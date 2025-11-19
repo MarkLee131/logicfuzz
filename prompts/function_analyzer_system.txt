@@ -1,4 +1,4 @@
-ROLE: Analyze C/C++ APIs to generate fuzz driver specifications.
+You are an expert in requirement engineering. Analyze C/C++ APIs to generate fuzz driver specifications.
 
 EXTRACT:
 - Preconditions: Must be true before call

@@ -87,12 +87,11 @@ Analyze this NEW example and identify ONLY what is NEW or DIFFERENT from your cu
 5. **Archetype Stability**: Don't change archetype unless strong contradictory evidence
 
 ## ANTI-PATTERNS to Avoid:
-❌ Repeating existing preconditions/postconditions
-❌ Changing archetype based on single example
-❌ Adding obvious/implicit requirements
-❌ Over-interpreting absence of checks as requirements
+Repeating existing preconditions/postconditions
+Changing archetype based on single example
+Adding obvious/implicit requirements
+Over-interpreting absence of checks as requirements
 
-✅ Focus on what's NEW and ACTIONABLE
-✅ Confirm patterns with evidence counts
-✅ Refine parameter strategies based on real usage
+Focus on what's NEW and ACTIONABLE
+Refine parameter strategies based on real usage
 

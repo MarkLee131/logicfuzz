@@ -575,13 +575,8 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                     log_prefix=f"CRASH_FEAS_ROUND_{cur_round:02d}"
                 )
                 
-                assistant_message = response_data.get("message")
-                if not assistant_message:
-                    assistant_message = {
-                        "role": "assistant",
-                        "content": response_data.get("content", ""),
-                        "tool_calls": response_data.get("tool_calls", [])
-                    }
+                # Use normalized assistant message from response (already in OpenAI API format)
+                assistant_message = response_data["message"]
                 text_response = assistant_message.get("content", "") or ""
                 tool_calls = assistant_message.get("tool_calls", []) or []
                 

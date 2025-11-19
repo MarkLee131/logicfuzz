@@ -179,7 +179,7 @@ def create_initial_state(
     benchmark,  # experiment.benchmark.Benchmark object
     work_dirs,  # experiment.workdir.WorkDirs object
     trial: int = 0,
-    max_round: int = 100,
+    max_round: int = 10,
     run_timeout: int = 300,
     pipeline: Optional[List[str]] = None,
     use_context: bool = False,

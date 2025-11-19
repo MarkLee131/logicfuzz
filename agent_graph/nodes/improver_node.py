@@ -32,32 +32,21 @@ def improver_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[s
     trial = state["trial"]
     logger.info('Starting Improver node', trial=trial)
     
-    try:
-        # Extract config
-        configurable = config.get("configurable", {})
-        llm = configurable["llm"]
-        args = configurable["args"]
-        
-        # Create agent
-        agent = LangGraphImprover(
-            llm=llm,
-            trial=trial,
-            args=args
-        )
-        
-        # Execute agent
-        result = agent.execute(state)
-        
-        logger.info('Improver node completed', trial=trial)
-        return result
-        
-    except Exception as e:
-        logger.error(f'Improver failed: {e}', trial=trial)
-        return {
-            "errors": [{
-                "node": "Improver",
-                "message": str(e),
-                "type": type(e).__name__
-            }]
-        }
+    # Extract config according to agreed contract
+    configurable = config.get("configurable", {})
+    llm = configurable["llm"]
+    args = configurable["args"]
+    
+    # Create agent
+    agent = LangGraphImprover(
+        llm=llm,
+        trial=trial,
+        args=args
+    )
+    
+    # Execute agent – let unexpected exceptions fail fast
+    result = agent.execute(state)
+    
+    logger.info('Improver node completed', trial=trial)
+    return result
 

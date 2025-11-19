@@ -286,17 +286,12 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
                     log_prefix=f"COVERAGE_ROUND_{cur_round:02d}"
                 )
                 
-                # Normalize response to content/tool_calls schema
-                text_response = response_data.get("content", "") or ""
-                tool_calls = response_data.get("tool_calls", [])
+                # Use normalized assistant message from response (already in OpenAI API format)
+                assistant_message = response_data["message"]
+                text_response = assistant_message.get("content", "") or ""
+                tool_calls = assistant_message.get("tool_calls", []) or []
                 
                 # Add assistant message to conversation (local only, not stored in state)
-                assistant_message = {
-                    "role": "assistant",
-                    "content": text_response if text_response else "I will use tools to investigate."
-                }
-                if tool_calls:
-                    assistant_message["tool_calls"] = tool_calls
                 messages.append(assistant_message)
                 # OPTIMIZATION: No longer store in state - local messages only
                 # add_agent_message(state, self.name, assistant_message)

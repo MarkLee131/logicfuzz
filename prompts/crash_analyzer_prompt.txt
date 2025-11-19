@@ -1,4 +1,4 @@
-Analyze crash: driver bug or project bug?
+Analyze the crash: driver bug or project bug?
 
 CRASH:
 {CRASH_INFO}

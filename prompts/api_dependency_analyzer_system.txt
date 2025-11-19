@@ -1,4 +1,4 @@
-ROLE: Analyze C/C++ API dependencies to identify related functions for fuzzing.
+You are an expert in fuzz driver design. Analyze C/C++ API dependencies to identify related functions for fuzzing.
 
 IDENTIFY:
 - Prerequisites: Functions called BEFORE target

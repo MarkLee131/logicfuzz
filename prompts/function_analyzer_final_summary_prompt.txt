@@ -107,13 +107,13 @@ target_func(input_str.c_str(), input_str.length(), base_str.c_str(), flags);
 4. **Document the reason in the rationale field**
 
 **Common ANTI-PATTERNS to avoid:**
-❌ BAD: Fixing parameters "for simplicity" → limits coverage
-❌ BAD: Fixing because "most examples use constant X" → copy pattern, not value
-❌ BAD: Fixing "to avoid errors" → test error paths too!
+BAD: Fixing parameters "for simplicity" → limits coverage
+BAD: Fixing because "most examples use constant X" → copy pattern, not value
+BAD: Fixing "to avoid errors" → test error paths too!
 
-✅ GOOD: Use FuzzedDataProvider to vary all parameters
-✅ GOOD: Test edge cases (empty strings, NULL, max values)
-✅ GOOD: Explore multiple code paths through parameter variation
+GOOD: Use FuzzedDataProvider to vary all parameters
+GOOD: Test edge cases (empty strings, NULL, max values)
+GOOD: Explore multiple code paths through parameter variation
 
 **CONSTRUCT strategy (struct parameters):**
 - Breakdown struct to primitive fields with individual strategies

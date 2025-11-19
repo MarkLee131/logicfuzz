@@ -20,6 +20,10 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
     3. Available analysis results
     4. Maximum retry limits
     
+    Design choice:
+    - We intentionally let unexpected exceptions bubble up instead of swallowing
+      them into "errors" state so that workflow bugs are surfaced early.
+    
     Args:
         state: Current LangGraph workflow state
         config: Configuration containing workflow parameters
@@ -27,92 +31,78 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
     Returns:
         Dictionary with next_action and routing decisions
     """
-    try:
-        trial = state["trial"]
-        logger.info('Starting Supervisor node', trial=trial)
-        
-        # Check for errors that should terminate the workflow
-        errors = state.get("errors", [])
-        configurable = config.get("configurable", {})
-        max_errors = configurable.get("max_errors", 5)
-        if len(errors) >= max_errors:
-            logger.warning('Too many errors, terminating workflow', trial=trial)
-            return {
-                "next_action": "END",
-                "termination_reason": "too_many_errors",
-                "messages": [{
-                    "role": "assistant",
-                    "content": f"Workflow terminated due to {len(errors)} errors"
-                }]
-            }
-        
-        # Check retry count
-        retry_count = state.get("retry_count", 0)
-        max_retries = state.get("max_retries", configurable.get("max_retries", 3))
-        
-        if retry_count >= max_retries:
-            logger.warning('Maximum retries reached, terminating workflow', trial=trial)
-            return {
-                "next_action": "END",
-                "termination_reason": "max_retries_reached",
-                "messages": [{
-                    "role": "assistant",
-                    "content": f"Workflow terminated after {retry_count} retries"
-                }]
-            }
-        
-        # Routing logic based on current state
-        next_action = _determine_next_action(state)
-        
-        # Track per-node visit counts (similar to no_coverage_improvement_count)
-        node_visit_counts = state.get("node_visit_counts", {}).copy()
-        if next_action != "END":
-            node_visit_counts[next_action] = node_visit_counts.get(next_action, 0) + 1
-            
-            # Check if a single node is being visited too many times
-            MAX_NODE_VISITS = 10
-            if node_visit_counts[next_action] > MAX_NODE_VISITS:
-                logger.warning(f'Node {next_action} visited {node_visit_counts[next_action]} times, '
-                              f'possible loop detected', trial=trial)
-                return {
-                    "next_action": "END",
-                    "termination_reason": "node_loop_detected",
-                    "node_visit_counts": node_visit_counts,
-                    "messages": [{
-                        "role": "assistant",
-                        "content": f"Workflow terminated: {next_action} visited {node_visit_counts[next_action]} times"
-                    }]
-                }
-        
-        logger.info(f'Supervisor determined next action: {next_action} '
-                   f'(node visits: {node_visit_counts.get(next_action, 0)})', 
-                   trial=trial)
-        
-        # 整理和清理session_memory，确保下游agent获得干净的共识约束
-        session_memory = consolidate_session_memory(state)
-        
-        return {
-            "next_action": next_action,
-            "node_visit_counts": node_visit_counts,
-            "session_memory": session_memory,  # 注入清理后的共识
-            "messages": [{
-                "role": "assistant",
-                "content": f"Supervisor routing to: {next_action}"
-            }]
-        }
-        
-    except Exception as e:
-        logger.error(f'Error in Supervisor node: {str(e)}', 
-                    trial=state.get("trial", 0))
+    trial = state["trial"]
+    logger.info('Starting Supervisor node', trial=trial)
+    
+    # Check for errors that should terminate the workflow
+    errors = state.get("errors", [])
+    configurable = config.get("configurable", {})
+    max_errors = configurable.get("max_errors", 5)
+    if len(errors) >= max_errors:
+        logger.warning('Too many errors, terminating workflow', trial=trial)
         return {
             "next_action": "END",
-            "termination_reason": "supervisor_error",
-            "errors": [{
-                "node": "Supervisor",
-                "message": str(e),
-                "type": type(e).__name__
+            "termination_reason": "too_many_errors",
+            "messages": [{
+                "role": "assistant",
+                "content": f"Workflow terminated due to {len(errors)} errors"
             }]
         }
+    
+    # Check retry count
+    retry_count = state.get("retry_count", 0)
+    max_retries = state.get("max_retries", configurable.get("max_retries", 3))
+    
+    if retry_count >= max_retries:
+        logger.warning('Maximum retries reached, terminating workflow', trial=trial)
+        return {
+            "next_action": "END",
+            "termination_reason": "max_retries_reached",
+            "messages": [{
+                "role": "assistant",
+                "content": f"Workflow terminated after {retry_count} retries"
+            }]
+        }
+    
+    # Routing logic based on current state
+    next_action = _determine_next_action(state)
+    
+    # Track per-node visit counts (similar to no_coverage_improvement_count)
+    node_visit_counts = state.get("node_visit_counts", {}).copy()
+    if next_action != "END":
+        node_visit_counts[next_action] = node_visit_counts.get(next_action, 0) + 1
+        
+        # Check if a single node is being visited too many times
+        MAX_NODE_VISITS = 10
+        if node_visit_counts[next_action] > MAX_NODE_VISITS:
+            logger.warning(f'Node {next_action} visited {node_visit_counts[next_action]} times, '
+                          f'possible loop detected', trial=trial)
+            return {
+                "next_action": "END",
+                "termination_reason": "node_loop_detected",
+                "node_visit_counts": node_visit_counts,
+                "messages": [{
+                    "role": "assistant",
+                    "content": f"Workflow terminated: {next_action} visited {node_visit_counts[next_action]} times"
+                }]
+            }
+    
+    logger.info(f'Supervisor determined next action: {next_action} '
+               f'(node visits: {node_visit_counts.get(next_action, 0)})', 
+               trial=trial)
+    
+    # 整理和清理session_memory，确保下游agent获得干净的共识约束
+    session_memory = consolidate_session_memory(state)
+    
+    return {
+        "next_action": next_action,
+        "node_visit_counts": node_visit_counts,
+        "session_memory": session_memory,  # 注入清理后的共识
+        "messages": [{
+            "role": "assistant",
+            "content": f"Supervisor routing to: {next_action}"
+        }]
+    }
 
 def _determine_next_action(state: FuzzingWorkflowState) -> str:
     """
@@ -357,7 +347,11 @@ def route_condition(state: FuzzingWorkflowState) -> str:
     Returns:
         Name of the next node to execute
     """
-    next_action = state.get("next_action", "function_analyzer")
+    if "next_action" not in state:
+        # Treat missing routing decision as a hard error instead of silently ending
+        raise KeyError("Workflow state is missing required 'next_action' for routing")
+    
+    next_action = state["next_action"]
     
     # Map actions to node names
     action_to_node = {
@@ -373,6 +367,9 @@ def route_condition(state: FuzzingWorkflowState) -> str:
         "END": "__end__"
     }
     
-    return action_to_node.get(next_action, "__end__")
+    if next_action not in action_to_node:
+        raise ValueError(f"Unknown next_action for routing: {next_action}")
+    
+    return action_to_node[next_action]
 
 __all__ = ['supervisor_node', 'route_condition']

@@ -25,37 +25,29 @@ def prototyper_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
     trial = state["trial"]
     logger.info('Starting Prototyper node', trial=trial)
     
-    try:
-        # Extract config
-        configurable = config.get("configurable", {})
-        llm = configurable["llm"]
-        args = configurable["args"]
-        
-        # Create agent
-        agent = LangGraphPrototyper(
-            llm=llm,
-            trial=trial,
-            args=args
+    # Extract config – rely on agreed contract instead of swallowing KeyError
+    configurable = config.get("configurable", {})
+    llm = configurable["llm"]
+    args = configurable["args"]
+    
+    # Create agent
+    agent = LangGraphPrototyper(
+        llm=llm,
+        trial=trial,
+        args=args
+    )
+    
+    # Execute agent
+    result = agent.execute(state)
+    
+    # Debug: log what we're returning
+    if "fuzz_target_source" in result:
+        code_length = len(result["fuzz_target_source"])
+        logger.info(
+            f'Prototyper node completed, returning fuzz_target_source (length={code_length})',
+            trial=trial
         )
-        
-        # Execute agent
-        result = agent.execute(state)
-        
-        # Debug: log what we're returning
-        if "fuzz_target_source" in result:
-            code_length = len(result["fuzz_target_source"])
-            logger.info(f'Prototyper node completed, returning fuzz_target_source (length={code_length})', trial=trial)
-        else:
-            logger.warning('Prototyper node completed but no fuzz_target_source in result', trial=trial)
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f'Prototyper failed: {e}', trial=trial)
-        return {
-            "errors": [{
-                "node": "Prototyper",
-                "message": str(e),
-                "type": type(e).__name__
-            }]
-        }
+    else:
+        logger.warning('Prototyper node completed but no fuzz_target_source in result', trial=trial)
+    
+    return result

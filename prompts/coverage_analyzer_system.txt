@@ -1,4 +1,4 @@
-ROLE: Analyze low code coverage and recommend improvements.
+You are an expert in fuzz driver optimization. Analyze low code coverage and recommend improvements.
 
 MISSION:
 - Understand current coverage

@@ -226,9 +226,10 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                     log_prefix=f"CRASH_ROUND_{cur_round:02d}"
                 )
                 
-                # Log the LLM response
-                content = response.get("content", "")
-                tool_calls = response.get("tool_calls", [])
+                # Use normalized assistant message from response (already in OpenAI API format)
+                assistant_message = response["message"]
+                content = assistant_message.get("content", "") or ""
+                tool_calls = assistant_message.get("tool_calls", []) or []
                 
                 logger.info(
                     f'<CRASH ANALYZER ROUND {cur_round}>\n'
@@ -239,12 +240,6 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                 )
                 
                 # Add assistant message to conversation
-                assistant_message = {
-                    "role": "assistant",
-                    "content": content if content else "I will use tools to investigate."
-                }
-                if tool_calls:
-                    assistant_message["tool_calls"] = tool_calls
                 messages.append(assistant_message)
                 
                 # Check if LLM provided a conclusion

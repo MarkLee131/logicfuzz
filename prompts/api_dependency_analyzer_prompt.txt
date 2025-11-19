@@ -1,4 +1,4 @@
-Analyze the API dependencies for the target function: **{function_signature}**
+Analyze the provided information and identify all APIs that should be called together with `{function_signature}` in a correct and effective fuzz driver.
 
 # Target Function Information
 
@@ -18,10 +18,6 @@ Analyze the API dependencies for the target function: **{function_signature}**
 {related_functions_section}
 
 {sample_xrefs_section}
-
-# Your Task
-
-Analyze the above information and identify all API functions that should be called together with `{function_signature}` in a comprehensive fuzz driver.
 
 ANALYSIS STRATEGY:
 
@@ -100,8 +96,7 @@ REQUIRED structure (all fields MUST be present):
 ```
 
 CRITICAL RULES:
-1. Return JSON ONLY - no markdown code blocks, no extra text
-2. ALL fields are required - use empty arrays [] if no items
-3. Each function entry MUST have all three fields: function, reason, confidence
-4. Each data_dependency MUST have all four fields: producer, consumer, type, reason
-5. Confidence MUST be exactly "high", "medium", or "low"
+1. You MUST respond with VALID JSON ONLY. No markdown, no explanations, just the JSON object.
+2. Each function entry MUST have all three fields: function, reason, confidence
+3. Each data_dependency MUST have all four fields: producer, consumer, type, reason
+4. Confidence MUST be exactly "high", "medium", or "low"

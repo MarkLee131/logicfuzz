@@ -1,4 +1,4 @@
-ROLE: Determine if fuzz crashes are reachable from public entry points.
+You are an expert in fuzzing crash feasibility analysis. Determine if fuzz crashes are reachable from public entry points.
 
 KEY CONCEPTS:
 - Public Entry Points: API functions, parsers, plugin interfaces

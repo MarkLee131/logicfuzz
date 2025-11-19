@@ -453,7 +453,12 @@ class LangGraphAgent(ABC):
             trial=self.trial
         )
         
-        return response
+        # Return normalized response with properly formatted tool_calls for OpenAI API
+        return {
+            "content": content,
+            "tool_calls": tool_calls,
+            "message": assistant_message  # Include normalized assistant message
+        }
     
     def _format_message_for_log(self, message: Dict[str, Any], max_chars: int = 6000) -> str:
         """Format a conversation message for structured logging."""
@@ -509,27 +514,43 @@ class LangGraphAgent(ABC):
         response: Dict[str, Any]
     ) -> tuple[Dict[str, Any], str, List[Dict[str, Any]]]:
         """
-        Normalize tool responses across different LLM providers.
+        Normalize tool responses from models.py format to OpenAI API format.
+        
+        models.py returns: {"content": str, "tool_calls": [{"id": str, "name": str, "arguments": dict}]}
+        OpenAI API needs: {"role": "assistant", "content": str, "tool_calls": [{"id": str, "type": "function", "function": {...}}]}
         
         Returns:
             (assistant_message, text_content, tool_calls)
         """
-        if not isinstance(response, dict):
-            return {}, str(response), []
+        import json
         
-        if "message" in response and isinstance(response["message"], dict):
-            assistant = response["message"]
-            content = assistant.get("content", "")
-            tool_calls = assistant.get("tool_calls", []) or []
-            return assistant, content, tool_calls
+        # models.py always returns dict with "content" and "tool_calls" keys
+        content = response.get("content", "") or ""
+        tool_calls_raw = response.get("tool_calls", [])
         
-        content = response.get("content", "")
-        tool_calls = response.get("tool_calls", []) or []
-        assistant = {
+        # Convert tool_calls from internal format to OpenAI API format
+        tool_calls: List[Dict[str, Any]] = []
+        for tc in tool_calls_raw:
+            tool_calls.append({
+                "id": tc["id"],
+                "type": "function",
+                "function": {
+                    "name": tc["name"],
+                    "arguments": json.dumps(tc["arguments"])  # arguments is always dict from models.py
+                }
+            })
+        
+        # Set content to None if we have tool_calls and no content (OpenAI API requirement)
+        assistant_content = None if (tool_calls and not content) else (content if content else None)
+        
+        # Build assistant message; only include tool_calls when non-empty to avoid
+        # sending `tool_calls: []`, which the OpenAI API rejects.
+        assistant: Dict[str, Any] = {
             "role": "assistant",
-            "content": content,
-            "tool_calls": tool_calls
+            "content": assistant_content,
         }
+        if tool_calls:
+            assistant["tool_calls"] = tool_calls
         return assistant, content, tool_calls
     
     @abstractmethod

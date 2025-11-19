@@ -63,6 +63,7 @@ class SRSKnowledge:
         knowledge = cls()
         knowledge.target_function = json_data.get("target_function", "")
         knowledge.archetype = json_data.get("archetype", knowledge.archetype)
+        knowledge._normalize_archetype()
         knowledge.functional_requirements = json_data.get("functional_requirements", [])
         knowledge.preconditions = json_data.get("preconditions", [])
         knowledge.postconditions = json_data.get("postconditions", [])
@@ -167,13 +168,23 @@ class SRSKnowledge:
                 old_pattern = self.archetype.get('primary_pattern', 'unknown')
                 new_pattern = new_archetype.get('primary_pattern', old_pattern)
                 
+                # Ensure numeric fields are normalized before comparisons/updates
+                normalized_new = dict(new_archetype)
+                if 'evidence_count' in normalized_new:
+                    normalized_new['evidence_count'] = self._coerce_int(
+                        normalized_new['evidence_count'], 
+                        default=self._coerce_int(self.archetype.get('evidence_count', 0))
+                    )
+                
                 if new_pattern != old_pattern and new_pattern != 'unchanged':
                     # Archetype pattern changed
-                    self.archetype.update(new_archetype)
+                    self.archetype.update(normalized_new)
+                    self._normalize_archetype()
                     changed = True
                 elif new_pattern == old_pattern:
                     # Confirmation increases confidence
-                    self.archetype['evidence_count'] = self.archetype.get('evidence_count', 0) + 1
+                    evidence = self._coerce_int(self.archetype.get('evidence_count', 0))
+                    self.archetype['evidence_count'] = evidence + 1
                     changed = True
         
         # Merge new preconditions
@@ -323,6 +334,19 @@ class SRSKnowledge:
                 return True
         
         return False
+    
+    @staticmethod
+    def _coerce_int(value: Any, default: int = 0) -> int:
+        """Coerce arbitrary value to int, falling back to default."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+    
+    def _normalize_archetype(self) -> None:
+        """Ensure archetype numeric fields use consistent types."""
+        self.archetype.setdefault('evidence_count', 0)
+        self.archetype['evidence_count'] = self._coerce_int(self.archetype['evidence_count'], 0)
     
     def _find_parameter_strategy_index(self, param_name: str) -> Optional[int]:
         """

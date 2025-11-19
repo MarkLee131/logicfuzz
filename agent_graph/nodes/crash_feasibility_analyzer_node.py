@@ -25,42 +25,21 @@ def crash_feasibility_analyzer_node(state: FuzzingWorkflowState, config: Runnabl
     trial = state["trial"]
     logger.info('Starting CrashFeasibilityAnalyzer node', trial=trial)
     
-    try:
-        # Extract config
-        configurable = config.get("configurable", {})
-        llm = configurable["llm"]
-        args = configurable["args"]
-        
-        # Create agent
-        agent = LangGraphCrashFeasibilityAnalyzer(
-            llm=llm,
-            trial=trial,
-            args=args
-        )
-        
-        # Execute agent
-        result = agent.execute(state)
-        
-        logger.info('CrashFeasibilityAnalyzer node completed', trial=trial)
-        return result
-        
-    except Exception as e:
-        logger.error(f'CrashFeasibilityAnalyzer failed: {e}', trial=trial)
-        # Return a default context_analysis to prevent infinite loops
-        # (similar to how execution_node sets default coverage values)
-        return {
-            "context_analysis": {
-                "feasible": False,
-                "analysis": f"Analysis failed: {str(e)}",
-                "source_code_evidence": "",
-                "recommendations": "",
-                "analyzed": False,
-                "error": str(e)
-            },
-            "errors": [{
-                "node": "CrashFeasibilityAnalyzer",
-                "message": str(e),
-                "type": type(e).__name__
-            }]
-        }
+    # Extract config
+    configurable = config.get("configurable", {})
+    llm = configurable["llm"]
+    args = configurable["args"]
+    
+    # Create agent
+    agent = LangGraphCrashFeasibilityAnalyzer(
+        llm=llm,
+        trial=trial,
+        args=args
+    )
+    
+    # Execute agent – if feasibility analysis is broken, fail fast
+    result = agent.execute(state)
+    
+    logger.info('CrashFeasibilityAnalyzer node completed', trial=trial)
+    return result
 
