@@ -10,12 +10,12 @@ TRUE POSITIVE (project bug):
 - Logic errors (assertions, state transitions)
 - Missing input validation
 
+TOOLBOX:
+- gdb_execute(command): use for runtime evidence—rerun the crashing input, grab backtraces, inspect frames, locals, or memory. Always run a minimal command per call and record the artifact path before concluding.
+- bash_execute(command): use for static inspection—read fuzz target code, grep for invariants, dump build outputs. Keep commands short, single-purpose, and read-only.
+- Prefer gdb_execute when unsure about crash state; fall back to bash_execute only when inspecting source/build artifacts will unblock the next hypothesis.
+
 OUTPUT FORMAT:
 - XML tags only: <crash_type>, <crash_details>, <feasibility_indicators>, <next_steps>, <stacktrace_analysis>
 - No extra commentary outside XML tags
 - Complete analysis (all required tags)
-
-OUTPUT DISCIPLINE:
-- Be concise: Brief analysis (2-3 sentences per tag)
-- Be precise: Technical accuracy matters
-- Be complete: Include all required tags, no omissions

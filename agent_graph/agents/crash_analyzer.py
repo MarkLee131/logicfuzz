@@ -219,19 +219,12 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
         try:
             while cur_round < max_round:
                 # Chat with LLM using tool calling
-                response = self.llm.chat_with_tools(messages, tools)
-                
-                # Track token usage
-                if hasattr(self.llm, 'last_token_usage') and self.llm.last_token_usage:
-                    from agent_graph.state import update_token_usage
-                    usage = self.llm.last_token_usage
-                    update_token_usage(
-                        state,
-                        self.name,
-                        usage.get('prompt_tokens', 0),
-                        usage.get('completion_tokens', 0),
-                        usage.get('total_tokens', 0)
-                    )
+                response = self.call_llm_with_tools(
+                    messages=messages,
+                    tools=tools,
+                    state=state,
+                    log_prefix=f"CRASH_ROUND_{cur_round:02d}"
+                )
                 
                 # Log the LLM response
                 content = response.get("content", "")
@@ -246,10 +239,13 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                 )
                 
                 # Add assistant message to conversation
-                messages.append({
+                assistant_message = {
                     "role": "assistant",
                     "content": content if content else "I will use tools to investigate."
-                })
+                }
+                if tool_calls:
+                    assistant_message["tool_calls"] = tool_calls
+                messages.append(assistant_message)
                 
                 # Check if LLM provided a conclusion
                 if self._has_conclusion(content):
@@ -322,9 +318,10 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                 "function": {
                     "name": "gdb_execute",
                     "description": (
-                        "Execute a GDB command in the debugging session. "
-                        "The fuzz target binary is already loaded. "
-                        "Use this to investigate the crash."
+                        "Run a single GDB command inside the already-launched screen session. "
+                        "Use it whenever you need runtime evidence: reproducing the crash, "
+                        "capturing a backtrace, switching frames, inspecting locals, or printing memory. "
+                        "Do not use it for file I/O or shell operations."
                     ),
                     "parameters": {
                         "type": "object",
@@ -332,16 +329,27 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                             "command": {
                                 "type": "string",
                                 "description": (
-                                    "GDB command to execute. Examples: "
-                                    "'run -runs=1 <artifact_path>' to reproduce crash, "
-                                    "'bt' for backtrace, "
-                                    "'frame N' to switch frames, "
-                                    "'info locals' to see local variables, "
-                                    "'print variable' to inspect values"
-                                )
+                                    "Exact GDB command (<= 200 chars). Typical calls: "
+                                    "'run -runs=1 {artifact}' to rerun the crash, "
+                                    "'bt' to dump stack, "
+                                    "'frame 4' and 'info locals', "
+                                    "'x/16gx $rsp', "
+                                    "'print *(foo*)bar'. "
+                                    "Response includes '(gdb) <command>' followed by stdout/stderr blocks."
+                                ),
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "examples": [
+                                    "run -runs=1 /tmp/crash-42",
+                                    "bt",
+                                    "frame 3",
+                                    "info locals",
+                                    "x/32bx $rsp"
+                                ]
                             }
                         },
-                        "required": ["command"]
+                        "required": ["command"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -350,8 +358,9 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                 "function": {
                     "name": "bash_execute",
                     "description": (
-                        "Execute a bash command in the project container. "
-                        "Use this to examine source files, search for patterns, etc."
+                        "Run a single bash command inside the project container to read files, "
+                        "grep for patterns, or inspect build artifacts. Use this instead of GDB "
+                        "when you only need static context from disk."
                     ),
                     "parameters": {
                         "type": "object",
@@ -359,14 +368,23 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                             "command": {
                                 "type": "string",
                                 "description": (
-                                    "Bash command to execute. Examples: "
-                                    "'cat /src/file.c' to read files, "
-                                    "'grep -r pattern /src' to search code, "
-                                    "'find /src -name \"*.h\"' to find files"
-                                )
+                                    "Single command without pipes/semicolons if possible (<= 400 chars). "
+                                    "Examples: 'cat /src/foo.c', "
+                                    "'grep -Rn \"fuzz\" /src', "
+                                    "'readelf -s /out/target'. Output mirrors the format "
+                                    "returned by ProjectContainerTool (command, return code, stdout, stderr)."
+                                ),
+                                "minLength": 1,
+                                "maxLength": 400,
+                                "examples": [
+                                    "cat /src/foo.c",
+                                    "grep -Rn \"parse\" src/",
+                                    "readelf -s /out/target"
+                                ]
                             }
                         },
-                        "required": ["command"]
+                        "required": ["command"],
+                        "additionalProperties": False
                     }
                 }
             }

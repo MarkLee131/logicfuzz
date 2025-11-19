@@ -5,8 +5,9 @@ This module provides a clean agent interface designed specifically for LangGraph
 without the legacy ADK/session baggage.
 """
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import argparse
+import json
 
 import logger
 from llm_toolkit.models import LLM
@@ -66,6 +67,15 @@ class LangGraphAgent(ABC):
             else NullLogger()
         )
         self._round = 0
+        self._tool_system_prompt_logged = False
+
+    def _get_llm_model_name(self) -> str:
+        """
+        The LangGraph agents always receive concrete `LLM` subclasses that expose a
+        `name` attribute (see `llm_toolkit.models.LLM`). Use that directly so logs
+        reflect the configured model without extra indirection.
+        """
+        return self.llm.name
     
     def chat_llm(
         self,
@@ -90,14 +100,25 @@ class LangGraphAgent(ABC):
         Returns:
             LLM response text
         """
-        # Get this agent's messages (initializes with system message if first time)
-        messages = get_agent_messages(state, self.name, self.system_message)
+        # OPTIMIZATION: Disable conversation history storage to reduce token usage
+        # See MEMORY_OPTIMIZATION_ANALYSIS.md for details
+        # All context now comes from session_memory only
         
-        # Add user prompt
-        add_agent_message(state, self.name, "user", prompt)
+        # === COMMENTED OUT: Agent message history storage ===
+        # # Get this agent's messages (initializes with system message if first time)
+        # messages = get_agent_messages(state, self.name, self.system_message)
+        # 
+        # # Add user prompt
+        # add_agent_message(state, self.name, "user", prompt)
+        # 
+        # # Get updated messages for LLM call
+        # messages = state["agent_messages"][self.name]
         
-        # Get updated messages for LLM call
-        messages = state["agent_messages"][self.name]
+        # NEW: Stateless LLM call with system message + prompt only
+        messages = [
+            {"role": "system", "content": self.system_message},
+            {"role": "user", "content": prompt}
+        ]
         
         # Increment round counter for detailed logging
         self._round += 1
@@ -110,7 +131,7 @@ class LangGraphAgent(ABC):
         
         # Detailed logging: log prompt with metadata
         prompt_metadata = {
-                'model': getattr(self.llm, 'model', 'unknown'),
+                'model': self._get_llm_model_name(),
                 'temperature': getattr(self.args, 'temperature', None),
                 'num_messages': len(messages)
             }
@@ -122,7 +143,7 @@ class LangGraphAgent(ABC):
                 metadata=prompt_metadata
             )
         
-        # Call LLM with this agent's messages only
+        # Call LLM with messages (now stateless: system + prompt only)
         response = self.llm.chat_with_messages(messages)
         
         # Track token usage
@@ -139,8 +160,9 @@ class LangGraphAgent(ABC):
                 usage.get('total_tokens', 0)
             )
         
-        # Add assistant response
-        add_agent_message(state, self.name, "assistant", response)
+        # === COMMENTED OUT: Agent message history storage ===
+        # # Add assistant response
+        # add_agent_message(state, self.name, "assistant", response)
         
         # Log the response (both standard and detailed)
         logger.info(
@@ -150,7 +172,7 @@ class LangGraphAgent(ABC):
         
         # Detailed logging: log response with metadata
         response_metadata = {
-                'model': getattr(self.llm, 'model', 'unknown'),
+                'model': self._get_llm_model_name(),
                 'tokens': token_usage
             }
         self._langgraph_logger.log_interaction(
@@ -189,7 +211,7 @@ class LangGraphAgent(ABC):
         # Detailed logging: log one-off prompt
         if self._langgraph_logger:
             prompt_metadata = {
-                'model': getattr(self.llm, 'model', 'unknown'),
+                'model': self._get_llm_model_name(),
                 'temperature': getattr(self.args, 'temperature', None),
                 'type': 'one-off (no history)'
             }
@@ -220,7 +242,7 @@ class LangGraphAgent(ABC):
         # Detailed logging: log one-off response
         if self._langgraph_logger:
             response_metadata = {
-                'model': getattr(self.llm, 'model', 'unknown'),
+                'model': self._get_llm_model_name(),
                 'tokens': token_usage,
                 'type': 'one-off (no history)'
             }
@@ -334,6 +356,181 @@ class LangGraphAgent(ABC):
         )
         
         return response
+    
+    def call_llm_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        state: Optional[FuzzingWorkflowState] = None,
+        log_prefix: str = "TOOLS"
+    ) -> Dict[str, Any]:
+        """
+        Call LLM with tool support while capturing detailed logs and token usage.
+        
+        Args:
+            messages: Conversation history shown to the LLM
+            tools: Tool definitions in OpenAI function calling format
+            state: Optional workflow state for token accounting
+            log_prefix: Label for log messages (helps correlate multi-round loops)
+        
+        Returns:
+            Raw response dict returned by the underlying LLM implementation
+        """
+        if not messages:
+            raise ValueError("messages cannot be empty for tool calls")
+        
+        self._round += 1
+        
+        # Log system message once per agent to avoid duplication
+        if not self._tool_system_prompt_logged:
+            system_msg = next((m for m in messages if m.get("role") == "system"), None)
+            if system_msg:
+                system_log = self._format_message_for_log(system_msg)
+                self._langgraph_logger.log_interaction(
+                    agent_name=self.name,
+                    interaction_type='prompt',
+                    content=system_log,
+                    round_num=self._round,
+                    metadata={
+                        'mode': 'tool_call',
+                        'log_prefix': f'{log_prefix}_SYSTEM',
+                        'message_role': 'system'
+                    }
+                )
+            self._tool_system_prompt_logged = True
+        
+        latest_message = messages[-1]
+        prompt_log = self._format_message_for_log(latest_message)
+        prompt_metadata = {
+            'mode': 'tool_call',
+            'log_prefix': log_prefix,
+            'message_role': latest_message.get('role', 'unknown'),
+            'messages_in_context': len(messages),
+            'tools_available': len(tools)
+        }
+        self._langgraph_logger.log_interaction(
+            agent_name=self.name,
+            interaction_type='prompt',
+            content=prompt_log,
+            round_num=self._round,
+            metadata=prompt_metadata
+        )
+        
+        response = self.llm.chat_with_tools(messages=messages, tools=tools)
+        
+        token_usage = getattr(self.llm, 'last_token_usage', None)
+        if state and token_usage:
+            from agent_graph.state import update_token_usage
+            update_token_usage(
+                state,
+                self.name,
+                token_usage.get('prompt_tokens', 0),
+                token_usage.get('completion_tokens', 0),
+                token_usage.get('total_tokens', 0)
+            )
+        
+        assistant_message, content, tool_calls = self._normalize_tool_response(response)
+        response_log = self._format_tool_response_for_log(content, tool_calls)
+        response_metadata = {
+            'mode': 'tool_call',
+            'log_prefix': log_prefix,
+            'tool_call_count': len(tool_calls),
+            'tokens': token_usage
+        }
+        self._langgraph_logger.log_interaction(
+            agent_name=self.name,
+            interaction_type='response',
+            content=response_log,
+            round_num=self._round,
+            metadata=response_metadata
+        )
+        
+        logger.debug(
+            f'<AGENT {self.name} {log_prefix} RESPONSE>\n'
+            f'{content[:500]}...\n'
+            f'Tool calls: {len(tool_calls)}\n'
+            f'</AGENT {self.name} {log_prefix} RESPONSE>',
+            trial=self.trial
+        )
+        
+        return response
+    
+    def _format_message_for_log(self, message: Dict[str, Any], max_chars: int = 6000) -> str:
+        """Format a conversation message for structured logging."""
+        if not message:
+            return "<empty message>"
+        
+        role = message.get('role', 'unknown').upper()
+        header_parts = [f"Role: {role}"]
+        if tool_id := message.get('tool_call_id'):
+            header_parts.append(f"ToolCallID: {tool_id}")
+        if name := message.get('name'):
+            header_parts.append(f"Name: {name}")
+        header = " | ".join(header_parts)
+        
+        content = message.get('content', '')
+        if isinstance(content, list):
+            content = json.dumps(content, indent=2)
+        elif not isinstance(content, str):
+            content = str(content)
+        
+        return f"{header}\n{self._truncate_for_log(content, max_chars)}"
+    
+    def _format_tool_response_for_log(
+        self,
+        content: str,
+        tool_calls: List[Dict[str, Any]],
+        max_chars: int = 6000
+    ) -> str:
+        """Format tool-enabled LLM responses for logging."""
+        sections = []
+        sections.append("Assistant Response:")
+        sections.append(self._truncate_for_log(content or "<empty>", max_chars))
+        
+        if tool_calls:
+            tool_json = json.dumps(tool_calls, indent=2, ensure_ascii=False)
+            sections.append("")
+            sections.append(f"Tool Calls ({len(tool_calls)}):")
+            sections.append(self._truncate_for_log(tool_json, max_chars))
+        else:
+            sections.append("")
+            sections.append("Tool Calls: none")
+        
+        return "\n".join(sections)
+    
+    def _truncate_for_log(self, text: str, max_chars: int) -> str:
+        """Truncate large text blocks for logging purposes."""
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + f"\n...[truncated {len(text) - max_chars} chars]"
+    
+    def _normalize_tool_response(
+        self,
+        response: Dict[str, Any]
+    ) -> tuple[Dict[str, Any], str, List[Dict[str, Any]]]:
+        """
+        Normalize tool responses across different LLM providers.
+        
+        Returns:
+            (assistant_message, text_content, tool_calls)
+        """
+        if not isinstance(response, dict):
+            return {}, str(response), []
+        
+        if "message" in response and isinstance(response["message"], dict):
+            assistant = response["message"]
+            content = assistant.get("content", "")
+            tool_calls = assistant.get("tool_calls", []) or []
+            return assistant, content, tool_calls
+        
+        content = response.get("content", "")
+        tool_calls = response.get("tool_calls", []) or []
+        assistant = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls
+        }
+        return assistant, content, tool_calls
     
     @abstractmethod
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:

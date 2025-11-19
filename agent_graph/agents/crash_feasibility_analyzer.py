@@ -52,16 +52,27 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "bash_execute",
-                    "description": "Execute bash command in the project container to search files or examine source code",
+                    "description": (
+                        "Read on-disk evidence from the project container with a single bash command. "
+                        "Use it for grepping call sites, viewing headers, or reading BUILD.gn. "
+                        "Avoid multi-command shells or long-running processes."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "command": {
                                 "type": "string",
-                                "description": "Bash command (e.g., 'grep -rn pattern /src', 'cat /path/to/file.c')"
+                                "description": (
+                                    "Single bash command (<= 400 chars). Include absolute paths when possible. "
+                                    "Examples: 'grep -Rn \"TargetFunc\" /src', 'cat /src/foo/api.h'. "
+                                    "The response echoes the command, return code, stdout, stderr."
+                                ),
+                                "minLength": 1,
+                                "maxLength": 400
                             }
                         },
-                        "required": ["command"]
+                        "required": ["command"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -69,16 +80,21 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_function_implementation",
-                    "description": "Get the full source code implementation of a function by its name",
+                    "description": (
+                        "Retrieve the full source implementation of a function by name. "
+                        "Call this after you know the exact function identifier. "
+                        "Returns a C/C++ snippet bounded by ```c fences."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "function_name": {
                                 "type": "string",
-                                "description": "Name of the function (e.g., 'sam_hrecs_remove_ref_altnames')"
+                                "description": "Exact function symbol (case-sensitive), e.g., 'sam_hrecs_remove_ref_altnames'"
                             }
                         },
-                        "required": ["function_name"]
+                        "required": ["function_name"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -86,16 +102,20 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_function_signature",
-                    "description": "Get the full signature of a function (return type + name + parameters)",
+                    "description": (
+                        "Get the canonical signature (return type + name + parameters) for a function. "
+                        "Use this first when you only know the symbol name."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "function_name": {
                                 "type": "string",
-                                "description": "Name of the function"
+                                "description": "Function symbol to resolve (e.g., 'archive_read_new')"
                             }
                         },
-                        "required": ["function_name"]
+                        "required": ["function_name"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -103,16 +123,20 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_sample_cross_references",
-                    "description": "Get sample code snippets showing how a function is called/used in the project",
+                    "description": (
+                        "Return representative call sites for a function so you can trace callers. "
+                        "Best used after you already have the full signature to avoid collisions."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "function_signature": {
                                 "type": "string",
-                                "description": "Full function signature (e.g., 'void func(int x)')"
+                                "description": "Full signature from get_function_signature (e.g., 'void foo(int x)')"
                             }
                         },
-                        "required": ["function_signature"]
+                        "required": ["function_signature"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -120,11 +144,15 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_type_definitions",
-                    "description": "Get all type definitions (structs, enums, typedefs) in the project",
+                    "description": (
+                        "List structs/enums/typedefs present in the project. "
+                        "Call sparingly—results are truncated to the first 20 definitions."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {},
-                        "required": []
+                        "required": [],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -132,16 +160,20 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_headers_for_function",
-                    "description": "Get the list of header files that need to be included to use a function",
+                    "description": (
+                        "Report which headers must be included to call a function. "
+                        "Useful for confirming whether the crash path could be exercised from public APIs."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "function_signature": {
                                 "type": "string",
-                                "description": "Full function signature"
+                                "description": "Full signature text for the target function"
                             }
                         },
-                        "required": ["function_signature"]
+                        "required": ["function_signature"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -149,17 +181,23 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_tests_for_functions",
-                    "description": "Get test code that uses specific functions, showing real-world usage examples",
+                    "description": (
+                        "Provide example test bodies that invoke the given functions. "
+                        "Use when you need real entry-point usage. Accepts 1-5 function names."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "function_names": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "List of function names to search for in tests"
+                                "minItems": 1,
+                                "maxItems": 5,
+                                "description": "List of symbols to search in tests (e.g., ['archive_read_new'])"
                             }
                         },
-                        "required": ["function_names"]
+                        "required": ["function_names"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -167,16 +205,20 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_function_debug_types",
-                    "description": "Get detailed type information for function parameters (useful for understanding complex types)",
+                    "description": (
+                        "Return DWARF-derived parameter/return type info for a function. "
+                        "Call after gathering the signature when you need struct field-level detail."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "function_signature": {
                                 "type": "string",
-                                "description": "Full function signature"
+                                "description": "Full signature text, identical to what the debug DB stores"
                             }
                         },
-                        "required": ["function_signature"]
+                        "required": ["function_signature"],
+                        "additionalProperties": False
                     }
                 }
             },
@@ -184,16 +226,19 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 "type": "function",
                 "function": {
                     "name": "get_functions_by_return_type",
-                    "description": "Find functions that return a specific type (useful for finding constructors/factories)",
+                    "description": (
+                        "Enumerate functions that return the supplied type so you can find factories or builders."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "return_type": {
                                 "type": "string",
-                                "description": "Type to search for (e.g., 'sam_hrecs_t *', 'int')"
+                                "description": "Type string to search for (e.g., 'sam_hrecs_t *', 'int')"
                             }
                         },
-                        "required": ["return_type"]
+                        "required": ["return_type"],
+                        "additionalProperties": False
                     }
                 }
             }
@@ -512,26 +557,38 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
         # Get tool definitions
         tools = self._get_tool_definitions()
         
-        # Initialize conversation messages
-        messages = get_agent_messages(state, self.name)
-        messages.append({"role": "user", "content": user_prompt})
+        # OPTIMIZATION: Use local messages list for tool calling (not stored in state)
+        # See CONVERSATION_HISTORY_DISABLED.md for details
+        # Tool calling requires conversation context, but we maintain it locally only
+        messages = [
+            {"role": "system", "content": self.system_message},
+            {"role": "user", "content": user_prompt}
+        ]
         
         try:
             while cur_round < max_round:
                 # Call LLM with tools
-                response_data = self.llm.chat_with_tools(
+                response_data = self.call_llm_with_tools(
                     messages=messages,
                     tools=tools,
-                    state=state
+                    state=state,
+                    log_prefix=f"CRASH_FEAS_ROUND_{cur_round:02d}"
                 )
                 
-                assistant_message = response_data["message"]
+                assistant_message = response_data.get("message")
+                if not assistant_message:
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": response_data.get("content", ""),
+                        "tool_calls": response_data.get("tool_calls", [])
+                    }
                 text_response = assistant_message.get("content", "") or ""
-                tool_calls = assistant_message.get("tool_calls", [])
+                tool_calls = assistant_message.get("tool_calls", []) or []
                 
-                # Add assistant message to conversation
+                # Add assistant message to conversation (local only, not stored in state)
                 messages.append(assistant_message)
-                add_agent_message(state, self.name, assistant_message)
+                # OPTIMIZATION: No longer store in state - local messages only
+                # add_agent_message(state, self.name, assistant_message)
                 
                 # Collect text responses for session memory
                 if text_response:
@@ -557,14 +614,15 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                     for tool_call in tool_calls:
                         tool_result = self._execute_tool(tool_call)
                         
-                        # Add tool result to conversation
+                        # Add tool result to conversation (local only, not stored in state)
                         tool_message = {
                             "role": "tool",
                             "tool_call_id": tool_call.get("id", ""),
                             "content": tool_result
                         }
                         messages.append(tool_message)
-                        add_agent_message(state, self.name, tool_message)
+                        # OPTIMIZATION: No longer store in state - local messages only
+                        # add_agent_message(state, self.name, tool_message)
                     
                     # Continue to next round with tool results
                     cur_round += 1

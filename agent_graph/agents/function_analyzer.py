@@ -329,7 +329,7 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             for i, call_site in enumerate(call_sites, 1):
                 logger.info(f'📍 Example {i}/{len(call_sites)}', trial=self.trial)
                 
-                context = self._extract_call_context(call_site, project_name)
+                context = self._extract_call_context(call_site, project_name, function_signature)
                 if not context:
                     logger.warning(f'   ⚠️ No context, skipping', trial=self.trial)
                     continue
@@ -422,9 +422,9 @@ Generate complete SRS incorporating all knowledge above.
                         iteration=state.get('current_iteration', 0)
                     )
         
-        # Save only final to agent_messages (not iterations)
-        add_agent_message(state, self.name, "user", f"Generate SRS for {function_signature}")
-        add_agent_message(state, self.name, "assistant", final_response)
+        # OPTIMIZATION: No longer store in state
+        # add_agent_message(state, self.name, "user", f"Generate SRS for {function_signature}")
+        # add_agent_message(state, self.name, "assistant", final_response)
         
         logger.info(f'📊 Stateless analysis complete: {examples_analyzed} examples processed', trial=self.trial)
         return final_response
@@ -478,12 +478,19 @@ Generate complete SRS incorporating all knowledge above.
         self,
         call_site: dict,
         project: str,
+        function_signature: str,
         context_lines: int = 15
     ) -> Optional[dict]:
         """
         Extract the context around a function call without loading the entire caller function.
         
         This is much more token-efficient than loading full source code.
+        
+        Args:
+            call_site: Call site metadata dict with keys: src_func, src_file, src_line
+            project: Project name
+            function_signature: Full signature of the function being called (callee)
+            context_lines: Number of context lines to extract around the call
         """
         from data_prep import introspector
         
@@ -506,8 +513,45 @@ Generate complete SRS incorporating all knowledge above.
         
         lines = caller_source.splitlines()
         
-        # Try to find the call in the source code
-        call_line_idx = self._find_call_in_source(lines, src_func)
+        # Extract callee function name from function_signature
+        # e.g., "CURLMcode curl_multi_socket_action(CURLM *, curl_socket_t, int, int *)"
+        # -> "curl_multi_socket_action"
+        callee_name = self._extract_function_name_from_signature(function_signature)
+        logger.debug(
+            f'Searching for callee function: {callee_name} (from signature: {function_signature[:80]}...)',
+            trial=self.trial
+        )
+        
+        # Priority 1: Use src_line if available (most reliable)
+        call_line_idx = None
+        src_line = call_site.get('src_line')
+        if src_line and isinstance(src_line, int):
+            # src_line is 1-indexed, convert to 0-indexed
+            call_line_idx = src_line - 1
+            if call_line_idx < 0 or call_line_idx >= len(lines):
+                logger.warning(
+                    f'src_line {src_line} out of range (function has {len(lines)} lines), '
+                    f'falling back to search', trial=self.trial
+                )
+                call_line_idx = None
+            else:
+                logger.info(
+                    f'Using src_line {src_line} from call_site metadata (0-indexed: {call_line_idx})',
+                    trial=self.trial
+                )
+        
+        # Priority 2: Search for the callee function call in source code
+        if call_line_idx is None:
+            logger.debug(
+                f'Searching for callee function call in {len(lines)} lines of caller function',
+                trial=self.trial
+            )
+            call_line_idx = self._find_call_in_source(lines, callee_name, function_signature)
+            if call_line_idx is not None:
+                logger.info(
+                    f'Found callee call at line {call_line_idx + 1} (0-indexed: {call_line_idx})',
+                    trial=self.trial
+                )
         
         if call_line_idx is None:
             # Fallback: use the entire function but limit to first N lines
@@ -565,56 +609,209 @@ Generate complete SRS incorporating all knowledge above.
         
         return context_dict
     
-    def _find_call_in_source(self, lines: List[str], func_name: str) -> Optional[int]:
-        """Try to find where a function is called in the source code."""
-        import re
-        # Extract just the function name without namespaces/classes
-        simple_name = func_name.split('::')[-1].split('.')[-1]
+    def _extract_function_name_from_signature(self, function_signature: str) -> str:
+        """
+        Extract function name from full signature.
         
+        Examples:
+            "CURLMcode curl_multi_socket_action(CURLM *, curl_socket_t, int, int *)"
+            -> "curl_multi_socket_action"
+            
+            "void sam_hrecs_remove_ref_altnames(sam_hrecs_t *, int, const char *)"
+            -> "sam_hrecs_remove_ref_altnames"
+        """
+        # Match pattern: return_type function_name(params)
+        # Extract the part between return type and opening parenthesis
+        match = re.search(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', function_signature)
+        if match:
+            return match.group(1)
+        
+        # Fallback: try to extract last word before '('
+        parts = function_signature.split('(')
+        if len(parts) > 1:
+            # Get the last identifier before '('
+            before_paren = parts[0].strip()
+            # Split by whitespace and take the last part
+            name_parts = before_paren.split()
+            if name_parts:
+                return name_parts[-1]
+        
+        return ""
+    
+    def _find_call_in_source(
+        self, 
+        lines: List[str], 
+        callee_name: str,
+        function_signature: str
+    ) -> Optional[int]:
+        """
+        Try to find where a function is called in the source code.
+        
+        Args:
+            lines: Source code lines of the calling function
+            callee_name: Name of the function being called (e.g., "curl_multi_socket_action")
+            function_signature: Full signature for additional matching context
+        
+        Returns:
+            Line index (0-based) where the call is found, or None
+        """
+        import re
+        
+        # Extract simple name (without namespaces/classes)
+        simple_name = callee_name.split('::')[-1].split('.')[-1]
+        
+        # Try multiple matching strategies
         for i, line in enumerate(lines):
-            # Look for function call patterns
-            if simple_name in line and '(' in line:
-                return i
+            stripped = line.strip()
+            
+            # Strategy 1: Look for function call pattern with parentheses
+            # Must have the function name and opening parenthesis on the same line
+            if simple_name in stripped and '(' in stripped:
+                # Avoid matching function declarations/definitions
+                # (they usually have return type before function name)
+                if re.search(r'\b' + re.escape(simple_name) + r'\s*\(', stripped):
+                    # Check if it's likely a call (not a declaration)
+                    # Calls usually don't have return type immediately before
+                    # (this is heuristic, but works for most cases)
+                    if not re.search(r'\b(static|inline|extern)\s+\w+\s+' + re.escape(simple_name), stripped):
+                        return i
+            
+            # Strategy 2: For C APIs with underscore naming, also check for
+            # patterns like "result = function_name(" or "function_name("
+            if simple_name.count('_') >= 2:  # Likely C API
+                if re.search(r'\b' + re.escape(simple_name) + r'\s*\(', stripped):
+                    # Make sure it's not a declaration
+                    if '=' in stripped or stripped.startswith(simple_name) or ';' in stripped:
+                        return i
         
         return None
     
     def _extract_parameter_setup(self, lines: List[str], call_idx: int, call_stmt: str) -> str:
-        """Extract code that sets up parameters for the call."""
+        """
+        Extract code that sets up parameters for the call.
+        
+        Improved version that:
+        1. Extracts parameter variables more accurately
+        2. Searches in a wider context window
+        3. Handles different assignment patterns
+        """
         import re
         setup_lines = []
         
         # Try to find variable names in the call statement
-        if '(' in call_stmt:
-            param_part = call_stmt.split('(', 1)[1].split(')')[0]
-            # Look for identifiers
-            potential_vars = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', param_part)
+        if '(' in call_stmt and ')' in call_stmt:
+            param_part = call_stmt.split('(', 1)[1].rsplit(')', 1)[0]
             
-            # Search backwards for declarations of these variables
-            for i in range(max(0, call_idx - 20), call_idx):
-                line = lines[i]
-                for var in potential_vars:
-                    if var in line and ('=' in line or 'new' in line or 'malloc' in line):
-                        setup_lines.append(f"Line {i+1}: {line.strip()}")
+            # Extract identifiers (variable names, not keywords)
+            # Filter out common keywords and types
+            keywords = {'if', 'for', 'while', 'return', 'static', 'const', 'void', 'int', 
+                       'char', 'long', 'short', 'unsigned', 'signed', 'struct', 'enum'}
+            potential_vars = []
+            for match in re.finditer(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', param_part):
+                var = match.group(1)
+                if var not in keywords and len(var) > 1:  # Skip single letters and keywords
+                    potential_vars.append(var)
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_vars = []
+            for var in potential_vars:
+                if var not in seen:
+                    seen.add(var)
+                    unique_vars.append(var)
+            
+            # Search backwards for declarations/assignments of these variables
+            # Use a wider search window (30 lines instead of 20)
+            search_start = max(0, call_idx - 30)
+            found_vars = set()
+            
+            for i in range(search_start, call_idx):
+                line = lines[i].strip()
+                if not line or line.startswith('//') or line.startswith('/*'):
+                    continue
+                
+                for var in unique_vars:
+                    if var in found_vars:
+                        continue
+                    
+                    # Look for variable assignment or initialization
+                    # Patterns: "var =", "var =", "type var =", "var->", "var.", etc.
+                    var_pattern = r'\b' + re.escape(var) + r'\b'
+                    
+                    # Check for assignment
+                    if re.search(var_pattern + r'\s*=', line):
+                        setup_lines.append(f"Line {i+1}: {line}")
+                        found_vars.add(var)
                         break
+                    # Check for pointer/struct member access (likely setup)
+                    elif re.search(var_pattern + r'\s*[-.>]', line):
+                        setup_lines.append(f"Line {i+1}: {line}")
+                        found_vars.add(var)
+                        break
+                    # Check for function call that might initialize
+                    elif re.search(var_pattern + r'\s*\(', line):
+                        setup_lines.append(f"Line {i+1}: {line}")
+                        found_vars.add(var)
+                        break
+            
+            # If we found some setup, return it
+            if setup_lines:
+                return '\n'.join(setup_lines[:10])  # Limit to 10 lines
         
-        return '\n'.join(setup_lines) if setup_lines else "No clear parameter setup found"
+        return "No clear parameter setup found"
     
     def _extract_return_usage(self, lines: List[str], call_idx: int, call_stmt: str) -> str:
-        """Extract code that uses the return value from the call."""
+        """
+        Extract code that uses the return value from the call.
+        
+        Improved version that:
+        1. Better extracts the variable name from assignment
+        2. Handles different assignment patterns
+        3. Searches in a wider context window
+        """
+        import re
         usage_lines = []
         
         # Check if return value is assigned to a variable
         if '=' in call_stmt:
-            var_name = call_stmt.split('=')[0].strip().split()[-1]
+            # Extract variable name from left side of assignment
+            # Handle patterns like: "result =", "CURLMcode code =", "int ret ="
+            left_side = call_stmt.split('=', 1)[0].strip()
             
-            # Search forward for usage of this variable
-            for i in range(call_idx + 1, min(len(lines), call_idx + 20)):
-                line = lines[i]
-                if var_name in line:
-                    usage_lines.append(f"Line {i+1}: {line.strip()}")
-                    # Stop after finding a few uses
-                    if len(usage_lines) >= 5:
-                        break
+            # Extract the last identifier (variable name)
+            # Split by whitespace and take the last part
+            parts = left_side.split()
+            if parts:
+                var_name = parts[-1]
+                # Remove any trailing operators
+                var_name = re.sub(r'[\[\]().,;]+$', '', var_name)
+                
+                if var_name and len(var_name) > 1:  # Valid variable name
+                    # Search forward for usage of this variable
+                    search_end = min(len(lines), call_idx + 30)
+                    for i in range(call_idx + 1, search_end):
+                        line = lines[i].strip()
+                        if not line or line.startswith('//') or line.startswith('/*'):
+                            continue
+                        
+                        # Look for variable usage (not just mention in comments)
+                        # Use word boundary to avoid partial matches
+                        if re.search(r'\b' + re.escape(var_name) + r'\b', line):
+                            usage_lines.append(f"Line {i+1}: {line}")
+                            # Stop after finding a few uses
+                            if len(usage_lines) >= 5:
+                                break
+        
+        # Also check for direct return value usage (not assigned)
+        # Pattern: "if (function_call(...))" or "while (function_call(...))"
+        if not usage_lines:
+            # Check if return value is used directly in control flow
+            next_line_idx = call_idx + 1
+            if next_line_idx < len(lines):
+                next_line = lines[next_line_idx].strip()
+                # Look for patterns like "if (", "while (", "switch ("
+                if re.search(r'\b(if|while|switch|for)\s*\(', next_line):
+                    usage_lines.append(f"Line {next_line_idx + 1}: {next_line}")
         
         return '\n'.join(usage_lines) if usage_lines else "No clear return value usage found"
     
@@ -669,12 +866,20 @@ Use this knowledge to structure your analysis.
     
     def _infer_archetype_from_history(self, state: FuzzingWorkflowState) -> Optional[str]:
         """
-        Try to infer archetype from conversation history.
-        
-        Looks for archetype mentions in the conversation.
+        Try to infer archetype from session memory.
+        Looks for archetype in session_memory or API constraints.
         """
-        # Check conversation history for archetype mentions
-        agent_messages = state.get("agent_messages", {}).get(self.name, [])
+        # OPTIMIZATION: Changed to use session_memory instead of agent_messages
+        # See CONVERSATION_HISTORY_DISABLED.md for details
+        
+        # First check if archetype is already identified in session_memory
+        session_memory = state.get("session_memory", {})
+        if archetype := session_memory.get("archetype"):
+            return archetype.get("type")
+        
+        # If not, try to infer from API constraints and decisions
+        api_constraints = session_memory.get("api_constraints", [])
+        decisions = session_memory.get("decisions", [])
         
         archetype_keywords = {
             "stateless_parser": ["stateless", "parse", "single call", "no state"],
@@ -687,19 +892,31 @@ Use this knowledge to structure your analysis.
             "stateful_fuzzing": ["static context", "reuse context", "static variable", "context reset", "stateful"]
         }
         
-        # Count keyword matches
+        # Count keyword matches in session_memory
         scores = {arch: 0 for arch in archetype_keywords}
         
-        for message in agent_messages[-5:]:  # Check last 5 messages
-            content = message.get("content", "").lower()
+        # Check API constraints
+        for constraint in api_constraints:
+            content = constraint.get("constraint", "").lower()
+            for arch, keywords in archetype_keywords.items():
+                for keyword in keywords:
+                    if keyword in content:
+                        scores[arch] += 1
+        
+        # Check decisions
+        for decision in decisions:
+            content = (decision.get("decision", "") + " " + decision.get("reason", "")).lower()
             for arch, keywords in archetype_keywords.items():
                 for keyword in keywords:
                     if keyword in content:
                         scores[arch] += 1
         
         # Return archetype with highest score (if > 0)
-        max_arch = max(scores, key=scores.get)
-        return max_arch if scores[max_arch] > 0 else None
+        if scores:
+            max_arch = max(scores, key=scores.get)
+            return max_arch if scores[max_arch] > 0 else None
+        
+        return None
     
     def _extract_header_information(
         self,

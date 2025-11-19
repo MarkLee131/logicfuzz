@@ -4,48 +4,52 @@ from typing_extensions import TypedDict, NotRequired, Annotated
 from typing import List, Dict, Any, Optional
 
 
-def add_agent_messages(
-    left: Dict[str, List[Dict[str, Any]]], 
-    right: Dict[str, List[Dict[str, Any]]]
-) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Message reducer for agent-specific messages.
-    
-    This reducer:
-    1. Merges agent-specific message dictionaries
-    2. Trims each agent's messages independently to 50k tokens
-    3. Preserves system messages for each agent
-    
-    Args:
-        left: Existing agent messages {agent_name: [messages]}
-        right: New agent messages to merge
-    
-    Returns:
-        Merged and trimmed agent messages
-    """
-    from agent_graph.memory import trim_messages_by_tokens
-    
-    # Start with a copy of left
-    result = left.copy()
-    
-    # Merge each agent's messages from right
-    for agent_name, messages in right.items():
-        if agent_name in result:
-            # Combine existing and new messages for this agent
-            combined = result[agent_name] + messages
-        else:
-            # New agent, just use the messages from right
-            combined = messages
-        
-        # Trim this agent's messages to 100k tokens
-        result[agent_name] = trim_messages_by_tokens(
-            combined,
-            max_tokens=100000,  # Increase to 100k tokens per agent
-            keep_system=True,
-            system_max_tokens=10000  # Limit system message to 10k
-        )
-    
-    return result
+# === COMMENTED OUT: Agent message history reducer ===
+# OPTIMIZATION: Conversation history storage disabled to reduce token usage
+# See MEMORY_OPTIMIZATION_ANALYSIS.md for details
+# 
+# def add_agent_messages(
+#     left: Dict[str, List[Dict[str, Any]]], 
+#     right: Dict[str, List[Dict[str, Any]]]
+# ) -> Dict[str, List[Dict[str, Any]]]:
+#     """
+#     Message reducer for agent-specific messages.
+#     
+#     This reducer:
+#     1. Merges agent-specific message dictionaries
+#     2. Trims each agent's messages independently to 50k tokens
+#     3. Preserves system messages for each agent
+#     
+#     Args:
+#         left: Existing agent messages {agent_name: [messages]}
+#         right: New agent messages to merge
+#     
+#     Returns:
+#         Merged and trimmed agent messages
+#     """
+#     from agent_graph.memory import trim_messages_by_tokens
+#     
+#     # Start with a copy of left
+#     result = left.copy()
+#     
+#     # Merge each agent's messages from right
+#     for agent_name, messages in right.items():
+#         if agent_name in result:
+#             # Combine existing and new messages for this agent
+#             combined = result[agent_name] + messages
+#         else:
+#             # New agent, just use the messages from right
+#             combined = messages
+#         
+#         # Trim this agent's messages to 100k tokens
+#         result[agent_name] = trim_messages_by_tokens(
+#             combined,
+#             max_tokens=100000,  # Increase to 100k tokens per agent
+#             keep_system=True,
+#             system_max_tokens=10000  # Limit system message to 10k
+#         )
+#     
+#     return result
 
 class FuzzingWorkflowState(TypedDict):
     """
@@ -70,10 +74,15 @@ class FuzzingWorkflowState(TypedDict):
     shared_data: NotRequired[Dict[str, Any]]  # DEPRECATED: Use context instead
     
     # === Agent-Specific Messages ===
-    # Each agent maintains its own conversation history independently
-    # Format: {agent_name: [messages]}
-    # Example: {"function_analyzer": [...], "prototyper": [...]}
-    agent_messages: NotRequired[Annotated[Dict[str, List[Dict[str, Any]]], add_agent_messages]]
+    # OPTIMIZATION: Conversation history storage disabled to reduce token usage
+    # See MEMORY_OPTIMIZATION_ANALYSIS.md for details
+    # All context now comes from session_memory only
+    # 
+    # === COMMENTED OUT: Agent conversation history ===
+    # # Each agent maintains its own conversation history independently
+    # # Format: {agent_name: [messages]}
+    # # Example: {"function_analyzer": [...], "prototyper": [...]}
+    # agent_messages: NotRequired[Annotated[Dict[str, List[Dict[str, Any]]], add_agent_messages]]
     
     # === Function Analysis (from FunctionAnalyzer) ===
     function_analysis: NotRequired[Dict[str, Any]]
@@ -186,14 +195,15 @@ def create_initial_state(
     benchmark_dict = benchmark.to_dict()
     work_dirs_dict = work_dirs.to_dict()
     
-    # Initialize agent_messages dict (empty, agents will add their own system messages)
-    agent_messages = {}
+    # === COMMENTED OUT: Agent message history initialization ===
+    # # Initialize agent_messages dict (empty, agents will add their own system messages)
+    # agent_messages = {}
     
     return FuzzingWorkflowState(
         benchmark=benchmark_dict,
         trial=trial,
         work_dirs=work_dirs_dict,
-        agent_messages=agent_messages,
+        # agent_messages=agent_messages,  # DISABLED: conversation history storage
         current_iteration=0,
         max_iterations=max_round,
         workflow_status="initialized",

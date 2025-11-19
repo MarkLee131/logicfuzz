@@ -1,23 +1,15 @@
 #!/usr/bin/env python3
 """
-API Context Extractor - 基于 FuzzIntrospector
+API Context Extractor
 
-从 FuzzIntrospector 提取 API 上下文，用于指导 LLM 生成正确的 fuzzer。
+Extract API context from FuzzIntrospector for LLM to generate correct fuzzer:
+Features:
+1. Query function signature and parameter types from FuzzIntrospector
+2. Query related type definitions
+3. Extract usage examples from existing fuzzers
+4. Identify types that need initialization
+5. Generate structured API context
 
-核心功能：
-1. 从 FuzzIntrospector 查询函数签名和参数类型
-2. 查询相关类型定义
-3. 从现有 fuzzer 中提取用法示例
-4. 识别需要初始化的类型
-5. 生成结构化的 API 上下文
-
-使用方法：
-    from agent_graph.api_context_extractor import get_api_context
-    
-    context = get_api_context(
-        project_name="igraph",
-        function_signature="igraph_sparsemat_arpack_rssolve"
-    )
 """
 
 import logging

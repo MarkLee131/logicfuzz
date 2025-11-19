@@ -166,6 +166,16 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
                 coverage_diff = run_result.coverage.covered_lines / total_lines
                 logger.info(f'Coverage diff: {coverage_diff:.2%}', trial=trial)
         
+        # Read run log from file
+        run_log = ""
+        if hasattr(run_result, 'log_path') and run_result.log_path and os.path.exists(run_result.log_path):
+            try:
+                with open(run_result.log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    run_log = f.read()
+                logger.debug(f'Read run log from {run_result.log_path} ({len(run_log)} bytes)', trial=trial)
+            except Exception as e:
+                logger.warning(f'Failed to read run log from {run_result.log_path}: {e}', trial=trial)
+        
         # Extract crash information if any
         crash_info = {}
         if run_result.crashes:
@@ -198,6 +208,7 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         state_update = {
             "run_success": run_result.succeeded if hasattr(run_result, 'succeeded') else True,
             "run_error": run_result.crash_info if hasattr(run_result, 'crash_info') else "",
+            "run_log": run_log,  # Add the run log content
             "crashes": run_result.crashes if hasattr(run_result, 'crashes') else False,
             "crash_info": crash_info,
             "crash_func": run_result.semantic_check.crash_func if (hasattr(run_result, 'semantic_check') and run_result.semantic_check) else "",

@@ -19,7 +19,6 @@ from agent_graph.memory import get_agent_messages, add_agent_message
 class LangGraphCoverageAnalyzer(LangGraphAgent):
     """
     Coverage analyzer agent for LangGraph.
-    
     Uses OpenAI Function Calling to execute bash commands via bash_execute tool.
     Multi-round interaction until conclusion is detected in text response.
     """
@@ -46,19 +45,34 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
                 "function": {
                     "name": "bash_execute",
                     "description": (
-                        "Execute bash command in the project container to examine coverage data, "
-                        "inspect source code, or analyze build artifacts. "
-                        "Use this to investigate why coverage is low."
+                        "Inspect coverage artifacts or source files by running a single bash command "
+                        "inside the benchmark container. Use it whenever you need ground-truth data "
+                        "from the filesystem (e.g., llvm-cov reports, compile logs, targeted greps). "
+                        "Avoid long-running pipelines and never chain commands with semicolons."
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "command": {
                                 "type": "string",
-                                "description": "Bash command to execute (e.g., 'cat file.c', 'grep pattern *.c', 'llvm-cov report')"
+                                "description": (
+                                    "A single, self-contained bash command (<= 400 chars). Examples: "
+                                    "'llvm-cov show /out/fuzz -instr-profile=/out/default.profdata', "
+                                    "'grep -Rn \"TODO\" src/', "
+                                    "'cat /out/coverage.json'. Output is returned as "
+                                    "\"Command\", \"Return code\", \"STDOUT\", \"STDERR\" blocks."
+                                ),
+                                "minLength": 1,
+                                "maxLength": 400,
+                                "examples": [
+                                    "llvm-cov report /out/fuzz -instr-profile=/out/default.profdata",
+                                    "grep -Rn \"Foo::Parse\" src/",
+                                    "cat /out/build.log"
+                                ]
                             }
                         },
-                        "required": ["command"]
+                        "required": ["command"],
+                        "additionalProperties": False
                     }
                 }
             }
@@ -177,8 +191,6 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         """
         Analyze coverage to understand why it's low and provide insights.
-        
-        Following the original CoverageAnalyzer logic from coverage_analyzer.py.
         """
         from tool.container_tool import ProjectContainerTool
         from experiment.workdir import WorkDirs
@@ -196,6 +208,27 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
         fuzz_target_source = state.get("fuzz_target_source", "")
         build_script_source = state.get("build_script_source", "")
         
+        # Get function requirements
+        function_requirements = self._get_function_requirements(state)
+        
+        # Get fuzzing log from state
+        fuzzing_log = state.get("run_log", "")
+        if not fuzzing_log:
+            logger.warning(
+                "Missing run_log; skipping coverage analysis for project %s (trial %02d, log_path=%s)",
+                benchmark.project,
+                self.trial,
+                state.get("log_path", "")
+            )
+            self._langgraph_logger.flush_agent_logs(self.name)
+            return {
+                "coverage_analysis": {
+                    "status": "skipped",
+                    "reason": "Missing fuzzing log; cannot analyze coverage."
+                },
+                "session_memory": state.get("session_memory", {})
+            }
+        
         # Initialize inspect_tool with the fuzz target and build script
         self.inspect_tool = ProjectContainerTool(benchmark, name='inspect')
         self.inspect_tool.write_to_file(content=fuzz_target_source,
@@ -205,16 +238,6 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
                 content=build_script_source,
                 file_path=self.inspect_tool.build_script_path)
         self.inspect_tool.compile(extra_commands=' && rm -rf /out/* > /dev/null')
-        
-        # Get function requirements
-        function_requirements = self._get_function_requirements(state)
-        
-        # Get fuzzing log from state
-        fuzzing_log = state.get("run_log", "")
-        if not fuzzing_log:
-            # Try to get coverage summary as fallback
-            coverage_summary = state.get("coverage_summary", "")
-            fuzzing_log = f"Coverage: {state.get('coverage_percent', 0.0):.2f}%\n{coverage_summary}"
         
         # Build base prompt using the new prompt_loader
         prompt_manager = get_prompt_manager()
@@ -247,29 +270,36 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
         # Get tool definitions
         tools = self._get_tool_definitions()
         
-        # Initialize conversation messages
-        messages = get_agent_messages(state, self.name)
-        messages.append({"role": "user", "content": user_prompt})
+        # Tool calling requires conversation context, but we maintain it locally only
+        messages = [
+            {"role": "system", "content": self.system_message},
+            {"role": "user", "content": user_prompt}
+        ]
         
         try:
             while cur_round < max_round:
                 # Call LLM with tools
-                response_data = self.llm.chat_with_tools(
+                response_data = self.call_llm_with_tools(
                     messages=messages,
-                    tools=tools
+                    tools=tools,
+                    state=state,
+                    log_prefix=f"COVERAGE_ROUND_{cur_round:02d}"
                 )
                 
                 # Normalize response to content/tool_calls schema
                 text_response = response_data.get("content", "") or ""
                 tool_calls = response_data.get("tool_calls", [])
                 
-                # Add assistant message to conversation
+                # Add assistant message to conversation (local only, not stored in state)
                 assistant_message = {
                     "role": "assistant",
                     "content": text_response if text_response else "I will use tools to investigate."
                 }
+                if tool_calls:
+                    assistant_message["tool_calls"] = tool_calls
                 messages.append(assistant_message)
-                add_agent_message(state, self.name, assistant_message)
+                # OPTIMIZATION: No longer store in state - local messages only
+                # add_agent_message(state, self.name, assistant_message)
                 
                 # Collect text responses for session memory
                 if text_response:
@@ -295,14 +325,15 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
                     for tool_call in tool_calls:
                         tool_result = self._execute_tool(tool_call)
                         
-                        # Add tool result to conversation
+                        # Add tool result to conversation (local only, not stored in state)
                         tool_message = {
                             "role": "tool",
                             "tool_call_id": tool_call.get("id", ""),
                             "content": tool_result
                         }
                         messages.append(tool_message)
-                        add_agent_message(state, self.name, tool_message)
+                        # OPTIMIZATION: No longer store in state - local messages only
+                        # add_agent_message(state, self.name, tool_message)
                     
                     # Continue to next round with tool results
                     cur_round += 1
