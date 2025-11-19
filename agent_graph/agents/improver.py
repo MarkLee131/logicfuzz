@@ -9,7 +9,7 @@ import json
 
 import logger
 from llm_toolkit.models import LLM
-from agent_graph.state import FuzzingWorkflowState
+from agent_graph.state import FuzzingWorkflowState, add_coverage_attempt
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
 from agent_graph.prompt_loader import get_prompt_manager
@@ -143,6 +143,24 @@ class LangGraphImprover(LangGraphAgent):
                 
                 self._langgraph_logger.flush_agent_logs(self.name)
                 return state_update
+        
+        # 在 session_memory 中记录一次 “improver 覆盖提升尝试”
+        try:
+            improvement_count = state.get("improvement_attempt_count", 0) + 1
+            notes = f"Improver attempt #{improvement_count}"
+            add_coverage_attempt(
+                state=state,
+                attempt_type="improver",
+                outcome="driver_rewritten",
+                coverage_percent=coverage_percent,
+                line_coverage_diff=line_coverage_diff,
+                no_improvement_count=state.get("no_coverage_improvement_count", 0),
+                iteration=state.get("current_iteration", 0),
+                notes=notes
+            )
+            updated_session_memory = state.get("session_memory", updated_session_memory)
+        except Exception as e:
+            logger.warning(f"Failed to record improver coverage attempt in session_memory: {e}", trial=self.trial)
         
         # Prepare state update with improved code
         state_update = {

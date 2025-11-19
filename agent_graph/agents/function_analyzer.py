@@ -554,9 +554,13 @@ Generate complete SRS incorporating all knowledge above.
                 )
         
         if call_line_idx is None:
-            # Fallback: use the entire function but limit to first N lines
-            logger.debug(f'Could not find exact call location, using function start', trial=self.trial)
-            call_line_idx = min(10, len(lines) // 2)
+            # 不要瞎编“调用行”——找不到就老老实实说找不到，跳过这个样本。
+            logger.warning(
+                f'Could not locate call to {callee_name} in caller {src_func}, '
+                f'skipping this call site',
+                trial=self.trial
+            )
+            return None
         
         # Extract context
         start_idx = max(0, call_line_idx - context_lines)

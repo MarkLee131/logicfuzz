@@ -159,17 +159,18 @@ class FuzzingContext:
             ) from e
         
         if not api_dependencies:
-            # For dependency graph, empty result might be valid (function with no deps)
-            # but we should log it as suspicious
-            log.warning(
-                f"Dependency graph is empty for '{function_signature}'. "
-                f"This is unusual - most functions have dependencies."
+            # 好品味原则：关键数据不能用"空结构"糊弄过去
+            # 如果依赖图为空，要么是：
+            #  1）函数真的没有依赖（极少），要么
+            #  2）FuzzIntrospector / 分析器的数据有问题
+            # 这两种情况都应该让上游明确感知，而不是静默继续。
+            raise ValueError(
+                f"API dependency analysis returned empty result for "
+                f"'{function_signature}' in project '{project_name}'.\n"
+                f"Either this function truly has no dependencies or the "
+                f"FuzzIntrospector data is incomplete. Inspect FI data or "
+                f"APICompositionAnalyzer before retrying."
             )
-            api_dependencies = {
-                'call_sequence': [],
-                'dependencies': [],
-                'note': 'No dependencies found - this is suspicious'
-            }
         
         # === Step 5: Extract header information ===
         log.debug('  5/5 Extracting headers...')
@@ -182,13 +183,13 @@ class FuzzingContext:
             ) from e
         
         if not header_info:
-            # Headers might be legitimately empty, but create explicit empty result
-            log.warning("Header extraction returned empty - will use minimal headers")
-            header_info = {
-                'standard_headers': [],
-                'project_headers': [],
-                'note': 'No headers extracted - compilation might fail'
-            }
+            # 同理：没有头文件信息就继续跑，只会在编译阶段制造一堆莫名其妙的错误。
+            # 这里直接失败，让调用方决定要不要降级处理。
+            raise ValueError(
+                f"Header extraction returned empty for function '{function_signature}' "
+                f"in project '{project_name}'. This is almost always a data-preparation "
+                f"bug and should be fixed instead of using synthetic minimal headers."
+            )
         
         # === Step 6: Extract existing fuzzer headers (for reference) ===
         log.debug('  6/6 Extracting existing fuzzer headers...')

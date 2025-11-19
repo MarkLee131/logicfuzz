@@ -185,13 +185,15 @@ class APICompositionAnalyzer:
             context = self.extractor.extract(target_function)
         
         if not context:
-            logger.warning(f"Could not extract context for {target_function}")
-            return {
-                'prerequisites': [],
-                'data_dependencies': [],
-                'call_sequence': [],
-                'initialization_code': []
-            }
+            # 这里是核心数据路径，静默返回一堆空列表只会在后面制造“假成功”。
+            # 直接抛错，让调用方（比如 FuzzingContext.prepare）决定怎么处理。
+            msg = (
+                f"Could not extract API context for target function '{target_function}' "
+                f"in project '{self.project_name}'. This usually indicates missing or "
+                f"corrupted FuzzIntrospector data."
+            )
+            logger.error(msg)
+            raise RuntimeError(msg)
         
         # 2. 识别前置依赖（API组合）- 优先从usage examples中提取真实使用模式
         prerequisites = self._find_prerequisite_functions(target_function, context)

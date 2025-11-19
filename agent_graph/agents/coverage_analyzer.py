@@ -9,7 +9,7 @@ import json
 
 import logger
 from llm_toolkit.models import LLM
-from agent_graph.state import FuzzingWorkflowState
+from agent_graph.state import FuzzingWorkflowState, add_coverage_attempt
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
 from agent_graph.prompt_loader import get_prompt_manager
@@ -370,6 +370,27 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
         
         # 合并更新到session_memory
         updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
+        
+        # 记录一次“覆盖率分析”尝试到 session_memory，供后续 agent 参考
+        try:
+            coverage_percent = state.get("coverage_percent", 0.0)
+            line_coverage_diff = state.get("line_coverage_diff", 0.0)
+            no_improvement_count = state.get("no_coverage_improvement_count", 0)
+            outcome = "analysis_improve_required" if coverage_result.get("improve_required", False) else "analysis_no_improvement_needed"
+            add_coverage_attempt(
+                state=state,
+                attempt_type="coverage_analysis",
+                outcome=outcome,
+                coverage_percent=coverage_percent,
+                line_coverage_diff=line_coverage_diff,
+                no_improvement_count=no_improvement_count,
+                iteration=state.get("current_iteration", 0),
+                notes="CoverageAnalyzer completed"
+            )
+            updated_session_memory = state.get("session_memory", updated_session_memory)
+        except Exception as e:
+            # 不要因为记录尝试失败而影响主流程
+            logger.warning(f"Failed to record coverage_analysis attempt in session_memory: {e}", trial=self.trial)
         
         # Flush logs for this agent after completing execution
         self._langgraph_logger.flush_agent_logs(self.name)
