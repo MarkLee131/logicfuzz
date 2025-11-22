@@ -16,3 +16,5 @@ __pycache__/
 .cursor/
 error_prompts/
 extracted_fuzz_drivers/
+chroma_db/
+libretor

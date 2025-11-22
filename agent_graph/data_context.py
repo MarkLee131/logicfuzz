@@ -142,20 +142,47 @@ class FuzzingContext:
         # === Step 4: Find API combinations ===
         log.debug('  4/5 Finding API combinations...')
         try:
-            analyzer = APICompositionAnalyzer(
-                project_name,
-                llm=None,
-                use_llm=False  # Use heuristic mode for data preparation
-            )
-            # Pass api_context to avoid redundant FI query
-            api_dependencies = analyzer.find_api_combinations(
-                function_signature, 
-                api_context=api_context
-            )
+            # Try HybridAPIAnalyzer first (combines Liberator + LogicFuzz)
+            try:
+                from agent_graph.hybrid_api_analyzer import HybridAPIAnalyzer
+                log.debug('   Using HybridAPIAnalyzer (Liberator + LogicFuzz)')
+                analyzer = HybridAPIAnalyzer(
+                    project_name=project_name,
+                    use_liberator=True,      # Enable Liberator type-driven analysis
+                    use_heuristic=True,      # Keep heuristic analysis as fallback
+                    use_llm=False,           # Data preparation doesn't use LLM
+                    project_dir=""            # Project directory not available in data context
+                )
+                # Pass api_context to avoid redundant FI query
+                api_dependencies = analyzer.analyze_dependencies(
+                    function_signature,
+                    api_context=api_context
+                )
+                log.info('   ✅ HybridAPIAnalyzer analysis completed')
+            except ImportError:
+                log.warning('   HybridAPIAnalyzer not available, falling back to APICompositionAnalyzer')
+                raise  # Re-raise to trigger fallback
+            except Exception as hybrid_error:
+                log.warning(
+                    f'   HybridAPIAnalyzer failed: {hybrid_error}. '
+                    f'Falling back to APICompositionAnalyzer'
+                )
+                # Fallback to original analyzer
+                analyzer = APICompositionAnalyzer(
+                    project_name,
+                    llm=None,
+                    use_llm=False  # Use heuristic mode for data preparation
+                )
+                # Pass api_context to avoid redundant FI query
+                api_dependencies = analyzer.find_api_combinations(
+                    function_signature, 
+                    api_context=api_context
+                )
+                log.info('   ✅ APICompositionAnalyzer fallback completed')
         except Exception as e:
             raise RuntimeError(
                 f"Failed to find API combinations: {e}\n"
-                f"This is an internal error in APICompositionAnalyzer."
+                f"This is an internal error in the API analyzer."
             ) from e
         
         if not api_dependencies:
