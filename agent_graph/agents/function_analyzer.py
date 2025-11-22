@@ -44,7 +44,7 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             extract_session_memory_updates_from_response,
             merge_session_memory_updates
         )
-        from agent_graph.api_context_extractor import get_api_context, format_api_context_for_prompt
+        from agent_graph.api_context_extractor import format_api_context_for_prompt
         
         benchmark = state["benchmark"]
         project_name = benchmark.get('project', 'unknown')
@@ -54,7 +54,6 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         # ========================================================================
         # DATA EXTRACTION: Get from context (prepared once at startup)
         # ========================================================================
-        # Philosophy: No fallbacks. If context is missing, something is wrong upstream.
         context = state.get('context', None)
         
         if not context:
@@ -62,7 +61,6 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             error_msg = (
                 f'❌ FATAL: No fuzzing context in state!\n'
                 f'This means data preparation failed but error was hidden.\n'
-                f'Check run_single_fuzz.py::_prepare_shared_data_for_benchmark().'
             )
             logger.error(error_msg, trial=self.trial)
             raise RuntimeError(error_msg)
@@ -922,239 +920,9 @@ Use this knowledge to structure your analysis.
         
         return None
     
-    def _extract_header_information(
-        self,
-        project_name: str,
-        function_signature: str
-    ) -> dict:
-        """
-        Extract header information from FuzzIntrospector.
-        
-        Returns:
-            dict with keys:
-                - function_header: Primary header file for the function
-                - related_headers: List of related project headers
-                - definition_file_headers: Headers extracted from function definition file (NEW)
-                - is_c_api: Whether the function is a C API (based on naming convention)
-        """
-        from data_prep import introspector
-        from agent_graph.header_extractor import get_function_definition_headers
-        
-        header_info = {
-            "function_header": None,
-            "related_headers": [],
-            "definition_file_headers": None,
-            "is_c_api": False
-        }
-        
-        try:
-            # ===== STEP 0: Detect if this is a C API function =====
-            # C API characteristics:
-            # 1. Function name uses underscore_style (e.g., ada_can_parse_with_base)
-            # 2. No namespace prefix (e.g., no ada::parse)
-            # 3. Often has C-style types (char*, size_t) without std::
-            function_name = function_signature.split('(')[0].strip().split()[-1]
-            is_c_api = self._detect_c_api(function_name, function_signature)
-            header_info["is_c_api"] = is_c_api
-            
-            if is_c_api:
-                logger.info(
-                    f'Detected C API function (underscore naming): {function_name}',
-                    trial=self.trial
-                )
-            # ======================================================
-            
-            # ===== STEP 1: Query FI for header files (HIGHEST PRIORITY for C APIs) =====
-            logger.info(f'Querying FI header files for {function_signature}', trial=self.trial)
-            all_headers = introspector.query_introspector_header_files_to_include(
-                project_name, function_signature
-            )
-            
-            if all_headers:
-                logger.info(f'Found {len(all_headers)} headers from FI', trial=self.trial)
-                
-                # Filter project headers (exclude standard library)
-                project_headers = []
-                for header in all_headers:
-                    # Keep headers that are in project source (/src/PROJECT_NAME/...)
-                    if f'/src/{project_name}/' in header or '/src/' in header[:20]:
-                        # Convert to include format
-                        include_path = self._convert_to_include_path(header, project_name)
-                        if include_path:
-                            project_headers.append(include_path)
-                
-                if project_headers:
-                    # First header is usually the function's declaration
-                    header_info["function_header"] = project_headers[0]
-                    header_info["related_headers"] = project_headers[1:5]  # Up to 4 more
-                    logger.info(f'Primary header from FI: {project_headers[0]}', trial=self.trial)
-            else:
-                logger.debug(f'No headers returned from FI for {function_signature}', trial=self.trial)
-            # ==========================================================================
-            
-            # ===== STEP 2: Extract headers from function definition file (fallback for C++) =====
-            logger.info(f'Extracting headers from function definition file', trial=self.trial)
-            definition_headers = get_function_definition_headers(
-                project_name, function_signature
-            )
-            
-            if definition_headers:
-                header_info["definition_file_headers"] = definition_headers
-                logger.info(
-                    f'Extracted {len(definition_headers.get("standard_headers", []))} standard '
-                    f'and {len(definition_headers.get("project_headers", []))} project headers '
-                    f'from definition file: {definition_headers.get("definition_file", "unknown")}',
-                    trial=self.trial
-                )
-            else:
-                logger.debug(f'No definition file headers found', trial=self.trial)
-            # ==================================================================================
-            
-        except Exception as e:
-            logger.warning(f'Failed to extract header information: {e}', trial=self.trial)
-        
-        return header_info
-    
-    def _detect_c_api(self, function_name: str, function_signature: str) -> bool:
-        """
-        Detect if a function is a C API based on naming conventions.
-        
-        C API characteristics:
-        - Underscore naming (e.g., ada_can_parse, json_parse_string)
-        - No namespace prefix (no ::)
-        - Typically 2+ underscores in name
-        
-        Args:
-            function_name: Extracted function name (e.g., 'ada_can_parse_with_base')
-            function_signature: Full signature for additional context
-        
-        Returns:
-            True if likely a C API function
-        """
-        # C++ API indicators (negative signals)
-        if '::' in function_name:
-            return False  # C++ namespace
-        
-        # Remove common prefixes to get pure name
-        name_parts = function_name.split('::')[-1]  # Get last part after ::
-        
-        # C API naming pattern: lowercase_with_underscores
-        # Require at least 2 underscores and all lowercase (except for specific prefixes)
-        underscore_count = name_parts.count('_')
-        
-        if underscore_count >= 2:
-            # Check if it's all lowercase (C API convention)
-            # Allow numbers and underscores
-            clean_name = name_parts.replace('_', '').replace('0', '').replace('1', '').replace('2', '').replace('3', '').replace('4', '').replace('5', '').replace('6', '').replace('7', '').replace('8', '').replace('9', '')
-            if clean_name.islower():
-                return True
-        
-        return False
-    
-    def _convert_to_include_path(self, absolute_path: str, project_name: str) -> str:
-        """
-        Convert absolute path to include format.
-        e.g., /src/mosh/src/terminal/terminal.h -> "src/terminal/terminal.h"
-        """
-        if not absolute_path:
-            return ""
-        
-        # Try to extract the part after /src/PROJECT_NAME/
-        if f'/src/{project_name}/' in absolute_path:
-            parts = absolute_path.split(f'/src/{project_name}/', 1)
-            if len(parts) > 1:
-                return parts[1]
-        
-        # Fallback: extract after any /src/
-        if '/src/' in absolute_path:
-            parts = absolute_path.split('/src/', 1)
-            if len(parts) > 1:
-                subparts = parts[1].split('/', 1)
-                if len(subparts) > 1:
-                    return subparts[1]
-        
-        # Last resort: return filename only
-        return absolute_path.split('/')[-1]
-    
-    def _extract_existing_fuzzer_headers(
-        self,
-        project_name: str
-    ) -> dict:
-        """
-        Extract actual include statements from existing fuzzers.
-        These headers are proven to work and should be prioritized.
-        
-        Args:
-            project_name: Name of the project
-            
-        Returns:
-            dict with keys:
-                - standard_headers: List of standard library includes (e.g., ["cstddef", "cstdint"])
-                - project_headers: List of project-specific includes (e.g., ["src/terminal/parser.h"])
-        """
-        from data_prep import introspector
-        import re
-        
-        result = {
-            "standard_headers": [],
-            "project_headers": []
-        }
-        
-        try:
-            # 1. Get all fuzzers for the project
-            logger.info(f'Querying existing fuzzers for {project_name}', trial=self.trial)
-            harnesses = introspector.query_introspector_for_harness_intrinsics(project_name)
-            
-            if not harnesses:
-                logger.warning(f'No existing fuzzers found for {project_name}', trial=self.trial)
-                return result
-            
-            all_includes = {"standard": set(), "project": set()}
-            
-            # 2. Analyze each fuzzer (limit to first 10 for efficiency)
-            for harness in harnesses[:10]:
-                fuzzer_path = harness.get('source', '')
-                if not fuzzer_path:
-                    continue
-                
-                logger.debug(f'Analyzing fuzzer: {fuzzer_path}', trial=self.trial)
-                
-                # 3. Get fuzzer source code
-                fuzzer_source = introspector.query_introspector_source_code(
-                    project_name, fuzzer_path
-                )
-                
-                if not fuzzer_source:
-                    continue
-                
-                # 4. Parse includes from source
-                # Pattern for #include <...> (standard library)
-                standard_includes = re.findall(r'#include\s+<([^>]+)>', fuzzer_source)
-                for inc in standard_includes:
-                    # Filter common fuzzer-only headers
-                    if inc not in ['fuzzer/FuzzedDataProvider.h']:
-                        all_includes["standard"].add(inc)
-                
-                # Pattern for #include "..." (project headers)
-                project_includes = re.findall(r'#include\s+"([^"]+)"', fuzzer_source)
-                for inc in project_includes:
-                    # Filter out fuzzer-specific and test files
-                    inc_lower = inc.lower()
-                    if 'fuzzer' not in inc_lower and 'test' not in inc_lower and 'mock' not in inc_lower:
-                        all_includes["project"].add(inc)
-            
-            result["standard_headers"] = sorted(list(all_includes["standard"]))
-            result["project_headers"] = sorted(list(all_includes["project"]))
-            
-            total_count = len(result["standard_headers"]) + len(result["project_headers"])
-            logger.info(f'Extracted {total_count} includes from existing fuzzers '
-                       f'({len(result["standard_headers"])} standard, {len(result["project_headers"])} project)',
-                       trial=self.trial)
-            
-        except Exception as e:
-            logger.warning(f'Failed to extract existing fuzzer headers: {e}', trial=self.trial)
-        
-        return result
+    # NOTE: Header extraction methods removed - header_info and existing_fuzzer_headers
+    # are now prepared in FuzzingContext.prepare() and passed via context.
+    # This eliminates redundant data extraction and ensures single source of truth.
     
     def _extract_srs_json(self, response: str) -> Optional[Dict[str, Any]]:
         """Extract and parse SRS JSON from the response.
