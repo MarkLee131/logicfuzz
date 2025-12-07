@@ -1,4 +1,3 @@
-responses/
 results/
 results-*/
 oss-fuzz/
@@ -14,7 +13,6 @@ __pycache__/
 .vscode/
 .DS_Store
 .cursor/
-error_prompts/
 extracted_fuzz_drivers/
 chroma_db/
-libretor
+logicfuzz.env
