@@ -28,7 +28,8 @@ Generate fuzzers for the sample `cjson` benchmark:
 
 ```bash
 python run_logicfuzz.py \
-  -y conti-benchmark/conti-cmp/cjson.yaml \
+  -y conti-benchmark/cjson.yaml \
+  -n 1 \
   --model gpt-5.1
 ```
 
@@ -36,11 +37,32 @@ To use a different model:
 
 ```bash
 python run_logicfuzz.py \
-  -y conti-benchmark/conti-cmp/cjson.yaml \
+  -y conti-benchmark/cjson.yaml \
+  -n 1 \
   --model qwen-plus
 ```
 
 For more options (e.g., `--benchmarks-directory`, `--num-samples`, `--run-timeout`), see `docs/RUNNING.md`.
+
+### 3. Available Models
+
+| Model | Provider | Notes |
+|-------|----------|-------|
+| `qwen-max` | Alibaba Cloud | **Default**. Large context (258K tokens) |
+| `qwen-plus` | Alibaba Cloud | Cost-efficient |
+| `qwen3-coder-plus` | Alibaba Cloud | Optimized for code |
+| `qwq-plus` | Alibaba Cloud | Reasoning model |
+| `gpt-5` | OpenAI | |
+| `gpt-5.1` | OpenAI | |
+| `gpt-3.5-turbo` | OpenAI | |
+| `deepseek-chat` | DeepSeek | Large context (128K tokens) |
+| `deepseek-reasoner` | DeepSeek | Reasoning model |
+
+List all available models with:
+
+```bash
+python run_logicfuzz.py --list-models
+```
 
 ---
 
