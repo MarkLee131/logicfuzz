@@ -110,44 +110,8 @@ class LangGraphEnhancer(LangGraphAgent):
             fuzz_target_code = response
         
         # 🔥 CRITICAL VALIDATION: Check if target function name was changed
-        target_function_name = benchmark.get('function_name', '')
-        if target_function_name:
-            violation_detected, violation_msg = self._validate_target_function_preserved(
-                fuzz_target_code, 
-                target_function_name
-            )
-            
-            if violation_detected:
-                logger.error(
-                    f'❌ CRITICAL VIOLATION: Target function was changed! {violation_msg}',
-                    trial=self.trial
-                )
-                # Force rebuild with error message explaining the violation
-                state_update = {
-                    "compile_success": False,
-                    "build_errors": [
-                        f"❌ VALIDATION ERROR: {violation_msg}",
-                        f"",
-                        f"YOU MUST CALL FUNCTION: {target_function_name}",
-                        f"",
-                        f"The target function name MUST remain exactly as specified.",
-                        f"DO NOT replace it with similar-named functions.",
-                        f"",
-                        f"Add a direct call to {target_function_name}() inside LLVMFuzzerTestOneInput.",
-                    ],
-                    "session_memory": updated_session_memory
-                }
-                
-                # Update retry counter
-                if workflow_phase == "compilation":
-                    compilation_retry_count = state.get("compilation_retry_count", 0)
-                    state_update["compilation_retry_count"] = compilation_retry_count + 1
-                else:
-                    retry_count = state.get("retry_count", 0)
-                    state_update["retry_count"] = retry_count + 1
-                
-                self._langgraph_logger.flush_agent_logs(self.name)
-                return state_update
+        # Project-level mode: No target function validation
+        # Skip function validation - driver can use any API from the project
         
         # Prepare state update
         state_update = {

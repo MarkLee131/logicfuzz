@@ -48,8 +48,6 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         
         benchmark = state["benchmark"]
         project_name = benchmark.get('project', 'unknown')
-        function_signature = benchmark.get('function_signature', 'unknown')
-        function_name = benchmark.get('function_name', 'unknown')
         
         # ========================================================================
         # DATA EXTRACTION: Get from context (prepared once at startup)
@@ -65,12 +63,14 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             logger.error(error_msg, trial=self.trial)
             raise RuntimeError(error_msg)
         
-        logger.info(f'✅ Using fuzzing context (prepared in {context.get("preparation_time", 0):.2f}s)', trial=self.trial)
+        logger.info(f'✅ Using project-level fuzzing context (prepared in {context.get("preparation_time", 0):.2f}s)', trial=self.trial)
         
-        # Extract data from context - all guaranteed to exist
-        func_source = context.get('source_code', '')
+        # Extract project-level data from context
+        project_apis = context.get('project_apis', [])
+        api_sequences = context.get('api_sequences', [])
+        dependency_graph = context.get('dependency_graph', {})
+        grammar_info = context.get('grammar_info', {})
         api_dependencies = context.get('api_dependencies', {})
-        api_context = api_dependencies.get('api_context', {})  # Nested inside dependencies
         header_info = context.get('header_info', {})
         existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
         
@@ -79,110 +79,45 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             header_info = {}
         header_info["existing_fuzzer_headers"] = existing_fuzzer_headers
         
-        # Log data summary (works for both shared_data and fallback paths)
-        if api_context:
-            param_count = len(api_context.get('parameters', []))
-            init_pattern_count = len(api_context.get('initialization_patterns', []))
-            example_count = len(api_context.get('usage_examples', []))
-            related_func_count = len(api_context.get('related_functions', []))
-            typedef_count = len(api_context.get('type_definitions', {}))
-            
-            logger.info(
-                f'📊 API context available: {param_count} parameters, '
-                f'{init_pattern_count} init patterns, {example_count} usage examples',
-                trial=self.trial
-            )
-            
-            # Log detailed context information
-            logger.info(
-                f'📊 Detailed API Context Information:\n'
-                f'  ├─ Parameters ({param_count}):\n' +
-                '\n'.join([f'  │   • {p.get("name", "?")} ({p.get("type", "?")})' 
-                          for p in api_context.get('parameters', [])[:10]]) +
-                ('\n  │   • ... (more parameters)' if param_count > 10 else '') +
-                f'\n  ├─ Type Definitions ({typedef_count}):\n' +
-                '\n'.join([f'  │   • {name}' 
-                          for name in list(api_context.get('type_definitions', {}).keys())[:5]]) +
-                ('\n  │   • ... (more types)' if typedef_count > 5 else '') +
-                f'\n  ├─ Initialization Patterns ({init_pattern_count}):\n' +
-                '\n'.join([f'  │   • {p.get("parameter", "?")} ({p.get("type", "?")}) -> {p.get("method", "?")[:50]}...' 
-                          for p in api_context.get('initialization_patterns', [])]) +
-                f'\n  ├─ Related Functions ({related_func_count}):\n' +
-                '\n'.join([f'  │   • {f.get("name", "?")} [{f.get("type", "?")}]' 
-                          for f in api_context.get('related_functions', [])[:10]]) +
-                ('\n  │   • ... (more functions)' if related_func_count > 10 else '') +
-                f'\n  └─ Usage Examples ({example_count}):\n' +
-                '\n'.join([f'  │   • {e.get("function", "?")} @ {e.get("file", "?")[:50]}...' 
-                          for e in api_context.get('usage_examples', [])]),
-                trial=self.trial
-            )
-        else:
-            logger.warning(f'⚠️ No API context available for {function_signature}', trial=self.trial)
+        # Log project-level data summary
+        api_count = len(project_apis)
+        sequence_count = len(api_sequences)
+        dep_nodes = dependency_graph.get('num_nodes', 0)
         
-        if api_dependencies and api_dependencies.get('call_sequence'):
-            prereq_count = len(api_dependencies.get('prerequisites', []))
-            data_dep_count = len(api_dependencies.get('data_dependencies', []))
-            call_seq_len = len(api_dependencies.get('call_sequence', []))
-            
-            logger.info(
-                f'🔗 API dependency graph available: {prereq_count} prerequisites, '
-                f'{data_dep_count} data deps, call sequence length: {call_seq_len}',
-                trial=self.trial
-            )
-            
-            # Log detailed dependency information
-            logger.info(
-                f'🔗 Detailed API Dependency Information:\n'
-                f'  ├─ Call Sequence ({call_seq_len}):\n' +
-                '\n'.join([f'  │   {i+1}. {func}{"" if func != function_signature else " ← TARGET"}' 
-                          for i, func in enumerate(api_dependencies.get('call_sequence', []))]) +
-                f'\n  ├─ Prerequisites ({prereq_count}):\n' +
-                '\n'.join([f'  │   • {prereq}()' 
-                          for prereq in api_dependencies.get('prerequisites', [])]) +
-                f'\n  └─ Data Dependencies ({data_dep_count}):\n' +
-                '\n'.join([f'  │   • {src} → {dst}' 
-                          for src, dst in api_dependencies.get('data_dependencies', [])]),
-                trial=self.trial
-            )
+        logger.info(
+            f'📊 Project-level API data available: {api_count} APIs, '
+            f'{sequence_count} sequences, {dep_nodes} dependency nodes',
+            trial=self.trial
+        )
+        
+        # Log detailed project API information
+        logger.info(
+            f'📊 Project API Information:\n'
+            f'  ├─ Total APIs ({api_count}):\n' +
+            '\n'.join([f'  │   • {api.get("function_name", "?")} ({api.get("return_type", "?")})' 
+                      for api in project_apis[:15]]) +
+            ('\n  │   • ... (more APIs)' if api_count > 15 else '') +
+            f'\n  ├─ API Sequences ({sequence_count}):\n' +
+            '\n'.join([f'  │   Sequence {i+1}: {" → ".join(seq[:5])}' + (' ...' if len(seq) > 5 else '')
+                      for i, seq in enumerate(api_sequences[:5])]) +
+            ('\n  │   • ... (more sequences)' if sequence_count > 5 else '') +
+            f'\n  └─ Dependency Graph: {dep_nodes} nodes',
+            trial=self.trial
+        )
         
         # Log header information
         if header_info:
-            std_count = len(header_info.get("existing_fuzzer_headers", {}).get('standard_headers', []))
-            proj_count = len(header_info.get("existing_fuzzer_headers", {}).get('project_headers', []))
+            std_count = len(header_info.get('standard_headers', []))
+            proj_count = len(header_info.get('project_headers', []))
             logger.info(
-                f'📚 Header information available:\n'
-                f'  Definition headers: {header_info.get("definition_headers", [])}\n'
-                f'  Required type headers: {header_info.get("required_type_headers", [])}\n'
-                f'  Existing fuzzer headers: {std_count} standard, {proj_count} project headers',
+                f'📚 Header information available: {std_count} standard, {proj_count} project headers',
                 trial=self.trial
             )
         
-        if not func_source:
-            logger.warning(
-                f'No source code found in FuzzIntrospector for project: {project_name}, '
-                f'function: {function_signature}. Using fallback guidance.',
-                trial=self.trial
-            )
-            # Provide a structured fallback that guides the LLM
-            func_source = f"""// Source code not available in FuzzIntrospector database for:
-// Function: {function_signature}
-// Project: {project_name}
-//
-// NOTE: Please analyze this function conservatively based on:
-// 1. The function signature and parameter types
-// 2. Common patterns for similar functions in {project_name}
-// 3. Standard practices for the involved data types
-// 4. Typical constraints that real callers would respect
-//
-// Avoid making assumptions about internal implementation details.
-// Focus on what can be inferred from the signature and common usage patterns."""
-        else:
-            logger.info(f'Source code found ({len(func_source)} chars)', trial=self.trial)
-        
-        # Use stateless iterative analysis - explicit SRS knowledge state
-        logger.info('Using stateless iterative analysis (no conversation history)', trial=self.trial)
-        response = self._execute_stateless_iterative_analysis(
-            state, project_name, function_signature, function_name, func_source, api_context
+        # Use project-level analysis
+        logger.info('Using project-level API sequence analysis', trial=self.trial)
+        response = self._execute_project_level_analysis(
+            state, project_name, project_apis, api_sequences, dependency_graph
         )
         
         # 从响应中提取session_memory更新（archetype、初始API约束等）
@@ -238,6 +173,72 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             "session_memory": updated_session_memory
         }
     
+    def _execute_project_level_analysis(
+        self,
+        state: FuzzingWorkflowState,
+        project_name: str,
+        project_apis: List[Dict[str, Any]],
+        api_sequences: List[List[str]],
+        dependency_graph: Dict[str, Any]
+    ) -> str:
+        """
+        Execute project-level analysis using API sequences from Liberator.
+        
+        This method analyzes the project's API sequences and generates
+        requirements for driver generation based on the dependency graph.
+        """
+        from agent_graph.prompt_loader import get_prompt_manager
+        
+        logger.info('=' * 80, trial=self.trial)
+        logger.info('🔬 Project-level API sequence analysis', trial=self.trial)
+        logger.info('=' * 80, trial=self.trial)
+        
+        prompt_manager = get_prompt_manager()
+        
+        # Format API sequences for prompt
+        sequences_text = '\n'.join([
+            f'  Sequence {i+1}: {" → ".join(seq)}'
+            for i, seq in enumerate(api_sequences[:10])  # Limit to 10 sequences
+        ])
+        
+        # Format project APIs for prompt
+        apis_text = '\n'.join([
+            f'  • {api.get("function_name", "?")}({", ".join([arg.get("name", "?") for arg in api.get("arguments", [])[:3]])})'
+            for api in project_apis[:20]  # Limit to 20 APIs
+        ])
+        
+        # Build project-level analysis prompt
+        # Note: This requires a new prompt template "function_analyzer_project_level"
+        # For now, use a modified version of the existing prompt
+        analysis_prompt = f"""Analyze the following project APIs and sequences for fuzzing driver generation.
+
+Project: {project_name}
+Total APIs: {len(project_apis)}
+API Sequences: {len(api_sequences)}
+
+API Sequences (from Liberator grammar):
+{sequences_text}
+
+Project APIs:
+{apis_text}
+
+Dependency Graph: {dependency_graph.get('num_nodes', 0)} nodes
+
+Please analyze:
+1. Common API usage patterns
+2. Initialization requirements
+3. Resource management (cleanup)
+4. Parameter constraints
+5. Recommended driver structure
+
+Generate a structured analysis that will guide driver generation."""
+        
+        logger.info(f'📤 Project-level analysis call: {len(analysis_prompt)} chars', trial=self.trial)
+        response = self.call_llm_stateless(analysis_prompt, state, "PROJECT_LEVEL")
+        
+        logger.info(f'📊 Project-level analysis complete', trial=self.trial)
+        return response
+    
     def _execute_stateless_iterative_analysis(
         self,
         state: FuzzingWorkflowState,
@@ -247,6 +248,10 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         func_source: str,
         api_context: Optional[Dict] = None
     ) -> str:
+        """
+        DEPRECATED: This method is kept for backward compatibility but should not be used.
+        Use _execute_project_level_analysis() instead.
+        """
         """
         Execute stateless iterative analysis using explicit SRS knowledge state.
         

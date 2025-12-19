@@ -86,14 +86,14 @@ class HybridAPIAnalyzer:
     
     def analyze_dependencies(
         self,
-        target_function: str,
+        target_function: Optional[str] = None,
         api_context: Optional[Dict] = None
     ) -> Dict:
         """
         混合分析：结合 Liberator 和 LogicFuzz 的结果
         
         Args:
-            target_function: 目标函数名（如 "curl_easy_setopt"）
+            target_function: 目标函数名（如 "curl_easy_setopt"），如果为 None 则进行项目级分析
             api_context: 可选的 FuzzIntrospector 上下文（避免重复查询）
         
         Returns:
@@ -105,7 +105,10 @@ class HybridAPIAnalyzer:
             - liberator_metadata: Liberator 分析结果（如果启用）
             - heuristic_metadata: 启发式分析结果（如果启用）
         """
-        logger.info(f"🔍 Hybrid analysis for {target_function}")
+        if target_function:
+            logger.info(f"🔍 Hybrid analysis for {target_function}")
+        else:
+            logger.info(f"🔍 Project-level hybrid analysis for {self.project_name}")
         
         results = {
             'prerequisites': [],
@@ -119,7 +122,12 @@ class HybridAPIAnalyzer:
         # 1. Liberator 类型驱动分析
         if self.use_liberator and self.liberator_adapter:
             try:
-                liberator_result = self._analyze_with_liberator(target_function, api_context)
+                if target_function:
+                    liberator_result = self._analyze_with_liberator(target_function, api_context)
+                else:
+                    # 项目级分析：使用 ProjectDriverGenerator
+                    liberator_result = self._analyze_project_level()
+                
                 if liberator_result:
                     results['liberator_metadata'] = liberator_result
                     # 合并依赖关系
@@ -133,8 +141,8 @@ class HybridAPIAnalyzer:
             except Exception as e:
                 logger.warning(f"Liberator analysis failed: {e}", exc_info=True)
         
-        # 2. LogicFuzz 启发式/LLM 分析
-        if (self.use_heuristic or self.use_llm) and self.composition_analyzer:
+        # 2. LogicFuzz 启发式/LLM 分析（仅在有目标函数时）
+        if target_function and (self.use_heuristic or self.use_llm) and self.composition_analyzer:
             try:
                 heuristic_result = self.composition_analyzer.find_api_combinations(
                     target_function, api_context
@@ -399,4 +407,60 @@ class HybridAPIAnalyzer:
             if line not in merged:
                 merged.append(line)
         return merged
+    
+    def _analyze_project_level(self) -> Optional[Dict]:
+        """
+        项目级分析：使用 ProjectDriverGenerator 进行项目级分析
+        
+        Returns:
+            包含项目级分析结果的字典
+        """
+        try:
+            from liberator_adapter.project_driver_generator import ProjectDriverGenerator
+            
+            # 创建项目级生成器（需要 benchmark 对象）
+            # 注意：这里需要从外部传入 benchmark，暂时使用简化版本
+            logger.info(f"🚀 Starting project-level analysis for {self.project_name}")
+            
+            # 如果适配器支持 Clang/LLVM，使用它来提取所有 API
+            if hasattr(self.liberator_adapter, 'use_clang_llvm') and self.liberator_adapter.use_clang_llvm:
+                # 提取所有 API
+                all_apis_dict = self.liberator_adapter.extract_all_apis()
+                all_apis = set(all_apis_dict.values())
+                
+                if not all_apis:
+                    logger.warning("No APIs extracted for project-level analysis")
+                    return None
+                
+                # 构建类型依赖图
+                from liberator_adapter.dependency import TypeDependencyGraphGenerator
+                dep_gen = TypeDependencyGraphGenerator(list(all_apis))
+                dep_graph = dep_gen.create()
+                
+                # 生成语法
+                from liberator_adapter.grammar import GrammarGenerator, NonTerminal, Terminal
+                start_term = NonTerminal("start")
+                end_term = Terminal("end")
+                grammar_gen = GrammarGenerator(start_term, end_term)
+                grammar = grammar_gen.create(dep_graph)
+                
+                # 收集所有 API 名称
+                all_api_names = [api.function_name for api in all_apis]
+                
+                return {
+                    'prerequisites': all_api_names,  # 所有 API 都可以作为候选
+                    'data_dependencies': [],  # 项目级不返回具体依赖关系
+                    'call_sequence': all_api_names,  # 所有 API 的序列
+                    'initialization_code': [],
+                    'all_apis': all_api_names,
+                    'dependency_graph_size': len(dep_graph.graph),
+                    'grammar_symbols': grammar.num_symbols()
+                }
+            else:
+                logger.warning("Project-level analysis requires Clang/LLVM mode")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"Project-level analysis failed: {e}", exc_info=True)
+            return None
 

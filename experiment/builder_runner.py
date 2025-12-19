@@ -382,24 +382,23 @@ class BuilderRunner:
 
   def _pre_build_check(self, target_path: str,
                        build_result: BuildResult) -> bool:
-    """Checks the generated C/C++ target before building and running it."""
-    # No need to build the fuzz target if it does not contain the target
-    # function. Only C/C++ is supported.
-    result = self._contains_target_cpp_function(target_path)
-
-    if not result:
-      build_result.errors = [
-          (f'The target function `{self.benchmark.function_signature}`'
-           ' was not called by the fuzz target '
-           '`LLVMFuzzerTestOneInput`.'
-           'YOU MUST CALL FUNCTION '
-           f'`{self.benchmark.function_signature}` INSIDE FUNCTION '
-           '`LLVMFuzzerTestOneInput`.')
-      ]
-      logger.warning('Missing target function: %s does not contain %s',
-                     target_path, self.benchmark.function_signature)
-
-    return result
+    """Checks the generated C/C++ target before building and running it.
+    
+    Project-level mode: No function validation, only basic syntax check.
+    """
+    # Project-level mode: Skip function validation
+    # Just verify the file exists and is readable
+    try:
+      with open(target_path, 'r') as f:
+        content = f.read()
+        if not content.strip():
+          build_result.errors = ['Generated fuzz target is empty']
+          return False
+    except Exception as e:
+      build_result.errors = [f'Failed to read generated target: {e}']
+      return False
+    
+    return True
 
   def _parse_stacks_from_libfuzzer_logs(self,
                                         lines: list[str]) -> list[list[str]]:

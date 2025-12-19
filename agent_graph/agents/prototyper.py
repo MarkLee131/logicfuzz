@@ -41,6 +41,13 @@ class LangGraphPrototyper(LangGraphAgent):
         
         benchmark = state["benchmark"]
         function_analysis = state.get("function_analysis", {})
+        context = state.get('context', {})
+        
+        # Extract project-level data
+        project_apis = context.get('project_apis', [])
+        api_sequences = context.get('api_sequences', [])
+        dependency_graph = context.get('dependency_graph', {})
+        condition_info = context.get('condition_info', {})
         
         # Determine language
         language = benchmark.get('language', 'C++')
@@ -67,15 +74,74 @@ class LangGraphPrototyper(LangGraphAgent):
         # Format SRS specification (use structured data if available, otherwise raw analysis)
         srs_specification = self._format_srs_specification(function_analysis)
         
-        base_prompt = prompt_manager.build_user_prompt(
-            "prototyper",
-            project_name=benchmark.get('project', 'unknown'),
-            function_name=benchmark.get('function_name', 'unknown'),
-            function_signature=benchmark.get('function_signature', 'unknown'),
-            srs_specification=srs_specification,
-            additional_context=additional_context,
-            skeleton_code=skeleton_code
-        )
+        # Format API sequences for prompt
+        api_sequences_text = self._format_api_sequences(api_sequences, limit=8)
+        project_apis_text = self._format_project_apis(project_apis, limit=20)
+        dep_graph_text = self._format_dependency_graph(dependency_graph, limit=12)
+        condition_text = self._format_condition_info(condition_info)
+        
+        # Build project-level prompt
+        # Note: This requires updating the prompt template to support API_SEQUENCES
+        # For now, we'll modify the prompt building to include sequences
+        try:
+            base_prompt = prompt_manager.build_user_prompt(
+                "prototyper",
+                project_name=benchmark.get('project', 'unknown'),
+                function_name="",  # Empty for project-level
+                function_signature="",  # Empty for project-level
+                srs_specification=srs_specification,
+                additional_context=additional_context,
+                skeleton_code=skeleton_code
+            )
+            # Inject API sequences into the prompt
+            base_prompt += f"""
+
+**API Sequences (from Liberator grammar):**
+{api_sequences_text}
+
+**Project APIs (sample):**
+{project_apis_text}
+
+**Dependency Graph (sample):**
+{dep_graph_text}
+
+**Liberator Constraints (ConditionManager):**
+{condition_text}
+
+**Instructions:**
+Generate a fuzz driver that uses one or more of the API sequences above.
+The driver should:
+1. Follow the dependency order in the sequences
+2. Initialize required resources
+3. Call APIs in the correct sequence
+4. Clean up resources properly
+"""
+        except Exception as e:
+            # Fallback: build prompt manually if template doesn't support project-level
+            logger.warning(f"Prompt template may not support project-level mode: {e}", trial=self.trial)
+            base_prompt = f"""Generate a fuzz target for project {benchmark.get('project', 'unknown')}.
+
+**API Sequences (from Liberator grammar):**
+{api_sequences_text}
+
+**Project APIs (sample):**
+{project_apis_text}
+
+**Dependency Graph (sample):**
+{dep_graph_text}
+
+**Liberator Constraints (ConditionManager):**
+{condition_text}
+
+**SRS Specification:**
+{srs_specification}
+
+**Skeleton Code:**
+{skeleton_code}
+
+{additional_context}
+
+Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above."""
         
         # 注入session_memory，让Prototyper能看到archetype和API约束
         prompt = build_prompt_with_session_memory(
@@ -132,6 +198,62 @@ class LangGraphPrototyper(LangGraphAgent):
         self._langgraph_logger.flush_agent_logs(self.name)
         
         return state_update
+
+    # === Formatting helpers ===
+
+    def _format_api_sequences(self, api_sequences: List[List[str]], limit: int = 10) -> str:
+        if not api_sequences:
+            return "  (none)"
+        lines = []
+        for i, seq in enumerate(api_sequences[:limit]):
+            seq_str = " → ".join(seq)
+            lines.append(f"  Sequence {i+1}: {seq_str}")
+        if len(api_sequences) > limit:
+            lines.append(f"  ... and {len(api_sequences) - limit} more")
+        return "\n".join(lines)
+
+    def _format_project_apis(self, project_apis: List[Dict[str, Any]], limit: int = 20) -> str:
+        if not project_apis:
+            return "  (none)"
+        lines = []
+        for api in project_apis[:limit]:
+            fn = api.get("function_name", "unknown")
+            rt = api.get("return_type", "void")
+            args = api.get("arguments", [])
+            args_str = ", ".join(args[:3])
+            if len(args) > 3:
+                args_str += ", ..."
+            lines.append(f"  • {rt} {fn}({args_str})")
+        if len(project_apis) > limit:
+            lines.append(f"  ... and {len(project_apis) - limit} more")
+        return "\n".join(lines)
+
+    def _format_dependency_graph(self, dep_graph: Dict[str, Any], limit: int = 12) -> str:
+        graph = dep_graph.get("graph", {}) if isinstance(dep_graph, dict) else {}
+        if not graph:
+            return "  (empty)"
+        lines = []
+        lines.append(f"  Total nodes: {dep_graph.get('num_nodes', len(graph))}")
+        lines.append(f"  Showing up to {limit} dependencies:")
+        for api, deps in list(graph.items())[:limit]:
+            if deps:
+                deps_str = ", ".join(deps[:5]) + (" ..." if len(deps) > 5 else "")
+                lines.append(f"    {api} depends on: {deps_str}")
+            else:
+                lines.append(f"    {api} depends on: (none)")
+        return "\n".join(lines)
+
+    def _format_condition_info(self, condition_info: Dict[str, Any]) -> str:
+        if not condition_info:
+            return "  (no constraints parsed)"
+        sources = condition_info.get("sources", [])
+        sinks = condition_info.get("sinks", [])
+        inits = condition_info.get("inits", [])
+        lines = []
+        lines.append(f"  Sources ({len(sources)}): {', '.join(sources[:10])}" + (" ..." if len(sources) > 10 else ""))
+        lines.append(f"  Sinks ({len(sinks)}): {', '.join(sinks[:10])}" + (" ..." if len(sinks) > 10 else ""))
+        lines.append(f"  Init ({len(inits)}): {', '.join(inits[:10])}" + (" ..." if len(inits) > 10 else ""))
+        return "\n".join(lines)
     
     def _validate_api_usage(self, code: str, project_name: str) -> str:
         """
