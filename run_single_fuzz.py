@@ -171,40 +171,44 @@ def prepare(oss_fuzz_dir: str) -> None:
   oss_fuzz_checkout.clone_oss_fuzz(oss_fuzz_dir)
   oss_fuzz_checkout.postprocess_oss_fuzz()
 
-def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Namespace) -> dict:
+def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Namespace,
+                                       llm_model: models.LLM = None) -> dict:
   """
-  Extract shared data that's identical for all trials.
+  Extract shared data using Liberator project-level modeling.
   
-  This function queries FuzzIntrospector once and returns data that
-  all trials can share, avoiding redundant network I/O and computation.
+  This function uses ProjectDriverGenerator to model the entire project,
+  extract all APIs, and generate API sequences for driver generation.
   
   Args:
-      benchmark: Benchmark containing project and function info
+      benchmark: Benchmark containing project info (project-level mode)
       args: Command line arguments
+      llm_model: Optional LLM instance for semantic filtering of API sequences
       
   Returns:
       Dictionary with shared data:
-      - source_code: Function source code from FI
-      - api_context: API context (parameters, types, examples, etc.)
-      - api_dependencies: Dependency graph
+      - project_apis: All APIs extracted from project
+      - api_sequences: API call sequences from grammar
+      - dependency_graph: Type dependency graph
+      - grammar_info: Grammar metadata
+      - api_dependencies: Legacy format for compatibility
       - header_info: Header file information
       - existing_fuzzer_headers: Headers from existing fuzzers
   """
   from agent_graph.data_context import FuzzingContext
   
   project_name = benchmark.project
-  function_signature = benchmark.function_signature
   
   try:
     context = FuzzingContext.prepare(
       project_name=project_name,
-      function_signature=function_signature,
-      logger_instance=None  # Use standard logging - no trial concept here
+      benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
+      logger_instance=None,  # Use standard logging - no trial concept here
+      llm=llm_model
     )
     return context.to_dict()
   except (ValueError, RuntimeError) as e:
     # Re-raise with clear message - caller decides how to handle
-    logger.error(f'❌ Failed to prepare fuzzing context: {e}', trial=0)
+    logger.error(f'❌ Failed to prepare project-level fuzzing context: {e}', trial=0)
     raise
 
 
@@ -391,7 +395,7 @@ def _fuzzing_pipelines(benchmark: Benchmark, model: models.LLM,
   shared_data_start = time.time()
   
   try:
-    shared_data = _prepare_shared_data_for_benchmark(benchmark, args)
+    shared_data = _prepare_shared_data_for_benchmark(benchmark, args, llm_model=model)
   except ValueError as e:
     # Data preparation failed due to bad input - this is terminal
     logger.error(

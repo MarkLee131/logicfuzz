@@ -53,6 +53,8 @@ class HybridAPIExtractor:
         
         # 本地临时目录（用于存储从容器复制的文件）
         self.local_temp_dir = None
+        # 记录最近一次提取的元数据（容器/本地路径）
+        self.last_metadata = {}
     
     def extract(
         self,
@@ -163,6 +165,8 @@ class HybridAPIExtractor:
         files_to_copy = [
             (apis_clang_path, 'apis_clang.json'),
             (apis_llvm_path, 'apis_llvm.json'),
+            (f'{self.output_dir}/conditions.json', 'conditions.json'),
+            (f'{self.output_dir}/data_layout.txt', 'data_layout.txt'),
         ]
         
         # 可选文件
@@ -197,6 +201,26 @@ class HybridAPIExtractor:
             apis_dict = {}
             for api in api_set:
                 apis_dict[api.function_name] = api
+
+            # 记录元数据供后续 DataLayout/ConditionManager 使用
+            self.last_metadata = {
+                "container": {
+                    "apis_clang": apis_clang_path,
+                    "apis_llvm": apis_llvm_path,
+                    "conditions": f"{self.output_dir}/conditions.json",
+                    "data_layout": f"{self.output_dir}/data_layout.txt",
+                    "incomplete_types": incomplete_types_path,
+                    "exported_functions": exported_functions_path,
+                },
+                "local": {
+                    "apis_clang": local_paths.get('apis_clang.json'),
+                    "apis_llvm": local_paths.get('apis_llvm.json'),
+                    "conditions": local_paths.get('conditions.json'),
+                    "data_layout": local_paths.get('data_layout.txt'),
+                    "incomplete_types": local_paths.get('incomplete_types.txt'),
+                    "exported_functions": local_paths.get('exported_functions.txt'),
+                }
+            }
             
             return apis_dict
         except Exception as e:
@@ -230,6 +254,10 @@ class HybridAPIExtractor:
         import re
         match = re.search(r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:_[a-zA-Z0-9_]+)*)\s*\(', signature)
         return match.group(1) if match else None
+    
+    def get_last_metadata(self):
+        """返回最近一次提取的元数据（容器/本地路径）。"""
+        return self.last_metadata
     
     def _file_exists_in_container(self, file_path: str) -> bool:
         """检查容器内文件是否存在"""

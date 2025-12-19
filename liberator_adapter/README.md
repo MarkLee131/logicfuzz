@@ -141,9 +141,82 @@ dep_graph = dep_gen.create()
 - **适配 LogicFuzz**：针对 LogicFuzz 的使用场景进行了适配
 - **最小化依赖**：只包含核心功能，减少不必要的依赖
 
+## 项目级 Driver 生成
+
+### ProjectDriverGenerator
+
+`ProjectDriverGenerator` 提供了完整的项目级 driver 生成功能，不需要指定单个 API。
+
+**功能特性：**
+- ✅ 提取项目中的所有 API
+- ✅ 生成类型依赖图
+- ✅ 生成语义序列（Grammar）
+- ✅ 管理约束条件（ConditionManager）
+- ✅ 生成 driver 代码
+
+**使用示例：**
+
+```python
+from experiment.benchmark import Benchmark
+from liberator_adapter.project_driver_generator import ProjectDriverGenerator
+
+# 创建 Benchmark 对象
+benchmark = Benchmark(project='zlib', ...)
+
+# 创建项目级 driver 生成器
+generator = ProjectDriverGenerator(
+    project_name='zlib',
+    benchmark=benchmark,
+    use_clang_llvm=True,
+    work_dir='./workdir_zlib'
+)
+
+# 完整流程：生成 driver
+drivers = generator.generate_all(
+    num_drivers=10,
+    driver_size=5,
+    policy='only_type'
+)
+```
+
+**分步执行：**
+
+```python
+# 1. 提取所有 API
+generator.extract_all_apis()
+
+# 2. 构建类型依赖图
+generator.build_dependency_graph()
+
+# 3. 生成语义序列（Grammar）
+generator.build_grammar()
+
+# 4. 构建约束管理器
+generator.build_condition_manager()
+
+# 5. 生成 driver
+drivers = generator.generate_drivers(num_drivers=10, driver_size=5)
+```
+
+更多信息请参考 [project_driver_generator.py](project_driver_generator.py) 和 [project_driver_generator_example.py](project_driver_generator_example.py)。
+
+## 已接入的 Liberator 功能
+
+### ✅ 已接入
+1. **类型系统**：类型依赖图生成（`TypeDependencyGraphGenerator`）
+2. **语义序列**：语法生成器（`GrammarGenerator`）
+3. **约束管理**：条件管理器（`ConditionManager`）
+4. **项目级生成**：`ProjectDriverGenerator` 支持对整个项目生成 driver
+
+### 🚧 部分实现
+1. **Driver Factory**：基础 Factory 已实现，完整的 OTFactory/CBFactory 需要进一步实现
+2. **Backend**：Driver 代码生成和保存功能需要实现
+
 ## 下一步
 
-1. 集成到 LogicFuzz 的 API 依赖分析流程
-2. 实现混合分析器（结合 Liberator 和 LogicFuzz 的分析方法）
-3. 完善适配器接口，支持更多数据源
+1. ✅ 集成到 LogicFuzz 的 API 依赖分析流程
+2. ✅ 实现混合分析器（结合 Liberator 和 LogicFuzz 的分析方法）
+3. ✅ 实现项目级 driver 生成
+4. 🚧 完善 Factory 实现（OTFactory/CBFactory）
+5. 🚧 实现 Backend（LibFuzzerBackend）用于生成和保存 driver 代码
 

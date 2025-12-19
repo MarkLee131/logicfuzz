@@ -38,6 +38,7 @@ class LiberatorAPIAdapter:
         self.project_name = project_name
         self.use_clang_llvm = use_clang_llvm
         self.api_cache: Dict[str, Api] = {}
+        self.last_metadata: Dict = {}
         
         if use_clang_llvm:
             if not benchmark:
@@ -156,13 +157,19 @@ class LiberatorAPIAdapter:
         if not self.use_clang_llvm or not self.hybrid_extractor:
             raise RuntimeError("extract_all_apis() is only available when use_clang_llvm=True")
         
-        return self.hybrid_extractor.extract(
+        apis = self.hybrid_extractor.extract(
             function_signatures=function_signatures,
             include_dir=include_dir,
             public_headers_file=public_headers_file,
             bc_file=bc_file,
             compile_project=compile_project
         )
+        # 缓存最近的元数据（paths）
+        try:
+            self.last_metadata = self.hybrid_extractor.get_last_metadata() or {}
+        except Exception:
+            self.last_metadata = {}
+        return apis
     
     def _extract_function_name(self, signature: str) -> Optional[str]:
         """Extract function name from function signature"""

@@ -113,36 +113,8 @@ class LangGraphImprover(LangGraphAgent):
             improved_code = response
         
         # Validate that target function is still called
-        target_function_name = benchmark.get('function_name', '')
-        if target_function_name:
-            violation_detected, violation_msg = self._validate_target_function_preserved(
-                improved_code, 
-                target_function_name
-            )
-            
-            if violation_detected:
-                logger.error(
-                    f'❌ CRITICAL VIOLATION: Target function was changed! {violation_msg}',
-                    trial=self.trial
-                )
-                # Return error state, forcing retry
-                state_update = {
-                    "compile_success": False,
-                    "build_errors": [
-                        f"❌ VALIDATION ERROR: {violation_msg}",
-                        f"",
-                        f"YOU MUST CALL FUNCTION: {target_function_name}",
-                        f"",
-                        f"The target function name MUST remain exactly as specified.",
-                        f"DO NOT replace it with similar-named functions.",
-                        f"",
-                        f"Add a direct call to {target_function_name}() inside LLVMFuzzerTestOneInput.",
-                    ],
-                    "session_memory": updated_session_memory
-                }
-                
-                self._langgraph_logger.flush_agent_logs(self.name)
-                return state_update
+        # Project-level mode: No target function validation
+        # Skip function validation - driver can use any API from the project
         
         # 在 session_memory 中记录一次 “improver 覆盖提升尝试”
         try:

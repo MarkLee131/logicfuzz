@@ -1,13 +1,41 @@
 import copy, re
 
 from liberator_adapter.common import Api, Utils, DataLayout
-from liberator_adapter.driver.ir import Type, PointerType, TypeTag
+from liberator_adapter.driver.ir import Type, PointerType, TypeTag, ApiCall
+
 
 class Factory:
     """
-    最小化的 Factory 类，仅提供 normalize_type 静态方法用于类型规范化
+    Factory 工具类：
+    - normalize_type: 将 Liberator 抽取到的类型规范化为 IR Type
+    - api_to_apicall: 将 Api 对象转换为 ApiCall（上下文无关调用节点）
     """
-    
+
+    @staticmethod
+    def api_to_apicall(api: Api) -> ApiCall:
+        """
+        将 Liberator Api 对象转换为 IR 层的 ApiCall。
+        """
+        function_name = api.function_name
+        return_info = api.return_info
+        arguments_info = api.arguments_info
+        namespace = getattr(api, "namespace", "")
+
+        arg_list_type = []
+        for arg in arguments_info:
+            # NOTE: const 视为非 const，保持与 Liberator IR 兼容
+            the_type = Factory.normalize_type(arg.type, arg.size, arg.flag, arg.is_const)
+            arg_list_type.append(the_type)
+
+        if return_info.size == 0:
+            ret_type = Factory.normalize_type("void", 0, "val", [False])
+        else:
+            ret_type = Factory.normalize_type(
+                return_info.type, return_info.size, return_info.flag, return_info.is_const
+            )
+
+        return ApiCall(api, function_name, namespace, arg_list_type, ret_type)
+
     @staticmethod
     def normalize_type(a_type, a_size, a_flag, a_is_const) -> Type:
         """

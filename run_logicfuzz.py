@@ -325,8 +325,8 @@ def extend_report_with_coverage_gains_process():
 
 def _print_experiment_result(result: Result):
   """Prints the |result| of a single experiment."""
-  logger.info('\n**** Finished benchmark %s, %s ****\n%s',
-              result.benchmark.project, result.benchmark.function_signature,
+  logger.info('\n**** Finished benchmark %s (project-level) ****\n%s',
+              result.benchmark.project,
               result.result)
 
 def _print_experiment_results(results: list[Result],
@@ -334,8 +334,8 @@ def _print_experiment_results(results: list[Result],
   """Prints the |results| of multiple experiments."""
   logger.info('\n\n**** FINAL RESULTS: ****\n\n')
   for result in results:
-    logger.info('%s\n*%s, %s*\n%s\n', '=' * 80, result.benchmark.project,
-                result.benchmark.function_signature, result.result)
+    logger.info('%s\n*%s (project-level)*\n%s\n', '=' * 80, result.benchmark.project,
+                result.result)
 
   # Only print coverage gain for projects in current experiments
   projects_in_results = {result.benchmark.project for result in results}

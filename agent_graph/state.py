@@ -99,9 +99,8 @@ class FuzzingWorkflowState(TypedDict):
     binary_exists: NotRequired[bool]
     is_function_referenced: NotRequired[bool]
     
-    # === NEW: Target Function Validation ===
-    target_function_name: NotRequired[str]  # Extracted from function signature
-    target_function_called: NotRequired[bool]  # Whether target function is called (validated)
+    # === Project-level mode: No target function validation ===
+    # Removed: target_function_name, target_function_called
     validation_error: NotRequired[str]  # Validation error message
     validation_failure_count: NotRequired[int]  # Number of validation failures
     
@@ -241,9 +240,7 @@ def create_initial_state(
             "coverage_strategies": [],   # Coverage optimization strategies
             "coverage_attempts": []      # History of coverage improvement attempts
         },
-        # Initialize validation fields
-        target_function_name="",
-        target_function_called=False,
+        # Project-level mode: No validation fields needed
         validation_error="",
         validation_failure_count=0,
     )

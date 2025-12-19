@@ -41,7 +41,10 @@ class Benchmark:
         'target_name': benchmarks[0].target_name,
     }
     for benchmark in benchmarks:
-      if benchmark.test_file_path:
+      if benchmark.is_project_level:
+        # Project-level benchmark: no functions or test_files
+        continue
+      elif benchmark.test_file_path:
         if 'test_files' not in result:
           result['test_files'] = []
         result['test_files'].append(
@@ -78,6 +81,30 @@ class Benchmark:
     functions = data.get('functions', [])
 
     test_files = data.get('test_files', [])
+    
+    # Support project-level mode: no functions and no test_files
+    if not functions and not test_files:
+      # Project-level benchmark
+      max_len = os.pathconf('/', 'PC_NAME_MAX') - len('output-')
+      truncated_id = f'{project_name}-project'[:max_len]
+      benchmarks.append(
+          cls(
+              truncated_id.lower(),
+              data['project'],
+              data['language'],
+              '',  # function_signature
+              '',  # function_name
+              '',  # return_type
+              [],  # params
+              data.get('target_path', ''),
+              data.get('target_name', ''),
+              use_project_examples=use_project_examples,
+              cppify_headers=cppify_headers,
+              commit=commit,
+              use_context=use_context,
+          ))
+      return benchmarks
+    
     if test_files:
       for test_file in test_files:
         max_len = os.pathconf('/', 'PC_NAME_MAX') - len('output-')
@@ -133,11 +160,11 @@ class Benchmark:
                benchmark_id: str,
                project: str,
                language: str,
-               function_signature: str,
-               function_name: str,
-               return_type: str,
-               params: list[dict[str, str]],
-               target_path: str,
+               function_signature: Optional[str] = '',
+               function_name: Optional[str] = '',
+               return_type: Optional[str] = '',
+               params: Optional[list[dict[str, str]]] = None,
+               target_path: str = '',
                preferred_target_name: Optional[str] = None,
                use_project_examples=True,
                cppify_headers=False,
@@ -148,10 +175,10 @@ class Benchmark:
     self.id = benchmark_id
     self.project = project
     self.language = language
-    self.function_signature = function_signature
-    self.function_name = function_name
-    self.return_type = return_type
-    self.params = params
+    self.function_signature = function_signature or ''
+    self.function_name = function_name or ''
+    self.return_type = return_type or ''
+    self.params = params or []
     self.function_dict = function_dict
     self.target_path = target_path
     self._preferred_target_name = preferred_target_name
@@ -236,11 +263,11 @@ class Benchmark:
         benchmark_id=data['id'],
         project=data['project'],
         language=data['language'],
-        function_signature=data['function_signature'],
-        function_name=data['function_name'],
-        return_type=data['return_type'],
-        params=data['params'],
-        target_path=data['target_path'],
+        function_signature=data.get('function_signature', ''),
+        function_name=data.get('function_name', ''),
+        return_type=data.get('return_type', ''),
+        params=data.get('params', []),
+        target_path=data.get('target_path', ''),
         preferred_target_name=data.get('_preferred_target_name'),
         use_project_examples=data.get('use_project_examples', True),
         cppify_headers=data.get('cppify_headers', False),
@@ -254,6 +281,11 @@ class Benchmark:
   def needs_extern(self) -> bool:
     """Checks if it is C++ fuzz target for a C project, which needs `extern`."""
     return self.is_cpp_target and self.is_c_project
+  
+  @property
+  def is_project_level(self) -> bool:
+    """Checks if this is a project-level benchmark (no specific function target)."""
+    return not self.function_signature and not self.function_name and not self.test_file_path
 
 def get_file_type(file_path: str) -> FileType:
   """Returns the file type based on the extension of |file_name|."""
