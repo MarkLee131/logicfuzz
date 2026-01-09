@@ -21,11 +21,19 @@ from experiment import benchmark as benchmarklib
 from experiment import evaluator, oss_fuzz_checkout, textcov
 from experiment.workdir import WorkDirs
 from llm_toolkit import models
+from dataclasses import dataclass
+from pathlib import Path
+import subprocess
+from typing import Optional, List
+
+# Liberator-related helpers (used to perform local Clang extraction)
+from liberator_adapter.extractors.clang_extractor import ClangAPIExtractor
+from liberator_adapter.dependency.type.TypeDependencyGraphGenerator import TypeDependencyGraphGenerator
+from liberator_adapter.common.api import Api, Arg
 
 logger = logging.getLogger(__name__)
 # log the debug and info
 logger.setLevel(logging.INFO)
-# sys.setrecursionlimit(20000)
 
 # WARN: Avoid large NUM_EXP for local experiments.
 # NUM_EXP controls the number of experiments in parallel, while each experiment
@@ -102,6 +110,157 @@ def prepare_experiment_targets(
     experiment_configs.extend(benchmarklib.Benchmark.from_yaml(benchmark_file))
 
   return experiment_configs
+
+
+#
+# Lightweight local shim to reuse the existing Clang extractor without Docker.
+# This preserves extractor expectations (execute/compile/write_to_file/terminate).
+#
+@dataclass
+class LocalProjectTool:
+  benchmark: benchmarklib.Benchmark
+  project_dir: str
+
+  def __post_init__(self):
+    self.container_id = 'local'
+    self.project_dir = os.path.abspath(self.project_dir)
+
+  def execute(self, command: str) -> subprocess.CompletedProcess:
+    """Run |command| locally in the project directory."""
+    proc = subprocess.run(command, shell=True, cwd=self.project_dir,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return proc
+
+  def compile(self) -> subprocess.CompletedProcess:
+    """Run the project's build.sh if present."""
+    build_sh = os.path.join(self.project_dir, 'build.sh')
+    if os.path.isfile(build_sh) and os.access(build_sh, os.X_OK):
+      return self.execute(f'{build_sh}')
+    elif os.path.isfile(build_sh):
+      return self.execute(f'bash {build_sh}')
+    return subprocess.CompletedProcess(args='compile', returncode=0, stdout='no build.sh', stderr='')
+
+  def write_to_file(self, content: str, file_path: str) -> None:
+    path = file_path if os.path.isabs(file_path) else os.path.join(self.project_dir, file_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
+      f.write(content)
+
+  def terminate(self) -> None:
+    return
+
+
+def guess_language_from_tree(project_dir: str) -> str:
+  """Heuristic: count .c vs .cpp/.cc files to infer language."""
+  c_count = 0
+  cpp_count = 0
+  for root, _, files in os.walk(project_dir):
+    for f in files:
+      if f.endswith('.c'):
+        c_count += 1
+      if f.endswith(('.cpp', '.cc', '.cxx', '.c++', '.hpp', '.h')):
+        cpp_count += 1
+  return 'c' if c_count > cpp_count else 'c++'
+
+
+def clone_repo(repo: str, outdir: str, commit: Optional[str] = None) -> str:
+  outdir = os.path.abspath(outdir)
+  if os.path.exists(outdir):
+    logger.info('Using existing directory %s', outdir)
+  else:
+    logger.info('Cloning %s -> %s', repo, outdir)
+    subprocess.run(['git', 'clone', repo, outdir], check=True)
+  if commit:
+    subprocess.run(['git', 'fetch'], cwd=outdir, check=True)
+    subprocess.run(['git', 'checkout', commit], cwd=outdir, check=True)
+  return outdir
+
+
+def convert_apis_clang_json_to_api_list(apis_clang_path: str) -> List[Api]:
+  """Read a Clang JSON lines file and convert to Api objects."""
+  apis: List[Api] = []
+  with open(apis_clang_path) as f:
+    for line in f:
+      line = line.strip()
+      if not line or line.startswith('#'):
+        continue
+      obj = json.loads(line)
+      fname = obj.get('function_name')
+      is_vararg = obj.get('is_vararg', False)
+      ret_json = obj.get('return_info', {'name': 'return', 'flag': 'val', 'size': 0, 'type': 'void', 'const': False})
+      return_arg = Arg(ret_json.get('name', 'return'),
+                       ret_json.get('flag', 'val'),
+                       ret_json.get('size', 0),
+                       ret_json.get('type', 'void'),
+                       [ret_json.get('const', False)])
+
+      args_list = []
+      for a in obj.get('arguments_info', []):
+        arg = Arg(a.get('name', ''), a.get('flag', 'val'), a.get('size', 0),
+                  a.get('type_clang', a.get('type', 'void')), [a.get('const', False)])
+        args_list.append(arg)
+
+      namespace = obj.get('namespace', [])
+      apis.append(Api(fname, is_vararg, return_arg, args_list, namespace))
+  return apis
+
+
+def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output_base: str) -> str:
+  """Run Clang extraction for a Benchmark object and write type dependency graph.
+
+  Returns the path to the directory containing extraction outputs.
+  """
+  project = benchmark.project
+  # Use the OSS-Fuzz project image/container (ProjectContainerTool) by
+  # letting ClangAPIExtractor create its default container. The extractor
+  # writes outputs inside the container; we'll copy them back locally.
+  outdir = os.path.abspath(os.path.join(output_base, project))
+  os.makedirs(outdir, exist_ok=True)
+
+  clang_extractor = ClangAPIExtractor(benchmark)  # creates ProjectContainerTool internally
+
+  # Use a container-internal temp dir for outputs to avoid host path collisions.
+  container_output_dir = f'/tmp/liberator_extract_{project}'
+  apis_clang_container_path = clang_extractor.extract_with_auto_detect(output_dir=container_output_dir, project_name=project)
+
+  # Copy relevant files from container to local outdir.
+  container = clang_extractor.container
+  container_id = getattr(container, 'container_id', None)
+  if not container_id:
+    raise RuntimeError('Failed to obtain container id from extractor')
+
+  def _copy_from_container(container_path: str, local_name: str) -> Optional[str]:
+    local_path = os.path.join(outdir, local_name)
+    try:
+      subprocess.run(['docker', 'cp', f'{container_id}:{container_path}', local_path], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+      return local_path
+    except subprocess.CalledProcessError as e:
+      logger.warning('Failed to copy %s from container: %s', container_path, e)
+      return None
+
+  apis_clang_path = _copy_from_container(apis_clang_container_path, 'apis_clang.json')
+  # optional files
+  _copy_from_container(f'{container_output_dir}/exported_functions.txt', 'exported_functions.txt')
+  _copy_from_container(f'{container_output_dir}/incomplete_types.txt', 'incomplete_types.txt')
+  _copy_from_container(f'{container_output_dir}/conditions.json', 'conditions.json')
+  _copy_from_container(f'{container_output_dir}/data_layout.txt', 'data_layout.txt')
+
+  api_list = convert_apis_clang_json_to_api_list(apis_clang_path)
+  logger.info('Parsed %d APIs from clang output for project %s', len(api_list), project)
+
+  tdg = TypeDependencyGraphGenerator(api_list)
+  dependency_graph = tdg.create()
+
+  out_graph = {}
+  for a, deps in dependency_graph.items():
+    out_graph[a.function_name] = [d.function_name for d in deps]
+
+  graph_path = os.path.join(outdir, 'type_dependency_graph.json')
+  with open(graph_path, 'w') as f:
+    json.dump(out_graph, f, indent=2)
+
+  logger.info('Wrote type dependency graph to %s', graph_path)
+  return outdir
 
 def run_experiments(benchmark: benchmarklib.Benchmark, args) -> Result:
   """Runs an experiment based on the |benchmark| config."""
@@ -222,6 +381,10 @@ def parse_args() -> argparse.Namespace:
                       help='Max targets to generate per benchmark heuristic.',
                       type=int,
                       default=5)
+  parser.add_argument('--extract-only',
+                      action='store_true',
+                      default=False,
+                      help='Only run Liberator Clang extraction for the provided benchmark YAML(s) and exit.')
   parser.add_argument(
       '--delay',
       type=int,
@@ -638,6 +801,19 @@ def main():
   run_single_fuzz.prepare(args.oss_fuzz_dir)
 
   experiment_targets = prepare_experiment_targets(args)
+  if args.extract_only:
+    logger.info('Running extraction-only mode for %d benchmark(s).', len(experiment_targets))
+    extracted = {}
+    for benchmark in experiment_targets:
+      try:
+        outdir = run_local_extraction_for_benchmark(benchmark, args.work_dir)
+        extracted[benchmark.project] = outdir
+      except Exception as e:
+        logger.error('Extraction failed for %s: %s', benchmark.project, e)
+        extracted[benchmark.project] = f'error: {e}'
+    add_to_json_report(args.work_dir, 'extraction_results', extracted)
+    logger.info('Extraction-only run complete. Results saved to %s', args.work_dir)
+    return
   if oss_fuzz_checkout.ENABLE_CACHING:
     oss_fuzz_checkout.prepare_cached_images(experiment_targets)
 
