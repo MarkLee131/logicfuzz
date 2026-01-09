@@ -24,6 +24,7 @@ from llm_toolkit import models
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+import tempfile
 from typing import Optional, List
 
 # Liberator-related helpers (used to perform local Clang extraction)
@@ -218,6 +219,11 @@ def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output
   os.makedirs(outdir, exist_ok=True)
 
   clang_extractor = ClangAPIExtractor(benchmark)  # creates ProjectContainerTool internally
+  script_path = clang_extractor.extract_script
+  if not Path(script_path).exists():
+    raise RuntimeError(
+        f'Liberator extract script not found at {script_path}. '
+        'Please provide minimal liberator files under `liberator_adapter/liberator`.')
 
   # Use a container-internal temp dir for outputs to avoid host path collisions.
   container_output_dir = f'/tmp/liberator_extract_{project}'
@@ -229,21 +235,24 @@ def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output
   if not container_id:
     raise RuntimeError('Failed to obtain container id from extractor')
 
-  def _copy_from_container(container_path: str, local_name: str) -> Optional[str]:
+  def _copy_from_container(container_path: str, local_name: str, required: bool = True) -> str:
     local_path = os.path.join(outdir, local_name)
-    try:
-      subprocess.run(['docker', 'cp', f'{container_id}:{container_path}', local_path], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-      return local_path
-    except subprocess.CalledProcessError as e:
-      logger.warning('Failed to copy %s from container: %s', container_path, e)
-      return None
+    result = subprocess.run(['docker', 'cp', f'{container_id}:{container_path}', local_path], 
+                           capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+      if required:
+        raise RuntimeError(f'Failed to copy required file {container_path} from container: {result.stderr}')
+      else:
+        logger.warning('Failed to copy optional file %s from container: %s', container_path, result.stderr)
+        return ''
+    return local_path
 
-  apis_clang_path = _copy_from_container(apis_clang_container_path, 'apis_clang.json')
+  apis_clang_path = _copy_from_container(apis_clang_container_path, 'apis_clang.json', required=True)
   # optional files
-  _copy_from_container(f'{container_output_dir}/exported_functions.txt', 'exported_functions.txt')
-  _copy_from_container(f'{container_output_dir}/incomplete_types.txt', 'incomplete_types.txt')
-  _copy_from_container(f'{container_output_dir}/conditions.json', 'conditions.json')
-  _copy_from_container(f'{container_output_dir}/data_layout.txt', 'data_layout.txt')
+  _copy_from_container(f'{container_output_dir}/exported_functions.txt', 'exported_functions.txt', required=False)
+  _copy_from_container(f'{container_output_dir}/incomplete_types.txt', 'incomplete_types.txt', required=False)
+  _copy_from_container(f'{container_output_dir}/conditions.json', 'conditions.json', required=False)
+  _copy_from_container(f'{container_output_dir}/data_layout.txt', 'data_layout.txt', required=False)
 
   api_list = convert_apis_clang_json_to_api_list(apis_clang_path)
   logger.info('Parsed %d APIs from clang output for project %s', len(api_list), project)
@@ -803,16 +812,9 @@ def main():
   experiment_targets = prepare_experiment_targets(args)
   if args.extract_only:
     logger.info('Running extraction-only mode for %d benchmark(s).', len(experiment_targets))
-    extracted = {}
     for benchmark in experiment_targets:
-      try:
-        outdir = run_local_extraction_for_benchmark(benchmark, args.work_dir)
-        extracted[benchmark.project] = outdir
-      except Exception as e:
-        logger.error('Extraction failed for %s: %s', benchmark.project, e)
-        extracted[benchmark.project] = f'error: {e}'
-    add_to_json_report(args.work_dir, 'extraction_results', extracted)
-    logger.info('Extraction-only run complete. Results saved to %s', args.work_dir)
+      outdir = run_local_extraction_for_benchmark(benchmark, args.work_dir)
+      logger.info('Extraction completed for %s. Results saved to %s', benchmark.project, outdir)
     return
   if oss_fuzz_checkout.ENABLE_CACHING:
     oss_fuzz_checkout.prepare_cached_images(experiment_targets)

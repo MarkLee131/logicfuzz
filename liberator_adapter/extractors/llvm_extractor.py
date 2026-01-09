@@ -5,16 +5,18 @@ LLVM API 提取器
 """
 import os
 import logging
+import subprocess
 from typing import Optional
 from pathlib import Path
 
 from tool.container_tool import ProjectContainerTool
 from experiment.benchmark import Benchmark
+from liberator_adapter.extractors.base_extractor import BaseAPIExtractor
 
 logger = logging.getLogger(__name__)
 
 
-class LLVMAPIExtractor:
+class LLVMAPIExtractor(BaseAPIExtractor):
     """
     使用 LLVM bitcode 提取 API 信息
     
@@ -29,15 +31,10 @@ class LLVMAPIExtractor:
             benchmark: 项目基准对象
             container: 可选的容器工具（如果已创建）
         """
-        self.benchmark = benchmark
-        self.container = container or ProjectContainerTool(benchmark, name='llvm_extract')
+        super().__init__(benchmark, container, container_name='llvm_extract')
         
-        # Liberator 工具路径
-        self.liberator_root = Path(__file__).parent.parent.parent / 'liberator'
+        # Liberator 工具路径：严格使用 liberator_adapter/liberator 下的文件
         self.extractor_bin = self.liberator_root / 'condition_extractor' / 'bin' / 'extractor'
-        
-        if not self.extractor_bin.exists():
-            logger.warning(f"Liberator extractor binary not found at {self.extractor_bin}")
     
     def extract_apis_llvm(
         self,
@@ -57,7 +54,7 @@ class LLVMAPIExtractor:
             apis_llvm.json 的路径（容器内路径）
         """
         # 确保输出目录存在
-        self.container.execute(f'mkdir -p {output_dir}')
+        self._ensure_output_dir(output_dir)
         
         # 设置环境变量（extractor 会使用 LIBFUZZ_LOG_PATH）
         self.container.execute(f'export LIBFUZZ_LOG_PATH={output_dir}')
@@ -103,19 +100,14 @@ class LLVMAPIExtractor:
                 './apis_llvm.json',
                 f'{os.path.dirname(bc_file)}/apis_llvm.json',
             ]
-            for alt_path in alt_paths:
-                if self._file_exists_in_container(alt_path):
-                    logger.info(f"Found apis_llvm.json at {alt_path}")
-                    return alt_path
+            found_path = self._find_file_in_container(alt_paths)
+            if found_path:
+                logger.info(f"Found apis_llvm.json at {found_path}")
+                return found_path
             raise RuntimeError(f"Output file apis_llvm.json was not created in {output_dir}")
         
         logger.info(f"Successfully extracted apis_llvm.json to {apis_llvm_path}")
         return apis_llvm_path
-    
-    def _file_exists_in_container(self, file_path: str) -> bool:
-        """检查容器内文件是否存在"""
-        result = self.container.execute(f'test -f "{file_path}" && echo "exists" || echo "not_found"')
-        return result.stdout.strip() == 'exists'
     
     def compile_to_bitcode(
         self,
@@ -168,12 +160,12 @@ class LLVMAPIExtractor:
                 raise RuntimeError("Could not find library file to extract bitcode from")
         
         # 使用 extract-bc 提取 bitcode
-        extract_result = self.container.execute(f'extract-bc -b "{output_bc.replace(".bc", "")}"')
-        if extract_result.returncode != 0:
-            raise RuntimeError(f"Failed to extract bitcode: {extract_result.stderr}")
-        
-        if not self._file_exists_in_container(output_bc):
-            raise RuntimeError(f"Bitcode file {output_bc} was not created")
+        self._execute_with_error_check(
+            f'extract-bc -b "{output_bc.replace(".bc", "")}"',
+            "Failed to extract bitcode",
+            check_output=True,
+            output_file=output_bc
+        )
         
         logger.info(f"Successfully created bitcode file: {output_bc}")
         return output_bc
@@ -185,56 +177,63 @@ class LLVMAPIExtractor:
         Returns:
             容器内的 extractor 路径
         """
-        # 尝试的路径列表
-        possible_paths = [
+        # First, check if extractor already exists and is executable in container.
+        container_possible = [
             '/liberator/condition_extractor/bin/extractor',
-            '/tmp/extractor',
             '/usr/local/bin/extractor',
+            '/tmp/extractor'
         ]
-        
-        # 检查 extractor 是否已存在
-        for path in possible_paths:
-            if self._file_exists_in_container(path):
-                # 检查是否可执行
-                result = self.container.execute(f'test -x "{path}" && echo "executable" || echo "not_executable"')
-                if result.stdout.strip() == 'executable':
-                    return path
-        
-        # 如果不存在，尝试复制到容器内
-        container_extractor_path = '/tmp/extractor'
-        try:
-            import subprocess as sp
-            # 使用 docker cp 复制 extractor（需要复制整个目录结构）
-            # 先创建目录
-            self.container.execute('mkdir -p /tmp/condition_extractor/bin')
-            
-            # 复制 extractor 二进制文件
-            cmd = [
-                'docker', 'cp',
-                str(self.extractor_bin),
-                f'{self.container.container_id}:{container_extractor_path}'
-            ]
-            result = sp.run(cmd, capture_output=True, text=True, check=False)
-            if result.returncode == 0:
-                # 设置执行权限
-                self.container.execute(f'chmod +x {container_extractor_path}')
-                logger.info(f"Copied extractor to container: {container_extractor_path}")
+        found_path = self._find_file_in_container(container_possible, check_executable=True)
+        if found_path:
+            return found_path
+
+        # If host has a prebuilt extractor binary at self.extractor_bin, copy it into container.
+        if self.extractor_bin.exists():
+            container_extractor_path = '/tmp/extractor'
+            try:
+                self._copy_file_to_container(
+                    self.extractor_bin,
+                    container_extractor_path,
+                    make_executable=True
+                )
+                logger.info(f"Copied extractor binary to container: {container_extractor_path}")
                 return container_extractor_path
+            except Exception as e:
+                logger.warning(f"Error copying extractor binary into container: {e}")
+
+        # As a final step, copy the condition_extractor source into container and build it there.
+        src_dir = self.liberator_root / 'condition_extractor'
+        if not src_dir.exists():
+            raise RuntimeError(
+                f"Condition extractor source not found at {src_dir}; cannot build extractor."
+            )
+
+        container_dest = '/liberator/condition_extractor'
+        try:
+            # copy source dir into container
+            self._copy_dir_to_container(src_dir, container_dest)
+            logger.info('Copied condition_extractor sources into container at %s', container_dest)
+            
+            # Build inside container
+            build_cmds = (
+                f'cd {container_dest} && mkdir -p build && cd build && cmake .. && make -j$(nproc)'
+            )
+            build_result = self.container.execute(build_cmds)
+            if build_result.returncode != 0:
+                logger.error(
+                    'Failed to build condition_extractor in container: %s',
+                    build_result.stderr
+                )
+                raise RuntimeError('Building condition_extractor in container failed.')
+            
+            extractor_path = f'{container_dest}/bin/extractor'
+            if self._file_exists_in_container(extractor_path):
+                logger.info('Built extractor at %s', extractor_path)
+                return extractor_path
             else:
-                logger.warning(f"Failed to copy extractor: {result.stderr}")
-        except Exception as e:
-            logger.warning(f"Error copying extractor: {e}")
-        
-        # 如果复制失败，尝试使用容器内可能已安装的版本
-        result = self.container.execute('which extractor || echo "not_found"')
-        if 'not_found' not in result.stdout:
-            return 'extractor'
-        
-        # 最后尝试：假设 extractor 在 /liberator（如果容器已挂载）
-        return possible_paths[0]
-    
-    def cleanup(self):
-        """清理资源（关闭容器等）"""
-        if self.container:
-            self.container.terminate()
+                raise RuntimeError('Extractor binary not found after build in container.')
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f'Failed to copy condition_extractor sources into container: {e}'
+            )
 
