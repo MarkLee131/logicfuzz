@@ -14,6 +14,7 @@ from pathlib import Path
 from tool.container_tool import ProjectContainerTool
 from experiment.benchmark import Benchmark
 
+from liberator_adapter.extractors.base_extractor import BaseAPIExtractor
 from liberator_adapter.extractors.clang_extractor import ClangAPIExtractor
 from liberator_adapter.extractors.llvm_extractor import LLVMAPIExtractor
 from liberator_adapter.common.api import Api
@@ -22,7 +23,7 @@ from liberator_adapter.common.utils import Utils
 logger = logging.getLogger(__name__)
 
 
-class HybridAPIExtractor:
+class HybridAPIExtractor(BaseAPIExtractor):
     """
     混合提取器：整合 Clang 和 LLVM 提取功能
     
@@ -41,8 +42,7 @@ class HybridAPIExtractor:
             benchmark: 项目基准对象
             container: 可选的容器工具（如果已创建）
         """
-        self.benchmark = benchmark
-        self.container = container or ProjectContainerTool(benchmark, name='hybrid_extract')
+        super().__init__(benchmark, container, container_name='hybrid_extract')
         
         # 创建子提取器（共享同一个容器）
         self.clang_extractor = ClangAPIExtractor(benchmark, self.container)
@@ -259,11 +259,6 @@ class HybridAPIExtractor:
         """返回最近一次提取的元数据（容器/本地路径）。"""
         return self.last_metadata
     
-    def _file_exists_in_container(self, file_path: str) -> bool:
-        """检查容器内文件是否存在"""
-        result = self.container.execute(f'test -f "{file_path}" && echo "exists" || echo "not_found"')
-        return result.stdout.strip() == 'exists'
-    
     def get_api(self, function_name: str) -> Optional[Api]:
         """
         获取单个函数的 API 信息
@@ -290,7 +285,6 @@ class HybridAPIExtractor:
             except Exception as e:
                 logger.warning(f"Failed to clean up temp directory: {e}")
         
-        # 关闭容器
-        if self.container:
-            self.container.terminate()
+        # 调用基类的清理方法（关闭容器）
+        super().cleanup()
 
