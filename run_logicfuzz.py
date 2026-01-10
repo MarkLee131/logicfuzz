@@ -225,6 +225,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                       type=int,
                       default=10,
                       help='Max trial round for agents.')
+  parser.add_argument('--enable-source-filter',
+                      action='store_true',
+                      default=False,
+                      help='Enable PGFilter-based source code filtering to reduce token usage')
+  parser.add_argument('--source-filter-min-lines',
+                      type=int,
+                      default=50,
+                      help='Minimum function lines to trigger filtering (default: 50). '
+                           'Functions with fewer lines will not be filtered.')
   parser.add_argument('--list-models',
                       action='store_true',
                       help='List all available models and exit.')
