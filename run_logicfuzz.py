@@ -13,8 +13,6 @@ from datetime import timedelta
 from multiprocessing import Pool, Process
 from typing import Any
 
-from google.cloud import logging as cloud_logging
-
 import run_single_fuzz
 from data_prep import introspector
 from experiment import benchmark as benchmarklib
@@ -220,7 +218,58 @@ def convert_apis_clang_json_to_api_list(apis_clang_path: str) -> List[Api]:
   return apis
 
 
-def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output_base: str) -> str:
+def print_dependency_graph_stats(project: str, dep_graph: dict) -> None:
+  """Print statistics and sample information about the type dependency graph."""
+  if not dep_graph:
+    logger.info('Empty dependency graph for project %s', project)
+    return
+
+  logger.info('')
+  logger.info('=' * 80)
+  logger.info('Type Dependency Graph Analysis for %s', project)
+  logger.info('=' * 80)
+
+  # Calculate statistics
+  total_apis = len(dep_graph)
+  total_dependencies = sum(len(deps) for deps in dep_graph.values())
+  avg_dependencies = total_dependencies / total_apis if total_apis > 0 else 0
+
+  # Find APIs with most dependencies
+  sorted_apis = sorted(dep_graph.items(), key=lambda x: len(x[1]), reverse=True)
+  apis_with_deps = [(api, deps) for api, deps in sorted_apis if len(deps) > 0]
+  apis_without_deps = [api for api, deps in sorted_apis if len(deps) == 0]
+
+  logger.info('')
+  logger.info('Statistics:')
+  logger.info('  Total APIs: %d', total_apis)
+  logger.info('  Total dependency edges: %d', total_dependencies)
+  logger.info('  Average dependencies per API: %.2f', avg_dependencies)
+  logger.info('  APIs with dependencies: %d (%.1f%%)',
+              len(apis_with_deps), 100 * len(apis_with_deps) / total_apis if total_apis > 0 else 0)
+  logger.info('  APIs without dependencies: %d (%.1f%%)',
+              len(apis_without_deps), 100 * len(apis_without_deps) / total_apis if total_apis > 0 else 0)
+
+  # Show top APIs with most dependencies
+  if apis_with_deps:
+    logger.info('')
+    logger.info('Top 10 APIs with most dependencies:')
+    for i, (api, deps) in enumerate(apis_with_deps[:10], 1):
+      logger.info('  %d. %s: %d dependencies', i, api, len(deps))
+      if i <= 3:  # Show actual dependencies for top 3
+        logger.info('     -> %s', ', '.join(deps[:5]) + ('...' if len(deps) > 5 else ''))
+
+  # Show some examples of APIs without dependencies (potential entry points)
+  if apis_without_deps:
+    logger.info('')
+    logger.info('Sample APIs without dependencies (potential entry points): %d total', len(apis_without_deps))
+    logger.info('  %s', ', '.join(apis_without_deps[:10]) + ('...' if len(apis_without_deps) > 10 else ''))
+
+  logger.info('')
+  logger.info('=' * 80)
+  logger.info('')
+
+
+def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output_base: str) -> tuple[str, dict]:
   """Run Clang extraction for a Benchmark object and write type dependency graph.
 
   Returns the path to the directory containing extraction outputs.
@@ -618,14 +667,8 @@ def _print_experiment_results(results: list[Result],
 
 def _setup_logging(verbose: str = 'info', is_cloud: bool = False) -> None:
   """Set up logging level."""
-
-  if is_cloud:
-    try:
-      client = cloud_logging.Client()
-      client.setup_logging()
-    except Exception as e:
-      # For local runs we continue
-      logger.warning('Error setting up cloud logging client: %s', e)
+  # Note: Google Cloud Logging removed - not needed for local experiments.
+  # If is_cloud is True, logs will still go to stdout/stderr.
 
   if verbose == "debug":
     log_level = logging.DEBUG
@@ -907,8 +950,11 @@ def main():
   if args.extract_only:
     logger.info('Running extraction-only mode for %d benchmark(s).', len(experiment_targets))
     for benchmark in experiment_targets:
-      outdir = run_local_extraction_for_benchmark(benchmark, args.work_dir)
+      outdir, dep_graph = run_local_extraction_for_benchmark(benchmark, args.work_dir)
       logger.info('Extraction completed for %s. Results saved to %s', benchmark.project, outdir)
+
+      # Display dependency graph statistics
+      print_dependency_graph_stats(benchmark.project, dep_graph)
     return
   if oss_fuzz_checkout.ENABLE_CACHING:
     oss_fuzz_checkout.prepare_cached_images(experiment_targets)

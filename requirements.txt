@@ -64,8 +64,6 @@ gitdb==4.0.12
     # via gitpython
 gitpython==3.1.43
     # via -r requirements.in
-google-adk==0.5.0
-    # via -r requirements.in
 google-api-core[grpc]==2.25.0rc1
     # via
     #   google-api-python-client
@@ -79,10 +77,6 @@ google-api-core[grpc]==2.25.0rc1
     #   google-cloud-speech
     #   google-cloud-storage
     #   google-cloud-trace
-google-api-python-client==2.157.0
-    # via
-    #   -r requirements.in
-    #   google-adk
 google-auth==2.40.2
     # via
     #   google-api-core
@@ -101,10 +95,6 @@ google-auth==2.40.2
     #   google-genai
 google-auth-httplib2==0.2.0
     # via google-api-python-client
-google-cloud-aiplatform==1.91.0
-    # via
-    #   -r requirements.in
-    #   google-adk
 google-cloud-appengine-logging==1.6.1
     # via google-cloud-logging
 google-cloud-audit-log==0.3.2
@@ -116,8 +106,6 @@ google-cloud-core==2.4.3
     #   google-cloud-bigquery
     #   google-cloud-logging
     #   google-cloud-storage
-google-cloud-logging==3.11.2
-    # via -r requirements.in
 google-cloud-resource-manager==1.14.2
     # via google-cloud-aiplatform
 google-cloud-secret-manager==2.23.3
@@ -125,10 +113,7 @@ google-cloud-secret-manager==2.23.3
 google-cloud-speech==2.32.0
     # via google-adk
 google-cloud-storage==2.18.0
-    # via
-    #   -r requirements.in
-    #   google-adk
-    #   google-cloud-aiplatform
+    # via -r requirements.in
 google-cloud-trace==1.16.1
     # via opentelemetry-exporter-gcp-trace
 google-crc32c==1.7.1
