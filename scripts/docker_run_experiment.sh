@@ -7,7 +7,7 @@ set -euo pipefail
 
 MODEL="${LOGICFUZZ_MODEL:-qwen3-coder-plus}"
 BENCHMARK_YAML="${BENCHMARK_YAML:-conti-benchmark/cjson.yaml}"
-NUM_SAMPLES="${NUM_SAMPLES:-2}"
+NUM_SAMPLES="${NUM_SAMPLES:-1}"
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 WORK_DIR="${WORK_DIR:-results/$(date +%Y%m%d-%H%M%S)}"
 INTROSPECTOR_ENDPOINT="${INTROSPECTOR_ENDPOINT:-http://127.0.0.1:8080/api}"
