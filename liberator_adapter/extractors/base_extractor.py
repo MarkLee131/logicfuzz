@@ -172,6 +172,50 @@ class BaseAPIExtractor:
                 f"Failed to copy directory to container: {e.stderr}"
             )
     
+    def _copy_from_container(
+        self,
+        container_path: str,
+        local_path: str,
+        required: bool = True
+    ) -> str:
+        """
+        从容器复制文件到本地
+        
+        Args:
+            container_path: 容器内的文件路径
+            local_path: 本地目标路径
+            required: 如果为 True，文件不存在时抛出异常；否则返回空字符串
+        
+        Returns:
+            本地文件路径，如果 required=False 且复制失败则返回空字符串
+        """
+        try:
+            cmd = [
+                'docker', 'cp',
+                f'{self.container.container_id}:{container_path}',
+                local_path
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            
+            if result.returncode != 0:
+                if required:
+                    raise RuntimeError(
+                        f"Failed to copy {container_path} from container: {result.stderr}"
+                    )
+                else:
+                    logger.warning(
+                        'Failed to copy optional file %s from container: %s',
+                        container_path, result.stderr
+                    )
+                    return ''
+            
+            logger.debug(f"Copied from container: {container_path} -> {local_path}")
+            return local_path
+        except subprocess.CalledProcessError as e:
+            if required:
+                raise RuntimeError(f"Failed to copy from container: {e.stderr}")
+            return ''
+    
     def _execute_with_error_check(
         self,
         cmd: str,
