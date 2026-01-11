@@ -28,12 +28,15 @@ def get_argument_info(type):
 
     # this trick expands typedef into their real types
     atd = type.get_declaration()
-    if (atd.kind.is_declaration() and 
-        "::" not in type.spelling and 
+    if (atd.kind.is_declaration() and
+        "::" not in type.spelling and
         atd.underlying_typedef_type.spelling != ""):
         type_str = atd.underlying_typedef_type.spelling
+        # Use the underlying type for const checking as well
+        type_for_const = atd.underlying_typedef_type
     else:
         type_str = type.spelling
+        type_for_const = type
 
     all_types.add(type_str)
 
@@ -72,32 +75,43 @@ def get_argument_info(type):
         if "[" in type_str:
             # stuffs like char[100] into char*
             type_str = re.sub('\[\d*\]', '*', type_str)
-        # type_str = type_str.replace("*","")
-        
-        
+
         type_str_token = type_str.strip().replace("*", " * ").split()
         for bad_token in ["enum", "struct"]:
             if bad_token in type_str_token:
                 type_str_token.remove(bad_token)
-        
-        n_const = n_asterix             
+
+        # Initialize const position array
+        n_const = n_asterix
         const_pos = [False for _ in range(n_const + 1)]
 
-        print(type_str_token)
+        # Use clang's API to check for const qualifiers more reliably
+        # Walk from the outermost type to the innermost to build const_pos array
+        # const_pos[0] = innermost type (base type), const_pos[n] = outermost (the pointer itself)
 
-        i = 0
-        for t in type_str_token:
-            if t == "const":
-                if i < len(const_pos):
-                    const_pos[i] = True
-            elif t == "*" and i == 1:
-                continue
-            else:
-                i = i + 1
+        # Collect all type levels from outer to inner
+        type_levels = []
+        current_type = type_for_const
+        while current_type.kind == clang.cindex.TypeKind.POINTER:
+            type_levels.append(current_type)
+            current_type = current_type.get_pointee()
+        # Add the base type (innermost)
+        type_levels.append(current_type)
 
+        # Now type_levels[0] is outermost (the pointer itself if it's a pointer type)
+        # type_levels[-1] is innermost (the base type)
+        # But const_pos[0] should be the innermost, so reverse the index mapping
+
+        # const_pos[0] corresponds to the innermost type (base type)
+        # const_pos[-1] corresponds to the outermost type (the pointer itself)
+        for i, t in enumerate(reversed(type_levels)):
+            if i < len(const_pos):
+                const_pos[i] = t.is_const_qualified()
+
+        # Remove "const" tokens from type string since we're tracking them separately
         while "const" in type_str_token:
             type_str_token.remove("const")
-    
+
         info["type_clang"] = " ".join(type_str_token)
         info["const"] = const_pos
 

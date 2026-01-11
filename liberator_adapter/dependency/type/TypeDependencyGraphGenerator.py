@@ -15,7 +15,8 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
             for api_b in self.apis_list:
                 # api_a_functionname = api_a.function_name
                 # api_b_functionname = api_b.function_name
-                if self.dependency_on(api_a, api_b):
+                # Skip self-dependencies: a function should not depend on itself
+                if api_a != api_b and self.dependency_on(api_a, api_b):
                     dependency_graph.add_edge(api_a, api_b)
                     # api_a_depdences = dependency_graph.get(api_a_functionname, [])
                     # api_a_depdences += [api_b_functionname]

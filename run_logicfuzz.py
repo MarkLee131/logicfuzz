@@ -218,7 +218,173 @@ def convert_apis_clang_json_to_api_list(apis_clang_path: str) -> List[Api]:
   return apis
 
 
-def print_dependency_graph_stats(project: str, dep_graph: dict) -> None:
+def find_entry_points(dep_graph: dict) -> tuple[set, set]:
+  """Find entry points (APIs with no dependencies) in the dependency graph.
+  
+  The graph format is: {api_a: [api_b1, api_b2, ...]}
+  meaning api_a can use outputs from api_b1, api_b2, ... (api_a depends on them).
+  
+  Entry points are APIs that don't depend on any other API's output.
+  
+  Returns:
+    tuple: (entry_points, all_apis)
+      - entry_points: set of APIs that don't depend on other APIs
+      - all_apis: set of all APIs in the graph
+  """
+  # Collect all APIs mentioned in the graph
+  apis_as_keys = set(dep_graph.keys())  # APIs that have dependencies
+  apis_as_values = set()  # APIs that are depended upon
+  for deps in dep_graph.values():
+    apis_as_values.update(deps)
+  
+  all_apis = apis_as_keys | apis_as_values
+  
+  # Entry points are APIs that are not keys (don't depend on others)
+  # OR are keys but have empty dependency lists
+  entry_points = set()
+  for api in all_apis:
+    if api not in apis_as_keys:
+      # This API doesn't depend on any other API
+      entry_points.add(api)
+    elif len(dep_graph.get(api, [])) == 0:
+      # This API is in the graph but has no dependencies
+      entry_points.add(api)
+  
+  return entry_points, all_apis
+
+
+def visualize_dependency_graph(project: str, dep_graph: dict, output_dir: str, 
+                                entry_points: set = None) -> str:
+  """Visualize the dependency graph using graphviz or networkx+matplotlib.
+  
+  Args:
+    project: Project name
+    dep_graph: Dependency graph {api: [dependencies]}
+    output_dir: Directory to save the visualization
+    entry_points: Set of entry point APIs (highlighted in green)
+  
+  Returns:
+    Path to the generated graph image
+  """
+  if not dep_graph:
+    logger.info('Empty graph, skipping visualization')
+    return ''
+  
+  # Collect all APIs
+  all_apis = set(dep_graph.keys())
+  for deps in dep_graph.values():
+    all_apis.update(deps)
+  
+  if entry_points is None:
+    entry_points, _ = find_entry_points(dep_graph)
+  
+  output_path = os.path.join(output_dir, f'{project}_dependency_graph')
+  
+  # First try graphviz (produces nicer output)
+  try:
+    from graphviz import Digraph
+    
+    dot = Digraph(name=f'{project}_dependency_graph', format='png')
+    dot.attr(rankdir='TB', size='30,30', dpi='100')
+    dot.attr('node', shape='box', fontname='Helvetica', fontsize='9')
+    dot.attr('edge', fontsize='7', color='#888888', arrowsize='0.5')
+    
+    # Add nodes with different colors
+    for api in sorted(all_apis):
+      if api in entry_points:
+        # Entry points in green
+        dot.node(api, api, style='filled', fillcolor='#90EE90', 
+                 color='#228B22', penwidth='2')
+      elif api in dep_graph:
+        # APIs with dependencies in light blue
+        dot.node(api, api, style='filled', fillcolor='#ADD8E6',
+                 color='#4682B4')
+      else:
+        # APIs without outgoing edges in light gray
+        dot.node(api, api, style='filled', fillcolor='#D3D3D3',
+                 color='#696969')
+    
+    # Add edges (api_a -> api_b means api_a depends on api_b)
+    for api_a, deps in dep_graph.items():
+      for api_b in deps:
+        dot.edge(api_a, api_b)
+    
+    # Try to render as PNG
+    try:
+      dot.render(output_path, cleanup=True)
+      logger.info('Dependency graph visualization saved to %s.png', output_path)
+      return f'{output_path}.png'
+    except Exception as e:
+      # Graphviz executable not found, save DOT file
+      dot_path = f'{output_path}.dot'
+      dot.save(dot_path)
+      logger.info('Graphviz not installed. Saved graph as DOT file: %s', dot_path)
+      logger.info('To render: dot -Tpng %s -o %s.png', dot_path, output_path)
+      
+  except ImportError:
+    logger.info('graphviz package not available')
+  
+  # Fallback: try networkx + matplotlib
+  try:
+    import networkx as nx
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+    
+    G = nx.DiGraph()
+    G.add_nodes_from(all_apis)
+    for api_a, deps in dep_graph.items():
+      for api_b in deps:
+        G.add_edge(api_a, api_b)
+    
+    # Create figure
+    plt.figure(figsize=(20, 16))
+    
+    # Use spring layout for positioning
+    pos = nx.spring_layout(G, k=2, iterations=50, seed=42)
+    
+    # Color nodes based on type
+    node_colors = []
+    for node in G.nodes():
+      if node in entry_points:
+        node_colors.append('#90EE90')  # Green for entry points
+      elif node in dep_graph:
+        node_colors.append('#ADD8E6')  # Light blue for APIs with deps
+      else:
+        node_colors.append('#D3D3D3')  # Gray for others
+    
+    # Draw the graph
+    nx.draw(G, pos, 
+            node_color=node_colors,
+            node_size=800,
+            font_size=7,
+            font_weight='bold',
+            with_labels=True,
+            arrows=True,
+            arrowsize=10,
+            edge_color='#888888',
+            alpha=0.9)
+    
+    plt.title(f'{project} Type Dependency Graph\n'
+              f'Green = Entry Points ({len(entry_points)}), '
+              f'Blue = APIs with deps, Gray = Others',
+              fontsize=12)
+    
+    png_path = f'{output_path}.png'
+    plt.savefig(png_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    logger.info('Dependency graph visualization saved to %s', png_path)
+    return png_path
+    
+  except ImportError as e:
+    logger.warning('Neither graphviz nor matplotlib available for visualization: %s', e)
+  except Exception as e:
+    logger.warning('Failed to create visualization with matplotlib: %s', e)
+  
+  return ''
+
+
+def print_dependency_graph_stats(project: str, dep_graph: dict, output_dir: str = None) -> None:
   """Print statistics and sample information about the type dependency graph."""
   if not dep_graph:
     logger.info('Empty dependency graph for project %s', project)
@@ -229,44 +395,48 @@ def print_dependency_graph_stats(project: str, dep_graph: dict) -> None:
   logger.info('Type Dependency Graph Analysis for %s', project)
   logger.info('=' * 80)
 
-  # Calculate statistics
-  total_apis = len(dep_graph)
-  total_dependencies = sum(len(deps) for deps in dep_graph.values())
-  avg_dependencies = total_dependencies / total_apis if total_apis > 0 else 0
+  # Find entry points using the new function
+  entry_points, all_apis = find_entry_points(dep_graph)
 
-  # Find APIs with most dependencies
-  sorted_apis = sorted(dep_graph.items(), key=lambda x: len(x[1]), reverse=True)
-  apis_with_deps = [(api, deps) for api, deps in sorted_apis if len(deps) > 0]
-  apis_without_deps = [api for api, deps in sorted_apis if len(deps) == 0]
+  # Calculate statistics
+  total_apis_with_deps = len(dep_graph)
+  total_all_apis = len(all_apis)
+  total_dependencies = sum(len(deps) for deps in dep_graph.values())
+  avg_dependencies = total_dependencies / total_apis_with_deps if total_apis_with_deps > 0 else 0
 
   logger.info('')
   logger.info('Statistics:')
-  logger.info('  Total APIs: %d', total_apis)
+  logger.info('  Total APIs in graph: %d', total_all_apis)
+  logger.info('  APIs with outgoing dependencies: %d', total_apis_with_deps)
   logger.info('  Total dependency edges: %d', total_dependencies)
   logger.info('  Average dependencies per API: %.2f', avg_dependencies)
-  logger.info('  APIs with dependencies: %d (%.1f%%)',
-              len(apis_with_deps), 100 * len(apis_with_deps) / total_apis if total_apis > 0 else 0)
-  logger.info('  APIs without dependencies: %d (%.1f%%)',
-              len(apis_without_deps), 100 * len(apis_without_deps) / total_apis if total_apis > 0 else 0)
 
-  # Show top APIs with most dependencies
-  if apis_with_deps:
+  # Entry points analysis
+  logger.info('')
+  logger.info('=' * 40)
+  logger.info('ENTRY POINTS (APIs without dependencies):')
+  logger.info('=' * 40)
+  if entry_points:
+    logger.info('  Found %d entry point(s) (%.1f%% of all APIs)', 
+                len(entry_points), 100 * len(entry_points) / total_all_apis if total_all_apis > 0 else 0)
     logger.info('')
-    logger.info('Top 10 APIs with most dependencies:')
-    for i, (api, deps) in enumerate(apis_with_deps[:10], 1):
-      logger.info('  %d. %s: %d dependencies', i, api, len(deps))
-      if i <= 3:  # Show actual dependencies for top 3
-        logger.info('     -> %s', ', '.join(deps[:5]) + ('...' if len(deps) > 5 else ''))
-
-  # Show some examples of APIs without dependencies (potential entry points)
-  if apis_without_deps:
-    logger.info('')
-    logger.info('Sample APIs without dependencies (potential entry points): %d total', len(apis_without_deps))
-    logger.info('  %s', ', '.join(apis_without_deps[:10]) + ('...' if len(apis_without_deps) > 10 else ''))
+    # Sort entry points alphabetically for consistent output
+    sorted_entry_points = sorted(entry_points)
+    for i, api in enumerate(sorted_entry_points[:20], 1):
+      logger.info('  %2d. %s', i, api)
+    if len(entry_points) > 20:
+      logger.info('  ... and %d more', len(entry_points) - 20)
+  else:
+    logger.warning('  NO ENTRY POINTS FOUND! The graph may have circular dependencies.')
+    logger.warning('  Consider adding APIs that only use primitive types as inputs.')
 
   logger.info('')
   logger.info('=' * 80)
   logger.info('')
+
+  # Generate visualization if output directory is provided
+  if output_dir:
+    visualize_dependency_graph(project, dep_graph, output_dir, entry_points)
 
 
 def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output_base: str) -> tuple[str, dict]:
@@ -370,30 +540,18 @@ def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output
     public_headers_file=public_headers_path
   )
 
-  # Copy relevant files from container to local outdir.
-  container = clang_extractor.container
-  container_id = getattr(container, 'container_id', None)
-  if not container_id:
-    raise RuntimeError('Failed to obtain container id from extractor')
+  # Copy relevant files from container to local outdir using extractor's method.
+  def _copy(container_path: str, local_name: str, required: bool = True) -> str:
+    return clang_extractor._copy_from_container(
+      container_path, os.path.join(outdir, local_name), required=required
+    )
 
-  def _copy_from_container(container_path: str, local_name: str, required: bool = True) -> str:
-    local_path = os.path.join(outdir, local_name)
-    result = subprocess.run(['docker', 'cp', f'{container_id}:{container_path}', local_path], 
-                           capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-      if required:
-        raise RuntimeError(f'Failed to copy required file {container_path} from container: {result.stderr}')
-      else:
-        logger.warning('Failed to copy optional file %s from container: %s', container_path, result.stderr)
-        return ''
-    return local_path
-
-  apis_clang_path = _copy_from_container(apis_clang_container_path, 'apis_clang.json', required=True)
+  apis_clang_path = _copy(apis_clang_container_path, 'apis_clang.json', required=True)
   # optional files
-  _copy_from_container(f'{container_output_dir}/exported_functions.txt', 'exported_functions.txt', required=False)
-  _copy_from_container(f'{container_output_dir}/incomplete_types.txt', 'incomplete_types.txt', required=False)
-  _copy_from_container(f'{container_output_dir}/conditions.json', 'conditions.json', required=False)
-  _copy_from_container(f'{container_output_dir}/data_layout.txt', 'data_layout.txt', required=False)
+  _copy(f'{container_output_dir}/exported_functions.txt', 'exported_functions.txt', required=False)
+  _copy(f'{container_output_dir}/incomplete_types.txt', 'incomplete_types.txt', required=False)
+  _copy(f'{container_output_dir}/conditions.json', 'conditions.json', required=False)
+  _copy(f'{container_output_dir}/data_layout.txt', 'data_layout.txt', required=False)
 
   api_list = convert_apis_clang_json_to_api_list(apis_clang_path)
   logger.info('Parsed %d APIs from clang output for project %s', len(api_list), project)
@@ -953,8 +1111,8 @@ def main():
       outdir, dep_graph = run_local_extraction_for_benchmark(benchmark, args.work_dir)
       logger.info('Extraction completed for %s. Results saved to %s', benchmark.project, outdir)
 
-      # Display dependency graph statistics
-      print_dependency_graph_stats(benchmark.project, dep_graph)
+      # Display dependency graph statistics and generate visualization
+      print_dependency_graph_stats(benchmark.project, dep_graph, output_dir=outdir)
     return
   if oss_fuzz_checkout.ENABLE_CACHING:
     oss_fuzz_checkout.prepare_cached_images(experiment_targets)

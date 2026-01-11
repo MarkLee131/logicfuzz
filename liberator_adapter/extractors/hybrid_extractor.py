@@ -1,7 +1,5 @@
 """
-混合 API 提取器
-
-整合 Clang 和 LLVM 提取器，提供完整的 API 提取功能
+Integrate Clang and LLVM extractors, provide complete API extraction functionality.
 """
 import os
 import logging
@@ -25,35 +23,35 @@ logger = logging.getLogger(__name__)
 
 class HybridAPIExtractor(BaseAPIExtractor):
     """
-    混合提取器：整合 Clang 和 LLVM 提取功能
+    Integrate Clang and LLVM extractors, provide complete API extraction functionality.
     
-    工作流程：
-    1. 使用 Clang 提取器从头文件提取 apis_clang.json
-    2. 使用 wllvm 编译项目到 bitcode
-    3. 使用 LLVM 提取器从 bitcode 提取 apis_llvm.json
-    4. 使用 Utils.get_api_list() 合并数据生成 Api 对象
+    Workflow:
+    1. Use Clang extractor to extract apis_clang.json from header files
+    2. Use wllvm to compile project to bitcode
+    3. Use LLVM extractor to extract apis_llvm.json from bitcode
+    4. Use Utils.get_api_list() to merge data and generate Api objects
     """
     
     def __init__(self, benchmark: Benchmark, container: Optional[ProjectContainerTool] = None):
         """
-        初始化混合提取器
+        Initialize hybrid extractor
         
         Args:
-            benchmark: 项目基准对象
-            container: 可选的容器工具（如果已创建）
+            benchmark: benchmark object
+            container: optional container tool (if created)
         """
         super().__init__(benchmark, container, container_name='hybrid_extract')
         
-        # 创建子提取器（共享同一个容器）
+        # Create sub-extractors (share the same container)
         self.clang_extractor = ClangAPIExtractor(benchmark, self.container)
         self.llvm_extractor = LLVMAPIExtractor(benchmark, self.container)
         
-        # 输出目录（容器内）
+        # Output directory (container内)
         self.output_dir = '/tmp/liberator_extract'
         
-        # 本地临时目录（用于存储从容器复制的文件）
+        # Local temporary directory (for storing files copied from container)
         self.local_temp_dir = None
-        # 记录最近一次提取的元数据（容器/本地路径）
+        # Record recent metadata (container/local paths)
         self.last_metadata = {}
     
     def extract(
@@ -65,21 +63,21 @@ class HybridAPIExtractor(BaseAPIExtractor):
         compile_project: bool = True
     ) -> Dict[str, Api]:
         """
-        提取 API 信息
+        Extract API information
         
         Args:
-            function_signatures: 要提取的函数签名列表（可选，如果为 None 则提取所有）
-            include_dir: 头文件目录（可选，如果为 None 则自动检测）
-            public_headers_file: 公共头文件列表（可选）
-            bc_file: bitcode 文件路径（可选，如果为 None 且 compile_project=True 则自动编译）
-            compile_project: 是否编译项目（如果 bc_file 未提供）
+            function_signatures: list of function signatures to extract (optional, if None then extract all)
+            include_dir: header file directory (optional, if None then auto-detect)
+            public_headers_file: list of public header files (optional)
+            bc_file: bitcode file path (optional, if None and compile_project=True then auto-compile)
+            compile_project: whether to compile project (if bc_file is not provided)
         
         Returns:
-            函数名到 Api 对象的字典
+            dictionary of function names to Api objects
         """
         logger.info(f"Starting hybrid API extraction for project: {self.benchmark.project}")
         
-        # 1. 提取 apis_clang.json
+        # 1. Extract apis_clang.json
         logger.info("Step 1: Extracting apis_clang.json...")
         if include_dir:
             apis_clang_path = self.clang_extractor.extract_apis_clang(
@@ -94,7 +92,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 project_name=self.benchmark.project
             )
         
-        # 2. 准备 bitcode 文件
+        # 2. Prepare bitcode file
         logger.info("Step 2: Preparing bitcode file...")
         if not bc_file:
             if compile_project:
@@ -227,27 +225,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
             logger.error(f"Failed to merge APIs: {e}")
             raise
     
-    def _copy_from_container(self, container_path: str, local_path: str):
-        """从容器复制文件到本地"""
-        try:
-            # 使用 docker cp 复制文件
-            cmd = ['docker', 'cp', f'{self.container.container_id}:{container_path}', local_path]
-            result = sp.run(cmd, capture_output=True, text=True, check=False)
-            
-            if result.returncode != 0:
-                # 如果直接复制失败，尝试先复制到临时位置
-                temp_local = local_path + '.tmp'
-                cmd = ['docker', 'cp', f'{self.container.container_id}:{container_path}', temp_local]
-                result = sp.run(cmd, capture_output=True, text=True, check=False)
-                if result.returncode == 0:
-                    shutil.move(temp_local, local_path)
-                else:
-                    raise RuntimeError(f"Failed to copy {container_path}: {result.stderr}")
-            
-            logger.debug(f"Copied {container_path} to {local_path}")
-        except Exception as e:
-            logger.error(f"Error copying file from container: {e}")
-            raise
+    # _copy_from_container is inherited from BaseAPIExtractor
     
     def _extract_function_name(self, signature: str) -> Optional[str]:
         """从函数签名中提取函数名"""
