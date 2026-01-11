@@ -1,0 +1,44 @@
+# Core LLM packages
+anthropic
+openai
+
+# Code analysis
+chardet
+cxxfilt
+rust-demangler
+tiktoken
+
+# Git operations
+gitpython
+
+# Template rendering
+jinja2
+
+# Data processing
+pandas
+pyyaml
+requests
+
+# Code quality
+pylint
+pyright
+yapf
+
+# Google Cloud - only storage needed for OSS-Fuzz coverage data access
+google-cloud-storage
+
+# LangGraph for agent workflow
+langgraph>=0.2.74
+langgraph-checkpoint>=1.0.0
+langgraph-checkpoint-postgres>=1.0.0
+
+# Tree-sitter for header extraction (Header Fix V2)
+tree-sitter>=0.25.0
+tree-sitter-cpp>=0.23.0
+
+# NetworkX for API dependency graph construction
+networkx>=3.0
+
+# ChromaDB for vector database
+chromadb>=0.4.0
+
