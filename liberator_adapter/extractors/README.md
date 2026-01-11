@@ -102,8 +102,3 @@ all_apis = adapter.extract_all_apis()
 1. **性能**: 首次提取可能需要较长时间（编译项目、分析 bitcode）
 2. **缓存**: 提取结果会缓存在 `api_cache` 中
 3. **清理**: 使用完毕后调用 `cleanup()` 清理临时文件和容器
-
-## 示例
-
-完整示例请参考 `test_liberator_extractors.py`（如果存在）。
-
