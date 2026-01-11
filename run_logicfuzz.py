@@ -188,17 +188,31 @@ def convert_apis_clang_json_to_api_list(apis_clang_path: str) -> List[Api]:
       obj = json.loads(line)
       fname = obj.get('function_name')
       is_vararg = obj.get('is_vararg', False)
-      ret_json = obj.get('return_info', {'name': 'return', 'flag': 'val', 'size': 0, 'type': 'void', 'const': False})
+      ret_json = obj.get('return_info', {'name': 'return', 'flag': 'val', 'size': 0, 'type_clang': 'void', 'const': [False]})
+      # Handle const field: could be a list [bool, bool] or a single bool
+      const_field = ret_json.get('const', [False])
+      if isinstance(const_field, list):
+        const_list = const_field
+      else:
+        const_list = [const_field]
+      
       return_arg = Arg(ret_json.get('name', 'return'),
                        ret_json.get('flag', 'val'),
                        ret_json.get('size', 0),
-                       ret_json.get('type', 'void'),
-                       [ret_json.get('const', False)])
+                       ret_json.get('type_clang', ret_json.get('type', 'void')),
+                       const_list)
 
       args_list = []
       for a in obj.get('arguments_info', []):
+        # Handle const field: could be a list [bool, bool] or a single bool
+        const_field = a.get('const', [False])
+        if isinstance(const_field, list):
+          const_list = const_field
+        else:
+          const_list = [const_field]
+        
         arg = Arg(a.get('name', ''), a.get('flag', 'val'), a.get('size', 0),
-                  a.get('type_clang', a.get('type', 'void')), [a.get('const', False)])
+                  a.get('type_clang', a.get('type', 'void')), const_list)
         args_list.append(arg)
 
       namespace = obj.get('namespace', [])
@@ -227,7 +241,85 @@ def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output
 
   # Use a container-internal temp dir for outputs to avoid host path collisions.
   container_output_dir = f'/tmp/liberator_extract_{project}'
-  apis_clang_container_path = clang_extractor.extract_with_auto_detect(output_dir=container_output_dir, project_name=project)
+  container = clang_extractor.container
+  clang_extractor._ensure_output_dir(container_output_dir)
+  
+  # Generate public_headers.txt following liberator's design:
+  # - Format: one header filename per line (e.g., "cJSON.h")
+  # - Should list only public API headers, not all headers
+  # - We try to find project-specific headers first
+  public_headers_path = f'{container_output_dir}/public_headers.txt'
+  
+  # Strategy: Find public API headers (not all headers)
+  # Following liberator's design: public_headers.txt should list only public API headers
+  # Priority: include/ directory > project root > system include (filtered)
+  project_dir = container.project_dir
+  headers_list = []
+  
+  # Priority 1: Check include/ directory (most common location for public headers)
+  include_dir = f'{project_dir}/include'
+  if container.execute(f'test -d "{include_dir}" && echo "exists"').stdout.strip() == 'exists':
+    find_include_headers_cmd = (
+      f'find "{include_dir}" -maxdepth 2 -type f \\( '
+      f'-name "*.h" -o -name "*.hpp" -o -name "*.h++" -o -name "*.hh" '
+      f'\\) ! -path "*/internal/*" ! -path "*/private/*" ! -path "*/detail/*" '
+      f'! -path "*/impl/*" ! -path "*/*_internal.*" ! -path "*/*_private.*" '
+      f'-exec basename {{}} \\; | sort -u'
+    )
+    headers_result = container.execute(find_include_headers_cmd)
+    if headers_result.returncode == 0 and headers_result.stdout.strip():
+      headers_list = headers_result.stdout.strip().split('\n')
+      logger.info(f'Found {len(headers_list)} header(s) in include/ directory: {headers_list[:10]}')
+  
+  # Priority 2: If no headers in include/, check project root (but exclude internal dirs)
+  if not headers_list:
+    find_root_headers_cmd = (
+      f'find "{project_dir}" -maxdepth 1 -type f \\( '
+      f'-name "*.h" -o -name "*.hpp" -o -name "*.h++" -o -name "*.hh" '
+      f'\\) ! -name "*_internal.*" ! -name "*_private.*" '
+      f'-exec basename {{}} \\; | sort -u'
+    )
+    headers_result = container.execute(find_root_headers_cmd)
+    if headers_result.returncode == 0 and headers_result.stdout.strip():
+      headers_list = headers_result.stdout.strip().split('\n')
+      logger.info(f'Found {len(headers_list)} header(s) in project root: {headers_list[:10]}')
+  
+  # Priority 3: Fallback to system include directory, but filter by project name
+  if not headers_list:
+    logger.warning(f'No headers found in project directory, trying system include with project filter')
+    system_include = '/usr/local/include'
+    find_system_headers_cmd = (
+      f'find "{system_include}" -type f \\( '
+      f'-name "*{project}*.h" -o -name "*{project}*.hpp" -o '
+      f'-path "*/{project}/*" \\( -name "*.h" -o -name "*.hpp" \\) '
+      f'\\) -exec basename {{}} \\; | sort -u'
+    )
+    headers_result = container.execute(find_system_headers_cmd)
+    if headers_result.returncode == 0 and headers_result.stdout.strip():
+      headers_list = headers_result.stdout.strip().split('\n')
+      logger.info(f'Found {len(headers_list)} header(s) in system include: {headers_list[:10]}')
+  
+  if not headers_list:
+    raise RuntimeError(
+      f'Could not find any headers for project {project}. '
+      f'Please ensure headers exist in {project_dir} or provide a public_headers.txt file.'
+    )
+  
+  # Write public_headers.txt in liberator format: one filename per line
+  headers_content = '\n'.join(headers_list)
+  create_file_cmd = f'cat > "{public_headers_path}" << \'EOF\'\n{headers_content}\nEOF'
+  create_result = container.execute(create_file_cmd)
+  if create_result.returncode != 0:
+    raise RuntimeError(f'Failed to create public_headers.txt: {create_result.stderr}')
+  
+  logger.info(f'Generated public_headers.txt with {len(headers_list)} header(s)')
+  
+  # Now call extract_with_auto_detect with the public_headers_file
+  apis_clang_container_path = clang_extractor.extract_with_auto_detect(
+    output_dir=container_output_dir, 
+    project_name=project,
+    public_headers_file=public_headers_path
+  )
 
   # Copy relevant files from container to local outdir.
   container = clang_extractor.container
@@ -269,7 +361,9 @@ def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output
     json.dump(out_graph, f, indent=2)
 
   logger.info('Wrote type dependency graph to %s', graph_path)
-  return outdir
+
+  # Return both output directory and dependency graph for analysis
+  return outdir, out_graph
 
 def run_experiments(benchmark: benchmarklib.Benchmark, args) -> Result:
   """Runs an experiment based on the |benchmark| config."""
