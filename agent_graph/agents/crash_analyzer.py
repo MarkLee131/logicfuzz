@@ -167,9 +167,12 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
             'add-apt-repository -y ppa:ubuntu-toolchain-r/test && '
             'apt update && '
             'apt install -y gdb screen')
-        self.gdb_tool.execute('export CFLAGS="$CFLAGS -g -O0"')
-        self.gdb_tool.execute('export CXXFLAGS="$CXXFLAGS -g -O0"')
-        self.gdb_tool.execute('compile > /dev/null')
+        # 注意：export 和 compile 必须在同一个 shell 中执行，否则环境变量不会生效
+        self.gdb_tool.execute(
+            'export CFLAGS="$CFLAGS -g -O0" && '
+            'export CXXFLAGS="$CXXFLAGS -g -O0" && '
+            'compile > /dev/null'
+        )
         
         # Launch GDB session
         self.gdb_tool.execute(

@@ -56,19 +56,16 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         # 确保输出目录存在
         self._ensure_output_dir(output_dir)
         
-        # 设置环境变量（extractor 会使用 LIBFUZZ_LOG_PATH）
-        self.container.execute(f'export LIBFUZZ_LOG_PATH={output_dir}')
-        
         # 准备输出文件路径
         conditions_path = f'{output_dir}/conditions.json'
         minimized_apis_path = f'{output_dir}/apis_minimized.txt'
         data_layout_path = f'{output_dir}/data_layout.txt'
         apis_llvm_path = f'{output_dir}/apis_llvm.json'
         
-        # 构建命令
         # 查找或复制 extractor 到容器内
         extractor_path = self._find_or_copy_extractor()
         
+        # 构建命令：将环境变量和命令放在同一个 shell 中执行
         cmd = (
             f'export LIBFUZZ_LOG_PATH={output_dir} && '
             f'{extractor_path} '
@@ -127,29 +124,25 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         if not source_dir:
             source_dir = self.container.project_dir
         
-        # 检查是否已安装 wllvm
-        result = self.container.execute('which wllvm')
-        if result.returncode != 0:
-            logger.warning("wllvm not found, attempting to install...")
-            # 尝试安装 wllvm
-            install_result = self.container.execute('pip install wllvm || pip3 install wllvm')
-            if install_result.returncode != 0:
-                raise RuntimeError("Failed to install wllvm. Please install it manually.")
+        # 确保 wllvm 已安装
+        self._ensure_wllvm_installed()
         
-        # 设置 wllvm 环境变量
-        self.container.execute('export LLVM_COMPILER=clang')
-        self.container.execute('export LLVM_COMPILER_PATH=$(which clang | xargs dirname)')
-        
-        # 编译项目（使用项目的 build.sh）
+        # 编译项目：设置 wllvm 环境变量并在同一个 shell 中编译
+        # 注意：必须在同一个命令链中执行，export 才会生效
         logger.info("Compiling project with wllvm...")
-        compile_result = self.container.compile()
+        compile_cmd = (
+            'export LLVM_COMPILER=clang && '
+            'export LLVM_COMPILER_PATH=$(dirname $(which clang)) && '
+            'export CC=wllvm && '
+            'export CXX=wllvm++ && '
+            'compile > /dev/null 2>&1'
+        )
+        compile_result = self.container.execute(compile_cmd)
         if compile_result.returncode != 0:
             raise RuntimeError(f"Failed to compile project: {compile_result.stderr}")
         
-        # 提取 bitcode（假设库文件在标准位置）
-        # 这需要根据项目结构调整
+        # 查找库文件并提取 bitcode
         if not output_bc:
-            # 尝试查找 .a 文件
             find_result = self.container.execute(
                 f'find {source_dir} -name "*.a" -type f | head -1'
             )
@@ -159,16 +152,32 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             else:
                 raise RuntimeError("Could not find library file to extract bitcode from")
         
-        # 使用 extract-bc 提取 bitcode
-        self._execute_with_error_check(
-            f'extract-bc -b "{output_bc.replace(".bc", "")}"',
-            "Failed to extract bitcode",
-            check_output=True,
-            output_file=output_bc
+        # 使用 extract-bc 提取 bitcode（需要 wllvm 环境变量）
+        extract_cmd = (
+            'export LLVM_COMPILER=clang && '
+            'export LLVM_COMPILER_PATH=$(dirname $(which clang)) && '
+            f'extract-bc -b "{output_bc.replace(".bc", "")}"'
         )
+        result = self.container.execute(extract_cmd)
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to extract bitcode: {result.stderr}")
+        
+        if not self._file_exists_in_container(output_bc):
+            raise RuntimeError(f"Output file {output_bc} was not created")
         
         logger.info(f"Successfully created bitcode file: {output_bc}")
         return output_bc
+    
+    def _ensure_wllvm_installed(self):
+        """确保 wllvm 已安装"""
+        result = self.container.execute('which wllvm extract-bc')
+        if result.returncode == 0:
+            return
+        
+        logger.info("wllvm not found, installing...")
+        install_result = self.container.execute('pip3 install wllvm || pip install wllvm')
+        if install_result.returncode != 0:
+            raise RuntimeError("Failed to install wllvm")
     
     def _find_or_copy_extractor(self) -> str:
         """
