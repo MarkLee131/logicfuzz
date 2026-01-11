@@ -244,18 +244,12 @@ class ClangAPIExtractor(BaseAPIExtractor):
         python_cmd_parts = [
             f'python3 {script_path}',
             f'-i "{include_dir}"',
+            f'-o "{output_dir}"',
         ]
         
         # 添加 public_headers 文件（如果提供）
         if public_headers_file:
             python_cmd_parts.append(f'-p "{public_headers_file}"')
-        
-        python_cmd_parts.extend([
-            f'-e "{exported_functions_path}"',
-            f'-t "{incomplete_types_path}"',
-            f'-a "{apis_clang_path}"',
-            f'-n "{enum_types_path}"',
-        ])
         
         python_cmd = ' '.join(python_cmd_parts)
         
@@ -290,14 +284,24 @@ class ClangAPIExtractor(BaseAPIExtractor):
         Returns:
             include 目录路径（容器内），如果找不到则返回 None
         """
-        # 检查项目目录下的 include
+        # 优先级1: 检查项目目录下的 include
         project_include = f'{self.container.project_dir}/include'
         if self._dir_exists_in_container(project_include):
             return project_include
         
-        # 检查系统 include 目录
+        # 优先级2: 检查项目源码目录中是否有头文件（可能在项目根目录或src目录）
+        # 查找项目目录下的所有 .h 文件
+        find_headers_cmd = f'find "{self.container.project_dir}" -maxdepth 3 -type f -name "*.h" -o -name "*.hpp" | head -1'
+        result = self.container.execute(find_headers_cmd)
+        if result.returncode == 0 and result.stdout.strip():
+            # 找到头文件，使用项目目录作为 include 目录
+            logger.info(f"Found headers in project directory: {self.container.project_dir}")
+            return self.container.project_dir
+        
+        # 优先级3: 检查系统 include 目录（最后的选择）
         system_include = '/usr/local/include'
         if self._dir_exists_in_container(system_include):
+            logger.warning(f"Using system include directory: {system_include}. This may include many headers.")
             return system_include
         
         return None
@@ -305,7 +309,8 @@ class ClangAPIExtractor(BaseAPIExtractor):
     def extract_with_auto_detect(
         self,
         output_dir: str = '/tmp/liberator_extract',
-        project_name: Optional[str] = None
+        project_name: Optional[str] = None,
+        public_headers_file: Optional[str] = None
     ) -> str:
         """
         自动检测 include 目录并提取
@@ -313,6 +318,8 @@ class ClangAPIExtractor(BaseAPIExtractor):
         Args:
             output_dir: 输出目录
             project_name: 项目名称
+            public_headers_file: 公共头文件列表文件（容器内路径），必需。
+                                文件内容应该是每行一个头文件名（如 cjson.h）
         
         Returns:
             apis_clang.json 的路径
@@ -323,39 +330,22 @@ class ClangAPIExtractor(BaseAPIExtractor):
         
         logger.info(f"Auto-detected include directory: {include_dir}")
         
-        # 自动生成 public_headers 文件（如果未提供）
-        # 查找 include_dir 中的所有头文件
-        self._ensure_output_dir(output_dir)
-        public_headers_path = f'{output_dir}/public_headers.txt'
+        # public_headers_file 是必需的，必须由调用者提供
+        if not public_headers_file:
+            raise ValueError(
+                "public_headers_file is required. "
+                "Please provide a file listing the header files to analyze (one header name per line, e.g., 'cjson.h')."
+            )
         
-        # 查找所有头文件
-        find_headers_cmd = f'find "{include_dir}" -type f \\( -name "*.h" -o -name "*.hpp" -o -name "*.h++" -o -name "*.hh" \\) -exec basename {{}} \\; | sort -u'
-        headers_result = self.container.execute(find_headers_cmd)
-        
-        if headers_result.returncode == 0 and headers_result.stdout.strip():
-            # 将找到的头文件写入 public_headers.txt
-            headers_list = headers_result.stdout.strip().split('\n')
-            headers_content = '\n'.join(headers_list)
-            
-            # 在容器内创建文件
-            create_file_cmd = f'cat > "{public_headers_path}" << \'EOF\'\n{headers_content}\nEOF'
-            create_result = self.container.execute(create_file_cmd)
-            
-            if create_result.returncode == 0:
-                logger.info(f"Auto-generated public_headers.txt with {len(headers_list)} header files")
-            else:
-                logger.warning(f"Failed to create public_headers.txt, trying alternative method")
-                # 备用方法：使用 echo
-                for header in headers_list:
-                    self.container.execute(f'echo "{header}" >> "{public_headers_path}"')
-        else:
-            logger.warning(f"No header files found in {include_dir}, creating empty public_headers.txt")
-            # 创建一个包含至少一个常见头文件的文件，避免脚本报错
-            self.container.execute(f'echo "*.h" > "{public_headers_path}"')
+        # 检查文件是否存在
+        if not self._file_exists_in_container(public_headers_file):
+            raise FileNotFoundError(
+                f"public_headers_file not found in container: {public_headers_file}"
+            )
         
         return self.extract_apis_clang(
             include_dir=include_dir,
-            public_headers_file=public_headers_path,
+            public_headers_file=public_headers_file,
             output_dir=output_dir,
             project_name=project_name or self.benchmark.project
         )

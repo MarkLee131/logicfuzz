@@ -240,22 +240,25 @@ def _main():
 
     parser = argparse.ArgumentParser(description='Extract list of exprted function from header files.')
     parser.add_argument('-include_folder', '-i', type=str, help='Folder with header files!', required=True)
-    parser.add_argument('-exported_functions', '-e', type=str, help='List of exported functions', required=True)
-    parser.add_argument('-incomplete_types', '-t', type=str, help='List of incomplete types', required=True)
-    parser.add_argument('-apis_list', '-a', type=str, help='List of APIs with types from the AST', required=True)
     parser.add_argument('-public_headers', '-p', type=str, help='List of public header files', required=True)
-    parser.add_argument('-enum_list', '-n', type=str, help='List of enum types', required=False)
+    parser.add_argument('-output_dir', '-o', type=str, help='Output directory for all generated files', required=True)
 
     args = parser.parse_args()
 
     include_folder = args.include_folder
-    exported_functions = args.exported_functions
-    incomplete_types = args.incomplete_types
-    apis_list = args.apis_list
     public_headers = args.public_headers
-    enum_list = args.enum_list
+    output_dir = args.output_dir
+    
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 生成所有输出文件路径
+    exported_functions = os.path.join(output_dir, 'exported_functions.txt')
+    incomplete_types = os.path.join(output_dir, 'incomplete_types.txt')
+    apis_list = os.path.join(output_dir, 'apis_clang.json')
+    enum_list = os.path.join(output_dir, 'enum_types.txt')
 
-    target = os.environ["TARGET_NAME"]
+    target = 'extract'
 
     type_log = f"./alltypes_{target}.txt"
 
@@ -265,9 +268,8 @@ def _main():
 
     # exit()
 
-    # Eventually, tell clang.cindex where libclang.dylib is -- or else apt install and good luck
-    # clang.cindex.Config.set_library_path("/Users/tomgong/Desktop/build/lib")
-    clang.cindex.Config.set_library_file(os.path.join(os.path.expanduser('~'), ".local/lib/python3.8/site-packages/clang/native/libclang.so"))
+    # libclang path should be set via LIBCLANG_PATH environment variable
+    # (set by clang_extractor.py), or clang will try to find it automatically
     index = clang.cindex.Index.create()
 
     # Generate AST from filepath passed in the command line
@@ -306,10 +308,9 @@ def _main():
         for a in apis_definition:
             out_f.write(f"{json.dumps(a)}\n")
 
-    if enum_list is not None:
-        with open(enum_list, "w") as out_f:
-            for e in type_enum:
-                out_f.write(f"{e}\n")
+    with open(enum_list, "w") as out_f:
+        for e in type_enum:
+            out_f.write(f"{e}\n")
         
 
 if __name__ == "__main__":
