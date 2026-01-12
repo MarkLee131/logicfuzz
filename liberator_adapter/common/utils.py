@@ -414,7 +414,16 @@ class Utils:
         type = at_json["type"]
         type_string = at_json["type_string"]
 
-        return AccessType(access, fields, type, type_string)
+        # 创建AccessType对象
+        at = AccessType(access, fields, type, type_string)
+
+        # 解析provenance信息（如果存在）
+        if "provenance" in at_json:
+            from liberator_adapter.constraints.provenance_checker import ProvenanceInfo
+            prov_info = ProvenanceInfo.from_dict(at_json)
+            at.provenance = prov_info
+
+        return at
 
     @staticmethod
     def get_access_type_set(ats_json) -> AccessTypeSet:

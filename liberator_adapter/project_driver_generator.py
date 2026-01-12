@@ -132,24 +132,53 @@ class ProjectDriverGenerator:
         
         return self.all_apis
     
-    def build_dependency_graph(self) -> DependencyGraph:
+    def build_dependency_graph(
+        self,
+        function_conditions: Optional[FunctionConditionsSet] = None,
+        enable_provenance_filter: bool = True
+    ) -> DependencyGraph:
         """
         构建类型依赖图
-        
+
+        Args:
+            function_conditions: 函数约束条件集合（可选，用于provenance过滤）
+            enable_provenance_filter: 是否启用provenance过滤（默认True）
+
         Returns:
             类型依赖图
         """
         if not self.all_apis:
             raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
-        
+
         logger.info("🔗 Building type dependency graph...")
-        
+
+        # 如果启用provenance过滤但没有提供条件，尝试加载
+        if enable_provenance_filter and function_conditions is None:
+            conditions_file = None
+            apis_llvm_file = None
+            if self.extract_metadata:
+                local_meta = self.extract_metadata.get("local", {})
+                conditions_file = local_meta.get("conditions")
+                apis_llvm_file = local_meta.get("apis_llvm")
+            if conditions_file and apis_llvm_file:
+                try:
+                    function_conditions = Utils.prase_function_conditions(conditions_file, apis_llvm_file)
+                    logger.info(f"✅ Loaded function conditions for provenance filtering")
+                except Exception as e:
+                    logger.warning(f"Failed to load conditions for provenance filtering: {e}")
+                    logger.warning("Continuing with provenance filter disabled")
+                    enable_provenance_filter = False
+
         # 使用 TypeDependencyGraphGenerator 生成依赖图
-        dep_gen = TypeDependencyGraphGenerator(list(self.all_apis))
+        dep_gen = TypeDependencyGraphGenerator(
+            list(self.all_apis),
+            function_conditions=function_conditions,
+            enable_provenance_filter=enable_provenance_filter
+        )
         self.dependency_graph = dep_gen.create()
-        
+
         logger.info(f"✅ Dependency graph built: {len(self.dependency_graph.graph)} nodes")
-        
+
         return self.dependency_graph
     
     def build_grammar(self) -> Grammar:
