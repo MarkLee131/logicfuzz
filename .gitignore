@@ -12,9 +12,6 @@ __pycache__/
 *.egg-info
 .vscode/
 .DS_Store
-.cursor/
-extracted_fuzz_drivers/
-chroma_db/
 logicfuzz.env
 
 TODO.md

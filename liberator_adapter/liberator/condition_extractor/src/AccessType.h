@@ -11,8 +11,9 @@
 
 #include "PhiFunction.h"
 #include "TypeMatcher.h"
+#include "ProvenanceTracker.h"
 #include "json/json.h"
-#include <fstream> 
+#include <fstream>
 #include <utility>
 
 using namespace SVF;
@@ -40,9 +41,12 @@ class AccessType {
 
         // original casted type
         const llvm::Type* c_type;
-        
+
         // remember the types extracted from previous GEP
         std::set<const llvm::Type*> visited_types;
+
+        // Provenance information for pointer tracking
+        ProvenanceInfo provenance;
 
         static std::string type_to_string(const llvm::Type* typ) {
             std::string str;
@@ -62,6 +66,7 @@ class AccessType {
             type = t;
             p_type = nullptr;
             c_type = nullptr;
+            provenance = ProvenanceInfo();  // Default to UNKNOWN
         }
         ~AccessType() {fields.clear();}
 
@@ -90,6 +95,9 @@ class AccessType {
 
             // visited types for GEP recursion
             this->visited_types = rhs.visited_types;
+
+            // provenance
+            this->provenance = rhs.provenance;
 
             return *this;
         };
@@ -157,6 +165,15 @@ class AccessType {
 
         inline bool hasParent() {
             return has_parent;
+        }
+
+        // Provenance getter/setter
+        void setProvenance(const ProvenanceInfo& prov) {
+            provenance = prov;
+        }
+
+        ProvenanceInfo getProvenance() const {
+            return provenance;
         }
 
         // void clone() {
@@ -381,6 +398,12 @@ class AccessType {
             accessTypeJson["fields"] = fieldsJson;
             accessTypeJson["type"] = type_to_hash(type);
             accessTypeJson["type_string"] = type_to_string(type);
+
+            // Add provenance information to JSON
+            accessTypeJson["provenance"] = ProvenanceTracker::provenanceTagToString(provenance.tag);
+            if (provenance.tag == ProvenanceTag::HEAP_CUSTOM && !provenance.allocator_name.empty()) {
+                accessTypeJson["allocator_name"] = provenance.allocator_name;
+            }
 
             if (verbose)
                 accessTypeJson["debug"] = dumpICFGNodesJson();

@@ -1,4 +1,8 @@
-from typing import List, Dict, Set #, Tuple, Optional
+from typing import List, Dict, Set, Optional, TYPE_CHECKING #, Tuple
+
+if TYPE_CHECKING:
+    from liberator_adapter.constraints.provenance_checker import ProvenanceInfo
+
 from enum import Enum
 
 class Access(Enum):
@@ -15,7 +19,8 @@ class AccessType:
     type: str
     type_string: str
 
-    parent: 'AccessType'
+    parent: Optional['AccessType']
+    provenance: Optional['ProvenanceInfo']  # Provenance information for pointer analysis
 
     def __init__(self, access: Access, fields: List[int],
         type: str, type_string: str):
@@ -24,6 +29,7 @@ class AccessType:
         self.type = type
         self.type_string = type_string
         self.parent = None
+        self.provenance = None  # Will be set when parsing from JSON
 
     def __str__(self):
         ff = ".".join([f"{f}" for f in self.fields])

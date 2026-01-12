@@ -44,6 +44,7 @@
 #include "TypeMatcher.h"
 #include "LibfuzzUtil.h"
 #include "GlobalStruct.h"
+#include "ProvenanceTracker.h"  // Add ProvenanceTracker
 
 // for random sampling
 #include <random>
@@ -51,7 +52,7 @@
 #include <iterator>
 
 #include "json/json.h"
-#include <fstream> 
+#include <fstream>
 #include <string>
 
 #include "md5/md5.h"
@@ -539,6 +540,11 @@ int main(int argc, char ** argv)
     SVFG* svfg = svfBuilder.buildFullSVFG(point_to_analysys);
     svfg->updateCallGraph(point_to_analysys);
 
+    // Initialize ProvenanceTracker for pointer provenance analysis
+    SVFUtil::outs() << "[INFO] Initializing ProvenanceTracker...\n";
+    ProvenanceTracker provenanceTracker(point_to_analysys, svfg);
+    SVFUtil::outs() << "[INFO] ProvenanceTracker initialized\n";
+
     // svfg->dump("from_extractor");
 
     // I want to find a minimized set of APIs to analyze
@@ -615,9 +621,36 @@ int main(int argc, char ** argv)
                 auto val = p->getValue();
                 auto llvm_val = llvmModuleSet->getLLVMValue(val);
                 auto seek_type = llvm_val->getType();
-                ValueMetadata paramMetadata = 
+                ValueMetadata paramMetadata =
                     ValueMetadata::extractParameterMetadata(
                         svfg, llvm_val, seek_type);
+
+                // Analyze provenance for each AccessType in the parameter
+                if (paramMetadata.getAccessTypeSet()->size() > 0) {
+                    AccessTypeSet* ats = paramMetadata.getAccessTypeSet();
+                    std::set<AccessType> updated_ats;
+
+                    for (auto at : *ats) {
+                        // Analyze provenance for this parameter
+                        ProvenanceInfo prov = provenanceTracker.analyze(llvm_val);
+                        at.setProvenance(prov);
+                        updated_ats.insert(at);
+
+                        if (verbose >= Verbosity::v1) {
+                            SVFUtil::outs() << "[INFO] Parameter provenance: "
+                                << ProvenanceTracker::provenanceTagToString(prov.tag) << "\n";
+                        }
+                    }
+
+                    // Rebuild AccessTypeSet with updated provenance
+                    AccessTypeSet new_ats;
+                    for (const auto& at : updated_ats) {
+                        for (const auto& node : at.getICFGNodes()) {
+                            new_ats.insert(const_cast<AccessType&>(at), node);
+                        }
+                    }
+                    paramMetadata.setAccessTypeSet(new_ats);
+                }
 
                 // auto param_key = "param_" + std::to_string(pn);
                 // functionResult[param_key] = paramMetadata.toJson();
@@ -657,6 +690,38 @@ int main(int argc, char ** argv)
             auto llvm_value = llvmModuleSet->getLLVMValue(p->getValue());
             ValueMetadata returnMetadata =
                 ValueMetadata::extractReturnMetadata(svfg, llvm_value);
+
+            // Analyze provenance for return value
+            if (returnMetadata.getAccessTypeSet()->size() > 0) {
+                // Get the actual function to analyze its return value provenance
+                const SVFFunction* svfFun = fun;
+                auto llvm_fun_val = llvmModuleSet->getLLVMValue(svfFun);
+                const llvm::Function* llvm_func = SVFUtil::dyn_cast<Function>(llvm_fun_val);
+
+                AccessTypeSet* ats = returnMetadata.getAccessTypeSet();
+                std::set<AccessType> updated_ats;
+
+                for (auto at : *ats) {
+                    // Analyze provenance for return value
+                    ProvenanceInfo prov = provenanceTracker.analyzeReturnValue(llvm_func);
+                    at.setProvenance(prov);
+                    updated_ats.insert(at);
+
+                    if (verbose >= Verbosity::v1) {
+                        SVFUtil::outs() << "[INFO] Return provenance: "
+                            << ProvenanceTracker::provenanceTagToString(prov.tag) << "\n";
+                    }
+                }
+
+                // Rebuild AccessTypeSet with updated provenance
+                AccessTypeSet new_ats;
+                for (const auto& at : updated_ats) {
+                    for (const auto& node : at.getICFGNodes()) {
+                        new_ats.insert(const_cast<AccessType&>(at), node);
+                    }
+                }
+                returnMetadata.setAccessTypeSet(new_ats);
+            }
 
             // functionResult["return"] = returnAccessTypeSet.toJson();
             // jsonResult.append(functionResult);
