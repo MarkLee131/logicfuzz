@@ -454,27 +454,6 @@ class APICompositionAnalyzer:
             return func_call.split('(')[0].strip()
         return func_call.strip()
     
-    def _is_initialization_function(self, func_name: str) -> bool:
-        """
-        判断函数是否是初始化函数（已弃用，保留用于向后兼容）
-        
-        注意：这个方法现在主要用于向后兼容。新的实现应该基于
-        usage examples中的真实使用模式，而不是函数名模式匹配。
-        """
-        func_lower = func_name.lower()
-        
-        # 检查是否包含初始化后缀
-        has_init_suffix = any(
-            func_lower.endswith(suffix) or suffix in func_lower
-            for suffix in INIT_SUFFIXES
-        )
-        
-        if not has_init_suffix:
-            return False
-        
-        # 验证函数确实存在（避免误匹配）
-        return self._function_exists(func_name)
-    
     def _find_prerequisites_heuristic(
         self,
         func: str,

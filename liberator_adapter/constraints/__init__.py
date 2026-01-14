@@ -12,7 +12,6 @@ from .sequence_filter import (
     SequenceFilter,           # 基本过滤器
     LLMLifecycleValidator,    # LLM生命周期验证器
     LLMSequenceFilter,        # LLM序列过滤器（主要使用）
-    TwoPhaseSequenceFilter,   # 别名，向后兼容
     APILifecyclePhase,
     APILifecycleInfo,
     FilterResult,

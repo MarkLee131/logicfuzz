@@ -69,10 +69,6 @@ class FuzzingWorkflowState(TypedDict):
     # Philosophy: Nodes read from context, never extract data themselves
     context: NotRequired[Dict[str, Any]]  # FuzzingContext.to_dict() - immutable data
     
-    # === Legacy: Shared Data (Deprecated, use context instead) ===
-    # Pre-fetched data shared across all trials to avoid redundant FI queries
-    shared_data: NotRequired[Dict[str, Any]]  # DEPRECATED: Use context instead
-    
     # === Agent-Specific Messages ===
     # OPTIMIZATION: Conversation history storage disabled to reduce token usage
     # See MEMORY_OPTIMIZATION_ANALYSIS.md for details

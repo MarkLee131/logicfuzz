@@ -105,9 +105,7 @@ class FuzzingWorkflow:
         
         # Inject fuzzing context into state
         if self.shared_data:
-            # Store both as 'context' (new) and 'shared_data' (legacy compatibility)
             initial_state['context'] = self.shared_data
-            initial_state['shared_data'] = self.shared_data  # Keep for legacy nodes
             logger.info('📍 [workflow.run] Fuzzing context injected into state', trial=trial)
         else:
             logger.info('📍 [workflow.run] WARNING: No fuzzing context available!', trial=trial)
