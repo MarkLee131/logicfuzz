@@ -3,6 +3,8 @@ CBFactory: Constraint-Based Factory for driver generation
 
 基于约束条件的 driver 生成策略，使用 ConditionManager 和 RunningContext
 来确保生成的 driver 满足 API 调用的约束条件。
+
+支持可选的 Z3 约束求解验证。
 """
 import copy
 import logging
@@ -20,6 +22,16 @@ from liberator_adapter.driver.ir import (
 )
 from liberator_adapter.bias import Bias
 
+# Z3 序列验证（可选）
+try:
+    from liberator_adapter.constraints.z3_solver import (
+        Z3SequenceValidator, is_z3_available
+    )
+    Z3_AVAILABLE = is_z3_available()
+except ImportError:
+    Z3_AVAILABLE = False
+    Z3SequenceValidator = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,23 +45,40 @@ class CBFactory(Factory):
     
     MAX_ALLOC_SIZE = 1024
     
-    def __init__(self, api_list: Set[Api], driver_size: int, 
+    def __init__(self, api_list: Set[Api], driver_size: int,
                  dgraph: DependencyGraph, conditions: FunctionConditionsSet,
-                 bias: Bias):
+                 bias: Bias, enable_z3_validation: bool = False):
         """
         初始化 CBFactory
-        
+
         Args:
             api_list: API 集合
             driver_size: driver 中 API 调用的数量
             dgraph: 依赖图（会被反转）
             conditions: 函数约束条件集合
             bias: 随机选择策略
+            enable_z3_validation: 是否启用 Z3 序列验证
         """
         self.api_list = api_list
         self.driver_size = driver_size
         self.conditions = conditions
         self.bias = bias
+        self.enable_z3_validation = enable_z3_validation and Z3_AVAILABLE
+
+        # 初始化 Z3 验证器
+        self.z3_validator = None
+        if self.enable_z3_validation:
+            try:
+                self.z3_validator = Z3SequenceValidator()
+                logger.info("[Z3 Validator] Enabled for sequence validation")
+            except Exception as e:
+                logger.warning(f"[Z3 Validator] Failed to initialize: {e}")
+                self.enable_z3_validation = False
+
+        # 构建函数条件映射
+        self.conditions_map: Dict[str, FunctionConditions] = {}
+        for _, fc in self.conditions:
+            self.conditions_map[fc.function_name] = fc
 
         # 初始化 RunningContext 的 type_to_hash（用于构建合成约束）
         RunningContext.type_to_hash = {}
@@ -210,6 +239,25 @@ class CBFactory(Factory):
 
         return (rng_ctx, {})
     
+    def validate_sequence_with_z3(self, api_sequence: List[Api]) -> Tuple[bool, List[str]]:
+        """
+        使用 Z3 验证 API 序列是否满足约束条件
+
+        Args:
+            api_sequence: API 调用序列
+
+        Returns:
+            (is_valid, violations): 是否有效，以及违反的约束列表
+        """
+        if not self.enable_z3_validation or not self.z3_validator:
+            return True, []
+
+        try:
+            return self.z3_validator.validate_sequence(api_sequence, self.conditions_map)
+        except Exception as e:
+            logger.warning(f"Z3 validation failed: {e}")
+            return True, []  # 保守处理：验证失败时认为有效
+
     def get_random_source_api(self):
         """随机选择一个 source API"""
         return self.bias.get_random_candidate([], self.source_api)

@@ -41,24 +41,45 @@ Please set this to environment variable to point to the SVF_DIR directory or set
     endif()
 endif()
 
-if(CMAKE_BUILD_TYPE MATCHES "Debug")
-    MESSAGE (STATUS "building SVF in debug mode")
-    if (EXISTS "${SVF_DIR}/Debug-build")
-        set(SVF_BIN "${SVF_DIR}/Debug-build")
-    else()
-        set(SVF_BIN "${SVF_DIR}/Release-build")
+# Detect SVF installation type (source build vs npm package)
+if (EXISTS "${SVF_DIR}/include" AND EXISTS "${SVF_DIR}/lib")
+    # npm-installed svf-lib (prebuilt binary)
+    MESSAGE (STATUS "Detected npm-installed SVF at ${SVF_DIR}")
+    set(SVF_HEADER "${SVF_DIR}/include")
+    set(SVF_LIB "${SVF_DIR}/lib/libSvfLLVM.a")
+    include_directories(${SVF_HEADER})
+
+    # Find SVF library
+    find_library(SVF_LIBRARY NAMES SvfLLVM libSvfLLVM.a
+                 HINTS "${SVF_DIR}/lib"
+                 NO_DEFAULT_PATH)
+    if(NOT SVF_LIBRARY)
+        message(STATUS "Using fallback SVF library path: ${SVF_LIB}")
+        set(SVF_LIBRARY "${SVF_LIB}")
     endif()
 else()
-    MESSAGE (STATUS "building SVF in release mode")
-    set(SVF_BIN "${SVF_DIR}/Release-build")
+    # Source-built SVF
+    MESSAGE (STATUS "Detected source-built SVF at ${SVF_DIR}")
+    if(CMAKE_BUILD_TYPE MATCHES "Debug")
+        MESSAGE (STATUS "building SVF in debug mode")
+        if (EXISTS "${SVF_DIR}/Debug-build")
+            set(SVF_BIN "${SVF_DIR}/Debug-build")
+        else()
+            set(SVF_BIN "${SVF_DIR}/Release-build")
+        endif()
+    else()
+        MESSAGE (STATUS "building SVF in release mode")
+        set(SVF_BIN "${SVF_DIR}/Release-build")
+    endif()
+    set(SVF_HEADER "${SVF_DIR}/svf/include")
+    set(SVF_LLVM_HEADER "${SVF_DIR}/svf-llvm/include")
+    set(SVF_LIB "${SVF_BIN}/svf-llvm/libSvfLLVM.a")
+    set(SVF_BIN_HEADER "${SVF_BIN}/include")
+    include_directories(${SVF_HEADER}
+                        ${SVF_LLVM_HEADER}
+                        ${SVF_BIN_HEADER})
+    set(SVF_LIBRARY "${SVF_LIB}")
 endif()
-set(SVF_HEADER "${SVF_DIR}/svf/include")
-set(SVF_LLVM_HEADER "${SVF_DIR}/svf-llvm/include")
-set(SVF_LIB "${SVF_BIN}/svf-llvm/libSvfLLVM.a")
-set(SVF_BIN_HEADER "${SVF_BIN}/include")
-include_directories(${SVF_HEADER}
-                    ${SVF_LLVM_HEADER}
-                    ${SVF_BIN_HEADER})
 
 #set z3 env
 if (DEFINED Z3_DIR)

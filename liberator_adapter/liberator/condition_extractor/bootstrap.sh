@@ -1,10 +1,32 @@
 #!/bin/bash
-set -x
+#
+# Bootstrap script for building the condition_extractor
+#
 set -e
 
-. ./env.sh
-# cmake .
-export PATH=$LLVM_DIR/bin:$PATH
+echo "=== Building LogicFuzz Condition Extractor ==="
+echo ""
+
+# Source environment
+if [ ! -f ./env.sh ]; then
+    echo "Error: env.sh not found"
+    exit 1
+fi
+
+source ./env.sh
+
+# Set compiler flags
 export CXXFLAGS="-Wno-deprecated-declarations -Wfatal-errors"
-# cmake -DCMAKE_BUILD_TYPE=Release .
-cmake -DCMAKE_BUILD_TYPE=Debug  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON  .
+
+# Configure with CMake
+echo "Configuring with CMake..."
+cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON .
+
+# Build
+echo ""
+echo "Building..."
+make -j$(nproc)
+
+echo ""
+echo "✓ Build complete!"
+echo "Extractor binary: ./bin/extractor"
