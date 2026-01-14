@@ -1,23 +1,58 @@
 import json, os
+import logging
 
 from liberator_adapter.common import Utils, Api, Arg
 from liberator_adapter.dependency import DependencyGraphGenerator, DependencyGraph
 from liberator_adapter.constraints.provenance_checker import ProvenanceChecker, ProvenanceInfo, ProvenanceTag
 
+# Z3 约束剪枝（可选）
+try:
+    from liberator_adapter.constraints.z3_solver import (
+        Z3DependencyPruner, is_z3_available
+    )
+    Z3_AVAILABLE = is_z3_available()
+except ImportError:
+    Z3_AVAILABLE = False
+    Z3DependencyPruner = None
+
+logger = logging.getLogger(__name__)
+
 
 class TypeDependencyGraphGenerator(DependencyGraphGenerator):
-    def __init__(self, api_list, function_conditions=None, enable_provenance_filter=True):
+    def __init__(self, api_list, function_conditions=None, enable_provenance_filter=True,
+                 enable_z3_pruning=False):
+        """
+        初始化类型依赖图生成器
+
+        Args:
+            api_list: API 列表
+            function_conditions: 函数约束条件集合
+            enable_provenance_filter: 是否启用 Provenance 过滤
+            enable_z3_pruning: 是否启用 Z3 约束剪枝（需要安装 z3-solver）
+        """
         super().__init__()
         self.apis_list = api_list
         self.function_conditions = function_conditions
         self.enable_provenance_filter = enable_provenance_filter
+        self.enable_z3_pruning = enable_z3_pruning and Z3_AVAILABLE
         self.provenance_stats = {"filtered": 0, "kept": 0}
+        self.z3_stats = {"filtered": 0, "kept": 0}
 
         # 构建API名称到FunctionConditions的映射（用于快速查找）
         self.function_conditions_map = {}
         if function_conditions:
             for fc in function_conditions.conditions_list:
                 self.function_conditions_map[fc.function_name] = fc
+
+        # 初始化 Z3 剪枝器
+        self.z3_pruner = None
+        if self.enable_z3_pruning:
+            try:
+                self.z3_pruner = Z3DependencyPruner()
+                logger.info("[Z3 Pruner] Enabled")
+            except Exception as e:
+                logger.warning(f"[Z3 Pruner] Failed to initialize: {e}")
+                self.enable_z3_pruning = False
 
     def create(self) -> DependencyGraph:
         dependency_graph = DependencyGraph()
@@ -52,6 +87,14 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
             if total > 0:
                 filter_rate = (self.provenance_stats["filtered"] / total) * 100
                 print(f"[Provenance Filter] Filtered {self.provenance_stats['filtered']}/{total} "
+                      f"dependencies ({filter_rate:.1f}%)")
+
+        # Print Z3 filtering statistics
+        if self.enable_z3_pruning:
+            total = self.z3_stats["filtered"] + self.z3_stats["kept"]
+            if total > 0:
+                filter_rate = (self.z3_stats["filtered"] / total) * 100
+                print(f"[Z3 Pruner] Filtered {self.z3_stats['filtered']}/{total} "
                       f"dependencies ({filter_rate:.1f}%)")
 
         return dependency_graph
@@ -92,10 +135,29 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
                 self.provenance_stats["kept"] += 1
             else:
                 self.provenance_stats["filtered"] += 1
+                return False  # Early return if provenance incompatible
 
-            return is_compatible
+        # Apply Z3 constraint-based pruning
+        if self.enable_z3_pruning and self.z3_pruner:
+            source_cond = self.function_conditions_map.get(api_b.function_name)
+            target_cond = self.function_conditions_map.get(api_a.function_name)
 
-        # No provenance filter, accept type dependency
+            try:
+                should_prune, reason = self.z3_pruner.prune_dependency_edge(
+                    api_b, api_a, source_cond, target_cond
+                )
+
+                if should_prune:
+                    self.z3_stats["filtered"] += 1
+                    return False
+                else:
+                    self.z3_stats["kept"] += 1
+            except Exception as e:
+                logger.debug(f"Z3 pruning failed for {api_b.function_name} -> {api_a.function_name}: {e}")
+                # 如果 Z3 失败，保守地保留这条边
+                self.z3_stats["kept"] += 1
+
+        # Accept type dependency
         return True
 
     def _check_provenance_compatibility(self, api_a: Api, api_b: Api,

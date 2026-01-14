@@ -135,7 +135,8 @@ class ProjectDriverGenerator:
     def build_dependency_graph(
         self,
         function_conditions: Optional[FunctionConditionsSet] = None,
-        enable_provenance_filter: bool = True
+        enable_provenance_filter: bool = True,
+        enable_z3_pruning: bool = False
     ) -> DependencyGraph:
         """
         构建类型依赖图
@@ -143,6 +144,7 @@ class ProjectDriverGenerator:
         Args:
             function_conditions: 函数约束条件集合（可选，用于provenance过滤）
             enable_provenance_filter: 是否启用provenance过滤（默认True）
+            enable_z3_pruning: 是否启用Z3约束剪枝（需要安装z3-solver）
 
         Returns:
             类型依赖图
@@ -151,6 +153,8 @@ class ProjectDriverGenerator:
             raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
 
         logger.info("🔗 Building type dependency graph...")
+        if enable_z3_pruning:
+            logger.info("   Z3 constraint pruning: enabled")
 
         # 如果启用provenance过滤但没有提供条件，尝试加载
         if enable_provenance_filter and function_conditions is None:
@@ -173,7 +177,8 @@ class ProjectDriverGenerator:
         dep_gen = TypeDependencyGraphGenerator(
             list(self.all_apis),
             function_conditions=function_conditions,
-            enable_provenance_filter=enable_provenance_filter
+            enable_provenance_filter=enable_provenance_filter,
+            enable_z3_pruning=enable_z3_pruning
         )
         self.dependency_graph = dep_gen.create()
 
@@ -320,31 +325,35 @@ class ProjectDriverGenerator:
         self,
         num_drivers: int = 10,
         driver_size: int = 5,
-        policy: str = "only_type"
+        policy: str = "only_type",
+        enable_z3_validation: bool = False
     ) -> List[Driver]:
         """
         生成 driver 列表
-        
+
         Args:
             num_drivers: 要生成的 driver 数量
             driver_size: 每个 driver 中的 API 调用数量
             policy: 生成策略（"only_type" 或 "constraint_based"）
-        
+            enable_z3_validation: 是否启用Z3序列验证（仅constraint_based策略）
+
         Returns:
             Driver 列表
         """
         if not self.grammar:
             raise RuntimeError("No grammar. Call build_grammar() first.")
-        
+
         logger.info(f"🚀 Generating {num_drivers} drivers (size={driver_size}, policy={policy})...")
-        
+        if enable_z3_validation and policy == "constraint_based":
+            logger.info("   Z3 sequence validation: enabled")
+
         drivers = []
-        
+
         # 根据策略选择 Factory
         if policy == "only_type":
             factory = self._create_ot_factory(driver_size)
         elif policy == "constraint_based":
-            factory = self._create_cb_factory(driver_size)
+            factory = self._create_cb_factory(driver_size, enable_z3_validation)
         else:
             raise ValueError(f"Unknown policy: {policy}. Supported: 'only_type', 'constraint_based'")
         
@@ -445,9 +454,13 @@ class ProjectDriverGenerator:
             grammar=self.grammar
         )
     
-    def _create_cb_factory(self, driver_size: int):
+    def _create_cb_factory(self, driver_size: int, enable_z3_validation: bool = False):
         """
         创建 CBFactory（constraint_based 策略）
+
+        Args:
+            driver_size: driver 中 API 调用的数量
+            enable_z3_validation: 是否启用Z3序列验证
         """
         if not self.dependency_graph:
             raise RuntimeError("No dependency graph available for CBFactory")
@@ -457,13 +470,14 @@ class ProjectDriverGenerator:
             raise RuntimeError("No condition manager available for CBFactory. Call build_condition_manager() first.")
 
         bias = Bias()
-        
+
         return CBFactory(
             api_list=self.all_apis,
             driver_size=driver_size,
             dgraph=self.dependency_graph,
             conditions=self.function_conditions or FunctionConditionsSet(),
-            bias=bias
+            bias=bias,
+            enable_z3_validation=enable_z3_validation
         )
     
     def create_backend(

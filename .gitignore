@@ -2,8 +2,6 @@ results/
 results-*/
 oss-fuzz/
 oss-fuzz-data/
-benchmark-sets/split_benchmarks/
-benchmark-sets/generated-benchmark-*
 venv/
 .venv/
 __pycache__/
@@ -13,5 +11,4 @@ __pycache__/
 .vscode/
 .DS_Store
 logicfuzz.env
-
-TODO.md
+CLAUDE.md
