@@ -7,7 +7,6 @@ and their sequences to guide driver generation.
 """
 from typing import Any, Dict, List, Optional
 import argparse
-import json
 
 import logger
 from llm_toolkit.models import LLM
@@ -51,14 +50,9 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         
         benchmark = state["benchmark"]
         project_name = benchmark.get('project', 'unknown')
-        
-        # ========================================================================
-        # DATA EXTRACTION: Get from context (prepared once at startup)
-        # ========================================================================
+
         context = state.get('context', None)
-        
         if not context:
-            # This should NEVER happen if run_single_fuzz.py did its job
             error_msg = (
                 f'❌ FATAL: No fuzzing context in state!\n'
                 f'This means data preparation failed but error was hidden.\n'
@@ -67,22 +61,18 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             raise RuntimeError(error_msg)
         
         logger.info(f'✅ Using project-level fuzzing context (prepared in {context.get("preparation_time", 0):.2f}s)', trial=self.trial)
-        
-        # Extract project-level data from context
+
         project_apis = context.get('project_apis', [])
         api_sequences = context.get('api_sequences', [])
         dependency_graph = context.get('dependency_graph', {})
-        grammar_info = context.get('grammar_info', {})
         api_dependencies = context.get('api_dependencies', {})
         header_info = context.get('header_info', {})
         existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
-        
-        # Update header_info to include existing fuzzer headers
+
         if header_info is None:
             header_info = {}
         header_info["existing_fuzzer_headers"] = existing_fuzzer_headers
-        
-        # Log project-level data summary
+
         api_count = len(project_apis)
         sequence_count = len(api_sequences)
         dep_nodes = dependency_graph.get('num_nodes', 0)
@@ -107,8 +97,7 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             f'\n  └─ Dependency Graph: {dep_nodes} nodes',
             trial=self.trial
         )
-        
-        # Log header information
+
         if header_info:
             std_count = len(header_info.get('standard_headers', []))
             proj_count = len(header_info.get('project_headers', []))
@@ -116,41 +105,32 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
                 f'📚 Header information available: {std_count} standard, {proj_count} project headers',
                 trial=self.trial
             )
-        
-        # Use project-level analysis
-        logger.info('Using project-level API sequence analysis', trial=self.trial)
+
         response = self._execute_project_level_analysis(
             state, project_name, project_apis, api_sequences, dependency_graph
         )
-        
-        # 从响应中提取session_memory更新（archetype、初始API约束等）
+
         session_memory_updates = extract_session_memory_updates_from_response(
             response,
             agent_name=self.name,
             current_iteration=state.get("current_iteration", 0)
         )
-        
-        # 合并更新到session_memory
         updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
-        
-        # Extract SRS JSON from response
+
         srs_data = self._extract_srs_json(response)
-        
-        # Parse response and create structured output
+
         analysis_result = {
-            "summary": response[:500],  # First 500 chars as summary
+            "summary": response[:500],
             "raw_analysis": response,
             "analyzed": True,
-            "header_information": header_info,  # Include header info for Prototyper
-            "srs_data": srs_data,  # Include structured SRS data
-            "api_dependencies": api_dependencies  # Include API dependency graph
+            "header_information": header_info,
+            "srs_data": srs_data,
+            "api_dependencies": api_dependencies
         }
-        
-        # Write requirements to file (matching original FunctionAnalyzer behavior)
+
         requirements_path = ""
         if response:
             try:
-                # Get work_dirs from state
                 work_dirs_dict = state.get("work_dirs", {})
                 requirements_dir = work_dirs_dict.get("requirements", "")
                 
@@ -166,8 +146,7 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
                         
             except Exception as e:
                 logger.warning(f'Failed to write requirements file: {e}', trial=self.trial)
-        
-        # Flush logs for this agent after completing execution
+
         self._langgraph_logger.flush_agent_logs(self.name)
         
         return {
@@ -189,29 +168,18 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         This method analyzes the project's API sequences and generates
         requirements for driver generation based on the dependency graph.
         """
-        from agent_graph.prompt_loader import get_prompt_manager
-        
-        logger.info('=' * 80, trial=self.trial)
         logger.info('🔬 Project-level API sequence analysis', trial=self.trial)
-        logger.info('=' * 80, trial=self.trial)
-        
-        prompt_manager = get_prompt_manager()
-        
-        # Format API sequences for prompt
+
         sequences_text = '\n'.join([
             f'  Sequence {i+1}: {" → ".join(seq)}'
-            for i, seq in enumerate(api_sequences[:10])  # Limit to 10 sequences
+            for i, seq in enumerate(api_sequences[:10])
         ])
-        
-        # Format project APIs for prompt
+
         apis_text = '\n'.join([
             f'  • {api.get("function_name", "?")}({", ".join([arg.get("name", "?") for arg in api.get("arguments", [])[:3]])})'
-            for api in project_apis[:20]  # Limit to 20 APIs
+            for api in project_apis[:20]
         ])
-        
-        # Build project-level analysis prompt
-        # Note: This requires a new prompt template "function_analyzer_project_level"
-        # For now, use a modified version of the existing prompt
+
         analysis_prompt = f"""Analyze the following project APIs and sequences for fuzzing driver generation.
 
 Project: {project_name}
@@ -252,9 +220,8 @@ Generate a structured analysis that will guide driver generation."""
         """
         import json
         import re
-        
+
         try:
-            # Look for <srs_json>...</srs_json> tags
             match = re.search(r'<srs_json>\s*(\{.*?\})\s*</srs_json>', response, re.DOTALL)
             if match:
                 json_str = match.group(1)

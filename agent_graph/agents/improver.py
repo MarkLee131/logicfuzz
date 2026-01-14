@@ -22,10 +22,8 @@ class LangGraphImprover(LangGraphAgent):
     """
     
     def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
-        # Load system prompt from file
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt("improver")
-        
         super().__init__(
             name="improver",
             llm=llm,
@@ -44,31 +42,25 @@ class LangGraphImprover(LangGraphAgent):
         
         benchmark = state["benchmark"]
         current_code = state.get("fuzz_target_source", "")
-        previous_code = state.get("previous_fuzz_target_source", "")
         coverage_analysis = state.get("coverage_analysis", {})
-        
-        # Determine language
+
         language = benchmark.get('language', 'C++')
         target_function = benchmark.get('function_name', 'unknown')
-        
-        # Extract improvement suggestions from coverage analysis
+
         suggestions = coverage_analysis.get("suggestions", "No specific suggestions provided")
         insights = coverage_analysis.get("insights", "")
         improve_required = coverage_analysis.get("improve_required", True)
-        
+
         if not improve_required:
             logger.info('Coverage analyzer says no improvement required, skipping', trial=self.trial)
             return {"session_memory": state.get("session_memory", {})}
-        
-        # Get coverage metrics for context
+
         coverage_percent = state.get("coverage_percent", 0.0)
         line_coverage_diff = state.get("line_coverage_diff", 0.0)
-        
-        # Compress coverage analysis for prompt efficiency (Phase 1 optimization)
+
         compressed_insights = self._compress_coverage_insights(insights)
         compressed_suggestions = self._compress_coverage_suggestions(suggestions)
-        
-        # Build base prompt from template file
+
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
             "improver",
@@ -80,40 +72,22 @@ class LangGraphImprover(LangGraphAgent):
             coverage_insights=compressed_insights,
             improvement_suggestions=compressed_suggestions
         )
-        
-        # Inject session_memory for consensus constraints
-        prompt = build_prompt_with_session_memory(
-            state,
-            base_prompt,
-            agent_name=self.name
-        )
-        
-        # Chat with LLM (using improver's own message history)
+
+        prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
         response = self.chat_llm(state, prompt)
-        
-        # Extract session_memory updates from response
+
         session_memory_updates = extract_session_memory_updates_from_response(
             response,
             agent_name=self.name,
             current_iteration=state.get("current_iteration", 0)
         )
-        
-        # Merge updates to session_memory
         updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
-        
-        # Extract improved code from <fuzz_target> tags
+
         improved_code = parse_tag(response, 'fuzz_target')
-        
-        # If no tags found, use the whole response as fallback
         if not improved_code:
             logger.warning('No <fuzz_target> tag found in improver response', trial=self.trial)
             improved_code = response
-        
-        # Validate that target function is still called
-        # Project-level mode: No target function validation
-        # Skip function validation - driver can use any API from the project
-        
-        # 在 session_memory 中记录一次 “improver 覆盖提升尝试”
+
         try:
             improvement_count = state.get("improvement_attempt_count", 0) + 1
             notes = f"Improver attempt #{improvement_count}"
@@ -130,26 +104,22 @@ class LangGraphImprover(LangGraphAgent):
             updated_session_memory = state.get("session_memory", updated_session_memory)
         except Exception as e:
             logger.warning(f"Failed to record improver coverage attempt in session_memory: {e}", trial=self.trial)
-        
-        # Prepare state update with improved code
+
         state_update = {
             "fuzz_target_source": improved_code,
             "previous_fuzz_target_source": current_code,
-            "compile_success": None,  # Reset to trigger rebuild
-            "run_success": None,  # Reset to trigger re-execution
+            "compile_success": None,
+            "run_success": None,
             "build_errors": [],
-            "coverage_analysis": None,  # Clear to allow fresh analysis
+            "coverage_analysis": None,
             "session_memory": updated_session_memory,
-            # Reset coverage improvement counter since we made changes
             "no_coverage_improvement_count": 0
         }
-        
-        # Increment improvement attempt counter
+
         improvement_count = state.get("improvement_attempt_count", 0)
         state_update["improvement_attempt_count"] = improvement_count + 1
         logger.info(f'Improvement attempt count: {improvement_count + 1}', trial=self.trial)
-        
-        # Flush logs for this agent after completing execution
+
         self._langgraph_logger.flush_agent_logs(self.name)
         
         return state_update
@@ -167,37 +137,28 @@ class LangGraphImprover(LangGraphAgent):
         """
         if not insights or len(insights) < 100:
             return insights
-        
+
         import re
-        
-        # Extract sections
+
         lines = insights.split('\n')
-        compressed_lines = []
-        
-        # Look for bullet points (-, *, •) which usually contain key issues
         bullet_points = []
         for line in lines:
             stripped = line.strip()
-            # Match bullet points
             if re.match(r'^[\-\*•]\s+\*\*.*?\*\*:', stripped):
                 bullet_points.append(stripped)
-        
-        # If we found structured bullet points, use top 3
+
         if bullet_points:
             compressed = "\n".join(bullet_points[:3])
         else:
-            # Fallback: extract first paragraph after "Root Cause" section
             root_cause_match = re.search(r'##\s*Root Cause[^\n]*\n(.*?)(?=\n##|\n\n\n|$)', insights, re.DOTALL)
             if root_cause_match:
                 root_cause_text = root_cause_match.group(1).strip()
-                # Take first 500 chars of root cause
                 compressed = root_cause_text[:500]
                 if len(root_cause_text) > 500:
                     compressed += "..."
             else:
-                # Last resort: take first 400 chars
                 compressed = insights[:400] + "..." if len(insights) > 400 else insights
-        
+
         return compressed
     
     def _compress_coverage_suggestions(self, suggestions: str) -> str:
@@ -213,38 +174,29 @@ class LangGraphImprover(LangGraphAgent):
         """
         if not suggestions or len(suggestions) < 100:
             return suggestions
-        
+
         import re
-        
-        # Remove code blocks (```...```)
-        no_code = re.sub(r'```[a-z]*\n.*?\n```', '[code example removed - see main template]', 
+
+        no_code = re.sub(r'```[a-z]*\n.*?\n```', '[code example removed - see main template]',
                         suggestions, flags=re.DOTALL)
-        
-        # Extract numbered recommendations (1., 2., 3., etc.)
+
         recommendations = []
-        
-        # Pattern: "1. **Something**:" or "1. Something:"
         pattern = r'(\d+)\.\s+\*\*([^:]+)\*\*:?\s*([^\n]*(?:\n(?!\d+\.)[^\n]*)*)'
         matches = re.finditer(pattern, no_code, re.MULTILINE)
-        
+
         for match in matches:
             num = match.group(1)
             title = match.group(2)
             description = match.group(3).strip()
-            
-            # Take first 200 chars of description
             if len(description) > 200:
                 description = description[:200] + "..."
-            
             recommendations.append(f"{num}. **{title}**: {description}")
-        
-        # Return top 3 recommendations
+
         if recommendations:
             compressed = "\n\n".join(recommendations[:3])
         else:
-            # Fallback: take first 600 chars
             compressed = no_code[:600] + "..." if len(no_code) > 600 else no_code
-        
+
         return compressed
     
 

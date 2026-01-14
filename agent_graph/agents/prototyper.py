@@ -19,10 +19,8 @@ class LangGraphPrototyper(LangGraphAgent):
     """Prototyper agent for LangGraph."""
     
     def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
-        # Load system prompt from file
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt("prototyper")
-        
         super().__init__(
             name="prototyper",
             llm=llm,
@@ -42,23 +40,16 @@ class LangGraphPrototyper(LangGraphAgent):
         benchmark = state["benchmark"]
         function_analysis = state.get("function_analysis", {})
         context = state.get('context', {})
-        
-        # Extract project-level data
+
         project_apis = context.get('project_apis', [])
         api_sequences = context.get('api_sequences', [])
         dependency_graph = context.get('dependency_graph', {})
         condition_info = context.get('condition_info', {})
-        
-        # Determine language
+
         language = benchmark.get('language', 'C++')
-        
-        # Check if this is a regeneration (after compilation failures)
         is_regeneration = state.get("compile_success") == False and state.get("fuzz_target_source", "") != ""
-        
-        # Build base prompt from template file
+
         prompt_manager = get_prompt_manager()
-        
-        # If regenerating, add context about previous failures
         additional_context = ""
         if is_regeneration:
             build_errors = state.get("build_errors", [])
@@ -66,23 +57,15 @@ class LangGraphPrototyper(LangGraphAgent):
                 additional_context = f"\n**Note**: Previous code generation failed to compile. Key errors:\n"
                 additional_context += "\n".join(build_errors[:3])  # Show first 3 errors
                 additional_context += "\n\nPlease generate a completely new approach that avoids these issues."
-        
-        # Retrieve skeleton from long-term memory based on archetype
-        # (skeleton already contains header information injected by Function Analyzer)
+
         skeleton_code = self._retrieve_skeleton(function_analysis)
-        
-        # Format SRS specification (use structured data if available, otherwise raw analysis)
         srs_specification = self._format_srs_specification(function_analysis)
-        
-        # Format API sequences for prompt
+
         api_sequences_text = self._format_api_sequences(api_sequences, limit=8)
         project_apis_text = self._format_project_apis(project_apis, limit=20)
         dep_graph_text = self._format_dependency_graph(dependency_graph, limit=12)
         condition_text = self._format_condition_info(condition_info)
-        
-        # Build project-level prompt
-        # Note: This requires updating the prompt template to support API_SEQUENCES
-        # For now, we'll modify the prompt building to include sequences
+
         try:
             base_prompt = prompt_manager.build_user_prompt(
                 "prototyper",
@@ -93,7 +76,6 @@ class LangGraphPrototyper(LangGraphAgent):
                 additional_context=additional_context,
                 skeleton_code=skeleton_code
             )
-            # Inject API sequences into the prompt
             base_prompt += f"""
 
 **API Sequences (from Liberator grammar):**
@@ -142,61 +124,44 @@ The driver should:
 {additional_context}
 
 Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above."""
-        
-        # 注入session_memory，让Prototyper能看到archetype和API约束
-        prompt = build_prompt_with_session_memory(
-            state,
-            base_prompt,
-            agent_name=self.name
-        )
-        
-        # Chat with LLM (using prototyper's own message history)
+
+        prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
         response = self.chat_llm(state, prompt)
-        
-        # 从响应中提取session_memory更新
+
         session_memory_updates = extract_session_memory_updates_from_response(
             response,
             agent_name=self.name,
             current_iteration=state.get("current_iteration", 0)
         )
-        
-        # 合并更新到session_memory
         updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
-        
-        # Extract code from <fuzz_target> tags
+
         fuzz_target_code = parse_tag(response, 'fuzz_target')
-        
-        # If no tags found, use the whole response as fallback
         if not fuzz_target_code:
             fuzz_target_code = response
-        
-        # 🔥 NEW: Validate generated code for internal API usage
+
         validation_warnings = self._validate_api_usage(
             fuzz_target_code,
             benchmark.get('project', 'unknown')
         )
-        
-        # Prepare state update
+
         state_update = {
             "fuzz_target_source": fuzz_target_code,
-            "compile_success": None,  # Reset to trigger build
-            "build_errors": [],  # Clear previous errors
-            "retry_count": 0,  # Reset retry count for new target
-            "session_memory": updated_session_memory,  # ✅ 返回更新
-            "api_validation_warnings": validation_warnings  # Store for Enhancer to see
+            "compile_success": None,
+            "build_errors": [],
+            "retry_count": 0,
+            "session_memory": updated_session_memory,
+            "api_validation_warnings": validation_warnings
         }
-        
-        # If this is a regeneration, update regeneration counter and reset compilation retry count
+
         if is_regeneration:
             prototyper_regenerate_count = state.get("prototyper_regenerate_count", 0)
             state_update["prototyper_regenerate_count"] = prototyper_regenerate_count + 1
-            state_update["compilation_retry_count"] = 0  # Reset enhancer retry count
+            state_update["compilation_retry_count"] = 0
             logger.info(f'Prototyper regeneration #{prototyper_regenerate_count + 1}, '
                        f'resetting compilation_retry_count', trial=self.trial)
-        
-        # Flush logs for this agent after completing execution
+
         self._langgraph_logger.flush_agent_logs(self.name)
-        
+
         return state_update
 
     # === Formatting helpers ===

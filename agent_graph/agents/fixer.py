@@ -17,10 +17,8 @@ class LangGraphEnhancer(LangGraphAgent):
     """Enhancer agent for LangGraph."""
     
     def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
-        # Load system prompt from file
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt("enhancer")
-        
         super().__init__(
             name="enhancer",
             llm=llm,
@@ -42,25 +40,16 @@ class LangGraphEnhancer(LangGraphAgent):
         previous_code = state.get("previous_fuzz_target_source", "")
         build_errors = state.get("build_errors", [])
         workflow_phase = state.get("workflow_phase", "compilation")
-        
-        # Determine language
+
         language = benchmark.get('language', 'C++')
-        
-        # Format build errors
         error_text = "\n".join(build_errors[:10])
-        
-        # Generate code context (diff or full code)
         code_context = self._generate_code_context(current_code, previous_code, build_errors)
-        
-        # Extract header information from function_analysis (if available)
+
         function_analysis = state.get("function_analysis", {})
         header_info = function_analysis.get("header_information", {})
         header_hints = self._format_header_hints(header_info, build_errors)
-        
-        # 🔥 NEW: Add API validation warnings if available
         api_warnings = state.get("api_validation_warnings", "")
-        
-        # Combine all additional context
+
         additional_context_parts = []
         if header_hints:
             additional_context_parts.append(header_hints)
@@ -68,70 +57,47 @@ class LangGraphEnhancer(LangGraphAgent):
             additional_context_parts.append("\n---\n\n# ⚠️  API Validation Warnings\n\n" + api_warnings)
         
         additional_context = "\n".join(additional_context_parts)
-        
-        # Build base prompt from template file
+
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
             "enhancer",
             language=language,
             function_name=benchmark.get('function_name', 'unknown'),
-            current_code=code_context,  # Use context instead of full code
+            current_code=code_context,
             build_errors=error_text,
             additional_context=additional_context
         )
-        
-        # 注入session_memory，让Enhancer能看到所有共识约束
-        prompt = build_prompt_with_session_memory(
-            state,
-            base_prompt,
-            agent_name=self.name
-        )
-        
-        # Chat with LLM (using enhancer's own message history)
+
+        prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
         response = self.chat_llm(state, prompt)
-        
-        # 从响应中提取session_memory更新
+
         session_memory_updates = extract_session_memory_updates_from_response(
             response,
             agent_name=self.name,
             current_iteration=state.get("current_iteration", 0)
         )
-        
-        # 合并更新到session_memory
         updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
-        
-        # Extract code from <fuzz_target> tags
+
         fuzz_target_code = parse_tag(response, 'fuzz_target')
-        
-        # If no tags found, use the whole response as fallback
         if not fuzz_target_code:
             fuzz_target_code = response
-        
-        # 🔥 CRITICAL VALIDATION: Check if target function name was changed
-        # Project-level mode: No target function validation
-        # Skip function validation - driver can use any API from the project
-        
-        # Prepare state update
+
         state_update = {
             "fuzz_target_source": fuzz_target_code,
-            "previous_fuzz_target_source": current_code,  # Save current as previous for next iteration
-            "compile_success": None,  # Reset to trigger rebuild
-            "build_errors": [],  # Clear previous errors
-            "session_memory": updated_session_memory  # 更新session_memory
+            "previous_fuzz_target_source": current_code,
+            "compile_success": None,
+            "build_errors": [],
+            "session_memory": updated_session_memory
         }
-        
-        # Update counters based on workflow phase
+
         if workflow_phase == "compilation":
-            # In compilation phase, update compilation_retry_count
             compilation_retry_count = state.get("compilation_retry_count", 0)
             state_update["compilation_retry_count"] = compilation_retry_count + 1
             logger.info(f'Compilation retry count: {compilation_retry_count + 1}', trial=self.trial)
         else:
-            # In optimization phase, update regular retry_count
             retry_count = state.get("retry_count", 0)
             state_update["retry_count"] = retry_count + 1
-        
-        # Flush logs for this agent after completing execution
+
         self._langgraph_logger.flush_agent_logs(self.name)
         
         return state_update
@@ -152,49 +118,40 @@ class LangGraphEnhancer(LangGraphAgent):
         """
         if not current_code:
             return ""
-        
-        # Extract line numbers from errors
+
         error_lines = set()
         for error in build_errors:
-            # Parse error messages to extract line numbers
-            # Common formats: "file.cpp:123:45: error", "line 123:", etc.
             import re
             matches = re.findall(r':(\d+):', error) or re.findall(r'line (\d+)', error)
             for match in matches:
                 try:
                     line_num = int(match)
-                    # Add context: ±10 lines around error
                     for i in range(max(1, line_num - 10), line_num + 11):
                         error_lines.add(i)
                 except (ValueError, IndexError):
                     continue
-        
-        # If we have specific error lines, extract only those sections
+
         if error_lines:
             code_lines = current_code.split('\n')
             relevant_lines = []
-            last_included = -100  # Track for adding "..."
-            
+            last_included = -100
+
             for line_num in sorted(error_lines):
                 if line_num <= len(code_lines):
-                    # Add "..." if there's a gap
                     if line_num - last_included > 1 and last_included != -100:
                         relevant_lines.append("// ... (lines omitted) ...")
-                    
                     relevant_lines.append(f"/* Line {line_num} */ {code_lines[line_num - 1]}")
                     last_included = line_num
-            
+
             if relevant_lines:
                 context = "**Code sections relevant to errors:**\n```cpp\n" + "\n".join(relevant_lines) + "\n```"
-                logger.debug(f'Extracted {len(relevant_lines)} relevant lines from {len(code_lines)} total lines', 
+                logger.debug(f'Extracted {len(relevant_lines)} relevant lines from {len(code_lines)} total lines',
                             trial=self.trial)
                 return context
-        
-        # Fallback: if no specific lines identified or code is small, return full code
-        if len(current_code) < 5000:  # Less than ~5KB, just send it all
+
+        if len(current_code) < 5000:
             return current_code
-        
-        # For large code without specific error lines, return first and last parts
+
         code_lines = current_code.split('\n')
         if len(code_lines) > 100:
             first_50 = '\n'.join(code_lines[:50])
@@ -206,24 +163,13 @@ class LangGraphEnhancer(LangGraphAgent):
     def _format_header_hints(self, header_info: dict, build_errors: list) -> str:
         """
         Format header information as hints for the Enhancer to fix header-related errors.
-        
-        This method provides the LLM with known correct header paths extracted by
-        FunctionAnalyzer, preventing it from blindly guessing incorrect paths.
-        
-        CRITICAL: This method now provides EXPLICIT PRIORITY GUIDANCE to prevent
-        LLM from using internal headers extracted from source code.
-        
-        Args:
-            header_info: Dictionary containing header information from FunctionAnalyzer
-            build_errors: List of build errors to determine if header hints are needed
-        
-        Returns:
-            Formatted string with header hints, or empty string if not needed
+
+        Provides priority-ordered header guidance to prevent LLM from using
+        internal headers extracted from source code.
         """
         if not header_info:
             return ""
-        
-        # Check if there are header-related errors
+
         has_header_errors = any(
             'file not found' in error.lower() or 
             'no such file' in error.lower() or
@@ -232,7 +178,6 @@ class LangGraphEnhancer(LangGraphAgent):
         )
         
         if not has_header_errors:
-            # No header errors, don't add unnecessary context
             return ""
         
         hint_lines = [
