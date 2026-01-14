@@ -27,6 +27,7 @@ from liberator_adapter.driver.synthesis.skeleton_generator import DriverSkeleton
 from liberator_adapter.driver.synthesis.constraint_collector import (
     ConstraintSet, ConstraintCollector, ConstraintSolver
 )
+from liberator_adapter.prompt_loader import get_prompt_manager
 
 logger = logging.getLogger(__name__)
 
@@ -289,63 +290,35 @@ class LLMFillStrategy(FillStrategy):
     def _callback_prompt(self, hole: Hole, context: Dict) -> str:
         """生成回调实现的prompt"""
         if isinstance(hole, CallbackImplHole):
-            return f'''Generate a minimal C callback implementation for fuzzing.
-
-Callback signature: {hole.callback_signature}
-Callback type: {hole.callback_type}
-Expected behavior: {hole.expected_behavior or "Generic callback stub"}
-
-Requirements:
-1. The callback should be safe (no crashes, infinite loops)
-2. For comparators: return a simple comparison result
-3. For handlers: log or ignore the event
-4. For readers: read from fuzz input buffer
-5. For writers: write to a discard buffer
-6. For allocators: use malloc with size limits
-
-Output ONLY the C function implementation, no explanations.
-'''
+            pm = get_prompt_manager()
+            return pm.get_hole_callback_impl_prompt(
+                callback_signature=hole.callback_signature,
+                callback_type=hole.callback_type,
+                expected_behavior=hole.expected_behavior or "Generic callback stub"
+            )
         return ""
 
     def _loop_condition_prompt(self, hole: Hole, context: Dict) -> str:
         """生成循环条件的prompt"""
         if isinstance(hole, LoopConditionHole):
-            return f'''Generate a loop termination condition for a fuzz driver.
-
-Loop type: {hole.loop_type}
-API return type: {hole.api_return_type}
-Termination hint: {hole.termination_hint or "None"}
-
-The condition should:
-1. Ensure the loop terminates
-2. Be based on the API return value or state
-3. Work correctly with common patterns (iterator, reader, etc.)
-
-For iterator: check if return is NULL
-For incremental: check if return is <= 0
-For state machine: check state variable
-
-Output ONLY the C condition expression (e.g., "result != NULL").
-'''
+            pm = get_prompt_manager()
+            return pm.get_hole_loop_condition_prompt(
+                loop_type=hole.loop_type,
+                api_return_type=hole.api_return_type,
+                termination_hint=hole.termination_hint or "None"
+            )
         return ""
 
     def _error_handling_prompt(self, hole: Hole, context: Dict) -> str:
         """生成错误处理代码的prompt"""
         if isinstance(hole, ErrorHandlingHole):
             cleanup_list = ", ".join(hole.cleanup_needed) if hole.cleanup_needed else "none"
-            return f'''Generate error handling code for a fuzz driver.
-
-Error source: {hole.error_source}
-Error type: {hole.error_type}
-Resources to cleanup: {cleanup_list}
-
-The error handling should:
-1. Check for the error condition
-2. Clean up allocated resources in reverse order
-3. Return 0 to indicate fuzzer should continue
-
-Output ONLY the C code block (if statement with cleanup).
-'''
+            pm = get_prompt_manager()
+            return pm.get_hole_error_handling_prompt(
+                error_source=hole.error_source,
+                error_type=hole.error_type,
+                cleanup_list=cleanup_list
+            )
         return ""
 
     def _cleanup_prompt(self, hole: Hole, context: Dict) -> str:
@@ -353,30 +326,21 @@ Output ONLY the C code block (if statement with cleanup).
         if isinstance(hole, ResourceCleanupHole):
             resources = ", ".join(hole.resources) if hole.resources else "none"
             order = ", ".join(hole.cleanup_order) if hole.cleanup_order else "reverse allocation order"
-            return f'''Generate resource cleanup code for a fuzz driver.
-
-Resources to clean: {resources}
-Suggested order: {order}
-
-Rules:
-1. Free resources in reverse allocation order
-2. Check for NULL before freeing
-3. Use appropriate cleanup functions (free, close, destroy, etc.)
-
-Output ONLY the C cleanup code statements.
-'''
+            pm = get_prompt_manager()
+            return pm.get_hole_resource_cleanup_prompt(
+                resources=resources,
+                cleanup_order=order
+            )
         return ""
 
     def _param_constraint_prompt(self, hole: Hole, context: Dict) -> str:
         """生成参数约束代码的prompt"""
         if isinstance(hole, ComplexHole):
-            return f'''Generate parameter constraint validation for a fuzz driver.
-
-Parameter: {hole.context.get('param_name', 'unknown')}
-Type: {hole.context.get('param_type', 'unknown')}
-
-Output a C expression that validates the parameter.
-'''
+            pm = get_prompt_manager()
+            return pm.get_hole_param_constraint_prompt(
+                param_name=hole.context.get('param_name', 'unknown'),
+                param_type=hole.context.get('param_type', 'unknown')
+            )
         return ""
 
     def _parse_response(self, response: str, kind: HoleKind) -> str:

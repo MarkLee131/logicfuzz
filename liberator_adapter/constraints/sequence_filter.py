@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from liberator_adapter.common.api import Api
 from liberator_adapter.common.conditions import FunctionConditionsSet
+from liberator_adapter.prompt_loader import get_prompt_manager
 
 logger = logging.getLogger(__name__)
 
@@ -88,95 +89,6 @@ class LLMLifecycleValidator:
 
     完全依赖LLM理解API语义，不使用硬编码的启发式规则。
     """
-
-    # API分类prompt
-    CLASSIFY_API_PROMPT = '''You are an expert C/C++ API analyzer. Analyze the following API and determine its role in resource lifecycle management.
-
-API Information:
-- Function name: {api_name}
-- Signature: {signature}
-- Return type: {return_type}
-- Parameters: {parameters}
-
-Classify this API into ONE of these lifecycle phases:
-1. CREATE: Allocates or creates a new resource that the caller must manage
-   - Examples: malloc, fopen, *_new, *_create, *_alloc, *_open
-   - Key indicator: Returns a pointer/handle that represents a new resource
-
-2. INIT: Initializes an already allocated resource (does NOT allocate new memory)
-   - Examples: *_init, *_setup, *_configure, memset
-   - Key indicator: Takes a pointer to existing memory and fills it
-
-3. USE: Uses a resource for operations (read, write, transform, query)
-   - Examples: fread, fwrite, *_get*, *_set*, *_print, *_process
-   - Key indicator: Operates on existing resource without allocation/deallocation
-
-4. CLEANUP: Releases or destroys a resource
-   - Examples: free, fclose, *_free, *_destroy, *_close, *_release
-   - Key indicator: Takes a resource and releases its memory/handle
-
-5. UNKNOWN: Cannot determine from the information provided
-
-Respond in JSON format:
-{{
-    "phase": "CREATE|INIT|USE|CLEANUP|UNKNOWN",
-    "resource_type": "the type of resource being managed (e.g., 'FILE*', 'cJSON*', 'memory')",
-    "reasoning": "brief explanation of why this classification"
-}}
-'''
-
-    # 序列验证prompt
-    VALIDATE_SEQUENCE_PROMPT = '''You are an expert in C/C++ resource management. Analyze the following API call sequence and determine if it's semantically valid.
-
-API Sequence (in calling order):
-{api_sequence}
-
-Check for these issues:
-1. Use-after-free: Using a resource after it has been freed/closed
-2. Double-free: Freeing the same resource twice
-3. Resource leak: Creating a resource without cleanup (less critical)
-4. Invalid initialization order: Using before init, or init after use
-5. Type mismatch: Passing wrong resource type between APIs
-
-For each API, consider:
-- What resources does it create/use/destroy?
-- What is the expected calling order?
-- Are there any obvious semantic issues?
-
-Respond in JSON format:
-{{
-    "is_valid": true/false,
-    "violations": ["list of specific issues found, empty if valid"],
-    "reasoning": "explanation of your analysis",
-    "suggested_order": ["optional: correct ordering if sequence is invalid"]
-}}
-'''
-
-    # 批量分类prompt（更高效）
-    BATCH_CLASSIFY_PROMPT = '''You are an expert C/C++ API analyzer. Classify each of the following APIs into their lifecycle phases.
-
-APIs to classify:
-{api_list}
-
-For EACH API, classify into one of:
-- CREATE: Allocates new resources (malloc, fopen, *_new, *_create)
-- INIT: Initializes existing resources (*_init, *_setup)
-- USE: Uses resources without allocation/deallocation
-- CLEANUP: Releases resources (free, fclose, *_free, *_destroy)
-- UNKNOWN: Cannot determine
-
-Respond in JSON format:
-{{
-    "classifications": [
-        {{
-            "api_name": "function_name",
-            "phase": "CREATE|INIT|USE|CLEANUP|UNKNOWN",
-            "resource_type": "type of resource"
-        }},
-        ...
-    ]
-}}
-'''
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
         """
@@ -283,7 +195,9 @@ Respond in JSON format:
 
         signature = f"{api.return_info.type} {api.function_name}({params_desc})"
 
-        prompt = self.CLASSIFY_API_PROMPT.format(
+        # 使用prompt_loader获取prompt
+        pm = get_prompt_manager()
+        prompt = pm.get_lifecycle_classify_prompt(
             api_name=api.function_name,
             signature=signature,
             return_type=api.return_info.type,
@@ -325,7 +239,9 @@ Respond in JSON format:
             sig = f"{api.return_info.type} {api.function_name}({params})"
             api_descriptions.append(f"{i+1}. {sig}")
 
-        prompt = self.BATCH_CLASSIFY_PROMPT.format(
+        # 使用prompt_loader获取prompt
+        pm = get_prompt_manager()
+        prompt = pm.get_lifecycle_batch_classify_prompt(
             api_list="\n".join(api_descriptions)
         )
 
@@ -387,7 +303,9 @@ Respond in JSON format:
             phase_str = f"[{info.phase.value}]" if info.phase != APILifecyclePhase.UNKNOWN else ""
             api_descriptions.append(f"{i+1}. {sig} {phase_str}")
 
-        prompt = self.VALIDATE_SEQUENCE_PROMPT.format(
+        # 使用prompt_loader获取prompt
+        pm = get_prompt_manager()
+        prompt = pm.get_lifecycle_validate_prompt(
             api_sequence="\n".join(api_descriptions)
         )
 

@@ -1,0 +1,12 @@
+Generate error handling code for fuzz driver.
+
+Error source: {error_source}
+Error type: {error_type}
+Resources to cleanup: {cleanup_list}
+
+Requirements:
+- Check error condition
+- Cleanup resources in reverse allocation order
+- Return 0 (continue fuzzing)
+
+Output ONLY the C if-block with cleanup.

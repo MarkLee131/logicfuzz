@@ -1,0 +1,16 @@
+Validate this C/C++ API call sequence for resource safety.
+
+API Sequence:
+{api_sequence}
+
+Check for:
+1. Use-after-free: using freed resource
+2. Double-free: freeing same resource twice
+3. Invalid order: use before init, init after use
+
+Output JSON:
+{{
+    "is_valid": true,
+    "violations": ["use-after-free: X called after Y freed resource"],
+    "reasoning": "..."
+}}

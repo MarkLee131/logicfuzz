@@ -1,0 +1,14 @@
+Generate a minimal C callback stub for fuzz testing.
+
+Signature: {callback_signature}
+Type: {callback_type}
+Behavior: {expected_behavior}
+
+Requirements:
+- Safe (no crashes, infinite loops)
+- Comparators: return memcmp result
+- Handlers: no-op
+- Readers: return from fuzz buffer
+- Allocators: malloc with 1MB limit
+
+Output ONLY the C function code.

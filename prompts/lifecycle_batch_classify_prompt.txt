@@ -1,0 +1,13 @@
+Classify each API's lifecycle phase.
+
+APIs:
+{api_list}
+
+Phases: CREATE (alloc), INIT (setup), USE (operate), CLEANUP (free), UNKNOWN
+
+Output JSON:
+{{
+    "classifications": [
+        {{"api_name": "func", "phase": "CREATE", "resource_type": "cJSON*"}}
+    ]
+}}

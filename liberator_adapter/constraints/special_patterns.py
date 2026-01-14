@@ -19,6 +19,7 @@ from typing import List, Tuple, Optional, Dict, Protocol
 from dataclasses import dataclass, field
 
 from liberator_adapter.common.api import Api
+from liberator_adapter.prompt_loader import get_prompt_manager
 
 logger = logging.getLogger(__name__)
 
@@ -95,36 +96,6 @@ class VarLenAnalyzer:
         (r'(?i)(key|value|payload|content|body)',
          r'(?i)(len|length|size|sz)'),
     ]
-
-    # LLM Prompt
-    VARLEN_PROMPT = '''Analyze the buffer-length relationships in this C/C++ function:
-
-Function: {signature}
-
-Parameters:
-{parameters}
-
-For each buffer parameter (pointer to data), identify:
-1. Which parameter specifies its length/size?
-2. What's the exact relationship? (buffer_len == size, buffer_len >= size, buffer_len == size * count, etc.)
-3. Any special constraints? (NULL-terminated string, alignment requirements, etc.)
-
-Respond in JSON format:
-{{
-    "relations": [
-        {{
-            "buffer_param": "parameter name of buffer",
-            "length_param": "parameter name of length",
-            "relationship": "==|>=|size*count|other expression",
-            "constraints": ["NULL-terminated", "4-byte aligned", etc.],
-            "reasoning": "brief explanation"
-        }}
-    ],
-    "no_varlen": false  // set to true if no buffer-length relationship exists
-}}
-
-If a buffer has no corresponding length parameter (e.g., NULL-terminated string), you can omit it or note it in constraints.
-'''
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
         self.llm_client = llm_client
@@ -297,7 +268,9 @@ If a buffer has no corresponding length parameter (e.g., NULL-terminated string)
         for i, arg in enumerate(api.arguments_info):
             param_desc.append(f"  [{i}] {arg.type} {arg.name}")
 
-        prompt = self.VARLEN_PROMPT.format(
+        # 使用prompt_loader获取prompt
+        pm = get_prompt_manager()
+        prompt = pm.get_varlen_prompt(
             signature=signature,
             parameters="\n".join(param_desc)
         )
@@ -428,34 +401,6 @@ class LoopPatternAnalyzer:
     # 返回类型表示"还有更多"
     CONTINUATION_RETURN_TYPES = {'bool', 'int', 'ssize_t', 'size_t'}
 
-    # LLM Prompt
-    LOOP_PROMPT = '''Analyze if this C/C++ API requires loop-based usage:
-
-Function: {signature}
-
-Return type: {return_type}
-Parameters: {parameters}
-
-Determine:
-1. Does this function typically need to be called in a loop?
-2. If yes, what's the loop pattern?
-   - Iterator: call until returns NULL/false/0 (e.g., linked list traversal)
-   - Incremental: call until all data consumed (e.g., reading from stream)
-   - State machine: call until terminal state reached
-3. What's the termination condition?
-4. What's a safe maximum iteration count?
-
-Respond in JSON format:
-{{
-    "needs_loop": true/false,
-    "loop_type": "iterator|incremental|state_machine|none",
-    "termination_condition": "return == NULL | return <= 0 | state == DONE | etc.",
-    "max_iterations": 100,
-    "code_template": "while ((item = func(...)) != NULL) {{ ... }}",
-    "reasoning": "explanation"
-}}
-'''
-
     def __init__(self, llm_client: Optional[LLMClient] = None):
         self.llm_client = llm_client
         self._cache: Dict[str, LoopPatternInfo] = {}
@@ -575,7 +520,9 @@ Respond in JSON format:
         params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info])
         signature = f"{api.return_info.type} {api.function_name}({params})"
 
-        prompt = self.LOOP_PROMPT.format(
+        # 使用prompt_loader获取prompt
+        pm = get_prompt_manager()
+        prompt = pm.get_loop_prompt(
             signature=signature,
             return_type=api.return_info.type,
             parameters=params or "void"
@@ -760,29 +707,6 @@ void fuzz_callback_{name}(void) {{
 ''',
     }
 
-    # LLM Prompt
-    CALLBACK_PROMPT = '''Analyze the callback (function pointer) parameter in this C/C++ function:
-
-Function: {signature}
-Callback parameter: {callback_param}
-Callback type signature: {callback_type}
-
-Determine:
-1. What is the purpose of this callback? (comparator, reader, writer, handler, allocator, etc.)
-2. Can this callback parameter be NULL?
-3. What constraints must the callback follow? (return values, thread safety, etc.)
-4. Generate a minimal stub implementation suitable for fuzz testing.
-
-Respond in JSON format:
-{{
-    "callback_purpose": "comparator|handler|reader|writer|allocator|deallocator|visitor|unknown",
-    "can_be_null": true/false,
-    "constraints": ["must return >= 0", "must not block", etc.],
-    "stub_code": "C code for the stub function",
-    "reasoning": "explanation"
-}}
-'''
-
     def __init__(self, llm_client: Optional[LLMClient] = None):
         self.llm_client = llm_client
         self._cache: Dict[str, CallbackAnalysisResult] = {}
@@ -913,8 +837,11 @@ Respond in JSON format:
         params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info])
         signature = f"{api.return_info.type} {api.function_name}({params})"
 
+        # 使用prompt_loader获取prompt
+        pm = get_prompt_manager()
+
         for cb in callbacks:
-            prompt = self.CALLBACK_PROMPT.format(
+            prompt = pm.get_callback_prompt(
                 signature=signature,
                 callback_param=cb.arg_name,
                 callback_type=cb.arg_type
@@ -1024,33 +951,6 @@ class TLVAnalyzer:
         (r'const\s+unsigned\s+char\s*\*', r'(size_t|int|unsigned)'),
     ]
 
-    # LLM Prompt
-    TLV_PROMPT = '''Analyze if this C/C++ function parses structured data (TLV, protocol, file format):
-
-Function: {signature}
-
-Determine:
-1. Does this function parse structured/formatted data?
-2. If yes, what's the format?
-   - TLV (Type-Length-Value)
-   - Fixed header (fixed-size header followed by payload)
-   - Length-prefixed (length field followed by data)
-   - Raw (unstructured byte stream)
-3. What's the minimum valid input size?
-4. Are there magic bytes, version fields, or other required fields?
-5. Any input constraints?
-
-Respond in JSON format:
-{{
-    "is_structured": true/false,
-    "format_type": "tlv|fixed_header|length_prefixed|raw|unknown",
-    "min_size": 0,
-    "magic_bytes": "0x89504E47" or null,
-    "constraints": ["first byte must be 0x01", "length field at offset 4"],
-    "reasoning": "explanation"
-}}
-'''
-
     def __init__(self, llm_client: Optional[LLMClient] = None):
         self.llm_client = llm_client
         self._cache: Dict[str, TLVAnalysisResult] = {}
@@ -1132,7 +1032,9 @@ Respond in JSON format:
         params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info])
         signature = f"{api.return_info.type} {api.function_name}({params})"
 
-        prompt = self.TLV_PROMPT.format(signature=signature)
+        # 使用prompt_loader获取prompt
+        pm = get_prompt_manager()
+        prompt = pm.get_tlv_prompt(signature=signature)
 
         try:
             response = self.llm_client.query(prompt)  # type: ignore

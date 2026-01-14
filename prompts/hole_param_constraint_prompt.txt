@@ -1,0 +1,6 @@
+Generate parameter validation for fuzz driver.
+
+Parameter: {param_name}
+Type: {param_type}
+
+Output ONLY a C expression that validates the parameter (e.g., "size > 0 && size < 1024").

@@ -1,0 +1,20 @@
+Determine if this C/C++ API requires loop-based calling.
+
+Function: {signature}
+Return type: {return_type}
+Parameters: {parameters}
+
+Output JSON:
+{{
+    "needs_loop": true,
+    "loop_type": "iterator|incremental|state_machine|none",
+    "termination_condition": "return == NULL",
+    "max_iterations": 100,
+    "reasoning": "..."
+}}
+
+Loop types:
+- iterator: call until NULL/0/false (e.g., get_next)
+- incremental: call until data exhausted (e.g., read)
+- state_machine: call until terminal state
+- none: single call sufficient
