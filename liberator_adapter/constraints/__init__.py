@@ -7,6 +7,19 @@ from .Conditions        import Conditions
 from .ConditionManager import ConditionManager
 from .RunningContext    import RunningContext, ConditionUnsat
 
+# Sequence Filter (LLM-based过滤)
+from .sequence_filter import (
+    SequenceFilter,           # 基本过滤器
+    LLMLifecycleValidator,    # LLM生命周期验证器
+    LLMSequenceFilter,        # LLM序列过滤器（主要使用）
+    TwoPhaseSequenceFilter,   # 别名，向后兼容
+    APILifecyclePhase,
+    APILifecycleInfo,
+    FilterResult,
+    LifecycleValidationResult,
+    LLMClient,                # LLM客户端协议
+)
+
 # Z3 约束求解器（可选，如果 Z3 不可用则提供 stub）
 try:
     from .z3_solver import (
@@ -19,12 +32,12 @@ try:
         ConstraintType,
         Z3Constraint
     )
-except ImportError as e:
+except (ImportError, NameError, Exception) as e:
     logger.warning(f"Z3 solver not available: {e}")
     # 提供 stub
-    is_z3_available = lambda: False
-    validate_api_sequence = lambda *args, **kwargs: (True, [])
-    should_prune_dependency = lambda *args, **kwargs: False
+    is_z3_available = lambda: False  # noqa: E731
+    validate_api_sequence = lambda *args, **kwargs: (True, [])  # noqa: E731
+    should_prune_dependency = lambda *args, **kwargs: False  # noqa: E731
     Z3ConstraintBuilder = None
     Z3SequenceValidator = None
     Z3DependencyPruner = None

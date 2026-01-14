@@ -26,6 +26,17 @@ except ImportError:
     Z3_AVAILABLE = False
     # 提供 stub 以防 Z3 不可用
     Solver = None
+    Bool = None
+    Int = None
+    BitVec = None
+    Array = None
+    And = None
+    Or = None
+    Not = None
+    Implies = None
+    sat = None
+    unsat = None
+    unknown = None
 
 from liberator_adapter.common import (
     Api, AccessType, Access, AccessTypeSet, ValueMetadata, FunctionConditions
@@ -85,7 +96,7 @@ class Z3ConstraintBuilder:
         self.type_vars.clear()
         self.order_vars.clear()
 
-    def _get_or_create_api_var(self, api_name: str) -> Bool:
+    def _get_or_create_api_var(self, api_name: str) -> Any:
         """获取或创建 API 的布尔变量（表示 API 是否被调用）"""
         if api_name not in self.api_vars:
             self.api_vars[api_name] = Bool(f"api_{api_name}")
