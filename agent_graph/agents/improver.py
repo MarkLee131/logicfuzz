@@ -1,11 +1,8 @@
 """
 LangGraphImprover agent for LangGraph workflow.
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 import argparse
-import os
-import re
-import json
 
 import logger
 from llm_toolkit.models import LLM
@@ -250,28 +247,4 @@ class LangGraphImprover(LangGraphAgent):
         
         return compressed
     
-    def _validate_target_function_preserved(self, code: str, target_function_name: str) -> Tuple[bool, str]:
-        """
-        Validate that the target function is still called in the improved code.
-        
-        Args:
-            code: Improved fuzz target code
-            target_function_name: Name of the target function that must be called
-        
-        Returns:
-            Tuple of (violation_detected, violation_message)
-        """
-        import re
-        
-        # Check for direct function call
-        call_pattern = rf'\b{re.escape(target_function_name)}\s*\('
-        if re.search(call_pattern, code):
-            return (False, "")
-        
-        # Violation detected
-        violation_msg = (
-            f"Target function '{target_function_name}' is not called in the improved driver. "
-            f"You must call this exact function."
-        )
-        return (True, violation_msg)
 

@@ -1,11 +1,9 @@
 """
 LangGraphEnhancer agent for LangGraph workflow.
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 import argparse
-import os
 import re
-import json
 
 import logger
 from llm_toolkit.models import LLM
@@ -421,123 +419,4 @@ class LangGraphEnhancer(LangGraphAgent):
         
         return "\n".join(hint_lines)
     
-    def _validate_target_function_preserved(
-        self, 
-        code: str, 
-        expected_function_name: str
-    ) -> Tuple[bool, str]:
-        """
-        Validate that the target function name is preserved in the generated code.
-        
-        This is a CRITICAL constraint - the LLM must NOT change the target function
-        to a similar-sounding function, even if it seems reasonable.
-        
-        Args:
-            code: Generated fuzz target code
-            expected_function_name: The required target function name
-        
-        Returns:
-            (violation_detected, violation_message)
-            - violation_detected: True if function was changed/missing
-            - violation_message: Human-readable description of violation
-        """
-        import re
-        
-        # Remove comments and strings to avoid false positives
-        code_no_comments = re.sub(r'//.*', '', code)
-        code_no_comments = re.sub(r'/\*.*?\*/', '', code_no_comments, flags=re.DOTALL)
-        code_no_strings = re.sub(r'"[^"]*"', '', code_no_comments)
-        code_no_strings = re.sub(r"'[^']*'", '', code_no_strings)
-        
-        # Check 1: Is the target function called? (not just mentioned)
-        # Look for function_name( or function_name ( with possible whitespace
-        function_call_pattern = rf'\b{re.escape(expected_function_name)}\s*\('
-        
-        if not re.search(function_call_pattern, code_no_strings):
-            # Function not called - check if a similar function is called instead
-            similar_functions = self._find_similar_function_calls(code_no_strings, expected_function_name)
-            
-            if similar_functions:
-                similar_list = ', '.join(f'`{f}`' for f in similar_functions[:3])
-                return (
-                    True,
-                    f"Target function `{expected_function_name}()` was replaced with similar function(s): {similar_list}"
-                )
-            else:
-                return (
-                    True,
-                    f"Target function `{expected_function_name}()` is not called in the fuzz target"
-                )
-        
-        # Check 2: Ensure it's called in LLVMFuzzerTestOneInput (not just a helper function)
-        # Extract LLVMFuzzerTestOneInput body
-        llvm_fuzzer_pattern = r'int\s+LLVMFuzzerTestOneInput\s*\([^)]*\)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}'
-        llvm_match = re.search(llvm_fuzzer_pattern, code_no_strings, re.DOTALL)
-        
-        if llvm_match:
-            fuzzer_body = llvm_match.group(1)
-            
-            # Check if target function is called in the fuzzer body (or nested blocks)
-            # Allow for calls through helper functions, but warn if it's too indirect
-            if not re.search(function_call_pattern, fuzzer_body):
-                # Not directly in fuzzer body - might be in a helper function
-                # This is OK, but worth noting in logs
-                logger.info(
-                    f'Target function {expected_function_name}() may be called indirectly (through helper function)',
-                    trial=self.trial
-                )
-        
-        # All checks passed
-        return (False, "")
-    
-    def _find_similar_function_calls(self, code: str, target_function: str) -> List[str]:
-        """
-        Find function calls that are similar to the target function name.
-        
-        This helps detect when LLM substitutes the target function with a
-        similar-named function (e.g., ada_parse → ada_can_parse).
-        
-        Args:
-            code: Code to search (should have comments/strings removed)
-            target_function: The expected function name
-        
-        Returns:
-            List of similar function names found in the code
-        """
-        import re
-        from difflib import SequenceMatcher
-        
-        # Extract all function calls from code
-        function_calls = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', code)
-        
-        # Filter to only functions that are "similar" to target
-        similar = []
-        target_lower = target_function.lower()
-        
-        for func in set(function_calls):
-            func_lower = func.lower()
-            
-            # Skip if it's the target function itself
-            if func == target_function:
-                continue
-            
-            # Check similarity criteria:
-            # 1. Shares a common prefix/suffix
-            # 2. Contains the target as substring or vice versa
-            # 3. High edit distance similarity (>0.7)
-            
-            similarity = SequenceMatcher(None, target_lower, func_lower).ratio()
-            
-            if similarity > 0.7:
-                similar.append(func)
-            elif target_lower in func_lower or func_lower in target_lower:
-                similar.append(func)
-            elif len(target_function) > 3 and len(func) > 3:
-                # Check common prefix (at least 60% of shorter name)
-                common_prefix_len = len(os.path.commonprefix([target_lower, func_lower]))
-                min_len = min(len(target_lower), len(func_lower))
-                if common_prefix_len >= int(0.6 * min_len):
-                    similar.append(func)
-        
-        return similar
 
