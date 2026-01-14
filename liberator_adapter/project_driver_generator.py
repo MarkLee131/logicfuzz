@@ -29,6 +29,7 @@ from liberator_adapter.driver.factory.only_type import OTFactory
 from liberator_adapter.driver.factory.constraint_based import CBFactory
 from liberator_adapter.bias import Bias
 from liberator_adapter.backend.libfuzz import LFBackendDriver
+from liberator_adapter.driver.driver_enhancer import DriverEnhancer, APIPatternCache
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,11 @@ class ProjectDriverGenerator:
         self.condition_manager: Optional[ConditionManager] = None
         self.function_conditions: Optional[FunctionConditionsSet] = None
         self.extract_metadata: Dict = {}
-        
+
+        # 特殊模式分析增强器
+        self.driver_enhancer: Optional[DriverEnhancer] = None
+        self.pattern_cache: Optional[APIPatternCache] = None
+
         logger.info(f"✅ ProjectDriverGenerator initialized for {project_name}")
     
     def extract_all_apis(
@@ -266,6 +271,40 @@ class ProjectDriverGenerator:
         
         return condition_manager
     
+    def analyze_special_patterns(self, llm_client=None) -> APIPatternCache:
+        """
+        分析API的特殊模式（VarLen、Loop、Callback、TLV）
+
+        Args:
+            llm_client: LLM客户端（可选，用于Phase 2语义验证）
+
+        Returns:
+            APIPatternCache: 分析结果缓存
+        """
+        if not self.all_apis:
+            raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
+
+        logger.info("🔍 Analyzing special patterns for APIs...")
+
+        # 创建增强器
+        self.driver_enhancer = DriverEnhancer(llm_client)
+
+        # 分析所有API
+        self.driver_enhancer.analyze_apis(list(self.all_apis))
+
+        # 保存缓存
+        self.pattern_cache = self.driver_enhancer.cache
+
+        # 打印摘要
+        summary = self.driver_enhancer.get_enhancement_summary()
+        logger.info(f"✅ Special pattern analysis complete:")
+        logger.info(f"   - APIs with var-len: {summary['apis_with_varlen']}")
+        logger.info(f"   - APIs needing loop: {summary['apis_needing_loop']}")
+        logger.info(f"   - APIs with callbacks: {summary['apis_with_callbacks']}")
+        logger.info(f"   - Structured parsers: {summary['structured_parsers']}")
+
+        return self.pattern_cache
+
     def build_data_layout(
         self,
         apis_clang_path: Optional[str] = None,
@@ -376,44 +415,52 @@ class ProjectDriverGenerator:
         driver_size: int = 5,
         policy: str = "only_type",
         function_conditions: Optional[FunctionConditionsSet] = None,
+        analyze_patterns: bool = True,
+        llm_client=None,
         **extract_kwargs
     ) -> List[Driver]:
         """
-        完整的生成流程：提取 API -> 构建依赖图 -> 生成语法 -> 管理约束 -> 生成 driver
-        
+        完整的生成流程：提取 API -> 构建依赖图 -> 生成语法 -> 管理约束 -> 分析模式 -> 生成 driver
+
         Args:
             num_drivers: 要生成的 driver 数量
             driver_size: 每个 driver 中的 API 调用数量
             policy: 生成策略
             function_conditions: 函数约束条件（可选）
+            analyze_patterns: 是否分析特殊模式（VarLen/Loop/Callback/TLV）
+            llm_client: LLM客户端（用于特殊模式的Phase 2分析）
             **extract_kwargs: 传递给 extract_all_apis 的参数
-        
+
         Returns:
             Driver 列表
         """
         logger.info("🎯 Starting complete driver generation pipeline...")
-        
+
         # 1. 提取所有 API
         self.extract_all_apis(**extract_kwargs)
-        
+
         # 2. 构建依赖图
         self.build_dependency_graph()
-        
+
         # 3. 生成语法
         self.build_grammar()
-        
+
         # 4. 构建约束管理器
         self.build_condition_manager(function_conditions)
-        
-        # 5. 生成 driver
+
+        # 5. 分析特殊模式（可选）
+        if analyze_patterns:
+            self.analyze_special_patterns(llm_client)
+
+        # 6. 生成 driver
         drivers = self.generate_drivers(
             num_drivers=num_drivers,
             driver_size=driver_size,
             policy=policy
         )
-        
+
         logger.info("✅ Complete pipeline finished")
-        
+
         return drivers
     
     def save_drivers(self, drivers: List[Driver], output_dir: Optional[str] = None):

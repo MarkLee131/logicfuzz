@@ -20,6 +20,30 @@ from .sequence_filter import (
     LLMClient,                # LLM客户端协议
 )
 
+# Special Pattern Analyzers (特殊场景分析器)
+from .special_patterns import (
+    # S1. Var-len 变长参数分析
+    VarLenAnalyzer,
+    VarLenRelation,
+    VarLenAnalysisResult,
+    # S2. TLV 格式分析
+    TLVAnalyzer,
+    TLVAnalysisResult,
+    StructuredFormat,
+    # S3. Loop 循环模式分析
+    LoopPatternAnalyzer,
+    LoopPatternInfo,
+    LoopType,
+    # S4. Callback 回调函数分析
+    CallbackAnalyzer,
+    CallbackInfo,
+    CallbackAnalysisResult,
+    CallbackType,
+    # 统一分析器
+    SpecialPatternAnalyzer,
+    APIPatternAnalysisResult,
+)
+
 # Z3 约束求解器（可选，如果 Z3 不可用则提供 stub）
 try:
     from .z3_solver import (
