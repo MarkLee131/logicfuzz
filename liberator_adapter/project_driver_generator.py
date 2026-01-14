@@ -31,6 +31,17 @@ from liberator_adapter.bias import Bias
 from liberator_adapter.backend.libfuzz import LFBackendDriver
 from liberator_adapter.driver.driver_enhancer import DriverEnhancer, APIPatternCache
 
+# 混合合成模块
+from liberator_adapter.driver.synthesis import (
+    SkeletonGenerator,
+    SkeletonRenderer,
+    DriverSkeleton,
+    HoleFiller,
+    ConstraintCollector,
+    render_skeleton,
+    fill_skeleton_holes,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -304,6 +315,248 @@ class ProjectDriverGenerator:
         logger.info(f"   - Structured parsers: {summary['structured_parsers']}")
 
         return self.pattern_cache
+
+    # =========================================================================
+    # 混合合成方法 (Hybrid Synthesis)
+    # =========================================================================
+
+    def generate_skeleton_drivers(
+        self,
+        api_sequences: Optional[List[List[Api]]] = None,
+        num_drivers: int = 10,
+        driver_size: int = 5,
+        llm_client=None
+    ) -> List[DriverSkeleton]:
+        """
+        使用混合合成生成Driver骨架
+
+        混合合成流程:
+        1. 生成API序列（使用Grammar或给定序列）
+        2. 对每个序列生成骨架（带Hole）
+        3. 用规则/约束填充简单Hole
+        4. 用LLM填充复杂Hole
+
+        Args:
+            api_sequences: 预定义的API序列（可选，None则自动生成）
+            num_drivers: 要生成的driver数量
+            driver_size: 每个driver的API调用数量
+            llm_client: LLM客户端（用于复杂Hole填充）
+
+        Returns:
+            DriverSkeleton列表
+        """
+        if not self.all_apis:
+            raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
+
+        logger.info(f"🔧 Generating {num_drivers} skeleton drivers (hybrid synthesis)...")
+
+        # 准备特殊模式信息
+        varlen_relations = {}
+        loop_patterns = {}
+        callback_infos = {}
+
+        if self.pattern_cache:
+            # 转换为SkeletonGenerator需要的格式
+            for api_name, relations in self.pattern_cache.varlen_relations.items():
+                varlen_relations[api_name] = [
+                    (r.buffer_arg_idx, r.length_arg_idx, r.relationship)
+                    for r in relations
+                ]
+
+            for api_name, loop_info in self.pattern_cache.loop_patterns.items():
+                loop_patterns[api_name] = {
+                    'needs_loop': loop_info.needs_loop,
+                    'loop_type': loop_info.loop_type.value if loop_info.loop_type else None,
+                    'termination_condition': loop_info.termination_condition,
+                    'max_iterations': loop_info.max_iterations,
+                }
+
+            for api_name, cbs in self.pattern_cache.callback_infos.items():
+                callback_infos[api_name] = [
+                    {
+                        'arg_idx': cb.arg_idx,
+                        'callback_type': cb.callback_type.value if cb.callback_type else None,
+                        'stub_code': cb.stub_code,
+                    }
+                    for cb in cbs
+                ]
+
+        # 生成或使用API序列
+        if api_sequences is None:
+            api_sequences = self._generate_api_sequences(num_drivers, driver_size)
+
+        # 创建骨架生成器和填充器
+        skeleton_generator = SkeletonGenerator()
+        hole_filler = HoleFiller(llm_client=llm_client)
+
+        skeletons = []
+        for i, sequence in enumerate(api_sequences[:num_drivers]):
+            try:
+                # 1. 生成骨架
+                skeleton = skeleton_generator.generate(
+                    api_sequence=sequence,
+                    varlen_relations=varlen_relations,
+                    loop_patterns=loop_patterns,
+                    callback_infos=callback_infos,
+                    driver_name=f"fuzz_driver_{i}"
+                )
+
+                # 2. 填充Hole
+                report = hole_filler.fill_all(skeleton)
+
+                logger.debug(
+                    f"Driver {i}: {len(sequence)} APIs, "
+                    f"{report.filled_count}/{report.total_holes} holes filled"
+                )
+
+                skeletons.append(skeleton)
+
+            except Exception as e:
+                logger.warning(f"Failed to generate skeleton driver {i}: {e}")
+
+        logger.info(f"✅ Generated {len(skeletons)} skeleton drivers")
+
+        return skeletons
+
+    def render_skeleton_to_code(
+        self,
+        skeleton: DriverSkeleton,
+        mark_holes: bool = False
+    ) -> str:
+        """
+        将骨架渲染为C代码
+
+        Args:
+            skeleton: Driver骨架
+            mark_holes: 是否在代码中标记未填充的Hole
+
+        Returns:
+            C代码字符串
+        """
+        renderer = SkeletonRenderer()
+        if mark_holes:
+            return renderer.render_with_holes_marked(skeleton)
+        return renderer.render(skeleton)
+
+    def save_skeleton_drivers(
+        self,
+        skeletons: List[DriverSkeleton],
+        output_dir: Optional[str] = None
+    ) -> List[str]:
+        """
+        保存骨架driver到文件
+
+        Args:
+            skeletons: DriverSkeleton列表
+            output_dir: 输出目录
+
+        Returns:
+            保存的文件路径列表
+        """
+        if output_dir is None:
+            out_path = self.work_dir / "skeleton_drivers"
+        else:
+            out_path = Path(output_dir)
+
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        saved_files = []
+        for skeleton in skeletons:
+            code = self.render_skeleton_to_code(skeleton)
+
+            # 检查是否有未填充的Hole
+            unfilled = skeleton.get_unfilled_holes()
+            if unfilled:
+                logger.warning(
+                    f"Driver {skeleton.name} has {len(unfilled)} unfilled holes"
+                )
+                # 仍然保存，但添加注释标记
+                code = f"// WARNING: {len(unfilled)} holes not filled\n" + code
+
+            file_path = out_path / f"{skeleton.name}.cc"
+            with open(file_path, 'w') as f:
+                f.write(code)
+
+            saved_files.append(str(file_path))
+            logger.debug(f"Saved: {file_path}")
+
+        logger.info(f"✅ Saved {len(saved_files)} skeleton drivers to {out_path}")
+
+        return saved_files
+
+    def _generate_api_sequences(
+        self,
+        num_sequences: int,
+        sequence_size: int
+    ) -> List[List[Api]]:
+        """
+        生成API序列（使用Grammar或简单策略）
+
+        Args:
+            num_sequences: 序列数量
+            sequence_size: 每个序列的长度
+
+        Returns:
+            API序列列表
+        """
+        sequences = []
+
+        if self.grammar:
+            # 使用Grammar生成序列
+            for _ in range(num_sequences):
+                try:
+                    # 从Grammar采样一个序列
+                    sequence = self._sample_sequence_from_grammar(sequence_size)
+                    if sequence:
+                        sequences.append(sequence)
+                except Exception as e:
+                    logger.debug(f"Failed to sample from grammar: {e}")
+
+        # 如果Grammar不可用或生成不足，使用简单策略
+        while len(sequences) < num_sequences:
+            # 简单策略: 随机选择API组成序列
+            import random
+            api_list = list(self.all_apis)
+            if len(api_list) >= sequence_size:
+                sequence = random.sample(api_list, sequence_size)
+            else:
+                sequence = random.choices(api_list, k=sequence_size)
+            sequences.append(sequence)
+
+        return sequences
+
+    def _sample_sequence_from_grammar(self, max_size: int) -> List[Api]:
+        """从Grammar采样一个API序列"""
+        if not self.grammar:
+            return []
+
+        # 简单的采样实现
+        # TODO: 使用更智能的采样策略
+        sequence = []
+        visited = set()
+
+        # 找到起始规则
+        start = self.grammar.start
+        if hasattr(start, 'rules') and start.rules:
+            import random
+            # 随机遍历规则
+            for _ in range(max_size * 2):  # 允许一些尝试
+                if len(sequence) >= max_size:
+                    break
+
+                # 随机选择一个可达的API
+                for rule in start.rules:
+                    if hasattr(rule, 'rhs') and rule.rhs:
+                        for symbol in rule.rhs:
+                            if hasattr(symbol, 'token') and symbol.token not in visited:
+                                # 找到对应的API
+                                for api in self.all_apis:
+                                    if api.function_name == symbol.token:
+                                        sequence.append(api)
+                                        visited.add(symbol.token)
+                                        break
+
+        return sequence
 
     def build_data_layout(
         self,
