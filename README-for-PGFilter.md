@@ -8,7 +8,10 @@ export DEEPSEEK_API_KEY="sk-e6d91a6015c54dadb13f1f056113ef48"
 
 ## Step 2: Run logicfuzz (using curl as an example).
 ```
-python run_logicfuzz.py -y conti-benchmark/curl.yaml --model deepseek-chat -n 1 --enable-source-filter --source-filter-min-lines 10 --run-timeout 60
+python run_logicfuzz.py -y conti-benchmark/curl.yaml --model deepseek-chat -n 1 \
+--enable-source-filter --source-filter-min-lines 10 \
+--run-timeout 60 \
+-e http://localhost:8080/api
 ```
 
 ## Explanation of each parameter is as follows:
