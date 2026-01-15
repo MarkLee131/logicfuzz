@@ -1,12 +1,12 @@
 """
-API Sequence Filter - LLM-based过滤
+API Sequence Filter - LLM-based filtering
 
-使用LLM进行API序列的语义过滤，不依赖硬编码的启发式规则。
+Uses LLM for semantic filtering of API sequences, without relying on hardcoded heuristic rules.
 
-设计原则：
-1. 不使用静态分析启发式规则（避免误杀）
-2. 使用LLM理解API语义
-3. 基于API生命周期进行验证
+Design principles:
+1. Do not use static analysis heuristic rules (avoid false positives)
+2. Use LLM to understand API semantics
+3. Validate based on API lifecycle
 """
 
 import logging
@@ -26,37 +26,37 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class LLMClient(Protocol):
-    """LLM客户端协议"""
+    """LLM client protocol"""
     def query(self, prompt: str) -> str:
-        """发送prompt并返回响应"""
+        """Send prompt and return response"""
         ...
 
 
 # =============================================================================
-# 数据结构
+# Data Structures
 # =============================================================================
 
 class APILifecyclePhase(Enum):
-    """API生命周期阶段"""
-    CREATE = "create"       # 创建/分配资源
-    INIT = "init"           # 初始化资源
-    USE = "use"             # 使用资源（读/写/转换）
-    CLEANUP = "cleanup"     # 清理/释放资源
-    UNKNOWN = "unknown"     # 未知
+    """API lifecycle phase"""
+    CREATE = "create"       # Create/allocate resources
+    INIT = "init"           # Initialize resources
+    USE = "use"             # Use resources (read/write/transform)
+    CLEANUP = "cleanup"     # Cleanup/release resources
+    UNKNOWN = "unknown"     # Unknown
 
 
 @dataclass
 class APILifecycleInfo:
-    """API的生命周期信息"""
+    """API lifecycle information"""
     api_name: str
     phase: APILifecyclePhase
-    resource_type: Optional[str] = None  # 操作的资源类型
-    reasoning: str = ""                  # 推理依据
+    resource_type: Optional[str] = None  # Resource type being operated on
+    reasoning: str = ""                  # Reasoning basis
 
 
 @dataclass
 class FilterResult:
-    """过滤结果"""
+    """Filter result"""
     is_valid: bool
     reason: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
@@ -72,7 +72,7 @@ class FilterResult:
 
 @dataclass
 class LifecycleValidationResult:
-    """生命周期验证结果"""
+    """Lifecycle validation result"""
     is_valid: bool
     violations: List[str] = field(default_factory=list)
     lifecycle_info: List[APILifecycleInfo] = field(default_factory=list)
@@ -85,38 +85,38 @@ class LifecycleValidationResult:
 
 class LLMLifecycleValidator:
     """
-    基于LLM的API生命周期验证器
+    LLM-based API lifecycle validator
 
-    完全依赖LLM理解API语义，不使用硬编码的启发式规则。
+    Completely relies on LLM to understand API semantics, does not use hardcoded heuristic rules.
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
         """
         Args:
-            llm_client: LLM客户端，需要实现 query(prompt) -> str 方法
+            llm_client: LLM client, needs to implement query(prompt) -> str method
         """
         self.llm_client = llm_client
         self._cache: Dict[str, APILifecycleInfo] = {}
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_client = llm_client
 
     def classify_api(self, api: Api) -> APILifecycleInfo:
         """
-        使用LLM分类单个API的生命周期阶段
+        Use LLM to classify single API's lifecycle phase
 
         Args:
-            api: API对象
+            api: API object
 
         Returns:
-            APILifecycleInfo: 生命周期信息
+            APILifecycleInfo: Lifecycle information
         """
-        # 检查缓存
+        # Check cache
         if api.function_name in self._cache:
             return self._cache[api.function_name]
 
-        # 没有LLM客户端，返回UNKNOWN
+        # No LLM client, return UNKNOWN
         if self.llm_client is None:
             return APILifecycleInfo(
                 api_name=api.function_name,
@@ -130,22 +130,22 @@ class LLMLifecycleValidator:
 
     def classify_batch(self, apis: List[Api]) -> List[APILifecycleInfo]:
         """
-        批量分类API（更高效）
+        Batch classify APIs (more efficient)
 
         Args:
-            apis: API列表
+            apis: API list
 
         Returns:
-            分类结果列表
+            List of classification results
         """
         if not apis:
             return []
 
-        # 检查哪些需要分类
+        # Check which ones need classification
         uncached = [api for api in apis if api.function_name not in self._cache]
 
         if uncached and self.llm_client:
-            # 批量调用LLM
+            # Batch call LLM
             batch_results = self._llm_classify_batch(uncached)
             for info in batch_results:
                 self._cache[info.api_name] = info

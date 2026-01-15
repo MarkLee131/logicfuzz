@@ -1,10 +1,10 @@
 """
 CBFactory: Constraint-Based Factory for driver generation
 
-基于约束条件的 driver 生成策略，使用 ConditionManager 和 RunningContext
-来确保生成的 driver 满足 API 调用的约束条件。
+Constraint-based driver generation strategy, using ConditionManager and RunningContext
+to ensure generated drivers satisfy API call constraints.
 
-支持可选的 Z3 约束求解验证。
+Supports optional Z3 constraint solving validation.
 """
 import copy
 import logging
@@ -22,13 +22,13 @@ from liberator_adapter.driver.ir import (
 )
 from liberator_adapter.bias import Bias
 
-# DriverEnhancer 用于增强 callback 生成（可选）
+# DriverEnhancer for enhanced callback generation (optional)
 try:
     from liberator_adapter.driver.driver_enhancer import DriverEnhancer
 except ImportError:
     DriverEnhancer = None
 
-# Z3 序列验证（可选）
+# Z3 sequence validation (optional)
 try:
     from liberator_adapter.constraints.z3_solver import (
         Z3SequenceValidator, is_z3_available
@@ -43,10 +43,10 @@ logger = logging.getLogger(__name__)
 
 class CBFactory(Factory):
     """
-    Constraint-Based Factory：基于约束条件的 driver 生成
+    Constraint-Based Factory: Constraint-based driver generation
     
-    使用 ConditionManager 来识别 source/sink/init API，并使用 RunningContext
-    来管理变量和约束条件，确保生成的 driver 满足 API 调用的语义约束。
+    Uses ConditionManager to identify source/sink/init APIs, and uses RunningContext
+    to manage variables and constraints, ensuring generated drivers satisfy API call semantic constraints.
     """
     
     MAX_ALLOC_SIZE = 1024
@@ -56,16 +56,16 @@ class CBFactory(Factory):
                  bias: Bias, enable_z3_validation: bool = False,
                  driver_enhancer: Optional['DriverEnhancer'] = None):
         """
-        初始化 CBFactory
+        Initialize CBFactory
 
         Args:
-            api_list: API 集合
-            driver_size: driver 中 API 调用的数量
-            dgraph: 依赖图（会被反转）
-            conditions: 函数约束条件集合
-            bias: 随机选择策略
-            enable_z3_validation: 是否启用 Z3 序列验证
-            driver_enhancer: DriverEnhancer 实例（可选，用于增强 callback 生成）
+            api_list: API set
+            driver_size: Number of API calls in driver
+            dgraph: Dependency graph (will be reversed)
+            conditions: Function constraint condition set
+            bias: Random selection strategy
+            enable_z3_validation: Whether to enable Z3 sequence validation
+            driver_enhancer: DriverEnhancer instance (optional, for enhanced callback generation)
         """
         self.api_list = api_list
         self.driver_size = driver_size
@@ -74,7 +74,7 @@ class CBFactory(Factory):
         self.enable_z3_validation = enable_z3_validation and Z3_AVAILABLE
         self.driver_enhancer = driver_enhancer
 
-        # 初始化 Z3 验证器
+        # Initialize Z3 validator
         self.z3_validator = None
         if self.enable_z3_validation:
             try:
@@ -84,19 +84,19 @@ class CBFactory(Factory):
                 logger.warning(f"[Z3 Validator] Failed to initialize: {e}")
                 self.enable_z3_validation = False
 
-        # 构建函数条件映射
+        # Build function condition mapping
         self.conditions_map: Dict[str, FunctionConditions] = {}
         for _, fc in self.conditions:
             self.conditions_map[fc.function_name] = fc
 
-        # 初始化 RunningContext 的 type_to_hash（用于构建合成约束）
+        # Initialize RunningContext type_to_hash (for building synthesis constraints)
         RunningContext.type_to_hash = {}
         for _, c in self.conditions:
             for arg in c.argument_at + [c.return_at]:
                 for at in arg.ats:
                     RunningContext.type_to_hash[at.type_string] = at.type
 
-        # DependencyGraph 需要反转（Liberator 的设计）
+        # DependencyGraph needs to be reversed (Liberator's design)
         inv_dep_graph = dict((k, set()) for k in list(dgraph.keys()))
         for api, deps in dgraph.items():
             for dep in deps:
@@ -110,7 +110,7 @@ class CBFactory(Factory):
         self.source_api = list(self.condition_manager.get_source_api())
         self.init_api = list(self.condition_manager.get_init_api())
 
-        # 建立 API 名称到 Api 对象的映射（用于增强 callback 生成）
+        # Build API name to Api object mapping (for enhanced callback generation)
         self.api_name_to_api: Dict[str, Api] = {
             api.function_name: api for api in self.api_list
         }
@@ -119,26 +119,26 @@ class CBFactory(Factory):
                                     conditions: FunctionConditions, 
                                     rng_ctx: RunningContext) -> Tuple[Optional[RunningContext], Set]:
         """
-        尝试实例化一个 API 调用，满足其约束条件
+        Try to instantiate an API call, satisfying its constraints
         
         Returns:
-            (RunningContext, unsat_vars): 成功返回新的 context，失败返回 None 和未满足的变量集合
+            (RunningContext, unsat_vars): Returns new context on success, None and unsatisfied variable set on failure
         """
         rng_ctx = copy.deepcopy(rng_ctx)
         unsat_vars = set()
 
-        # 第一轮：初始化依赖参数（len_depends_on）
+        # First round: Initialize dependent parameters (len_depends_on)
         for arg_pos, arg_type in api_call.get_pos_args_types():
             arg_cond = conditions.argument_at[arg_pos]
 
-            # 获取 var-len 依赖索引
-            # 优先使用静态分析结果，如果没有则尝试 DriverEnhancer 分析
+            # Get var-len dependency index
+            # Prefer static analysis results, fallback to DriverEnhancer analysis if not available
             len_depends_idx = None
             if arg_cond.len_depends_on != "":
-                # 静态分析已发现 var-len 关系
+                # Static analysis has found var-len relationship
                 len_depends_idx = int(arg_cond.len_depends_on.replace("param_", ""))
             elif self.driver_enhancer is not None:
-                # 使用 DriverEnhancer 的 VarLen 分析作为备选
+                # Use DriverEnhancer's VarLen analysis as fallback
                 varlen_info = self.driver_enhancer.get_buffer_size_constraint(
                     api_call.function_name, arg_pos
                 )
@@ -202,7 +202,7 @@ class CBFactory(Factory):
                         rng_ctx.update(api_call, idx_cond, idx)
                         rng_ctx.var_to_cond[x].len_depends_on = b_len
 
-        # 第二轮：初始化所有其他参数
+        # Second round: Initialize all other parameters
         for arg_pos, arg_type in api_call.get_pos_args_types():
             arg_cond = conditions.argument_at[arg_pos]
 
@@ -211,7 +211,7 @@ class CBFactory(Factory):
 
             try:
                 if isinstance(arg_type, PointerType) and arg_type.to_function:
-                    # 使用 DriverEnhancer 生成增强的 callback stub（如果可用）
+                    # Use DriverEnhancer to generate enhanced callback stub (if available)
                     arg_var = self._get_enhanced_function_pointer(
                         arg_type, api_call.function_name, arg_pos, rng_ctx
                     )
@@ -227,7 +227,7 @@ class CBFactory(Factory):
             except ConditionUnsat:
                 unsat_vars.add((arg_pos, arg_cond))
         
-        # 处理可变参数
+        # Handle variadic arguments
         if api_call.is_vararg:
             ats_t = AccessTypeSet()
             cond_t = ValueMetadata(ats_t, False, False, False, "", [])
@@ -243,7 +243,7 @@ class CBFactory(Factory):
                     var_t = val
                 api_call.vararg_var[i] = var_t.get_address()
 
-        # 处理返回值
+        # Handle return value
         ret_cond = conditions.return_at
         ret_type = api_call.ret_type
         try:
@@ -258,7 +258,7 @@ class CBFactory(Factory):
         if len(unsat_vars) != 0:
             return (None, unsat_vars)
 
-        # 更新 context
+        # Update context
         for arg_pos, arg_type in api_call.get_pos_args_types():
             arg_cond = conditions.argument_at[arg_pos]
             rng_ctx.update(api_call, arg_cond, arg_pos)
@@ -266,7 +266,7 @@ class CBFactory(Factory):
         if api_call.ret_var is not None:
             rng_ctx.update(api_call, ret_cond, -1)
 
-        # 处理待处理的变量（如数组长度控制）
+        # Handle pending variables (e.g., array length control)
         for var, var_len, cond_len in rng_ctx.new_vars:
             rng_ctx.update_var(var_len, cond_len)
             rng_ctx.var_to_cond[var].len_depends_on = var_len
@@ -282,18 +282,18 @@ class CBFactory(Factory):
         rng_ctx: RunningContext
     ) -> Function:
         """
-        获取 callback 函数指针，优先使用 DriverEnhancer 生成增强的 stub
+        Get callback function pointer, prefer using DriverEnhancer to generate enhanced stub
 
         Args:
-            arg_type: callback 参数类型
-            api_name: API 名称
-            arg_pos: 参数位置
+            arg_type: callback parameter type
+            api_name: API name
+            arg_pos: argument position
             rng_ctx: RunningContext
 
         Returns:
-            Function 对象
+            Function object
         """
-        # 如果 DriverEnhancer 可用，使用增强的 stub 生成
+        # If DriverEnhancer is available, use enhanced stub generation
         if self.driver_enhancer is not None:
             api = self.api_name_to_api.get(api_name)
             if api is not None:
@@ -303,14 +303,14 @@ class CBFactory(Factory):
                         api, arg_pos, func_name
                     )
 
-                    # 检查是否已经为此类型生成过 stub
+                    # Check if stub has already been generated for this type
                     if arg_type in rng_ctx.stub_functions:
                         return rng_ctx.stub_functions[arg_type]
 
-                    # 创建 Function 对象
+                    # Create Function object
                     func = Function(func_name, arg_type)
                     func.stub_code = stub_code
-                    # 保存到 context 的 stub_functions 中
+                    # Save to context's stub_functions
                     rng_ctx.stub_functions[arg_type] = func
 
                     logger.debug(
@@ -324,18 +324,18 @@ class CBFactory(Factory):
                         f"arg {arg_pos}: {e}, falling back to default"
                     )
 
-        # 回退到默认的 function pointer 生成
+        # Fallback to default function pointer generation
         return rng_ctx.get_function_pointer(arg_type)
 
     def validate_sequence_with_z3(self, api_sequence: List[Api]) -> Tuple[bool, List[str]]:
         """
-        使用 Z3 验证 API 序列是否满足约束条件
+        Use Z3 to validate if API sequence satisfies constraints
 
         Args:
-            api_sequence: API 调用序列
+            api_sequence: API call sequence
 
         Returns:
-            (is_valid, violations): 是否有效，以及违反的约束列表
+            (is_valid, violations): Whether valid, and list of violated constraints
         """
         if not self.enable_z3_validation or not self.z3_validator:
             return True, []
@@ -344,14 +344,14 @@ class CBFactory(Factory):
             return self.z3_validator.validate_sequence(api_sequence, self.conditions_map)
         except Exception as e:
             logger.warning(f"Z3 validation failed: {e}")
-            return True, []  # 保守处理：验证失败时认为有效
+            return True, []  # Conservative handling: consider valid when validation fails
 
     def get_random_source_api(self):
-        """随机选择一个 source API"""
+        """Randomly select a source API"""
         return self.bias.get_random_candidate([], self.source_api)
 
     def get_random_candidate(self, candidate_api):
-        """从候选 API 中随机选择一个"""
+        """Randomly select one from candidate APIs"""
         apis = [a[2] for a in candidate_api]
         a = self.bias.get_random_candidate([], apis)         
         for ca in candidate_api:
@@ -362,7 +362,7 @@ class CBFactory(Factory):
 
     def create_random_driver(self) -> Driver:
         """
-        创建一个随机的 driver，满足约束条件
+        Create a random driver that satisfies constraints
         """
         rng_ctx = RunningContext()
 
@@ -375,7 +375,7 @@ class CBFactory(Factory):
         # List[(ApiCall, RunningContext)]
         drv = list()
 
-        # 从 source API 开始
+        # Start with source API
         begin_api = self.get_random_source_api()
         begin_condition = get_cond(begin_api)
         call_begin = to_api(begin_api)
@@ -420,7 +420,7 @@ class CBFactory(Factory):
 
             logger.debug(f"Complete doable functions: {len(candidate_api)}")
 
-            # 避免 driver 退化为单个 API 的重复调用
+            # Avoid driver degenerating into repeated calls of a single API
             if len(candidate_api) == 1 and candidate_api[0][2] == api_n:
                 candidate_api = []
                 
@@ -431,7 +431,7 @@ class CBFactory(Factory):
 
                 drv.append((api_call, rng_ctx_1))
             else:
-                # 开始新的链
+                # Start new chain
                 api_n = self.get_random_source_api()
                 begin_condition = get_cond(api_n)
                 call_begin = to_api(api_n)
@@ -447,7 +447,7 @@ class CBFactory(Factory):
 
                 drv.append((call_begin, rng_ctx_1))
 
-        # 使用最后一个 RunningContext
+        # Use the last RunningContext
         context = [rng_ctx for _, rng_ctx in drv][-1]
 
         statements_apicall = []
@@ -458,7 +458,7 @@ class CBFactory(Factory):
                 var = api_call.ret_var.get_variable()
                 statements_apicall.append(AssertNull(var.get_buffer()))
             
-            # sink APIs 需要清理
+            # Sink APIs need cleanup
             if self.condition_manager.is_sink(api_call):
                 arg = api_call.arg_vars[0]
                 if isinstance(arg, Address):

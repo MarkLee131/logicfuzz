@@ -168,13 +168,13 @@ class ClangAPIExtractor(BaseAPIExtractor):
         # Install libclang-dev (required for pip version)
         self.container.execute('apt-get install -y libclang-dev 2>&1')
         
-        # 尝试 pip install
+        # Try pip install
         result = self.container.execute('pip3 install clang 2>&1 || pip install clang 2>&1')
         if result.returncode != 0:
             self.container.execute('pip3 install libclang 2>&1 || pip install libclang 2>&1')
     
     def _raise_clang_error(self, libclang_path: Optional[str]):
-        """生成详细的错误信息"""
+        """Generate detailed error message"""
         dpkg_result = self.container.execute('dpkg -l | grep -i clang 2>&1')
         apt_packages = dpkg_result.stdout.strip() if dpkg_result.returncode == 0 else 'Unable to check'
         
@@ -197,7 +197,7 @@ class ClangAPIExtractor(BaseAPIExtractor):
         raise RuntimeError(error_msg)
     
     def _build_command_with_env(self, python_cmd: str) -> str:
-        """构建带环境变量的命令"""
+        """Build command with environment variables"""
         libclang_path, pythonpath = self._setup_clang_environment()
         
         cmd_parts = []
@@ -217,36 +217,36 @@ class ClangAPIExtractor(BaseAPIExtractor):
         project_name: Optional[str] = None
     ) -> str:
         """
-        提取 apis_clang.json
+        Extract apis_clang.json
 
         Args:
-            include_dir: 头文件目录（容器内路径）
-            public_headers_file: 公共头文件列表（可选，主机路径或容器内路径）
-            output_dir: 输出目录（容器内路径）
-            project_name: 项目名称（用于查找 public_headers.txt）
+            include_dir: Header file directory (container path)
+            public_headers_file: Public header file list (optional, host path or container path)
+            output_dir: Output directory (container path)
+            project_name: Project name (for finding public_headers.txt)
 
         Returns:
-            apis_clang.json 的路径（容器内路径）
+            Path to apis_clang.json (container path)
         """
-        # 确保输出目录存在
+        # Ensure output directory exists
         self._ensure_output_dir(output_dir)
 
-        # 设置 clang 环境
+        # Setup clang environment
         self._setup_clang_environment()
 
-        # 准备输出文件路径
+        # Prepare output file path
         apis_clang_path = f'{output_dir}/apis_clang.json'
 
-        # 复制脚本到容器
+        # Copy script to container
         script_path = self._copy_script_to_container()
 
-        # 处理 public_headers_file - 如果是主机路径，复制到容器
+        # Handle public_headers_file - if host path, copy to container
         container_public_headers = None
         if public_headers_file:
             from pathlib import Path
             host_path = Path(public_headers_file)
             if host_path.exists():
-                # 文件在主机上，需要复制到容器
+                # File is on host, need to copy to container
                 container_public_headers = '/tmp/public_headers.txt'
                 self._copy_file_to_container(
                     host_path,
@@ -255,14 +255,14 @@ class ClangAPIExtractor(BaseAPIExtractor):
                 )
                 logger.info(f"Copied public_headers to container: {container_public_headers}")
             elif self._file_exists_in_container(public_headers_file):
-                # 文件已在容器内
+                # File is already in container
                 container_public_headers = public_headers_file
             else:
                 raise FileNotFoundError(
                     f"public_headers_file not found on host or in container: {public_headers_file}"
                 )
 
-        # 构建 Python 命令
+        # Build Python command
         python_cmd_parts = [
             f'python3 {script_path}',
             f'-i "{include_dir}"',
@@ -288,24 +288,24 @@ class ClangAPIExtractor(BaseAPIExtractor):
     
     def _find_include_dir(self) -> Optional[str]:
         """
-        自动查找项目的 include 目录
+        Automatically find project's include directory
         
         Returns:
-            include 目录路径（容器内），如果找不到则返回 None
+            Include directory path (in container), or None if not found
         """
-        # 优先级1: 检查项目目录下的 include
+        # Priority 1: Check include directory under project directory
         project_include = f'{self.container.project_dir}/include'
         if self._dir_exists_in_container(project_include):
             return project_include
         
-        # 优先级2: 检查项目源码目录中是否有头文件
+        # Priority 2: Check if there are header files in project source directory
         find_headers_cmd = f'find "{self.container.project_dir}" -maxdepth 3 -type f -name "*.h" -o -name "*.hpp" | head -1'
         result = self.container.execute(find_headers_cmd)
         if result.returncode == 0 and result.stdout.strip():
             logger.info(f"Found headers in project directory: {self.container.project_dir}")
             return self.container.project_dir
         
-        # 优先级3: 检查系统 include 目录
+        # Priority 3: Check system include directory
         system_include = '/usr/local/include'
         if self._dir_exists_in_container(system_include):
             logger.warning(f"Using system include directory: {system_include}. This may include many headers.")
@@ -320,15 +320,15 @@ class ClangAPIExtractor(BaseAPIExtractor):
         public_headers_file: Optional[str] = None
     ) -> str:
         """
-        自动检测 include 目录并提取
+        Auto-detect include directory and extract
 
         Args:
-            output_dir: 输出目录
-            project_name: 项目名称
-            public_headers_file: 公共头文件列表文件（主机路径或容器内路径），必需。
+            output_dir: Output directory
+            project_name: Project name
+            public_headers_file: Public header file list file (host path or container path), required.
 
         Returns:
-            apis_clang.json 的路径
+            Path to apis_clang.json
         """
         include_dir = self._find_include_dir()
         if not include_dir:
@@ -352,7 +352,7 @@ class ClangAPIExtractor(BaseAPIExtractor):
         )
     
     def _copy_script_to_container(self) -> str:
-        """复制 extract_included_functions.py 到容器"""
+        """Copy extract_included_functions.py to container"""
         container_script_path = '/tmp/extract_included_functions.py'
         return self._copy_file_to_container(
             self.extract_script,

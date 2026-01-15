@@ -7,43 +7,43 @@ from .Conditions        import Conditions
 from .ConditionManager import ConditionManager
 from .RunningContext    import RunningContext, ConditionUnsat
 
-# Sequence Filter (LLM-based过滤)
+# Sequence Filter (LLM-based filtering)
 from .sequence_filter import (
-    SequenceFilter,           # 基本过滤器
-    LLMLifecycleValidator,    # LLM生命周期验证器
-    LLMSequenceFilter,        # LLM序列过滤器（主要使用）
+    SequenceFilter,           # Basic filter
+    LLMLifecycleValidator,    # LLM lifecycle validator
+    LLMSequenceFilter,        # LLM sequence filter (main usage)
     APILifecyclePhase,
     APILifecycleInfo,
     FilterResult,
     LifecycleValidationResult,
-    LLMClient,                # LLM客户端协议
+    LLMClient,                # LLM client protocol
 )
 
-# Special Pattern Analyzers (特殊场景分析器)
+# Special Pattern Analyzers
 from .special_patterns import (
-    # S1. Var-len 变长参数分析
+    # S1. Var-len variable-length parameter analysis
     VarLenAnalyzer,
     VarLenRelation,
     VarLenAnalysisResult,
-    # S2. TLV 格式分析
+    # S2. TLV format analysis
     TLVAnalyzer,
     TLVAnalysisResult,
     StructuredFormat,
-    # S3. Loop 循环模式分析
+    # S3. Loop pattern analysis
     LoopPatternAnalyzer,
     LoopPatternInfo,
     LoopType,
-    # S4. Callback 回调函数分析
+    # S4. Callback function analysis
     CallbackAnalyzer,
     CallbackInfo,
     CallbackAnalysisResult,
     CallbackType,
-    # 统一分析器
+    # Unified analyzer
     SpecialPatternAnalyzer,
     APIPatternAnalysisResult,
 )
 
-# Z3 约束求解器（可选，如果 Z3 不可用则提供 stub）
+# Z3 constraint solver (optional, provides stub if Z3 unavailable)
 try:
     from .z3_solver import (
         Z3ConstraintBuilder,
@@ -57,7 +57,7 @@ try:
     )
 except (ImportError, NameError, Exception) as e:
     logger.warning(f"Z3 solver not available: {e}")
-    # 提供 stub
+    # Provide stub
     is_z3_available = lambda: False  # noqa: E731
     validate_api_sequence = lambda *args, **kwargs: (True, [])  # noqa: E731
     should_prune_dependency = lambda *args, **kwargs: False  # noqa: E731

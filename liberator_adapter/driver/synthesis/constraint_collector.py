@@ -1,13 +1,13 @@
 """
-Constraint Collector - 约束收集器
+Constraint Collector - Constraint Collector
 
-收集Driver骨架中的约束，并尝试用规则或约束求解器解决。
+Collects constraints from driver skeleton and attempts to solve them using rules or constraint solvers.
 
-约束类型:
-1. 类型约束: 变量类型必须匹配
-2. Var-len约束: buffer长度与size参数的关系
-3. 生命周期约束: 变量使用必须在有效生命周期内
-4. 值域约束: 参数值必须在有效范围内
+Constraint types:
+1. Type constraints: Variable types must match
+2. Var-len constraints: Relationship between buffer length and size parameter
+3. Lifetime constraints: Variable usage must be within valid lifetime
+4. Value range constraints: Parameter values must be within valid range
 """
 
 import logging
@@ -28,35 +28,35 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 约束定义
+# Constraint Definitions
 # =============================================================================
 
 class ConstraintKind(Enum):
-    """约束类型"""
-    TYPE_COMPAT = auto()        # 类型兼容性
-    VARLEN_RELATION = auto()    # 变长关系
-    LIFETIME = auto()           # 生命周期
-    VALUE_RANGE = auto()        # 值域
-    NOT_NULL = auto()           # 非空约束
-    DEPENDS_ON = auto()         # 依赖关系
+    """Constraint types"""
+    TYPE_COMPAT = auto()        # Type compatibility
+    VARLEN_RELATION = auto()    # Variable-length relationship
+    LIFETIME = auto()           # Lifetime
+    VALUE_RANGE = auto()        # Value range
+    NOT_NULL = auto()           # Not-null constraint
+    DEPENDS_ON = auto()         # Dependency relationship
 
 
 @dataclass
 class Constraint:
-    """约束基类"""
+    """Base constraint class"""
     kind: ConstraintKind
     description: str
     variables: List[str] = field(default_factory=list)
-    is_hard: bool = True  # 硬约束必须满足，软约束可以放松
+    is_hard: bool = True  # Hard constraints must be satisfied, soft constraints can be relaxed
 
     def to_smt(self) -> str:
-        """转换为SMT-LIB格式（用于Z3）"""
+        """Convert to SMT-LIB format (for Z3)"""
         return f"; {self.description}"
 
 
 @dataclass
 class TypeConstraint(Constraint):
-    """类型约束"""
+    """Type constraint"""
     kind: ConstraintKind = field(default=ConstraintKind.TYPE_COMPAT, init=False)
     expected_type: str = ""
     actual_type: str = ""
@@ -67,7 +67,7 @@ class TypeConstraint(Constraint):
 
 @dataclass
 class VarLenConstraint(Constraint):
-    """变长约束"""
+    """Variable-length constraint"""
     kind: ConstraintKind = field(default=ConstraintKind.VARLEN_RELATION, init=False)
     buffer_var: str = ""
     length_var: str = ""
@@ -83,7 +83,7 @@ class VarLenConstraint(Constraint):
 
 @dataclass
 class ValueRangeConstraint(Constraint):
-    """值域约束"""
+    """Value range constraint"""
     kind: ConstraintKind = field(default=ConstraintKind.VALUE_RANGE, init=False)
     variable: str = ""
     min_value: Optional[int] = None
@@ -104,7 +104,7 @@ class ValueRangeConstraint(Constraint):
 
 @dataclass
 class NotNullConstraint(Constraint):
-    """非空约束"""
+    """Not-null constraint"""
     kind: ConstraintKind = field(default=ConstraintKind.NOT_NULL, init=False)
     variable: str = ""
 
@@ -114,7 +114,7 @@ class NotNullConstraint(Constraint):
 
 @dataclass
 class DependsOnConstraint(Constraint):
-    """依赖约束"""
+    """Dependency constraint"""
     kind: ConstraintKind = field(default=ConstraintKind.DEPENDS_ON, init=False)
     dependent_var: str = ""
     source_var: str = ""
@@ -124,12 +124,12 @@ class DependsOnConstraint(Constraint):
 
 
 # =============================================================================
-# 约束集合
+# Constraint Set
 # =============================================================================
 
 @dataclass
 class ConstraintSet:
-    """约束集合"""
+    """Constraint set"""
     constraints: List[Constraint] = field(default_factory=list)
 
     def add(self, constraint: Constraint) -> None:
@@ -148,7 +148,7 @@ class ConstraintSet:
         return [c for c in self.constraints if not c.is_hard]
 
     def to_smt_lib(self) -> str:
-        """导出为SMT-LIB格式"""
+        """Export to SMT-LIB format"""
         lines = ["; Constraints"]
         for c in self.constraints:
             lines.append(f"(assert {c.to_smt()})")
@@ -156,27 +156,27 @@ class ConstraintSet:
 
 
 # =============================================================================
-# 约束收集器
+# Constraint Collector
 # =============================================================================
 
 class ConstraintCollector:
     """
-    约束收集器
+    Constraint collector
 
-    从骨架和分析结果中收集约束
+    Collects constraints from skeleton and analysis results
     """
 
     def __init__(self):
         self.constraints = ConstraintSet()
 
     def collect_from_skeleton(self, skeleton: DriverSkeleton) -> ConstraintSet:
-        """从骨架收集约束"""
+        """Collect constraints from skeleton"""
         self.constraints = ConstraintSet()
 
-        # 1. 收集类型约束
+        # 1. Collect type constraints
         self._collect_type_constraints(skeleton)
 
-        # 2. 收集Hole相关约束
+        # 2. Collect Hole-related constraints
         self._collect_hole_constraints(skeleton)
 
         # 3. 收集变量依赖约束

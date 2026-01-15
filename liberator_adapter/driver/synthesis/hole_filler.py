@@ -1,15 +1,15 @@
 """
-Hole Filler - 孔填充器
+Hole Filler - Hole filler
 
-分层填充策略:
-1. 规则填充: 简单孔用预定义规则
-2. 约束求解: 有约束的孔用求解器
-3. LLM填充: 复杂孔用LLM语义推理
+Layered filling strategy:
+1. Rule filling: Simple holes use predefined rules
+2. Constraint solving: Holes with constraints use solvers
+3. LLM filling: Complex holes use LLM semantic reasoning
 
-设计原则:
-- 优先使用确定性方法（规则、约束）
-- LLM作为兜底方案处理复杂语义
-- 填充结果可验证、可解释
+Design principles:
+- Prefer deterministic methods (rules, constraints)
+- LLM as fallback for complex semantics
+- Fill results are verifiable and explainable
 """
 
 import logging
@@ -33,23 +33,23 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 填充结果
+# Fill Results
 # =============================================================================
 
 @dataclass
 class FillResult:
-    """填充结果"""
+    """Fill result"""
     hole_name: str
     success: bool
     value: Optional[Any] = None
     method: str = ""        # "rule", "constraint", "llm"
     reason: str = ""
-    confidence: float = 1.0  # 置信度 (LLM填充时有意义)
+    confidence: float = 1.0  # Confidence (meaningful for LLM filling)
 
 
 @dataclass
 class FillReport:
-    """填充报告"""
+    """Fill report"""
     results: List[FillResult] = field(default_factory=list)
     total_holes: int = 0
     filled_count: int = 0
@@ -76,32 +76,32 @@ class FillReport:
 
 
 # =============================================================================
-# 填充策略接口
+# Fill Strategy Interface
 # =============================================================================
 
 class FillStrategy(ABC):
-    """填充策略接口"""
+    """Fill strategy interface"""
 
     @abstractmethod
     def can_fill(self, hole: Hole) -> bool:
-        """检查是否能填充该类型的孔"""
+        """Check if this type of hole can be filled"""
         pass
 
     @abstractmethod
     def fill(self, hole: Hole, context: Dict[str, Any]) -> FillResult:
-        """填充孔"""
+        """Fill hole"""
         pass
 
 
 # =============================================================================
-# 规则填充策略
+# Rule Fill Strategy
 # =============================================================================
 
 class RuleFillStrategy(FillStrategy):
-    """基于规则的填充策略"""
+    """Rule-based fill strategy"""
 
     def __init__(self):
-        # 规则映射: HoleKind -> 填充函数
+        # Rule mapping: HoleKind -> fill function
         self.rules: Dict[HoleKind, Callable] = {
             HoleKind.BUFFER_SIZE: self._fill_buffer_size,
             HoleKind.ARRAY_LENGTH: self._fill_array_length,
@@ -140,18 +140,18 @@ class RuleFillStrategy(FillStrategy):
             )
 
     def _fill_buffer_size(self, hole: Hole, context: Dict) -> str:
-        """填充buffer大小"""
-        # 默认使用fuzz输入的size
+        """Fill buffer size"""
+        # Default to use fuzz input size
         return "size"
 
     def _fill_array_length(self, hole: Hole, context: Dict) -> int:
-        """填充数组长度"""
+        """Fill array length"""
         if isinstance(hole, ArrayLengthHole):
             return min(256, hole.max_length)
         return 256
 
     def _fill_init_value(self, hole: Hole, context: Dict) -> str:
-        """填充初始化值"""
+        """Fill initialization value"""
         if isinstance(hole, InitValueHole):
             if hole.is_pointer:
                 return "NULL"
@@ -170,38 +170,38 @@ class RuleFillStrategy(FillStrategy):
         return "0"
 
     def _fill_loop_bound(self, hole: Hole, context: Dict) -> int:
-        """填充循环边界"""
+        """Fill loop bound"""
         if isinstance(hole, LoopBoundHole):
             return hole.suggested_bound
         return 100
 
     def _fill_null_check(self, hole: Hole, context: Dict) -> str:
-        """填充NULL检查"""
+        """Fill NULL check"""
         return "!= NULL"
 
     def _fill_type_cast(self, hole: Hole, context: Dict) -> str:
-        """填充类型转换"""
+        """Fill type cast"""
         target_type = context.get("target_type", "void*")
         return f"({target_type})"
 
 
 # =============================================================================
-# 约束求解策略
+# Constraint Solving Strategy
 # =============================================================================
 
 class ConstraintFillStrategy(FillStrategy):
-    """基于约束求解的填充策略"""
+    """Constraint-solving based fill strategy"""
 
     def __init__(self, use_z3: bool = False):
         self.solver = ConstraintSolver(use_z3=use_z3)
         self._solutions: Dict[str, Any] = {}
 
     def precompute(self, skeleton: DriverSkeleton, constraints: ConstraintSet) -> None:
-        """预计算约束解"""
+        """Precompute constraint solutions"""
         self._solutions = self.solver.solve(skeleton, constraints)
 
     def can_fill(self, hole: Hole) -> bool:
-        # 约束求解主要处理SimpleHole
+        # Constraint solving mainly handles SimpleHole
         return hole.is_simple and hole.name in self._solutions
 
     def fill(self, hole: Hole, context: Dict[str, Any]) -> FillResult:
@@ -221,25 +221,25 @@ class ConstraintFillStrategy(FillStrategy):
 
 
 # =============================================================================
-# LLM填充策略
+# LLM Fill Strategy
 # =============================================================================
 
 class LLMClient(ABC):
-    """LLM客户端接口"""
+    """LLM client interface"""
 
     @abstractmethod
     def complete(self, prompt: str) -> str:
-        """调用LLM完成prompt"""
+        """Call LLM to complete prompt"""
         pass
 
 
 class LLMFillStrategy(FillStrategy):
-    """基于LLM的填充策略"""
+    """LLM-based fill strategy"""
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
         self.llm_client = llm_client
 
-        # Prompt模板
+        # Prompt templates
         self.prompts = {
             HoleKind.CALLBACK_IMPL: self._callback_prompt,
             HoleKind.LOOP_CONDITION: self._loop_condition_prompt,
@@ -278,7 +278,7 @@ class LLMFillStrategy(FillStrategy):
                 value=value,
                 method="llm",
                 reason="Generated by LLM",
-                confidence=0.8  # LLM填充置信度略低
+                confidence=0.8  # LLM fill confidence is slightly lower
             )
         except Exception as e:
             return FillResult(
@@ -288,7 +288,7 @@ class LLMFillStrategy(FillStrategy):
             )
 
     def _callback_prompt(self, hole: Hole, context: Dict) -> str:
-        """生成回调实现的prompt"""
+        """Generate callback implementation prompt"""
         if isinstance(hole, CallbackImplHole):
             pm = get_prompt_manager()
             return pm.get_hole_callback_impl_prompt(
@@ -299,7 +299,7 @@ class LLMFillStrategy(FillStrategy):
         return ""
 
     def _loop_condition_prompt(self, hole: Hole, context: Dict) -> str:
-        """生成循环条件的prompt"""
+        """Generate loop condition prompt"""
         if isinstance(hole, LoopConditionHole):
             pm = get_prompt_manager()
             return pm.get_hole_loop_condition_prompt(
@@ -310,7 +310,7 @@ class LLMFillStrategy(FillStrategy):
         return ""
 
     def _error_handling_prompt(self, hole: Hole, context: Dict) -> str:
-        """生成错误处理代码的prompt"""
+        """Generate error handling code prompt"""
         if isinstance(hole, ErrorHandlingHole):
             cleanup_list = ", ".join(hole.cleanup_needed) if hole.cleanup_needed else "none"
             pm = get_prompt_manager()
@@ -322,7 +322,7 @@ class LLMFillStrategy(FillStrategy):
         return ""
 
     def _cleanup_prompt(self, hole: Hole, context: Dict) -> str:
-        """生成资源清理代码的prompt"""
+        """Generate resource cleanup code prompt"""
         if isinstance(hole, ResourceCleanupHole):
             resources = ", ".join(hole.resources) if hole.resources else "none"
             order = ", ".join(hole.cleanup_order) if hole.cleanup_order else "reverse allocation order"
@@ -334,7 +334,7 @@ class LLMFillStrategy(FillStrategy):
         return ""
 
     def _param_constraint_prompt(self, hole: Hole, context: Dict) -> str:
-        """生成参数约束代码的prompt"""
+        """Generate parameter constraint code prompt"""
         if isinstance(hole, ComplexHole):
             pm = get_prompt_manager()
             return pm.get_hole_param_constraint_prompt(
@@ -344,11 +344,11 @@ class LLMFillStrategy(FillStrategy):
         return ""
 
     def _parse_response(self, response: str, kind: HoleKind) -> str:
-        """解析LLM响应"""
-        # 清理响应
+        """Parse LLM response"""
+        # Clean response
         response = response.strip()
 
-        # 移除markdown代码块标记
+        # Remove markdown code block markers
         if response.startswith("```c"):
             response = response[4:]
         if response.startswith("```"):
@@ -360,11 +360,11 @@ class LLMFillStrategy(FillStrategy):
 
 
 # =============================================================================
-# 回调Stub模板库
+# Callback Stub Template Library
 # =============================================================================
 
 class CallbackStubLibrary:
-    """预定义的回调stub模板"""
+    """Predefined callback stub templates"""
 
     COMPARATOR = '''
 int {name}(const void* a, const void* b) {{
@@ -436,7 +436,7 @@ int {name}(void* item, void* user_data) {{
 
     @classmethod
     def get_stub(cls, callback_type: str, name: str) -> Optional[str]:
-        """获取stub模板"""
+        """Get stub template"""
         templates = {
             "comparator": cls.COMPARATOR,
             "handler": cls.HANDLER,
@@ -454,11 +454,11 @@ int {name}(void* item, void* user_data) {{
 
 
 # =============================================================================
-# 模板填充策略
+# Template Fill Strategy
 # =============================================================================
 
 class TemplateFillStrategy(FillStrategy):
-    """基于模板库的填充策略"""
+    """Template library-based fill strategy"""
 
     def can_fill(self, hole: Hole) -> bool:
         if isinstance(hole, CallbackImplHole):
@@ -491,18 +491,18 @@ class TemplateFillStrategy(FillStrategy):
 
 
 # =============================================================================
-# 综合孔填充器
+# Comprehensive Hole Filler
 # =============================================================================
 
 class HoleFiller:
     """
-    综合孔填充器
+    Comprehensive hole filler
 
-    按优先级使用多种策略填充孔:
-    1. 规则填充 (最快，确定性)
-    2. 模板填充 (针对回调)
-    3. 约束求解 (有约束时)
-    4. LLM填充 (复杂语义)
+    Uses multiple strategies to fill holes by priority:
+    1. Rule filling (fastest, deterministic)
+    2. Template filling (for callbacks)
+    3. Constraint solving (when constraints exist)
+    4. LLM filling (complex semantics)
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None, use_z3: bool = False):
@@ -518,15 +518,15 @@ class HoleFiller:
         self.llm_strategy: Optional[LLMFillStrategy] = None
 
     def set_llm_client(self, client: LLMClient) -> None:
-        """设置LLM客户端"""
-        # 查找或添加LLM策略
+        """Set LLM client"""
+        # Find or add LLM strategy
         for strategy in self.strategies:
             if isinstance(strategy, LLMFillStrategy):
                 strategy.set_llm_client(client)
                 self.llm_strategy = strategy
                 return
 
-        # 没有找到则添加
+        # If not found, add it
         llm_strategy = LLMFillStrategy(client)
         self.strategies.append(llm_strategy)
         self.llm_strategy = llm_strategy
@@ -537,37 +537,37 @@ class HoleFiller:
         constraints: Optional[ConstraintSet] = None
     ) -> FillReport:
         """
-        填充骨架中的所有孔
+        Fill all holes in skeleton
 
         Args:
-            skeleton: Driver骨架
-            constraints: 约束集（可选，会自动收集）
+            skeleton: Driver skeleton
+            constraints: Constraint set (optional, will be collected automatically)
 
         Returns:
-            FillReport: 填充报告
+            FillReport: Fill report
         """
         report = FillReport(total_holes=len(skeleton.holes))
 
-        # 收集约束
+        # Collect constraints
         if constraints is None:
             collector = ConstraintCollector()
             constraints = collector.collect_from_skeleton(skeleton)
 
-        # 预计算约束解
+        # Precompute constraint solutions
         for strategy in self.strategies:
             if isinstance(strategy, ConstraintFillStrategy):
                 strategy.precompute(skeleton, constraints)
 
-        # 构建填充上下文
+        # Build fill context
         context = self._build_context(skeleton)
 
-        # 按优先级排序孔
+        # Sort holes by priority
         holes = sorted(
             skeleton.holes.get_unfilled(),
             key=lambda h: h.priority.value
         )
 
-        # 逐个填充
+        # Fill one by one
         for hole in holes:
             result = self._fill_hole(hole, context)
             report.add(result)
@@ -582,7 +582,7 @@ class HoleFiller:
         return report
 
     def _fill_hole(self, hole: Hole, context: Dict[str, Any]) -> FillResult:
-        """尝试用各种策略填充孔"""
+        """Try to fill hole using various strategies"""
         for strategy in self.strategies:
             if strategy.can_fill(hole):
                 result = strategy.fill(hole, context)
@@ -596,7 +596,7 @@ class HoleFiller:
         )
 
     def _build_context(self, skeleton: DriverSkeleton) -> Dict[str, Any]:
-        """构建填充上下文"""
+        """Build fill context"""
         return {
             "driver_name": skeleton.name,
             "target_apis": [api.function_name for api in skeleton.target_apis],
@@ -606,7 +606,7 @@ class HoleFiller:
 
 
 # =============================================================================
-# 工具函数
+# Utility Functions
 # =============================================================================
 
 def fill_skeleton_holes(
@@ -614,13 +614,13 @@ def fill_skeleton_holes(
     llm_client: Optional[LLMClient] = None,
     use_z3: bool = False
 ) -> FillReport:
-    """便捷函数：填充骨架中的孔"""
+    """Convenience function: fill holes in skeleton"""
     filler = HoleFiller(llm_client=llm_client, use_z3=use_z3)
     return filler.fill_all(skeleton)
 
 
 def apply_fill_report(skeleton: DriverSkeleton, report: FillReport) -> int:
-    """将填充报告应用到骨架，返回成功数"""
+    """Apply fill report to skeleton, return success count"""
     count = 0
     for result in report.results:
         if result.success:

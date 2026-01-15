@@ -2,8 +2,8 @@
 """
 API Composition Analyzer
 
-分析可以组合一起测试的API，而不是API依赖关系。
-从真实使用场景和文档中识别API组合模式。
+Analyzes APIs that can be combined for testing together, rather than API dependencies.
+Identifies API composition patterns from real usage scenarios and documentation.
 """
 
 import os
@@ -27,15 +27,15 @@ from agent_graph.api_heuristics import (
     get_base_name_from_type
 )
 
-# 尝试导入 networkx
+# Try to import networkx
 try:
     import networkx as nx
     HAS_NETWORKX = True
 except ImportError:
     HAS_NETWORKX = False
-    # Fallback: 使用简单的邻接表
+    # Fallback: use simple adjacency list
     class SimpleGraph:
-        """简单的有向图实现（无 networkx 时的 fallback）"""
+        """Simple directed graph implementation (fallback when networkx unavailable)"""
         def __init__(self):
             self.nodes = {}
             self.edges = []
@@ -50,8 +50,8 @@ except ImportError:
             return list(self.nodes.keys())
         
         def topological_sort_dfs(self):
-            """简单的拓扑排序实现"""
-            # 构建邻接表
+            """Simple topological sort implementation"""
+            # Build adjacency list
             graph = {}
             in_degree = {}
             for node in self.nodes:
@@ -81,21 +81,21 @@ logger = logging.getLogger(__name__)
 
 class APICompositionAnalyzer:
     """
-    分析可以组合一起测试的API
+    Analyzes APIs that can be combined for testing together
     
-    核心功能：
-    1. 从usage examples中提取真实的API组合模式（而不是基于函数名模式猜测）
-    2. 识别完整的API组合：包括配置、使用、清理等，而不仅仅是初始化函数
-    3. 减少启发式规则依赖：只在完全没有usage examples时才使用fallback
+    Core functionality:
+    1. Extract real API composition patterns from usage examples (rather than guessing based on function name patterns)
+    2. Identify complete API compositions: including configuration, usage, cleanup, etc., not just initialization functions
+    3. Reduce heuristic rule dependency: only use fallback when there are no usage examples at all
     
-    支持两种模式：
-    1. Heuristic mode (默认): 基于真实代码使用模式分析
-    2. LLM mode: 使用 LLM 进行深度分析（需要提供 llm 参数）
+    Supports two modes:
+    1. Heuristic mode (default): Analysis based on real code usage patterns
+    2. LLM mode: Use LLM for deep analysis (requires providing llm parameter)
     
-    分析策略（按优先级）：
-    1. 从usage examples中提取真实的API组合模式（最可靠）
-    2. 从related_functions中提取（作为补充）
-    3. 启发式规则（仅在完全没有usage examples时使用，作为最后手段）
+    Analysis strategy (by priority):
+    1. Extract real API composition patterns from usage examples (most reliable)
+    2. Extract from related_functions (as supplement)
+    3. Heuristic rules (only used when there are no usage examples at all, as last resort)
     """
     
     def __init__(

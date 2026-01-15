@@ -1,29 +1,29 @@
 """
-Synthesis Module - 混合程序合成
+Synthesis Module - Hybrid Program Synthesis
 
-基于传统程序合成 + LLM的混合Driver生成方法。
+Hybrid driver generation method based on traditional program synthesis + LLM.
 
-核心组件:
-1. hole.py - 孔定义（简单孔/复杂孔）
-2. skeleton_generator.py - 骨架生成器
-3. constraint_collector.py - 约束收集与求解
-4. hole_filler.py - 孔填充器（规则+模板+LLM）
+Core components:
+1. hole.py - Hole definitions (simple holes/complex holes)
+2. skeleton_generator.py - Skeleton generator
+3. constraint_collector.py - Constraint collection and solving
+4. hole_filler.py - Hole filler (rules + templates + LLM)
 
-使用示例:
+Usage example:
 ```python
 from liberator_adapter.driver.synthesis import (
     SkeletonGenerator, render_skeleton, HoleFiller
 )
 
-# 生成骨架
+# Generate skeleton
 generator = SkeletonGenerator()
 skeleton = generator.generate(api_sequence)
 
-# 填充孔
+# Fill holes
 filler = HoleFiller()
 report = filler.fill_all(skeleton)
 
-# 渲染代码
+# Render code
 code = render_skeleton(skeleton)
 ```
 """
