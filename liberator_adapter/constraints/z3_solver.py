@@ -197,21 +197,21 @@ class Z3ConstraintBuilder:
         target_prov: str
     ) -> Z3Constraint:
         """
-        添加 Provenance 兼容性约束
+        Add Provenance compatibility constraint
 
-        检查源和目标的 provenance 是否兼容
+        Check if source and target provenance are compatible
         """
         source_called = self._get_or_create_api_var(source_api)
         target_called = self._get_or_create_api_var(target_api)
 
-        # Provenance 兼容性规则
+        # Provenance compatibility rules
         compatible = self._check_provenance_compatibility(source_prov, target_prov)
 
         if compatible:
             expr = Bool(f"prov_compat_{source_api}_{target_api}")
-            self.solver.add(expr)  # 兼容
+            self.solver.add(expr)  # Compatible
         else:
-            # 不兼容：如果两个 API 都被调用，则不可行
+            # Incompatible: If both APIs are called, it's infeasible
             expr = Not(And(source_called, target_called))
 
         constraint = Z3Constraint(
@@ -227,8 +227,8 @@ class Z3ConstraintBuilder:
         return constraint
 
     def _check_provenance_compatibility(self, source_prov: str, target_prov: str) -> bool:
-        """检查 Provenance 兼容性"""
-        # 规则来自 provenance_checker.py
+        """Check Provenance compatibility"""
+        # Rules from provenance_checker.py
         if source_prov == "HEAP_MALLOC" and target_prov == "RETURN_OPAQUE":
             return False
         if source_prov in ["STACK", "GLOBAL"] and target_prov == "HEAP_MALLOC":
@@ -245,24 +245,24 @@ class Z3ConstraintBuilder:
         condition: str = "length"
     ) -> Z3Constraint:
         """
-        添加参数依赖约束
+        Add parameter dependency constraint
 
-        例如：param[i] 的长度依赖于 param[j]
+        For example: param[i]'s length depends on param[j]
         """
         api_var = self._get_or_create_api_var(api_name)
 
-        # 创建参数变量
+        # Create parameter variables
         param_var = Int(f"{api_name}_param_{param_idx}")
         dep_var = Int(f"{api_name}_param_{depends_on_param}")
 
         if condition == "length":
-            # 长度约束：param_var 的大小应该与 dep_var 相关
+            # Length constraint: param_var's size should be related to dep_var
             expr = Implies(
                 api_var,
                 And(param_var >= 0, dep_var >= 0, param_var <= dep_var * 1024)
             )
         else:
-            # 通用依赖
+            # Generic dependency
             expr = Implies(api_var, dep_var >= 0)
 
         constraint = Z3Constraint(
@@ -284,21 +284,21 @@ class Z3ConstraintBuilder:
         delete_apis: List[str]
     ) -> List[Z3Constraint]:
         """
-        添加资源生命周期约束
+        Add resource lifecycle constraint
 
-        资源必须先创建，使用，最后销毁
+        Resource must be created first, used, then destroyed
         """
         constraints = []
 
-        # 创建资源存在性变量
+        # Create resource existence variable
         resource_exists = Bool(f"resource_{resource_type}_exists")
 
-        # 任何 create API 可以创建资源
+        # Any create API can create resource
         if create_apis:
             create_exprs = [self._get_or_create_api_var(api) for api in create_apis]
             self.solver.add(Implies(resource_exists, Or(*create_exprs)))
 
-        # 使用 API 需要资源存在
+        # Use APIs require resource to exist
         for use_api in use_apis:
             use_var = self._get_or_create_api_var(use_api)
             expr = Implies(use_var, resource_exists)
@@ -312,7 +312,7 @@ class Z3ConstraintBuilder:
             constraints.append(constraint)
             self.solver.add(expr)
 
-        # 删除 API 需要资源存在
+        # Delete APIs require resource to exist
         for delete_api in delete_apis:
             delete_var = self._get_or_create_api_var(delete_api)
             expr = Implies(delete_var, resource_exists)
@@ -334,9 +334,9 @@ class Z3ConstraintBuilder:
         api_sequence: List[str]
     ) -> Z3Constraint:
         """
-        添加 API 序列顺序约束
+        Add API sequence order constraint
 
-        确保序列中的 API 按给定顺序执行
+        Ensure APIs in sequence are executed in given order
         """
         if len(api_sequence) < 2:
             return None
@@ -344,9 +344,9 @@ class Z3ConstraintBuilder:
         order_exprs = []
         for i, api in enumerate(api_sequence):
             order_var = self._get_or_create_order_var(api)
-            # 设置序号
+            # Set sequence number
             order_exprs.append(order_var == i)
-            # 标记 API 被调用
+            # Mark API as called
             api_var = self._get_or_create_api_var(api)
             self.solver.add(api_var)
 
@@ -362,14 +362,14 @@ class Z3ConstraintBuilder:
 
         return constraint
 
-    # ========== 求解方法 ==========
+    # ========== Solving Methods ==========
 
     def check_satisfiability(self) -> Tuple[bool, Optional[Dict]]:
         """
-        检查当前约束是否可满足
+        Check if current constraints are satisfiable
 
         Returns:
-            (is_sat, model): 是否可满足，以及满足时的模型
+            (is_sat, model): Whether satisfiable, and model when satisfied
         """
         result = self.solver.check()
 

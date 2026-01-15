@@ -265,14 +265,14 @@ class BaseAPIExtractor:
         check_executable: bool = False
     ) -> Optional[str]:
         """
-        在容器的多个可能路径中查找文件
+        Find file in multiple possible paths in container
         
         Args:
-            search_paths: 要搜索的路径列表
-            check_executable: 是否检查文件可执行性
+            search_paths: List of paths to search
+            check_executable: Whether to check file executability
         
         Returns:
-            找到的文件路径，如果未找到则返回 None
+            Found file path, or None if not found
         """
         for path in search_paths:
             if self._file_exists_in_container(path):
@@ -286,7 +286,7 @@ class BaseAPIExtractor:
         return None
     
     def cleanup(self):
-        """清理资源（关闭容器等）"""
+        """Clean up resources (close container, etc.)"""
         if self.container:
             self.container.terminate()
 

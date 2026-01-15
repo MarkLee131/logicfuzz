@@ -218,7 +218,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
 
             logger.info('Extractor completed successfully on host')
 
-            # 5. 复制结果到output目录
+            # 5. Copy results to output directory
             os.makedirs(output_dir, exist_ok=True)
 
             final_conditions = os.path.join(output_dir, 'conditions.json')
@@ -244,7 +244,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             return final_apis_llvm if os.path.exists(final_apis_llvm) else ''
 
         finally:
-            # 清理临时目录
+            # Clean up temporary directory
             shutil.rmtree(temp_dir, ignore_errors=True)
             logger.info(f'Cleaned up temp directory: {temp_dir}')
 

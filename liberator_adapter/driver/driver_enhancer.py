@@ -322,10 +322,10 @@ class DriverEnhancer:
 
         Args:
             api_name: API name
-            buffer_arg_idx: buffer参数索引
+            buffer_arg_idx: Buffer parameter index
 
         Returns:
-            (size_arg_idx, relationship) 或 None
+            (size_arg_idx, relationship) or None
         """
         relations = self.get_varlen_relations(api_name)
         for rel in relations:
@@ -334,7 +334,7 @@ class DriverEnhancer:
         return None
 
     def get_enhancement_summary(self) -> Dict[str, Any]:
-        """获取增强信息摘要"""
+        """Get enhancement information summary"""
         return {
             "total_apis_analyzed": len(self.cache.varlen_relations) +
                                    len(self.cache.loop_patterns),
@@ -349,28 +349,28 @@ class DriverEnhancer:
         }
 
     def clear_cache(self):
-        """清除缓存"""
+        """Clear cache"""
         self.cache = APIPatternCache()
         self.pattern_analyzer.clear_cache()
 
 
 # =============================================================================
-# 增强的Context（可选替换原有Context）
+# Enhanced Context (optional replacement for original Context)
 # =============================================================================
 
 def enhance_context_get_function_pointer(original_method):
     """
-    装饰器：增强Context.get_function_pointer方法
+    Decorator: Enhance Context.get_function_pointer method
 
-    使用CallbackAnalyzer生成更智能的stub
+    Uses CallbackAnalyzer to generate smarter stubs
     """
     def enhanced_method(self, type, api=None, arg_idx=None, enhancer=None):
         if enhancer and api and arg_idx is not None:
-            # 使用增强的stub生成
+            # Use enhanced stub generation
             func_name = f"fuzz_cb_{api.function_name}_{arg_idx}"
             stub_code, cb_type = enhancer.generate_callback_stub(api, arg_idx, func_name)
 
-            # 创建Function对象
+            # Create Function object
             from liberator_adapter.driver.ir import Function
             func = Function(func_name, type)
             func.stub_code = stub_code
@@ -379,32 +379,32 @@ def enhance_context_get_function_pointer(original_method):
             self.stub_functions[type] = func
             return func
 
-        # 回退到原始方法
+        # Fallback to original method
         return original_method(self, type)
 
     return enhanced_method
 
 
 # =============================================================================
-# 工具函数
+# Utility Functions
 # =============================================================================
 
 def create_driver_enhancer(llm_client: Optional[LLMClient] = None) -> DriverEnhancer:
-    """创建DriverEnhancer实例"""
+    """Create DriverEnhancer instance"""
     return DriverEnhancer(llm_client)
 
 
 def analyze_api_patterns(apis: List[Api],
                          llm_client: Optional[LLMClient] = None) -> APIPatternCache:
     """
-    分析API列表的特殊模式
+    Analyze special patterns for API list
 
     Args:
-        apis: API列表
-        llm_client: LLM客户端（可选）
+        apis: API list
+        llm_client: LLM client (optional)
 
     Returns:
-        APIPatternCache: 分析结果缓存
+        APIPatternCache: Analysis result cache
     """
     enhancer = DriverEnhancer(llm_client)
     enhancer.analyze_apis(apis)
@@ -413,7 +413,7 @@ def analyze_api_patterns(apis: List[Api],
 
 def get_varlen_for_api(api: Api,
                        llm_client: Optional[LLMClient] = None) -> List[VarLenRelation]:
-    """快速获取单个API的var-len关系"""
+    """Quickly get var-len relations for a single API"""
     adapted_client = create_llm_adapter(llm_client)
     analyzer = VarLenAnalyzer(adapted_client)
     result = analyzer.analyze(api)
@@ -422,7 +422,7 @@ def get_varlen_for_api(api: Api,
 
 def get_loop_info_for_api(api: Api,
                           llm_client: Optional[LLMClient] = None) -> LoopPatternInfo:
-    """快速获取单个API的循环模式信息"""
+    """Quickly get loop pattern information for a single API"""
     adapted_client = create_llm_adapter(llm_client)
     analyzer = LoopPatternAnalyzer(adapted_client)
     return analyzer.analyze(api)
