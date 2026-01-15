@@ -103,20 +103,26 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 bc_file = self.llvm_extractor.compile_to_bitcode()
             else:
                 raise ValueError("bc_file not provided and compile_project=False")
-        
+
         # 3. 提取 apis_llvm.json (在 host 上运行)
+        # Note: LLVM extraction runs on HOST, so output goes to a HOST directory
         logger.info("Step 3: Extracting apis_llvm.json on host...")
-        apis_llvm_path = self.llvm_extractor.extract_apis_llvm_on_host(
+        if not self.local_temp_dir:
+            self.local_temp_dir = tempfile.mkdtemp(prefix=f'liberator_extract_{self.benchmark.project}_')
+            logger.info(f"Created local temp directory: {self.local_temp_dir}")
+
+        # Extract to local temp dir (HOST path)
+        self.llvm_extractor.extract_apis_llvm_on_host(
             bc_file=bc_file,
             apis_clang_path=apis_clang_path,
-            output_dir=self.output_dir
+            output_dir=self.local_temp_dir  # Use HOST temp dir, not container path
         )
-        
+
         # 4. 读取并合并数据
         logger.info("Step 4: Merging Clang and LLVM data...")
         apis = self._merge_apis(
-            apis_clang_path=apis_clang_path,
-            apis_llvm_path=apis_llvm_path,
+            apis_clang_path=apis_clang_path,  # Container path
+            llvm_output_dir=self.local_temp_dir,  # Host path with LLVM results
             function_signatures=function_signatures
         )
         
@@ -126,67 +132,64 @@ class HybridAPIExtractor(BaseAPIExtractor):
     def _merge_apis(
         self,
         apis_clang_path: str,
-        apis_llvm_path: str,
+        llvm_output_dir: str,
         function_signatures: Optional[List[str]] = None
     ) -> Dict[str, Api]:
         """
         使用 Utils.get_api_list() 合并 Clang 和 LLVM 数据
-        
+
         Args:
             apis_clang_path: apis_clang.json 路径（容器内）
-            apis_llvm_path: apis_llvm.json 路径（容器内）
+            llvm_output_dir: LLVM 提取结果目录（HOST 上，包含 apis_llvm.json, conditions.json 等）
             function_signatures: 要提取的函数签名列表（可选）
-        
+
         Returns:
             函数名到 Api 对象的字典
         """
-        # 创建本地临时目录
-        if not self.local_temp_dir:
-            self.local_temp_dir = tempfile.mkdtemp(prefix=f'liberator_extract_{self.benchmark.project}_')
-            logger.info(f"Created local temp directory: {self.local_temp_dir}")
-        
+        # llvm_output_dir 已经是 local_temp_dir，直接使用
+        local_paths = {}
+
+        # LLVM 结果已经在 HOST 上（llvm_output_dir）
+        llvm_files = ['apis_llvm.json', 'conditions.json', 'data_layout.txt']
+        for filename in llvm_files:
+            host_path = os.path.join(llvm_output_dir, filename)
+            if os.path.exists(host_path):
+                local_paths[filename] = host_path
+                logger.debug(f"Using LLVM result from host: {host_path}")
+
+        # Clang 结果在容器内，需要复制
+        local_apis_clang = os.path.join(llvm_output_dir, 'apis_clang.json')
+        self._copy_from_container(apis_clang_path, local_apis_clang)
+        local_paths['apis_clang.json'] = local_apis_clang
+
         # 准备其他必需的文件路径（容器内）
-        coerce_log_path = f'{self.output_dir}/coerce.log'
         exported_functions_path = f'{self.output_dir}/exported_functions.txt'
         incomplete_types_path = f'{self.output_dir}/incomplete_types.txt'
         minimum_apis_path = ''  # 可选
-        
+
         # 如果指定了函数签名，创建 minimum_apis 文件
         if function_signatures:
             # 提取函数名
             function_names = [self._extract_function_name(sig) for sig in function_signatures]
             function_names = [name for name in function_names if name]
-            
+
             if function_names:
-                minimum_apis_path = f'{self.output_dir}/minimum_apis.txt'
-                # 在容器内创建文件
-                content = '\n'.join(function_names)
-                self.container.write_to_file(content, minimum_apis_path)
-        
-        # 复制文件从容器到本地
-        files_to_copy = [
-            (apis_clang_path, 'apis_clang.json'),
-            (apis_llvm_path, 'apis_llvm.json'),
-            (f'{self.output_dir}/conditions.json', 'conditions.json'),
-            (f'{self.output_dir}/data_layout.txt', 'data_layout.txt'),
+                minimum_apis_path = os.path.join(llvm_output_dir, 'minimum_apis.txt')
+                with open(minimum_apis_path, 'w') as f:
+                    f.write('\n'.join(function_names))
+                local_paths['minimum_apis.txt'] = minimum_apis_path
+
+        # 复制容器内的其他可选文件
+        optional_container_files = [
+            (exported_functions_path, 'exported_functions.txt'),
+            (incomplete_types_path, 'incomplete_types.txt'),
         ]
-        
-        # 可选文件
-        if self._file_exists_in_container(coerce_log_path):
-            files_to_copy.append((coerce_log_path, 'coerce.log'))
-        if self._file_exists_in_container(exported_functions_path):
-            files_to_copy.append((exported_functions_path, 'exported_functions.txt'))
-        if self._file_exists_in_container(incomplete_types_path):
-            files_to_copy.append((incomplete_types_path, 'incomplete_types.txt'))
-        if minimum_apis_path and self._file_exists_in_container(minimum_apis_path):
-            files_to_copy.append((minimum_apis_path, 'minimum_apis.txt'))
-        
-        # 复制文件
-        local_paths = {}
-        for container_path, local_name in files_to_copy:
-            local_path = os.path.join(self.local_temp_dir, local_name)
-            self._copy_from_container(container_path, local_path)
-            local_paths[local_name] = local_path
+
+        for container_path, local_name in optional_container_files:
+            if self._file_exists_in_container(container_path):
+                local_path = os.path.join(llvm_output_dir, local_name)
+                self._copy_from_container(container_path, local_path)
+                local_paths[local_name] = local_path
         
         # 使用 Utils.get_api_list() 读取
         try:
@@ -205,12 +208,11 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 apis_dict[api.function_name] = api
 
             # 记录元数据供后续 DataLayout/ConditionManager 使用
+            # Note: LLVM results are on HOST, Clang results copied from container
             self.last_metadata = {
                 "container": {
                     "apis_clang": apis_clang_path,
-                    "apis_llvm": apis_llvm_path,
-                    "conditions": f"{self.output_dir}/conditions.json",
-                    "data_layout": f"{self.output_dir}/data_layout.txt",
+                    # LLVM extraction runs on host, no container paths for LLVM results
                     "incomplete_types": incomplete_types_path,
                     "exported_functions": exported_functions_path,
                 },
@@ -221,7 +223,8 @@ class HybridAPIExtractor(BaseAPIExtractor):
                     "data_layout": local_paths.get('data_layout.txt'),
                     "incomplete_types": local_paths.get('incomplete_types.txt'),
                     "exported_functions": local_paths.get('exported_functions.txt'),
-                }
+                },
+                "llvm_output_dir": llvm_output_dir,
             }
             
             return apis_dict
