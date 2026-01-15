@@ -386,6 +386,174 @@ def visualize_dependency_graph(project: str, dep_graph: dict, output_dir: str,
   return ''
 
 
+def generate_api_sequences_from_graph(
+    dep_graph: dict,
+    max_sequences: int = 100,
+    max_length: int = 5
+) -> tuple[list, dict]:
+  """
+  Generate API call sequences from the dependency graph.
+
+  Uses role-based classification to generate meaningful sequences:
+  CREATE -> OPERATE* -> OUTPUT? -> CLEANUP
+
+  Args:
+    dep_graph: {api_name: [dependency1, dependency2, ...]}
+    max_sequences: Maximum number of sequences to generate
+    max_length: Maximum length of each sequence
+
+  Returns:
+    Tuple of (sequences, apis_by_role):
+      - sequences: List of API call sequences
+      - apis_by_role: Dict mapping role to list of APIs
+  """
+  if not dep_graph:
+    return ([], {})
+
+  # Collect all APIs
+  all_apis = set(dep_graph.keys())
+  for deps in dep_graph.values():
+    all_apis.update(deps)
+
+  # Build reverse graph: who depends on me? (i.e., who can come after me)
+  reverse_graph = {api: [] for api in all_apis}
+  for api, deps in dep_graph.items():
+    for dep in deps:
+      if dep in reverse_graph:
+        reverse_graph[dep].append(api)
+
+  # Classify APIs by role
+  def classify_api(api_name: str) -> str:
+    name = api_name.lower()
+    # Order matters: check more specific patterns first
+    if any(p in name for p in ['delete', 'free', 'destroy', 'close', 'release', 'cleanup']):
+      return 'CLEANUP'
+    if any(p in name for p in ['print', 'tostring', 'dump', 'serialize', 'write']):
+      return 'OUTPUT'
+    if any(p in name for p in ['parse', 'create', 'new', 'init', 'open', 'alloc', 'load', 'read']):
+      return 'CREATE'
+    if any(p in name for p in ['get', 'add', 'set', 'insert', 'replace', 'detach', 'remove',
+                                'append', 'prepend', 'is', 'has', 'find', 'compare']):
+      return 'OPERATE'
+    return 'OTHER'
+
+  # Group APIs by role
+  apis_by_role = {'CREATE': [], 'OPERATE': [], 'OUTPUT': [], 'CLEANUP': [], 'OTHER': []}
+  for api in all_apis:
+    role = classify_api(api)
+    apis_by_role[role].append(api)
+
+  # Log classification for debugging
+  # print(f"CREATE: {len(apis_by_role['CREATE'])}, OPERATE: {len(apis_by_role['OPERATE'])}, "
+  #       f"OUTPUT: {len(apis_by_role['OUTPUT'])}, CLEANUP: {len(apis_by_role['CLEANUP'])}")
+
+  sequences = []
+  seen = set()
+
+  def add_sequence(seq):
+    """Add sequence if unique and valid"""
+    if len(seq) >= 2:
+      seq_tuple = tuple(seq)
+      if seq_tuple not in seen:
+        seen.add(seq_tuple)
+        sequences.append(seq)
+        return True
+    return False
+
+  def can_follow(api_a: str, api_b: str) -> bool:
+    """Check if api_b can follow api_a based on dependency graph"""
+    # api_b depends on api_a means api_b can come after api_a
+    return api_a in dep_graph.get(api_b, [])
+
+  def find_followers(api: str, target_role: str = None) -> list:
+    """Find APIs that can follow the given api"""
+    followers = reverse_graph.get(api, [])
+    if target_role:
+      followers = [f for f in followers if classify_api(f) == target_role]
+    return followers
+
+  # Strategy 1: CREATE -> OPERATE -> CLEANUP (most common pattern)
+  for create_api in apis_by_role['CREATE'][:15]:
+    if len(sequences) >= max_sequences:
+      break
+
+    # Find OPERATE APIs that can follow this CREATE
+    operate_followers = find_followers(create_api, 'OPERATE')
+
+    for operate_api in operate_followers[:5]:
+      if len(sequences) >= max_sequences:
+        break
+
+      # Find CLEANUP that can follow OPERATE
+      cleanup_followers = find_followers(operate_api, 'CLEANUP')
+      if cleanup_followers:
+        add_sequence([create_api, operate_api, cleanup_followers[0]])
+
+      # Try another OPERATE before CLEANUP
+      operate_followers2 = find_followers(operate_api, 'OPERATE')
+      for operate_api2 in operate_followers2[:3]:
+        if operate_api2 != operate_api:
+          cleanup_followers2 = find_followers(operate_api2, 'CLEANUP')
+          if cleanup_followers2:
+            add_sequence([create_api, operate_api, operate_api2, cleanup_followers2[0]])
+
+  # Strategy 2: CREATE -> OUTPUT -> CLEANUP
+  for create_api in apis_by_role['CREATE'][:15]:
+    if len(sequences) >= max_sequences:
+      break
+
+    output_followers = find_followers(create_api, 'OUTPUT')
+    for output_api in output_followers[:3]:
+      cleanup_followers = find_followers(output_api, 'CLEANUP')
+      # Also check cleanup that follows create directly
+      if not cleanup_followers:
+        cleanup_followers = find_followers(create_api, 'CLEANUP')
+      if cleanup_followers:
+        add_sequence([create_api, output_api, cleanup_followers[0]])
+
+  # Strategy 3: CREATE -> OPERATE -> OUTPUT -> CLEANUP
+  for create_api in apis_by_role['CREATE'][:10]:
+    if len(sequences) >= max_sequences:
+      break
+
+    operate_followers = find_followers(create_api, 'OPERATE')
+    for operate_api in operate_followers[:3]:
+      output_followers = find_followers(operate_api, 'OUTPUT')
+      for output_api in output_followers[:2]:
+        cleanup_followers = find_followers(output_api, 'CLEANUP')
+        if not cleanup_followers:
+          cleanup_followers = find_followers(create_api, 'CLEANUP')
+        if cleanup_followers:
+          add_sequence([create_api, operate_api, output_api, cleanup_followers[0]])
+
+  # Strategy 4: CREATE -> OPERATE (multiple) without explicit cleanup
+  for create_api in apis_by_role['CREATE'][:10]:
+    if len(sequences) >= max_sequences:
+      break
+
+    operate_followers = find_followers(create_api, 'OPERATE')
+    for op1 in operate_followers[:5]:
+      for op2 in find_followers(op1, 'OPERATE')[:3]:
+        if op2 != op1:
+          add_sequence([create_api, op1, op2])
+          for op3 in find_followers(op2, 'OPERATE')[:2]:
+            if op3 not in [op1, op2]:
+              add_sequence([create_api, op1, op2, op3])
+
+  # Strategy 5: Simple CREATE -> CLEANUP pairs
+  for create_api in apis_by_role['CREATE']:
+    if len(sequences) >= max_sequences:
+      break
+    cleanup_followers = find_followers(create_api, 'CLEANUP')
+    for cleanup in cleanup_followers[:2]:
+      add_sequence([create_api, cleanup])
+
+  # Sort by length (longer first) then alphabetically for consistency
+  sequences.sort(key=lambda x: (-len(x), x[0]))
+
+  return sequences[:max_sequences], apis_by_role
+
+
 def print_dependency_graph_stats(project: str, dep_graph: dict, output_dir: str = None) -> None:
   """Print statistics and sample information about the type dependency graph."""
   if not dep_graph:
@@ -631,6 +799,33 @@ def run_local_extraction_for_benchmark(
     json.dump(out_graph, f, indent=2)
 
   logger.info('Wrote type dependency graph to %s', graph_path)
+
+  # Generate and output API sequences for human review
+  sequences, role_stats = generate_api_sequences_from_graph(out_graph, max_sequences=50, max_length=5)
+  sequences_path = os.path.join(outdir, 'api_sequences.txt')
+  with open(sequences_path, 'w') as f:
+    f.write(f"# API Sequences generated from type dependency graph\n")
+    f.write(f"# Total sequences: {len(sequences)}\n")
+    f.write(f"# Max length: 5\n\n")
+
+    # Write role classification statistics
+    f.write("=" * 60 + "\n")
+    f.write("API ROLE CLASSIFICATION (heuristic-based)\n")
+    f.write("=" * 60 + "\n\n")
+    for role, apis in role_stats.items():
+      f.write(f"{role} ({len(apis)} APIs):\n")
+      for api in sorted(apis)[:15]:
+        f.write(f"  - {api}\n")
+      if len(apis) > 15:
+        f.write(f"  ... and {len(apis) - 15} more\n")
+      f.write("\n")
+
+    f.write("=" * 60 + "\n")
+    f.write("GENERATED SEQUENCES\n")
+    f.write("=" * 60 + "\n\n")
+    for i, seq in enumerate(sequences, 1):
+      f.write(f"{i}. {' -> '.join(seq)}\n")
+  logger.info('Wrote %d API sequences to %s', len(sequences), sequences_path)
 
   # Return both output directory and dependency graph for analysis
   return outdir, out_graph
