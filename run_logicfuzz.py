@@ -31,6 +31,10 @@ from liberator_adapter.extractors.llvm_extractor import LLVMAPIExtractor
 from liberator_adapter.dependency.type.TypeDependencyGraphGenerator import TypeDependencyGraphGenerator
 from liberator_adapter.common.api import Api, Arg
 from liberator_adapter.common.utils import Utils
+from liberator_adapter.common.datalayout import DataLayout
+from liberator_adapter.constraints.ConditionManager import ConditionManager
+from liberator_adapter.common import FunctionConditionsSet
+from liberator_adapter.driver.factory import Factory
 
 logger = logging.getLogger(__name__)
 # log the debug and info
@@ -177,6 +181,21 @@ def clone_repo(repo: str, outdir: str, commit: Optional[str] = None) -> str:
   return outdir
 
 
+def _infer_flag_from_type(type_str: str, is_return: bool = False) -> str:
+  """Infer the flag from the type string.
+
+  - If type contains '*' or '[]', it's a pointer -> 'ref' (or 'ret' for returns)
+  - If type contains '(*)', it's a function pointer -> 'fun'
+  - Otherwise -> 'val'
+  """
+  if '(*)' in type_str:
+    return 'fun'
+  elif '*' in type_str or '[' in type_str:
+    return 'ret' if is_return else 'ref'
+  else:
+    return 'val'
+
+
 def convert_apis_clang_json_to_api_list(apis_clang_path: str) -> List[Api]:
   """Read a Clang JSON lines file and convert to Api objects."""
   apis: List[Api] = []
@@ -195,11 +214,15 @@ def convert_apis_clang_json_to_api_list(apis_clang_path: str) -> List[Api]:
         const_list = const_field
       else:
         const_list = [const_field]
-      
+
+      # Infer flag from type if not provided
+      ret_type = ret_json.get('type_clang', ret_json.get('type', 'void'))
+      ret_flag = ret_json.get('flag', _infer_flag_from_type(ret_type, is_return=True))
+
       return_arg = Arg(ret_json.get('name', 'return'),
-                       ret_json.get('flag', 'val'),
+                       ret_flag,
                        ret_json.get('size', 0),
-                       ret_json.get('type_clang', ret_json.get('type', 'void')),
+                       ret_type,
                        const_list)
 
       args_list = []
@@ -210,9 +233,13 @@ def convert_apis_clang_json_to_api_list(apis_clang_path: str) -> List[Api]:
           const_list = const_field
         else:
           const_list = [const_field]
-        
-        arg = Arg(a.get('name', ''), a.get('flag', 'val'), a.get('size', 0),
-                  a.get('type_clang', a.get('type', 'void')), const_list)
+
+        # Infer flag from type if not provided
+        arg_type = a.get('type_clang', a.get('type', 'void'))
+        arg_flag = a.get('flag', _infer_flag_from_type(arg_type, is_return=False))
+
+        arg = Arg(a.get('name', ''), arg_flag, a.get('size', 0),
+                  arg_type, const_list)
         args_list.append(arg)
 
       namespace = obj.get('namespace', [])
@@ -554,6 +581,327 @@ def generate_api_sequences_from_graph(
   return sequences[:max_sequences], apis_by_role
 
 
+def setup_condition_manager(
+    api_list: List[Api],
+    function_conditions: FunctionConditionsSet,
+    apis_clang_path: str,
+    apis_llvm_path: str,
+    data_layout_path: str,
+    incomplete_types_path: str = None,
+    enum_types_path: str = None
+) -> ConditionManager:
+  """
+  Setup DataLayout and ConditionManager for type-aware analysis.
+
+  Args:
+    api_list: List of Api objects
+    function_conditions: FunctionConditionsSet from conditions.json
+    apis_clang_path: Path to apis_clang.json
+    apis_llvm_path: Path to apis_llvm.json
+    data_layout_path: Path to data_layout.txt
+    incomplete_types_path: Path to incomplete_types.txt (optional)
+    enum_types_path: Path to enum_types.txt (optional)
+
+  Returns:
+    Configured ConditionManager instance
+  """
+  # Setup DataLayout first (required by ConditionManager)
+  data_layout = DataLayout.instance()
+
+  # Create empty files if not provided
+  if incomplete_types_path is None or not os.path.exists(incomplete_types_path):
+    incomplete_types_path = os.path.join(os.path.dirname(apis_clang_path), 'incomplete_types.txt')
+    if not os.path.exists(incomplete_types_path):
+      with open(incomplete_types_path, 'w') as f:
+        pass  # Create empty file
+
+  if enum_types_path is None or not os.path.exists(enum_types_path):
+    enum_types_path = os.path.join(os.path.dirname(apis_clang_path), 'enum_types.txt')
+    if not os.path.exists(enum_types_path):
+      with open(enum_types_path, 'w') as f:
+        pass  # Create empty file
+
+  try:
+    data_layout.setup(
+      apis_clang_p=apis_clang_path,
+      apis_llvm_p=apis_llvm_path,
+      incomplete_types_p=incomplete_types_path,
+      data_layout_p=data_layout_path,
+      enum_types_p=enum_types_path
+    )
+    logger.info('DataLayout setup complete')
+  except Exception as e:
+    logger.warning('Failed to setup DataLayout: %s', e)
+
+  # Setup ConditionManager
+  # Filter api_list to only include APIs that have conditions
+  available_conditions = set(function_conditions.fun_cond_set.keys())
+  api_set_filtered = {api for api in api_list if api.function_name in available_conditions}
+
+  if len(api_set_filtered) < len(api_list):
+    logger.info('Filtered %d APIs without conditions (keeping %d)',
+                len(api_list) - len(api_set_filtered), len(api_set_filtered))
+
+  condition_manager = ConditionManager.instance()
+  condition_manager.setup(
+    api_list=api_set_filtered,
+    api_list_all=api_set_filtered,
+    conditions=function_conditions
+  )
+
+  logger.info('ConditionManager setup complete:')
+  logger.info('  - Source APIs: %d', len(condition_manager.get_source_api()))
+  logger.info('  - Sink APIs: %d', len(condition_manager.get_sink_api()))
+  logger.info('  - Init APIs: %d', len(condition_manager.get_init_api()))
+
+  return condition_manager
+
+
+def generate_type_aware_sequences(
+    api_list: List[Api],
+    condition_manager: ConditionManager,
+    dep_graph_api: dict,  # {Api: [Api, ...]}
+    max_sequences: int = 100,
+    max_length: int = 5
+) -> tuple[list, dict]:
+  """
+  Generate API sequences using type-aware source/sink classification.
+
+  Uses ConditionManager to:
+  - Find SOURCE APIs (create resources) per type
+  - Find SINK APIs (destroy resources) per type
+  - Find INIT/SET APIs per type
+  - Generate sequences that respect type relationships
+
+  Args:
+    api_list: List of all Api objects
+    condition_manager: Configured ConditionManager instance
+    dep_graph_api: Dependency graph with Api objects as keys/values
+    max_sequences: Maximum number of sequences to generate
+    max_length: Maximum length of each sequence
+
+  Returns:
+    Tuple of (sequences, classification_stats)
+  """
+  if not api_list or not condition_manager:
+    return ([], {})
+
+  # Get type-aware classification from ConditionManager
+  source_apis = condition_manager.get_source_api()
+  sink_apis = condition_manager.get_sink_api()
+  init_apis = condition_manager.get_init_api()
+
+  # Build name -> Api mapping for easy lookup
+  name_to_api = {api.function_name: api for api in api_list}
+
+  # Get source_per_type and sink_map from ConditionManager
+  source_per_type = getattr(condition_manager, 'source_per_type', {})
+  sink_map = getattr(condition_manager, 'sink_map', {})
+
+  # Classify all APIs by role
+  classification = {
+    'SOURCE': set(),      # Creates resources (return pointer to struct)
+    'SINK': set(),        # Destroys resources (DELETE access)
+    'INIT': set(),        # Initializes existing objects
+    'OPERATE': set(),     # Other operations
+    'OTHER': set()
+  }
+
+  for api in api_list:
+    if api in source_apis:
+      classification['SOURCE'].add(api.function_name)
+    elif api in sink_apis:
+      classification['SINK'].add(api.function_name)
+    elif api in init_apis:
+      classification['INIT'].add(api.function_name)
+    else:
+      # Use heuristic for OPERATE vs OTHER
+      name = api.function_name.lower()
+      if any(p in name for p in ['get', 'add', 'set', 'insert', 'replace', 'detach',
+                                  'remove', 'append', 'prepend', 'is', 'has', 'find',
+                                  'compare', 'print', 'write', 'dump']):
+        classification['OPERATE'].add(api.function_name)
+      else:
+        classification['OTHER'].add(api.function_name)
+
+  # Build reverse dependency graph (who can come after me)
+  all_apis_set = set(dep_graph_api.keys())
+  for deps in dep_graph_api.values():
+    all_apis_set.update(deps)
+
+  reverse_graph = {api: [] for api in all_apis_set}
+  for api, deps in dep_graph_api.items():
+    for dep in deps:
+      if dep in reverse_graph:
+        reverse_graph[dep].append(api)
+
+  sequences = []
+  seen = set()
+
+  def add_sequence(seq_apis: List[Api]):
+    """Add sequence if unique and valid"""
+    if len(seq_apis) >= 2:
+      seq_names = tuple(api.function_name for api in seq_apis)
+      if seq_names not in seen:
+        seen.add(seq_names)
+        sequences.append(list(seq_names))
+        return True
+    return False
+
+  def get_type_key(api: Api) -> str:
+    """Get the primary output type of an API for matching"""
+    ret_type = api.return_info.type
+    if ret_type and ret_type != 'void':
+      return ret_type.replace('*', '').replace(' ', '')
+    return None
+
+  def find_matching_sink(source_api: Api) -> Api:
+    """Find a sink that matches the source's output type"""
+    source_type = get_type_key(source_api)
+    if not source_type:
+      return None
+
+    # Look through sink_map for matching type
+    for sink_type, sink_api in sink_map.items():
+      sink_type_str = str(sink_type.token if hasattr(sink_type, 'token') else sink_type)
+      sink_type_clean = sink_type_str.replace('*', '').replace(' ', '')
+      if source_type == sink_type_clean:
+        return sink_api
+
+    # Fallback: look for sink with matching parameter type
+    for sink_api in sink_apis:
+      if sink_api.arguments_info:
+        arg_type = sink_api.arguments_info[0].type
+        arg_type_clean = arg_type.replace('*', '').replace(' ', '')
+        if source_type == arg_type_clean:
+          return sink_api
+
+    return None
+
+  def find_followers(api: Api, target_apis: set = None) -> List[Api]:
+    """Find APIs that can follow the given API (optionally filtered)"""
+    followers = reverse_graph.get(api, [])
+    if target_apis:
+      followers = [f for f in followers if f in target_apis]
+    return followers
+
+  # Strategy 1: SOURCE -> matched SINK (type-aware pairs)
+  logger.info('Generating type-aware SOURCE -> SINK pairs...')
+  for source_api in source_apis:
+    if len(sequences) >= max_sequences:
+      break
+
+    sink_api = find_matching_sink(source_api)
+    if sink_api:
+      add_sequence([source_api, sink_api])
+
+  # Strategy 2: SOURCE -> OPERATE -> matched SINK
+  logger.info('Generating SOURCE -> OPERATE -> SINK sequences...')
+  operate_apis = {name_to_api[name] for name in classification['OPERATE'] if name in name_to_api}
+
+  for source_api in source_apis:
+    if len(sequences) >= max_sequences:
+      break
+
+    sink_api = find_matching_sink(source_api)
+    if not sink_api:
+      continue
+
+    # Find OPERATE APIs that can follow SOURCE
+    operate_followers = find_followers(source_api, operate_apis)
+
+    for op_api in operate_followers[:5]:
+      if len(sequences) >= max_sequences:
+        break
+
+      add_sequence([source_api, op_api, sink_api])
+
+      # Try chaining two OPERATE APIs
+      op_followers2 = find_followers(op_api, operate_apis)
+      for op_api2 in op_followers2[:3]:
+        if op_api2 != op_api:
+          add_sequence([source_api, op_api, op_api2, sink_api])
+
+  # Strategy 3: SOURCE -> INIT -> OPERATE -> SINK (with initialization)
+  logger.info('Generating SOURCE -> INIT -> OPERATE -> SINK sequences...')
+  init_api_set = {name_to_api[name] for name in classification['INIT'] if name in name_to_api}
+
+  for source_api in source_apis:
+    if len(sequences) >= max_sequences:
+      break
+
+    sink_api = find_matching_sink(source_api)
+    if not sink_api:
+      continue
+
+    init_followers = find_followers(source_api, init_api_set)
+
+    for init_api in init_followers[:3]:
+      add_sequence([source_api, init_api, sink_api])
+
+      # Add OPERATE between INIT and SINK
+      op_followers = find_followers(init_api, operate_apis)
+      for op_api in op_followers[:2]:
+        add_sequence([source_api, init_api, op_api, sink_api])
+
+  # Strategy 4: Multiple SOURCEs with shared operations
+  logger.info('Generating multi-source sequences...')
+  source_list = list(source_apis)[:10]
+
+  for i, source1 in enumerate(source_list):
+    if len(sequences) >= max_sequences:
+      break
+
+    sink1 = find_matching_sink(source1)
+    if not sink1:
+      continue
+
+    for source2 in source_list[i+1:i+3]:
+      sink2 = find_matching_sink(source2)
+      if not sink2:
+        continue
+
+      # Find common OPERATE APIs
+      followers1 = set(find_followers(source1, operate_apis))
+      followers2 = set(find_followers(source2, operate_apis))
+      common_ops = followers1 & followers2
+
+      for op_api in list(common_ops)[:2]:
+        add_sequence([source1, source2, op_api, sink1, sink2])
+
+  # Sort sequences by length (longer first) then alphabetically
+  sequences.sort(key=lambda x: (-len(x), x[0]))
+
+  # Build classification stats with function names
+  classification_stats = {
+    'SOURCE': sorted(classification['SOURCE']),
+    'SINK': sorted(classification['SINK']),
+    'INIT': sorted(classification['INIT']),
+    'OPERATE': sorted(classification['OPERATE']),
+    'OTHER': sorted(classification['OTHER'])
+  }
+
+  # Add type mapping info
+  type_mapping = {}
+  for source_api in source_apis:
+    source_type = get_type_key(source_api)
+    if source_type:
+      sink = find_matching_sink(source_api)
+      if sink:
+        type_mapping[source_type] = {
+          'sources': [source_api.function_name],
+          'sink': sink.function_name
+        }
+        # Add other sources for same type
+        for other_source in source_apis:
+          if other_source != source_api and get_type_key(other_source) == source_type:
+            type_mapping[source_type]['sources'].append(other_source.function_name)
+
+  classification_stats['TYPE_MAPPING'] = type_mapping
+
+  return sequences[:max_sequences], classification_stats
+
+
 def print_dependency_graph_stats(project: str, dep_graph: dict, output_dir: str = None) -> None:
   """Print statistics and sample information about the type dependency graph."""
   if not dep_graph:
@@ -800,31 +1148,106 @@ def run_local_extraction_for_benchmark(
 
   logger.info('Wrote type dependency graph to %s', graph_path)
 
-  # Generate and output API sequences for human review
-  sequences, role_stats = generate_api_sequences_from_graph(out_graph, max_sequences=50, max_length=5)
+  # Setup ConditionManager for type-aware sequence generation
+  condition_manager = None
+  data_layout_path = os.path.join(outdir, 'data_layout.txt')
+  incomplete_types_path = os.path.join(outdir, 'incomplete_types.txt')
+  enum_types_path = os.path.join(outdir, 'enum_types.txt')
+
+  if function_conditions and os.path.exists(data_layout_path):
+    try:
+      condition_manager = setup_condition_manager(
+        api_list=api_list,
+        function_conditions=function_conditions,
+        apis_clang_path=apis_clang_path,
+        apis_llvm_path=apis_llvm_path,
+        data_layout_path=data_layout_path,
+        incomplete_types_path=incomplete_types_path,
+        enum_types_path=enum_types_path
+      )
+    except Exception as e:
+      logger.warning('Failed to setup ConditionManager: %s', e)
+      import traceback
+      traceback.print_exc()
+
+  # Generate API sequences
   sequences_path = os.path.join(outdir, 'api_sequences.txt')
-  with open(sequences_path, 'w') as f:
-    f.write(f"# API Sequences generated from type dependency graph\n")
-    f.write(f"# Total sequences: {len(sequences)}\n")
-    f.write(f"# Max length: 5\n\n")
 
-    # Write role classification statistics
-    f.write("=" * 60 + "\n")
-    f.write("API ROLE CLASSIFICATION (heuristic-based)\n")
-    f.write("=" * 60 + "\n\n")
-    for role, apis in role_stats.items():
-      f.write(f"{role} ({len(apis)} APIs):\n")
-      for api in sorted(apis)[:15]:
-        f.write(f"  - {api}\n")
-      if len(apis) > 15:
-        f.write(f"  ... and {len(apis) - 15} more\n")
-      f.write("\n")
+  if condition_manager:
+    # Use type-aware sequence generation
+    logger.info('Using TYPE-AWARE sequence generation (ConditionManager)')
+    sequences, role_stats = generate_type_aware_sequences(
+      api_list=api_list,
+      condition_manager=condition_manager,
+      dep_graph_api=dependency_graph.graph,  # Use Api objects
+      max_sequences=100,
+      max_length=5
+    )
 
-    f.write("=" * 60 + "\n")
-    f.write("GENERATED SEQUENCES\n")
-    f.write("=" * 60 + "\n\n")
-    for i, seq in enumerate(sequences, 1):
-      f.write(f"{i}. {' -> '.join(seq)}\n")
+    with open(sequences_path, 'w') as f:
+      f.write("# API Sequences generated with TYPE-AWARE classification\n")
+      f.write(f"# Total sequences: {len(sequences)}\n")
+      f.write("# Classification: Based on static analysis (ConditionManager)\n\n")
+
+      # Write role classification statistics
+      f.write("=" * 60 + "\n")
+      f.write("API ROLE CLASSIFICATION (type-aware, static analysis)\n")
+      f.write("=" * 60 + "\n\n")
+
+      for role in ['SOURCE', 'SINK', 'INIT', 'OPERATE', 'OTHER']:
+        if role in role_stats:
+          apis = role_stats[role]
+          f.write(f"{role} ({len(apis)} APIs):\n")
+          for api in sorted(apis)[:15]:
+            f.write(f"  - {api}\n")
+          if len(apis) > 15:
+            f.write(f"  ... and {len(apis) - 15} more\n")
+          f.write("\n")
+
+      # Write type mapping if available
+      if 'TYPE_MAPPING' in role_stats and role_stats['TYPE_MAPPING']:
+        f.write("=" * 60 + "\n")
+        f.write("TYPE -> API MAPPING\n")
+        f.write("=" * 60 + "\n\n")
+        for type_name, mapping in role_stats['TYPE_MAPPING'].items():
+          f.write(f"Type: {type_name}\n")
+          f.write(f"  Sources: {', '.join(mapping['sources'][:5])}\n")
+          f.write(f"  Sink: {mapping['sink']}\n\n")
+
+      f.write("=" * 60 + "\n")
+      f.write("GENERATED SEQUENCES (type-aware)\n")
+      f.write("=" * 60 + "\n\n")
+      for i, seq in enumerate(sequences, 1):
+        f.write(f"{i}. {' -> '.join(seq)}\n")
+
+  else:
+    # Fallback to heuristic-based generation
+    logger.info('Using HEURISTIC-based sequence generation (no ConditionManager)')
+    sequences, role_stats = generate_api_sequences_from_graph(out_graph, max_sequences=50, max_length=5)
+
+    with open(sequences_path, 'w') as f:
+      f.write("# API Sequences generated from type dependency graph\n")
+      f.write(f"# Total sequences: {len(sequences)}\n")
+      f.write("# Classification: Heuristic-based (name patterns)\n\n")
+
+      # Write role classification statistics
+      f.write("=" * 60 + "\n")
+      f.write("API ROLE CLASSIFICATION (heuristic-based)\n")
+      f.write("=" * 60 + "\n\n")
+      for role, apis in role_stats.items():
+        f.write(f"{role} ({len(apis)} APIs):\n")
+        for api in sorted(apis)[:15]:
+          f.write(f"  - {api}\n")
+        if len(apis) > 15:
+          f.write(f"  ... and {len(apis) - 15} more\n")
+        f.write("\n")
+
+      f.write("=" * 60 + "\n")
+      f.write("GENERATED SEQUENCES\n")
+      f.write("=" * 60 + "\n\n")
+      for i, seq in enumerate(sequences, 1):
+        f.write(f"{i}. {' -> '.join(seq)}\n")
+
   logger.info('Wrote %d API sequences to %s', len(sequences), sequences_path)
 
   # Return both output directory and dependency graph for analysis
