@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# LLM Client Protocol (复用sequence_filter中的定义)
+# LLM Client Protocol (reused from sequence_filter definition)
 # =============================================================================
 
 class LLMClient(Protocol):
@@ -348,57 +348,57 @@ class VarLenAnalyzer:
 
 
 # =============================================================================
-# S3. Loop 循环模式分析
+# S3. Loop Pattern Analysis
 # =============================================================================
 
 class LoopType(Enum):
-    """循环类型"""
-    ITERATOR = "iterator"           # 迭代器模式
-    INCREMENTAL = "incremental"     # 增量读取模式
-    STATE_MACHINE = "state_machine" # 状态机模式
-    NONE = "none"                   # 不需要循环
+    """Loop type"""
+    ITERATOR = "iterator"           # Iterator pattern
+    INCREMENTAL = "incremental"     # Incremental read pattern
+    STATE_MACHINE = "state_machine" # State machine pattern
+    NONE = "none"                   # No loop needed
 
 
 @dataclass
 class LoopPatternInfo:
-    """循环模式信息"""
+    """Loop pattern information"""
     api_name: str
     needs_loop: bool = False
     loop_type: LoopType = LoopType.NONE
-    termination_condition: str = ""      # 终止条件
-    max_iterations: int = 100            # 最大迭代次数（安全边界）
-    code_template: str = ""              # 代码模板
+    termination_condition: str = ""      # Termination condition
+    max_iterations: int = 100            # Maximum iterations (safety boundary)
+    code_template: str = ""              # Code template
     confidence: float = 0.0
     reasoning: str = ""
 
 
 class LoopPatternAnalyzer:
     """
-    循环模式分析器
+    Loop pattern analyzer
 
-    Phase 1: 静态分析识别可能需要循环的API
-    Phase 2: LLM确认循环模式和终止条件
+    Phase 1: Static analysis to identify APIs that may need loops
+    Phase 2: LLM confirmation of loop pattern and termination condition
     """
 
-    # 迭代器命名模式
+    # Iterator naming patterns
     ITERATOR_PATTERNS = [
         r'(?i)_next$', r'(?i)_iterate', r'(?i)_foreach',
         r'(?i)^get_next', r'(?i)^next_', r'(?i)_step$',
     ]
 
-    # 增量读取命名模式
+    # Incremental read naming patterns
     INCREMENTAL_PATTERNS = [
         r'(?i)_read$', r'(?i)^read_', r'(?i)_recv$', r'(?i)^recv_',
         r'(?i)_fetch', r'(?i)_consume', r'(?i)_pull',
     ]
 
-    # 状态机命名模式
+    # State machine naming patterns
     STATE_MACHINE_PATTERNS = [
         r'(?i)_process$', r'(?i)_run$', r'(?i)_execute$',
         r'(?i)_tick$', r'(?i)_update$', r'(?i)_pump$',
     ]
 
-    # 返回类型表示"还有更多"
+    # Return types indicating "more available"
     CONTINUATION_RETURN_TYPES = {'bool', 'int', 'ssize_t', 'size_t'}
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
@@ -406,22 +406,22 @@ class LoopPatternAnalyzer:
         self._cache: Dict[str, LoopPatternInfo] = {}
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_client = llm_client
 
     def analyze(self, api: Api) -> LoopPatternInfo:
-        """分析API的循环模式"""
+        """Analyze loop pattern for API"""
         if api.function_name in self._cache:
             return self._cache[api.function_name]
 
-        # Phase 1: 静态分析
+        # Phase 1: Static analysis
         phase1_result = self._phase1_static_analysis(api)
 
         if not phase1_result.needs_loop:
             self._cache[api.function_name] = phase1_result
             return phase1_result
 
-        # Phase 2: LLM确认
+        # Phase 2: LLM confirmation
         if self.llm_client:
             result = self._phase2_llm_confirm(api, phase1_result)
         else:
@@ -431,11 +431,11 @@ class LoopPatternAnalyzer:
         return result
 
     def _phase1_static_analysis(self, api: Api) -> LoopPatternInfo:
-        """Phase 1: 静态分析识别循环候选"""
+        """Phase 1: Static analysis to identify loop candidates"""
         func_name = api.function_name
         return_type = api.return_info.type
 
-        # 检查命名模式
+        # Check naming patterns
         loop_type = LoopType.NONE
         confidence = 0.0
 
@@ -459,7 +459,7 @@ class LoopPatternAnalyzer:
                     confidence = 0.5
                     break
 
-        # 检查返回类型（仅当函数名没有明显的非循环特征时）
+        # Check return type (only when function name doesn't have obvious non-loop characteristics)
         non_loop_name_patterns = [
             r'(?i)^init', r'(?i)_init$', r'(?i)^create', r'(?i)_create$',
             r'(?i)^new', r'(?i)_new$', r'(?i)^alloc', r'(?i)_alloc$',
@@ -471,13 +471,13 @@ class LoopPatternAnalyzer:
         is_non_loop_name = any(re.search(p, func_name) for p in non_loop_name_patterns)
 
         if loop_type == LoopType.NONE and not is_non_loop_name:
-            # 返回指针可能是迭代器
+            # Returning pointer might be iterator
             if '*' in return_type and 'void' not in return_type.lower():
                 loop_type = LoopType.ITERATOR
                 confidence = 0.4
-            # 返回int/size_t可能是增量读取
+            # Returning int/size_t might be incremental read
             elif any(t in return_type for t in self.CONTINUATION_RETURN_TYPES):
-                # 检查是否有输出buffer参数（不是Context/State类型）
+                # Check if there's an output buffer parameter (not Context/State type)
                 has_output_buffer = any(
                     '*' in arg.type and
                     not any(c in arg.type for c in ['const']) and
@@ -488,7 +488,7 @@ class LoopPatternAnalyzer:
                     loop_type = LoopType.INCREMENTAL
                     confidence = 0.4
 
-        # 构建结果
+        # Build result
         needs_loop = loop_type != LoopType.NONE
         termination = self._guess_termination(loop_type, return_type)
 
@@ -503,7 +503,7 @@ class LoopPatternAnalyzer:
         )
 
     def _guess_termination(self, loop_type: LoopType, return_type: str) -> str:
-        """猜测终止条件"""
+        """Guess termination condition"""
         if loop_type == LoopType.ITERATOR:
             if '*' in return_type:
                 return "return == NULL"
@@ -516,11 +516,11 @@ class LoopPatternAnalyzer:
 
     def _phase2_llm_confirm(self, api: Api,
                             phase1: LoopPatternInfo) -> LoopPatternInfo:
-        """Phase 2: LLM确认"""
+        """Phase 2: LLM confirmation"""
         params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info])
         signature = f"{api.return_info.type} {api.function_name}({params})"
 
-        # 使用prompt_loader获取prompt
+        # Use prompt_loader to get prompt
         pm = get_prompt_manager()
         prompt = pm.get_loop_prompt(
             signature=signature,
@@ -536,7 +536,7 @@ class LoopPatternAnalyzer:
             return phase1
 
     def _parse_llm_response(self, api: Api, response: str) -> LoopPatternInfo:
-        """解析LLM响应"""
+        """Parse LLM response"""
         import json
 
         try:
@@ -568,42 +568,42 @@ class LoopPatternAnalyzer:
         )
 
     def clear_cache(self):
-        """清除缓存"""
+        """Clear cache"""
         self._cache.clear()
 
 
 # =============================================================================
-# S4. Callback 回调函数分析
+# S4. Callback Function Analysis
 # =============================================================================
 
 class CallbackType(Enum):
-    """回调函数类型"""
-    COMPARATOR = "comparator"       # 比较函数
-    HANDLER = "handler"             # 事件处理器
-    READER = "reader"               # 读取函数
-    WRITER = "writer"               # 写入函数
-    ALLOCATOR = "allocator"         # 分配器
-    DEALLOCATOR = "deallocator"     # 释放器
-    VISITOR = "visitor"             # 访问者
+    """Callback function type"""
+    COMPARATOR = "comparator"       # Comparison function
+    HANDLER = "handler"             # Event handler
+    READER = "reader"               # Read function
+    WRITER = "writer"               # Write function
+    ALLOCATOR = "allocator"         # Allocator
+    DEALLOCATOR = "deallocator"     # Deallocator
+    VISITOR = "visitor"             # Visitor
     UNKNOWN = "unknown"
 
 
 @dataclass
 class CallbackInfo:
-    """回调函数信息"""
-    arg_idx: int                    # 参数索引
-    arg_name: str                   # 参数名
-    arg_type: str                   # 参数类型
+    """Callback function information"""
+    arg_idx: int                    # Argument index
+    arg_name: str                   # Argument name
+    arg_type: str                   # Argument type
     callback_type: CallbackType = CallbackType.UNKNOWN
-    can_be_null: bool = False       # 是否可以传NULL
-    stub_code: str = ""             # stub代码
+    can_be_null: bool = False       # Whether NULL can be passed
+    stub_code: str = ""             # Stub code
     constraints: List[str] = field(default_factory=list)
     reasoning: str = ""
 
 
 @dataclass
 class CallbackAnalysisResult:
-    """回调分析结果"""
+    """Callback analysis result"""
     api_name: str
     callbacks: List[CallbackInfo] = field(default_factory=list)
     llm_confirmed: bool = False
@@ -611,38 +611,38 @@ class CallbackAnalysisResult:
 
 class CallbackAnalyzer:
     """
-    回调函数分析器
+    Callback function analyzer
 
-    Phase 1: 静态分析识别函数指针参数
-    Phase 2: LLM生成合适的stub实现
+    Phase 1: Static analysis to identify function pointer parameters
+    Phase 2: LLM generates appropriate stub implementations
     """
 
-    # 函数指针类型模式
+    # Function pointer type patterns
     FUNC_PTR_PATTERN = r'\(\s*\*\s*\w*\s*\)\s*\(|^\w+\s*\(\s*\*\s*\)\s*\('
 
-    # 比较函数签名模式
+    # Comparator function signature patterns
     COMPARATOR_PATTERN = r'\(.*const\s+void\s*\*.*,.*const\s+void\s*\*.*\)\s*->\s*int|\(.*const\s+void\s*\*.*,.*const\s+void\s*\*.*\)'
 
-    # 常见回调类型的特征
+    # Common callback type characteristics
     CALLBACK_SIGNATURES = {
         CallbackType.COMPARATOR: [
-            (r'const\s+void\s*\*', r'const\s+void\s*\*', r'int'),  # qsort风格
+            (r'const\s+void\s*\*', r'const\s+void\s*\*', r'int'),  # qsort style
         ],
         CallbackType.READER: [
-            (r'void\s*\*', r'size_t', r'size_t'),  # fread风格
+            (r'void\s*\*', r'size_t', r'size_t'),  # fread style
         ],
         CallbackType.WRITER: [
-            (r'const\s+void\s*\*', r'size_t', r'size_t'),  # fwrite风格
+            (r'const\s+void\s*\*', r'size_t', r'size_t'),  # fwrite style
         ],
         CallbackType.ALLOCATOR: [
-            (r'size_t', None, r'void\s*\*'),  # malloc风格
+            (r'size_t', None, r'void\s*\*'),  # malloc style
         ],
         CallbackType.DEALLOCATOR: [
-            (r'void\s*\*', None, r'void'),  # free风格
+            (r'void\s*\*', None, r'void'),  # free style
         ],
     }
 
-    # Stub模板
+    # Stub templates
     STUB_TEMPLATES = {
         CallbackType.COMPARATOR: '''
 int fuzz_comparator_{name}(const void* a, const void* b) {{
@@ -712,15 +712,15 @@ void fuzz_callback_{name}(void) {{
         self._cache: Dict[str, CallbackAnalysisResult] = {}
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_client = llm_client
 
     def analyze(self, api: Api) -> CallbackAnalysisResult:
-        """分析API的回调参数"""
+        """Analyze callback parameters of API"""
         if api.function_name in self._cache:
             return self._cache[api.function_name]
 
-        # Phase 1: 静态分析识别函数指针参数
+        # Phase 1: Static analysis to identify function pointer parameters
         callbacks = self._phase1_static_analysis(api)
 
         result = CallbackAnalysisResult(
@@ -732,12 +732,12 @@ void fuzz_callback_{name}(void) {{
             self._cache[api.function_name] = result
             return result
 
-        # Phase 2: LLM生成stub
+        # Phase 2: LLM generates stub
         if self.llm_client:
             result = self._phase2_llm_generate(api, callbacks)
             result.llm_confirmed = True
         else:
-            # 使用模板生成stub
+            # Use template to generate stub
             for cb in result.callbacks:
                 cb.stub_code = self._generate_stub(cb, api.function_name)
 
@@ -745,7 +745,7 @@ void fuzz_callback_{name}(void) {{
         return result
 
     def _phase1_static_analysis(self, api: Api) -> List[CallbackInfo]:
-        """Phase 1: 静态分析识别函数指针参数"""
+        """Phase 1: Static analysis to identify function pointer parameters"""
         callbacks = []
 
         for i, arg in enumerate(api.arguments_info):
@@ -762,16 +762,16 @@ void fuzz_callback_{name}(void) {{
         return callbacks
 
     def _is_function_pointer(self, type_str: str) -> bool:
-        """检查是否是函数指针类型"""
-        # 模式1: (*)(...)  如 void (*)(int) 或 int (*)(const void*, const void*)
+        """Check if it's a function pointer type"""
+        # Pattern 1: (*)(...)  e.g., void (*)(int) or int (*)(const void*, const void*)
         if re.search(self.FUNC_PTR_PATTERN, type_str):
             return True
 
-        # 模式2: 返回类型 (*)(参数)  如 int (*)(const void*, const void*)
+        # Pattern 2: return_type (*)(params)  e.g., int (*)(const void*, const void*)
         if re.search(r'\w+\s*\(\s*\*\s*\)\s*\([^)]*\)', type_str):
             return True
 
-        # 模式3: 类型名包含 _func, _callback, _handler 等
+        # Pattern 3: Type name contains _func, _callback, _handler, etc.
         type_lower = type_str.lower()
         callback_keywords = ['_func', '_callback', '_handler', '_hook',
                             '_fn', 'callback', 'handler', 'func_t']
@@ -781,10 +781,10 @@ void fuzz_callback_{name}(void) {{
         return False
 
     def _classify_callback(self, type_str: str) -> CallbackType:
-        """分类回调类型"""
+        """Classify callback type"""
         type_lower = type_str.lower()
 
-        # 基于命名
+        # Based on naming
         if 'compar' in type_lower or 'cmp' in type_lower:
             return CallbackType.COMPARATOR
         if 'read' in type_lower:
@@ -800,12 +800,12 @@ void fuzz_callback_{name}(void) {{
         if 'handler' in type_lower or 'callback' in type_lower:
             return CallbackType.HANDLER
 
-        # 基于签名分析
+        # Based on signature analysis
         # Comparator: int (*)(const void*, const void*)
         if re.search(r'int\s*\(\s*\*\s*\)\s*\(\s*const\s+void\s*\*\s*,\s*const\s+void\s*\*\s*\)', type_str):
             return CallbackType.COMPARATOR
 
-        # Allocator: void* (*)(size_t) 或类似
+        # Allocator: void* (*)(size_t) or similar
         if re.search(r'void\s*\*\s*\(\s*\*\s*\)\s*\(\s*size_t\s*\)', type_str):
             return CallbackType.ALLOCATOR
 
@@ -816,19 +816,19 @@ void fuzz_callback_{name}(void) {{
         return CallbackType.UNKNOWN
 
     def _generate_stub(self, callback: CallbackInfo, api_name: str) -> str:
-        """生成stub代码"""
+        """Generate stub code"""
         template = self.STUB_TEMPLATES.get(
             callback.callback_type,
             self.STUB_TEMPLATES[CallbackType.UNKNOWN]
         )
 
-        # 生成唯一的名称
+        # Generate unique name
         name = f"{api_name}_{callback.arg_name}".replace('-', '_')
         return template.format(name=name)
 
     def _phase2_llm_generate(self, api: Api,
                              callbacks: List[CallbackInfo]) -> CallbackAnalysisResult:
-        """Phase 2: LLM生成stub"""
+        """Phase 2: LLM generates stub"""
         result = CallbackAnalysisResult(
             api_name=api.function_name,
             callbacks=[]
@@ -837,7 +837,7 @@ void fuzz_callback_{name}(void) {{
         params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info])
         signature = f"{api.return_info.type} {api.function_name}({params})"
 
-        # 使用prompt_loader获取prompt
+        # Use prompt_loader to get prompt
         pm = get_prompt_manager()
 
         for cb in callbacks:
@@ -860,7 +860,7 @@ void fuzz_callback_{name}(void) {{
 
     def _parse_llm_response(self, callback: CallbackInfo,
                             response: str, api_name: str) -> CallbackInfo:
-        """解析LLM响应"""
+        """Parse LLM response"""
         import json
 
         try:
@@ -898,31 +898,31 @@ void fuzz_callback_{name}(void) {{
         )
 
     def clear_cache(self):
-        """清除缓存"""
+        """Clear cache"""
         self._cache.clear()
 
 
 # =============================================================================
-# S2. TLV 格式分析
+# S2. TLV Format Analysis
 # =============================================================================
 
 class StructuredFormat(Enum):
-    """结构化数据格式"""
+    """Structured data format"""
     TLV = "tlv"                     # Type-Length-Value
-    FIXED_HEADER = "fixed_header"   # 固定头部
-    LENGTH_PREFIXED = "length_prefixed"  # 长度前缀
-    RAW = "raw"                     # 原始数据
+    FIXED_HEADER = "fixed_header"   # Fixed header
+    LENGTH_PREFIXED = "length_prefixed"  # Length prefixed
+    RAW = "raw"                     # Raw data
     UNKNOWN = "unknown"
 
 
 @dataclass
 class TLVAnalysisResult:
-    """TLV分析结果"""
+    """TLV analysis result"""
     api_name: str
     is_structured: bool = False
     format_type: StructuredFormat = StructuredFormat.UNKNOWN
-    min_size: int = 0                # 最小有效输入大小
-    magic_bytes: Optional[bytes] = None  # 魔数
+    min_size: int = 0                # Minimum valid input size
+    magic_bytes: Optional[bytes] = None  # Magic bytes
     constraints: List[str] = field(default_factory=list)
     reasoning: str = ""
     llm_confirmed: bool = False
@@ -930,20 +930,20 @@ class TLVAnalysisResult:
 
 class TLVAnalyzer:
     """
-    TLV/结构化数据格式分析器
+    TLV/Structured data format analyzer
 
-    Phase 1: 静态分析识别可能解析结构化数据的API
-    Phase 2: LLM确认格式和约束
+    Phase 1: Static analysis to identify APIs that may parse structured data
+    Phase 2: LLM confirms format and constraints
     """
 
-    # 解析函数命名模式
+    # Parser function naming patterns
     PARSE_PATTERNS = [
         r'(?i)_parse$', r'(?i)^parse_', r'(?i)_decode$', r'(?i)^decode_',
         r'(?i)_deserialize', r'(?i)_unmarshal', r'(?i)_unpack',
         r'(?i)_read$', r'(?i)_load$', r'(?i)_from_',
     ]
 
-    # 典型的解析参数模式
+    # Typical parser parameter patterns
     PARSE_PARAM_PATTERNS = [
         (r'const\s+uint8_t\s*\*', r'size_t'),
         (r'const\s+char\s*\*', r'size_t'),
@@ -956,22 +956,22 @@ class TLVAnalyzer:
         self._cache: Dict[str, TLVAnalysisResult] = {}
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_client = llm_client
 
     def analyze(self, api: Api) -> TLVAnalysisResult:
-        """分析API是否处理结构化数据"""
+        """Analyze whether API handles structured data"""
         if api.function_name in self._cache:
             return self._cache[api.function_name]
 
-        # Phase 1: 静态分析
+        # Phase 1: Static analysis
         phase1_result = self._phase1_static_analysis(api)
 
         if not phase1_result.is_structured:
             self._cache[api.function_name] = phase1_result
             return phase1_result
 
-        # Phase 2: LLM确认
+        # Phase 2: LLM confirmation
         if self.llm_client:
             result = self._phase2_llm_confirm(api)
             result.llm_confirmed = True
@@ -982,10 +982,10 @@ class TLVAnalyzer:
         return result
 
     def _phase1_static_analysis(self, api: Api) -> TLVAnalysisResult:
-        """Phase 1: 静态分析"""
+        """Phase 1: Static analysis"""
         func_name = api.function_name
 
-        # 检查命名模式
+        # Check naming patterns
         is_parser = False
         for pattern in self.PARSE_PATTERNS:
             if re.search(pattern, func_name):
@@ -995,7 +995,7 @@ class TLVAnalyzer:
         if not is_parser:
             return TLVAnalysisResult(api_name=func_name)
 
-        # 检查参数模式
+        # Check parameter patterns
         has_parse_params = self._check_parse_params(api)
 
         if not has_parse_params:
@@ -1010,13 +1010,13 @@ class TLVAnalyzer:
         )
 
     def _check_parse_params(self, api: Api) -> bool:
-        """检查是否有解析函数的参数模式"""
+        """Check if there are parser function parameter patterns"""
         args = api.arguments_info
 
         if len(args) < 2:
             return False
 
-        # 检查是否有 (buffer, size) 参数对
+        # Check if there is a (buffer, size) parameter pair
         for i in range(len(args) - 1):
             arg1_type = args[i].type
             arg2_type = args[i + 1].type
@@ -1028,11 +1028,11 @@ class TLVAnalyzer:
         return False
 
     def _phase2_llm_confirm(self, api: Api) -> TLVAnalysisResult:
-        """Phase 2: LLM确认"""
+        """Phase 2: LLM confirmation"""
         params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info])
         signature = f"{api.return_info.type} {api.function_name}({params})"
 
-        # 使用prompt_loader获取prompt
+        # Use prompt_loader to get prompt
         pm = get_prompt_manager()
         prompt = pm.get_tlv_prompt(signature=signature)
 
@@ -1049,7 +1049,7 @@ class TLVAnalyzer:
             )
 
     def _parse_llm_response(self, api: Api, response: str) -> TLVAnalysisResult:
-        """解析LLM响应"""
+        """Parse LLM response"""
         import json
 
         try:
@@ -1089,17 +1089,17 @@ class TLVAnalyzer:
         )
 
     def clear_cache(self):
-        """清除缓存"""
+        """Clear cache"""
         self._cache.clear()
 
 
 # =============================================================================
-# 统一分析器
+# Unified Analyzer
 # =============================================================================
 
 @dataclass
 class APIPatternAnalysisResult:
-    """API模式分析综合结果"""
+    """Comprehensive API pattern analysis result"""
     api_name: str
     varlen: Optional[VarLenAnalysisResult] = None
     loop: Optional[LoopPatternInfo] = None
@@ -1109,9 +1109,9 @@ class APIPatternAnalysisResult:
 
 class SpecialPatternAnalyzer:
     """
-    特殊模式统一分析器
+    Unified special pattern analyzer
 
-    整合所有特殊场景的分析:
+    Integrates analysis for all special scenarios:
     - S1. Var-len
     - S2. TLV
     - S3. Loop
@@ -1126,7 +1126,7 @@ class SpecialPatternAnalyzer:
         self.tlv_analyzer = TLVAnalyzer(llm_client)
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_client = llm_client
         self.varlen_analyzer.set_llm_client(llm_client)
         self.loop_analyzer.set_llm_client(llm_client)
@@ -1139,17 +1139,17 @@ class SpecialPatternAnalyzer:
                 analyze_callback: bool = True,
                 analyze_tlv: bool = True) -> APIPatternAnalysisResult:
         """
-        分析API的所有特殊模式
+        Analyze all special patterns for API
 
         Args:
-            api: API对象
-            analyze_varlen: 是否分析var-len
-            analyze_loop: 是否分析loop
-            analyze_callback: 是否分析callback
-            analyze_tlv: 是否分析TLV
+            api: API object
+            analyze_varlen: Whether to analyze var-len
+            analyze_loop: Whether to analyze loop
+            analyze_callback: Whether to analyze callback
+            analyze_tlv: Whether to analyze TLV
 
         Returns:
-            APIPatternAnalysisResult: 综合分析结果
+            APIPatternAnalysisResult: Comprehensive analysis result
         """
         result = APIPatternAnalysisResult(api_name=api.function_name)
 
@@ -1168,32 +1168,32 @@ class SpecialPatternAnalyzer:
         return result
 
     def analyze_batch(self, apis: List[Api], **kwargs) -> List[APIPatternAnalysisResult]:
-        """批量分析"""
+        """Batch analysis"""
         return [self.analyze(api, **kwargs) for api in apis]
 
     def clear_cache(self):
-        """清除所有缓存"""
+        """Clear all caches"""
         self.varlen_analyzer.clear_cache()
         self.loop_analyzer.clear_cache()
         self.callback_analyzer.clear_cache()
         self.tlv_analyzer.clear_cache()
 
     def get_varlen_relations(self, api: Api) -> List[VarLenRelation]:
-        """获取API的var-len关系"""
+        """Get var-len relations for API"""
         result = self.varlen_analyzer.analyze(api)
         return result.relations
 
     def needs_loop(self, api: Api) -> bool:
-        """检查API是否需要循环调用"""
+        """Check if API needs loop calls"""
         result = self.loop_analyzer.analyze(api)
         return result.needs_loop
 
     def get_callbacks(self, api: Api) -> List[CallbackInfo]:
-        """获取API的回调参数"""
+        """Get callback parameters for API"""
         result = self.callback_analyzer.analyze(api)
         return result.callbacks
 
     def is_structured_parser(self, api: Api) -> bool:
-        """检查API是否是结构化数据解析器"""
+        """Check if API is a structured data parser"""
         result = self.tlv_analyzer.analyze(api)
         return result.is_structured

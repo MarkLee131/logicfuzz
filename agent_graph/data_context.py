@@ -9,6 +9,7 @@ This module establishes clear data ownership:
 
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Tuple
+from pathlib import Path
 import logging
 import json
 import re
@@ -214,6 +215,8 @@ class FuzzingContext:
                 'start_symbol': str(grammar.get_start_symbol()),
                 'num_sequences': len(api_sequences)
             }
+            # Save raw sequences before any filtering
+            raw_api_sequences = list(api_sequences)  # Make a copy
             log.info(f'   ✅ Grammar generated: {grammar_info["num_symbols"]} symbols, {len(api_sequences)} sequences')
         except Exception as e:
             raise RuntimeError(
@@ -469,7 +472,23 @@ class FuzzingContext:
             f'Deps: {dep_graph_dict["num_nodes"]} nodes, '
             f'Headers: {len(header_info.get("standard_headers", [])) + len(header_info.get("project_headers", []))}'
         )
-        
+
+        # === Save intermediate results to results folder ===
+        results_dir = f"./results/{project_name}"
+        log.info(f'📁 Saving intermediate results to {results_dir}/static_analysis/')
+        save_intermediate_results(
+            project_name=project_name,
+            results_dir=results_dir,
+            dependency_graph=dep_graph_dict,
+            raw_sequences=raw_api_sequences,
+            filtered_sequences=api_sequences,
+            pattern_analysis=pattern_analysis,
+            project_apis=project_apis,
+            grammar_info=grammar_info,
+            condition_info=condition_info,
+            log=log
+        )
+
         return cls(
             project_name=project_name,
             project_apis=project_apis,
@@ -666,4 +685,103 @@ def _parse_selected_indices(response_text: str, max_len: int) -> List[int]:
     # Fallback: regex search
     match = re.findall(r'\d+', response_text)
     return [int(i) for i in match if 0 <= int(i) < max_len][:max_len]
+
+
+def save_intermediate_results(
+    project_name: str,
+    results_dir: str,
+    dependency_graph: Dict[str, Any],
+    raw_sequences: List[List[str]],
+    filtered_sequences: List[List[str]],
+    pattern_analysis: Dict[str, Any],
+    project_apis: List[Dict[str, Any]],
+    grammar_info: Dict[str, Any],
+    condition_info: Dict[str, Any],
+    log: logging.Logger = None
+) -> None:
+    """
+    Save all intermediate static analysis results to the results folder.
+
+    Saves:
+    - dependency_graph.json: Type dependency graph
+    - raw_sequences.json: API sequences before LLM filtering
+    - filtered_sequences.json: API sequences after LLM filtering
+    - pattern_analysis.json: VarLen/Loop/Callback/TLV analysis
+    - project_apis.json: All extracted APIs
+    - analysis_summary.json: Combined summary
+    """
+    log = log or logger
+
+    results_path = Path(results_dir) / "static_analysis"
+    results_path.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Save dependency graph
+        dep_graph_path = results_path / "dependency_graph.json"
+        with open(dep_graph_path, 'w') as f:
+            json.dump(dependency_graph, f, indent=2)
+        log.info(f"   📄 Saved dependency graph: {dep_graph_path}")
+
+        # Save raw sequences (before LLM filtering)
+        raw_seq_path = results_path / "raw_sequences.json"
+        with open(raw_seq_path, 'w') as f:
+            json.dump({
+                'num_sequences': len(raw_sequences),
+                'sequences': [
+                    {'index': i, 'apis': seq, 'length': len(seq)}
+                    for i, seq in enumerate(raw_sequences)
+                ]
+            }, f, indent=2)
+        log.info(f"   📄 Saved raw sequences ({len(raw_sequences)}): {raw_seq_path}")
+
+        # Save filtered sequences (after LLM filtering)
+        filtered_seq_path = results_path / "filtered_sequences.json"
+        with open(filtered_seq_path, 'w') as f:
+            json.dump({
+                'num_sequences': len(filtered_sequences),
+                'sequences': [
+                    {'index': i, 'apis': seq, 'length': len(seq)}
+                    for i, seq in enumerate(filtered_sequences)
+                ]
+            }, f, indent=2)
+        log.info(f"   📄 Saved filtered sequences ({len(filtered_sequences)}): {filtered_seq_path}")
+
+        # Save pattern analysis
+        pattern_path = results_path / "pattern_analysis.json"
+        with open(pattern_path, 'w') as f:
+            json.dump(pattern_analysis, f, indent=2)
+        log.info(f"   📄 Saved pattern analysis: {pattern_path}")
+
+        # Save project APIs
+        apis_path = results_path / "project_apis.json"
+        with open(apis_path, 'w') as f:
+            json.dump({
+                'num_apis': len(project_apis),
+                'apis': project_apis
+            }, f, indent=2)
+        log.info(f"   📄 Saved project APIs ({len(project_apis)}): {apis_path}")
+
+        # Save combined summary
+        summary_path = results_path / "analysis_summary.json"
+        summary = {
+            'project_name': project_name,
+            'statistics': {
+                'total_apis': len(project_apis),
+                'dependency_graph_nodes': dependency_graph.get('num_nodes', 0),
+                'raw_sequences': len(raw_sequences),
+                'filtered_sequences': len(filtered_sequences),
+                'filter_reduction': f"{(1 - len(filtered_sequences)/max(len(raw_sequences), 1))*100:.1f}%"
+            },
+            'grammar_info': grammar_info,
+            'condition_info': condition_info,
+            'pattern_summary': pattern_analysis.get('summary', {})
+        }
+        with open(summary_path, 'w') as f:
+            json.dump(summary, f, indent=2)
+        log.info(f"   📄 Saved analysis summary: {summary_path}")
+
+        log.info(f"✅ All intermediate results saved to: {results_path}")
+
+    except Exception as e:
+        log.warning(f"Failed to save intermediate results: {e}")
 

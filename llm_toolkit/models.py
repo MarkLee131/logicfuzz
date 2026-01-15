@@ -992,6 +992,42 @@ class GeminiModel(VertexAIModel):
   def get_model(self) -> Any:
     return GenerativeModel(self._vertex_ai_model)
 
+  def get_chat_client(self, model: Any) -> Any:
+    """Returns a chat session for the Gemini model."""
+    if model is None:
+      model = self.get_model()
+    return model.start_chat(response_validation=False)
+
+  def chat_llm(self, client: Any, messages: list[dict[str, str]]) -> str:
+    """Sends messages to the Gemini chat session and returns the response."""
+    parameters_list = self._prepare_parameters()[0]
+    # Convert messages to a single prompt string for Gemini
+    if isinstance(messages, list):
+      # Combine all messages into a single prompt
+      prompt_parts = []
+      for msg in messages:
+        role = msg.get('role', 'user')
+        content = msg.get('content', '')
+        if role == 'system':
+          prompt_parts.append(f"System: {content}")
+        elif role == 'user':
+          prompt_parts.append(f"User: {content}")
+        elif role == 'assistant':
+          prompt_parts.append(f"Assistant: {content}")
+        else:
+          prompt_parts.append(content)
+      prompt = '\n\n'.join(prompt_parts)
+    else:
+      prompt = str(messages)
+
+    logger.info('%s generating chat response', self.name)
+    response = client.send_message(
+        prompt,
+        stream=False,
+        generation_config=parameters_list,
+        safety_settings=self.safety_config)
+    return response.text if hasattr(response, 'text') else str(response)
+
   def do_generate(self, model: Any, prompt: str, config: dict[str, Any]) -> Any:
     # Loosen inapplicable restrictions just in case.
     logger.info('%s generating response with config: %s', self.name, config)

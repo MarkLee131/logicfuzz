@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-混合 API 依赖分析器：融合 Liberator 和 LogicFuzz 的分析能力
+Hybrid API Dependency Analyzer: Combines Liberator and LogicFuzz analysis capabilities
 
-结合 Liberator 的类型驱动分析和 LogicFuzz 的启发式+LLM 分析，
-提供更准确和完整的 API 依赖关系分析。
+Combines Liberator's type-driven analysis with LogicFuzz's heuristic+LLM analysis,
+providing more accurate and complete API dependency relationship analysis.
 """
 import logging
 from typing import Dict, List, Optional, Set
@@ -17,17 +17,17 @@ logger = logging.getLogger(__name__)
 
 class HybridAPIAnalyzer:
     """
-    混合分析器：结合 Liberator 的类型驱动分析和 LogicFuzz 的启发式+LLM 分析
+    Hybrid analyzer: Combines Liberator's type-driven analysis with LogicFuzz's heuristic+LLM analysis
     
-    分析策略：
-    1. Liberator 类型驱动分析：基于严格的类型匹配，识别类型依赖关系
-    2. LogicFuzz 启发式分析：基于真实代码使用模式和启发式规则
-    3. LLM 分析（可选）：使用 LLM 进行深度语义分析
+    Analysis strategies:
+    1. Liberator type-driven analysis: Based on strict type matching, identifies type dependencies
+    2. LogicFuzz heuristic analysis: Based on real code usage patterns and heuristic rules
+    3. LLM analysis (optional): Uses LLM for deep semantic analysis
     
-    结果合并策略：
-    - 优先使用 Liberator 的类型依赖（最可靠）
-    - 补充 LogicFuzz 的使用模式（更全面）
-    - 合并去重，保留所有有效的依赖关系
+    Result merging strategy:
+    - Prioritize Liberator's type dependencies (most reliable)
+    - Supplement with LogicFuzz usage patterns (more comprehensive)
+    - Merge and deduplicate, preserve all valid dependency relationships
     """
     
     def __init__(
@@ -40,15 +40,15 @@ class HybridAPIAnalyzer:
         project_dir: str = ""
     ):
         """
-        初始化混合分析器
+        Initialize hybrid analyzer
         
         Args:
-            project_name: 项目名称
-            use_liberator: 是否启用 Liberator 类型驱动分析
-            use_heuristic: 是否启用 LogicFuzz 启发式分析
-            use_llm: 是否启用 LLM 分析
-            llm: LLM 实例（如果启用 LLM 分析）
-            project_dir: 项目目录路径
+            project_name: Project name
+            use_liberator: Whether to enable Liberator type-driven analysis
+            use_heuristic: Whether to enable LogicFuzz heuristic analysis
+            use_llm: Whether to enable LLM analysis
+            llm: LLM instance (if LLM analysis is enabled)
+            project_dir: Project directory path
         """
         self.project_name = project_name
         self.project_dir = project_dir
@@ -56,7 +56,7 @@ class HybridAPIAnalyzer:
         self.use_heuristic = use_heuristic
         self.use_llm = use_llm
         
-        # Liberator 组件
+        # Liberator components
         if use_liberator:
             try:
                 self.liberator_adapter = LiberatorAPIAdapter(project_name)
@@ -68,7 +68,7 @@ class HybridAPIAnalyzer:
                 self.use_liberator = False
                 self.liberator_adapter = None
         
-        # LogicFuzz 组件
+        # LogicFuzz components
         if use_heuristic or use_llm:
             try:
                 self.composition_analyzer = APICompositionAnalyzer(
@@ -90,20 +90,20 @@ class HybridAPIAnalyzer:
         api_context: Optional[Dict] = None
     ) -> Dict:
         """
-        混合分析：结合 Liberator 和 LogicFuzz 的结果
+        Hybrid analysis: Combine Liberator and LogicFuzz results
         
         Args:
-            target_function: 目标函数名（如 "curl_easy_setopt"），如果为 None 则进行项目级分析
-            api_context: 可选的 FuzzIntrospector 上下文（避免重复查询）
+            target_function: Target function name (e.g., "curl_easy_setopt"), if None then perform project-level analysis
+            api_context: Optional FuzzIntrospector context (to avoid redundant queries)
         
         Returns:
-            包含以下字段的字典：
-            - prerequisites: 前置依赖 API 列表（合并去重）
-            - data_dependencies: 数据依赖关系 [(producer, consumer), ...]
-            - call_sequence: 推荐的调用顺序（优先使用 Liberator 的拓扑排序）
-            - initialization_code: 初始化代码模板（合并）
-            - liberator_metadata: Liberator 分析结果（如果启用）
-            - heuristic_metadata: 启发式分析结果（如果启用）
+            Dictionary containing the following fields:
+            - prerequisites: Prerequisite API list (merged and deduplicated)
+            - data_dependencies: Data dependency relationships [(producer, consumer), ...]
+            - call_sequence: Recommended call order (prioritize Liberator's topological sort)
+            - initialization_code: Initialization code templates (merged)
+            - liberator_metadata: Liberator analysis results (if enabled)
+            - heuristic_metadata: Heuristic analysis results (if enabled)
         """
         if target_function:
             logger.info(f"🔍 Hybrid analysis for {target_function}")
@@ -119,18 +119,18 @@ class HybridAPIAnalyzer:
             'heuristic_metadata': {}
         }
         
-        # 1. Liberator 类型驱动分析
+        # 1. Liberator type-driven analysis
         if self.use_liberator and self.liberator_adapter:
             try:
                 if target_function:
                     liberator_result = self._analyze_with_liberator(target_function, api_context)
                 else:
-                    # 项目级分析：使用 ProjectDriverGenerator
+                    # Project-level analysis: use ProjectDriverGenerator
                     liberator_result = self._analyze_project_level()
                 
                 if liberator_result:
                     results['liberator_metadata'] = liberator_result
-                    # 合并依赖关系
+                    # Merge dependency relationships
                     results['prerequisites'].extend(
                         liberator_result.get('prerequisites', [])
                     )
@@ -141,7 +141,7 @@ class HybridAPIAnalyzer:
             except Exception as e:
                 logger.warning(f"Liberator analysis failed: {e}", exc_info=True)
         
-        # 2. LogicFuzz 启发式/LLM 分析（仅在有目标函数时）
+        # 2. LogicFuzz heuristic/LLM analysis (only when target function is provided)
         if target_function and (self.use_heuristic or self.use_llm) and self.composition_analyzer:
             try:
                 heuristic_result = self.composition_analyzer.find_api_combinations(
@@ -149,7 +149,7 @@ class HybridAPIAnalyzer:
                 )
                 if heuristic_result:
                     results['heuristic_metadata'] = heuristic_result
-                    # 合并依赖关系（去重）
+                    # Merge dependency relationships (deduplicate)
                     for prereq in heuristic_result.get('prerequisites', []):
                         if prereq not in results['prerequisites']:
                             results['prerequisites'].append(prereq)
@@ -160,7 +160,7 @@ class HybridAPIAnalyzer:
             except Exception as e:
                 logger.warning(f"LogicFuzz analysis failed: {e}", exc_info=True)
         
-        # 3. 生成统一的调用序列（优先使用 Liberator 的拓扑排序）
+        # 3. Generate unified call sequence (prioritize Liberator's topological sort)
         liberator_sequence = results.get('liberator_metadata', {}).get('call_sequence', [])
         heuristic_sequence = results.get('heuristic_metadata', {}).get('call_sequence', [])
         results['call_sequence'] = self._merge_call_sequences(
@@ -168,7 +168,7 @@ class HybridAPIAnalyzer:
             heuristic_sequence
         )
         
-        # 4. 生成初始化代码（合并）
+        # 4. Generate initialization code (merge)
         liberator_init = results.get('liberator_metadata', {}).get('initialization_code', [])
         heuristic_init = results.get('heuristic_metadata', {}).get('initialization_code', [])
         results['initialization_code'] = self._merge_initialization_code(
@@ -190,12 +190,12 @@ class HybridAPIAnalyzer:
         api_context: Optional[Dict] = None
     ) -> Optional[Dict]:
         """
-        使用 Liberator 进行类型驱动的依赖分析
+        Use Liberator for type-driven dependency analysis
         
-        基于严格的类型匹配，识别 API 之间的类型依赖关系。
+        Based on strict type matching, identifies type dependency relationships between APIs.
         """
         try:
-            # 1. 转换目标函数为 Api 对象
+            # 1. Convert target function to Api object
             target_api = self.liberator_adapter.convert_to_liberator_api(
                 target_function, api_context
             )
@@ -203,22 +203,22 @@ class HybridAPIAnalyzer:
                 logger.warning(f"Failed to convert {target_function} to Liberator Api object")
                 return None
             
-            # 2. 获取所有相关 API（从 FuzzIntrospector 或静态分析结果）
+            # 2. Get all related APIs (from FuzzIntrospector or static analysis results)
             all_apis = self._collect_all_apis(target_function, api_context)
             if not all_apis:
                 logger.warning(f"No APIs collected for {target_function}")
                 return None
             
-            # 3. 构建类型依赖图
+            # 3. Build type dependency graph
             dep_gen = TypeDependencyGraphGenerator(all_apis)
             dep_graph = dep_gen.create()
             self.liberator_dep_graph = dep_graph
             
-            # 4. 分析依赖关系
+            # 4. Analyze dependency relationships
             prerequisites = []
             data_dependencies = []
             
-            # 查找目标 API 的依赖
+            # Find dependencies of target API
             target_deps = dep_graph.graph.get(target_api, [])
             for dep in target_deps:
                 prereq_name = dep.function_name
@@ -226,7 +226,7 @@ class HybridAPIAnalyzer:
                     prerequisites.append(prereq_name)
                 data_dependencies.append((prereq_name, target_api.function_name))
             
-            # 5. 生成调用序列（拓扑排序）
+            # 5. Generate call sequence (topological sort)
             call_sequence = self._generate_call_sequence_from_graph(
                 dep_graph, target_api
             )
@@ -235,7 +235,7 @@ class HybridAPIAnalyzer:
                 'prerequisites': prerequisites,
                 'data_dependencies': data_dependencies,
                 'call_sequence': call_sequence,
-                'initialization_code': []  # 需要 ConditionManager 支持
+                'initialization_code': []  # Requires ConditionManager support
             }
             
         except Exception as e:
@@ -248,19 +248,19 @@ class HybridAPIAnalyzer:
         api_context: Optional[Dict] = None
     ) -> List[Api]:
         """
-        收集项目中所有相关 API（从 FuzzIntrospector 或静态分析结果）
+        Collect all related APIs in the project (from FuzzIntrospector or static analysis results)
         
-        策略：
-        1. 从 api_context 的 related_functions 中提取
-        2. 从 usage_examples 中提取
-        3. 如果缓存中有，使用缓存
+        Strategy:
+        1. Extract from api_context's related_functions
+        2. Extract from usage_examples
+        3. Use cache if available
         """
         apis = []
         
-        # 如果缓存中有，直接返回
+        # If cached, return directly
         if self.liberator_apis:
             apis = list(self.liberator_apis)
-            # 确保目标函数也在列表中
+            # Ensure target function is also in the list
             target_api = self.liberator_adapter.convert_to_liberator_api(
                 target_function, api_context
             )
@@ -268,9 +268,9 @@ class HybridAPIAnalyzer:
                 apis.append(target_api)
             return apis
         
-        # 1. 从 api_context 中提取相关函数
+        # 1. Extract related functions from api_context
         if api_context:
-            # 从 related_functions 中提取
+            # Extract from related_functions
             for related in api_context.get('related_functions', []):
                 func_name = related.get('name', '')
                 if func_name:
@@ -278,9 +278,9 @@ class HybridAPIAnalyzer:
                     if api:
                         apis.append(api)
             
-            # 从 usage_examples 中提取函数调用
+            # Extract function calls from usage_examples
             for example in api_context.get('usage_examples', []):
-                # 简单提取：查找函数调用模式
+                # Simple extraction: find function call patterns
                 import re
                 func_calls = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:_[a-zA-Z0-9_]+)*)\s*\(', example)
                 for func_name in func_calls:
@@ -289,14 +289,14 @@ class HybridAPIAnalyzer:
                         if api:
                             apis.append(api)
         
-        # 2. 确保目标函数在列表中
+        # 2. Ensure target function is in the list
         target_api = self.liberator_adapter.convert_to_liberator_api(
             target_function, api_context
         )
         if target_api and target_api not in apis:
             apis.append(target_api)
         
-        # 3. 更新缓存
+        # 3. Update cache
         self.liberator_apis = set(apis)
         
         return apis
@@ -307,17 +307,17 @@ class HybridAPIAnalyzer:
         target_api: Api
     ) -> List[str]:
         """
-        从依赖图生成调用序列（拓扑排序）
+        Generate call sequence from dependency graph (topological sort)
         
-        使用 Kahn 算法进行拓扑排序，确保依赖关系正确。
+        Uses Kahn's algorithm for topological sorting to ensure correct dependency relationships.
         """
         try:
-            # 构建邻接表和入度
+            # Build adjacency list and in-degree
             graph = {}
             in_degree = {}
             all_apis = set()
             
-            # 收集所有节点
+            # Collect all nodes
             for api in dep_graph.graph.keys():
                 all_apis.add(api)
                 graph[api] = []
@@ -342,7 +342,7 @@ class HybridAPIAnalyzer:
             visited = set()
             
             while queue:
-                # 优先选择目标 API 的依赖
+                # Prioritize dependencies of target API
                 node = queue.pop(0)
                 if node in visited:
                     continue
@@ -354,7 +354,7 @@ class HybridAPIAnalyzer:
                     if in_degree[neighbor] == 0 and neighbor not in visited:
                         queue.append(neighbor)
             
-            # 如果目标 API 不在结果中，添加到末尾
+            # If target API is not in result, add it at the end
             target_name = target_api.function_name
             if target_name not in result and target_api in all_apis:
                 result.append(target_name)
@@ -371,12 +371,12 @@ class HybridAPIAnalyzer:
         seq2: List[str]
     ) -> List[str]:
         """
-        合并两个调用序列，保留顺序
+        Merge two call sequences, preserving order
         
-        策略：
-        1. 优先使用 Liberator 的拓扑排序（更可靠）
-        2. 如果 Liberator 序列为空，使用启发式序列
-        3. 合并时保持依赖顺序
+        Strategy:
+        1. Prioritize Liberator's topological sort (more reliable)
+        2. If Liberator sequence is empty, use heuristic sequence
+        3. Maintain dependency order when merging
         """
         if not seq1 and not seq2:
             return []
@@ -387,8 +387,8 @@ class HybridAPIAnalyzer:
         if not seq2:
             return seq1
         
-        # 优先使用 Liberator 的序列（类型驱动，更可靠）
-        # 但补充启发式序列中缺失的 API
+        # Prioritize Liberator's sequence (type-driven, more reliable)
+        # But supplement with APIs missing from heuristic sequence
         merged = list(seq1)
         for api in seq2:
             if api not in merged:
@@ -401,7 +401,7 @@ class HybridAPIAnalyzer:
         code1: List[str],
         code2: List[str]
     ) -> List[str]:
-        """合并初始化代码，去重"""
+        """Merge initialization code, deduplicate"""
         merged = list(code1)
         for line in code2:
             if line not in merged:
@@ -410,21 +410,21 @@ class HybridAPIAnalyzer:
     
     def _analyze_project_level(self) -> Optional[Dict]:
         """
-        项目级分析：使用 ProjectDriverGenerator 进行项目级分析
+        Project-level analysis: Use ProjectDriverGenerator for project-level analysis
         
         Returns:
-            包含项目级分析结果的字典
+            Dictionary containing project-level analysis results
         """
         try:
             from liberator_adapter.project_driver_generator import ProjectDriverGenerator
             
-            # 创建项目级生成器（需要 benchmark 对象）
-            # 注意：这里需要从外部传入 benchmark，暂时使用简化版本
+            # Create project-level generator (requires benchmark object)
+            # Note: benchmark needs to be passed from outside, using simplified version for now
             logger.info(f"🚀 Starting project-level analysis for {self.project_name}")
             
-            # 如果适配器支持 Clang/LLVM，使用它来提取所有 API
+            # If adapter supports Clang/LLVM, use it to extract all APIs
             if hasattr(self.liberator_adapter, 'use_clang_llvm') and self.liberator_adapter.use_clang_llvm:
-                # 提取所有 API
+                # Extract all APIs
                 all_apis_dict = self.liberator_adapter.extract_all_apis()
                 all_apis = set(all_apis_dict.values())
                 
@@ -432,25 +432,25 @@ class HybridAPIAnalyzer:
                     logger.warning("No APIs extracted for project-level analysis")
                     return None
                 
-                # 构建类型依赖图
+                # Build type dependency graph
                 from liberator_adapter.dependency import TypeDependencyGraphGenerator
                 dep_gen = TypeDependencyGraphGenerator(list(all_apis))
                 dep_graph = dep_gen.create()
                 
-                # 生成语法
+                # Generate grammar
                 from liberator_adapter.grammar import GrammarGenerator, NonTerminal, Terminal
                 start_term = NonTerminal("start")
                 end_term = Terminal("end")
                 grammar_gen = GrammarGenerator(start_term, end_term)
                 grammar = grammar_gen.create(dep_graph)
                 
-                # 收集所有 API 名称
+                # Collect all API names
                 all_api_names = [api.function_name for api in all_apis]
                 
                 return {
-                    'prerequisites': all_api_names,  # 所有 API 都可以作为候选
-                    'data_dependencies': [],  # 项目级不返回具体依赖关系
-                    'call_sequence': all_api_names,  # 所有 API 的序列
+                    'prerequisites': all_api_names,  # All APIs can be candidates
+                    'data_dependencies': [],  # Project-level doesn't return specific dependencies
+                    'call_sequence': all_api_names,  # Sequence of all APIs
                     'initialization_code': [],
                     'all_apis': all_api_names,
                     'dependency_graph_size': len(dep_graph.graph),
