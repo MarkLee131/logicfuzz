@@ -1,3 +1,5 @@
+# Part 1: How to run the logicfuzz project outside of Docker
+
 
 ## Step 1, set the API key for LLM (using DeepSeek as an example).
 ```
@@ -59,3 +61,25 @@ python run_logicfuzz.py --list-models
 | **`docs/NEW_PROJECT_SETUP.md`** | How to onboard new projects (OSS‑Fuzz, private repos, custom builds). |
 | **`docs/WORKFLOW_DIAGRAM.md`** | High‑level workflow and architecture diagrams. |
 | **`agent_graph/README.md`** | Implementation details of the LangGraph‑based agent workflow. |
+
+
+
+
+
+# Part 2: How to run the logicfuzz project in Docker
+
+
+```
+cp logicfuzz.env.example logicfuzz.env
+```
+
+
+```
+docker run --rm   --network host   --env-file logicfuzz.env   -v /var/run/docker.sock:/var/run/docker.sock   -v "$PWD":/experiment   -w /experiment   logicfuzz   bash scripts/docker_run_experiment.sh
+```
+
+
+
+
+
+
