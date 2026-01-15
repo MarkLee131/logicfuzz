@@ -142,7 +142,7 @@ class Z3ConstraintBuilder:
         else:
             # Types differ, constraint is False (incompatible)
             expr = Bool(f"type_compat_{source_api}_{target_api}")
-            self.solver.add(Not(expr))  # 默认不兼容
+            self.solver.add(Not(expr))  # Default incompatible
 
         constraint = Z3Constraint(
             constraint_type=ConstraintType.TYPE_MATCH,
@@ -162,16 +162,16 @@ class Z3ConstraintBuilder:
         delete_api: str
     ) -> Z3Constraint:
         """
-        添加访问顺序约束
+        Add access order constraint
 
-        CREATE 必须在 DELETE 之前发生
+        CREATE must occur before DELETE
         """
         create_order = self._get_or_create_order_var(create_api)
         delete_order = self._get_or_create_order_var(delete_api)
         create_called = self._get_or_create_api_var(create_api)
         delete_called = self._get_or_create_api_var(delete_api)
 
-        # 如果 delete 被调用，则 create 必须先被调用且顺序在前
+        # If delete is called, create must be called first and in order
         expr = Implies(
             delete_called,
             And(create_called, create_order < delete_order)
@@ -387,9 +387,9 @@ class Z3ConstraintBuilder:
 
     def get_unsat_core(self) -> List[str]:
         """
-        获取不可满足的核心约束
+        Get unsatisfiable core constraints
 
-        需要先调用 solver.set("unsat_core", True)
+        Need to call solver.set("unsat_core", True) first
         """
         self.solver.set("unsat_core", True)
         result = self.solver.check()
@@ -402,9 +402,9 @@ class Z3ConstraintBuilder:
 
 class Z3SequenceValidator:
     """
-    Z3 API 序列验证器
+    Z3 API sequence validator
 
-    用于验证 API 调用序列是否满足所有约束条件
+    Used to validate whether API call sequences satisfy all constraints
     """
 
     def __init__(self):
@@ -419,30 +419,30 @@ class Z3SequenceValidator:
         function_conditions: Dict[str, FunctionConditions]
     ) -> Tuple[bool, List[str]]:
         """
-        验证 API 序列是否可行
+        Validate if API sequence is feasible
 
         Args:
-            api_sequence: API 调用序列
-            function_conditions: 函数约束条件映射
+            api_sequence: API call sequence
+            function_conditions: Function constraint condition mapping
 
         Returns:
-            (is_valid, violations): 是否有效，以及违反的约束列表
+            (is_valid, violations): Whether valid, and list of violated constraints
         """
         self.builder.reset()
         violations = []
 
-        # 1. 添加序列顺序约束
+        # 1. Add sequence order constraints
         api_names = [api.function_name for api in api_sequence]
         self.builder.add_api_sequence_constraint(api_names)
 
-        # 2. 添加类型依赖约束
+        # 2. Add type dependency constraints
         for i, api in enumerate(api_sequence):
             if api.function_name not in function_conditions:
                 continue
 
             cond = function_conditions[api.function_name]
 
-            # 检查参数依赖
+            # Check parameter dependencies
             for j, arg_cond in enumerate(cond.argument_at):
                 if arg_cond.len_depends_on:
                     dep_idx = int(arg_cond.len_depends_on.replace("param_", ""))
@@ -450,10 +450,10 @@ class Z3SequenceValidator:
                         api.function_name, j, dep_idx, "length"
                     )
 
-        # 3. 添加资源生命周期约束
+        # 3. Add resource lifecycle constraints
         self._add_lifecycle_constraints(api_sequence, function_conditions)
 
-        # 4. 检查可满足性
+        # 4. Check satisfiability
         is_sat, model = self.builder.check_satisfiability()
 
         if not is_sat:
@@ -466,8 +466,8 @@ class Z3SequenceValidator:
         api_sequence: List[Api],
         function_conditions: Dict[str, FunctionConditions]
     ):
-        """添加资源生命周期约束"""
-        # 收集 CREATE 和 DELETE 操作
+        """Add resource lifecycle constraints"""
+        # Collect CREATE and DELETE operations
         creates: Dict[str, List[str]] = {}  # type -> [api_names]
         deletes: Dict[str, List[str]] = {}
 
@@ -477,7 +477,7 @@ class Z3SequenceValidator:
 
             cond = function_conditions[api.function_name]
 
-            # 检查返回值是否有 CREATE
+            # Check if return value has CREATE
             for at in cond.return_at.ats:
                 if at.access == Access.CREATE:
                     type_str = at.type_string or api.return_info.type
@@ -485,7 +485,7 @@ class Z3SequenceValidator:
                         creates[type_str] = []
                     creates[type_str].append(api.function_name)
 
-            # 检查参数是否有 DELETE
+            # Check if parameters have DELETE
             for arg_cond in cond.argument_at:
                 for at in arg_cond.ats:
                     if at.access == Access.DELETE:
@@ -494,7 +494,7 @@ class Z3SequenceValidator:
                             deletes[type_str] = []
                         deletes[type_str].append(api.function_name)
 
-        # 添加 CREATE 必须在 DELETE 之前的约束
+        # Add constraint that CREATE must occur before DELETE
         for type_str in set(creates.keys()) & set(deletes.keys()):
             for create_api in creates[type_str]:
                 for delete_api in deletes[type_str]:
@@ -503,9 +503,9 @@ class Z3SequenceValidator:
 
 class Z3DependencyPruner:
     """
-    Z3 依赖图剪枝器
+    Z3 dependency graph pruner
 
-    使用 Z3 约束求解来精确剪枝依赖图
+    Uses Z3 constraint solving to precisely prune dependency graph
     """
 
     def __init__(self):
@@ -520,24 +520,24 @@ class Z3DependencyPruner:
         target_cond: Optional[FunctionConditions]
     ) -> Tuple[bool, str]:
         """
-        检查依赖边是否应该被剪枝
+        Check if dependency edge should be pruned
 
         Returns:
-            (should_prune, reason): 是否应该剪枝，以及原因
+            (should_prune, reason): Whether should prune, and reason
         """
         builder = Z3ConstraintBuilder()
 
-        # 1. 类型匹配检查
+        # 1. Type matching check
         source_output_type = source_api.return_info.type
         for arg in target_api.arguments_info:
             target_input_type = arg.type
 
-            # 清理类型字符串
+            # Clean type strings
             source_clean = source_output_type.replace("*", "").replace(" ", "")
             target_clean = target_input_type.replace("*", "").replace(" ", "")
 
             if source_clean == target_clean:
-                # 类型匹配，添加约束
+                # Types match, add constraint
                 builder.add_type_match_constraint(
                     source_api.function_name,
                     target_api.function_name,
@@ -545,7 +545,7 @@ class Z3DependencyPruner:
                     target_input_type
                 )
 
-        # 2. Provenance 兼容性检查
+        # 2. Provenance compatibility check
         if source_cond and target_cond:
             source_prov = self._extract_provenance(source_cond.return_at)
             for i, arg_cond in enumerate(target_cond.argument_at):
@@ -558,7 +558,7 @@ class Z3DependencyPruner:
                     target_prov
                 )
 
-        # 3. 检查可满足性
+        # 3. Check satisfiability
         is_sat, _ = builder.check_satisfiability()
 
         if not is_sat:
@@ -567,17 +567,17 @@ class Z3DependencyPruner:
         return False, "Compatible"
 
     def _extract_provenance(self, value_metadata: ValueMetadata) -> str:
-        """从 ValueMetadata 中提取 Provenance 标签"""
+        """Extract Provenance tag from ValueMetadata"""
         for at in value_metadata.ats:
             if hasattr(at, 'provenance') and at.provenance:
                 return at.provenance.tag.value if hasattr(at.provenance, 'tag') else str(at.provenance)
         return "UNKNOWN"
 
 
-# ========== 便捷函数 ==========
+# ========== Convenience Functions ==========
 
 def is_z3_available() -> bool:
-    """检查 Z3 是否可用"""
+    """Check if Z3 is available"""
     return Z3_AVAILABLE
 
 
@@ -586,7 +586,7 @@ def validate_api_sequence(
     function_conditions: Dict[str, FunctionConditions]
 ) -> Tuple[bool, List[str]]:
     """
-    便捷函数：验证 API 序列
+    Convenience function: Validate API sequence
 
     Returns:
         (is_valid, violations)
@@ -606,7 +606,7 @@ def should_prune_dependency(
     target_cond: Optional[FunctionConditions] = None
 ) -> bool:
     """
-    便捷函数：检查依赖边是否应该被剪枝
+    Convenience function: Check if dependency edge should be pruned
     """
     if not Z3_AVAILABLE:
         return False

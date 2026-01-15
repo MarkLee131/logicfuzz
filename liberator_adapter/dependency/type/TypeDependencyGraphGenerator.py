@@ -155,7 +155,7 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
                     self.z3_stats["kept"] += 1
             except Exception as e:
                 logger.debug(f"Z3 pruning failed for {api_b.function_name} -> {api_a.function_name}: {e}")
-                # 如果 Z3 失败，保守地保留这条边
+                # If Z3 fails, conservatively keep this edge
                 self.z3_stats["kept"] += 1
 
         # Accept type dependency
@@ -164,55 +164,55 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
     def _check_provenance_compatibility(self, api_a: Api, api_b: Api,
                                         input_a, output_b) -> bool:
         """
-        检查两个API之间的provenance兼容性
+        Check provenance compatibility between two APIs
 
-        api_a依赖api_b意味着：api_b的output可以作为api_a的input
-        需要检查：output_b的provenance是否可以传给input_a的provenance
+        api_a depends on api_b means: api_b's output can be used as api_a's input
+        Need to check: whether output_b's provenance can be passed to input_a's provenance
         """
 
-        # 获取api_b的返回值provenance（作为source）
+        # Get api_b's return value provenance (as source)
         source_prov = self._extract_provenance_from_arg(api_b, api_b.return_info, is_return=True)
 
-        # 检查api_a的每个输入参数的provenance（作为sink）
+        # Check each input parameter's provenance of api_a (as sink)
         for arg_a in input_a:
-            # 检查类型是否匹配
+            # Check if types match
             type_a_clean = arg_a.type.replace("*", "").replace(" ", "")
 
             for arg_b in output_b:
                 type_b_clean = arg_b.type.replace("*", "").replace(" ", "")
 
                 if type_a_clean == type_b_clean:
-                    # 类型匹配，检查provenance
+                    # Types match, check provenance
                     sink_prov = self._extract_provenance_from_arg(api_a, arg_a, is_return=False)
 
                     if not ProvenanceChecker.is_compatible(source_prov, sink_prov):
-                        # Provenance不兼容，拒绝这个依赖
+                        # Provenance incompatible, reject this dependency
                         return False
 
-        # 所有匹配的类型都provenance兼容
+        # All matching types are provenance compatible
         return True
 
     def _extract_provenance_from_arg(self, api: Api, arg: Arg, is_return: bool) -> ProvenanceInfo:
         """
-        从API的参数或返回值中提取provenance信息
+        Extract provenance information from API's parameter or return value
 
-        通过查找FunctionConditions中的AccessTypeSet获取provenance标签
+        Get provenance tag by looking up AccessTypeSet in FunctionConditions
         """
 
-        # 如果没有conditions数据，返回保守的UNKNOWN
+        # If no conditions data, return conservative UNKNOWN
         if not self.function_conditions_map:
             return ProvenanceInfo(tag=ProvenanceTag.UNKNOWN)
 
-        # 查找该API的FunctionConditions
+        # Find FunctionConditions for this API
         fc = self.function_conditions_map.get(api.function_name)
         if not fc:
             return ProvenanceInfo(tag=ProvenanceTag.UNKNOWN)
 
-        # 获取对应的ValueMetadata
+        # Get corresponding ValueMetadata
         if is_return:
             value_metadata = fc.return_at
         else:
-            # 查找匹配的参数（通过名称匹配）
+            # Find matching parameter (by name matching)
             param_idx = -1
             for i, api_arg in enumerate(api.arguments_info):
                 if api_arg.name == arg.name:
@@ -224,15 +224,15 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
 
             value_metadata = fc.argument_at[param_idx]
 
-        # 从AccessTypeSet中提取provenance
-        # 优先使用第一个AccessType的provenance（简化处理）
+        # Extract provenance from AccessTypeSet
+        # Prefer using first AccessType's provenance (simplified handling)
         ats = value_metadata.ats
         if ats and len(ats.access_type_set) > 0:
             first_at = next(iter(ats.access_type_set))
             if hasattr(first_at, 'provenance') and first_at.provenance is not None:
                 return first_at.provenance
 
-        # 如果没有找到provenance信息，返回UNKNOWN（保守处理）
+        # If no provenance information found, return UNKNOWN (conservative handling)
         return ProvenanceInfo(tag=ProvenanceTag.UNKNOWN)
 
     

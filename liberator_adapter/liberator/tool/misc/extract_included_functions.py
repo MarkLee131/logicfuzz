@@ -263,10 +263,10 @@ def _main():
     public_headers = args.public_headers
     output_dir = args.output_dir
     
-    # 确保输出目录存在
+    # Ensure output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
-    # 生成所有输出文件路径
+    # Generate all output file paths
     exported_functions = os.path.join(output_dir, 'exported_functions.txt')
     incomplete_types = os.path.join(output_dir, 'incomplete_types.txt')
     apis_list = os.path.join(output_dir, 'apis_clang.json')

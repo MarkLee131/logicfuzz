@@ -99,7 +99,7 @@ class ProvenanceChecker:
         if source_prov.tag == sink_prov.tag:
             return True
 
-        # 默认：保守允许
+        # Default: conservatively allow
         return True
 
     @staticmethod
@@ -107,39 +107,39 @@ class ProvenanceChecker:
                                 source_is_return: bool = True,
                                 sink_param_idx: int = 0) -> bool:
         """
-        检查两个API之间的provenance兼容性
+        Check provenance compatibility between two APIs
 
         Args:
-            source_api: 源API的JSON数据
-            sink_api: 目标API的JSON数据
-            source_is_return: 是否检查源API的返回值（True）还是参数（False）
-            sink_param_idx: 目标API的参数索引
+            source_api: Source API's JSON data
+            sink_api: Target API's JSON data
+            source_is_return: Whether to check source API's return value (True) or parameter (False)
+            sink_param_idx: Target API's parameter index
 
         Returns:
-            bool: 是否兼容
+            bool: Whether compatible
         """
 
-        # 提取source的provenance
+        # Extract source's provenance
         if source_is_return:
             source_metadata = source_api.get("return", {})
         else:
             param_key = f"param_{sink_param_idx}"
             source_metadata = source_api.get(param_key, {})
 
-        # 提取sink的provenance
+        # Extract sink's provenance
         sink_param_key = f"param_{sink_param_idx}"
         sink_metadata = sink_api.get(sink_param_key, {})
 
-        # 从AccessTypeSet中提取provenance
+        # Extract provenance from AccessTypeSet
         source_ats = source_metadata.get("access_type_set", [])
         sink_ats = sink_metadata.get("access_type_set", [])
 
         if not source_ats or not sink_ats:
-            # 如果没有AccessType信息，保守允许
+            # If no AccessType information, conservatively allow
             return True
 
-        # 检查每个AccessType的provenance兼容性
-        # 只要有一个兼容的组合就允许
+        # Check provenance compatibility for each AccessType
+        # Allow if there's at least one compatible combination
         for source_at in source_ats:
             source_prov = ProvenanceInfo.from_dict(source_at.get("provenance", "UNKNOWN"))
 
@@ -149,24 +149,24 @@ class ProvenanceChecker:
                 if ProvenanceChecker.is_compatible(source_prov, sink_prov):
                     return True
 
-        # 所有组合都不兼容
+        # All combinations are incompatible
         return False
 
     @staticmethod
     def filter_dependencies_by_provenance(api_list: List[Dict],
                                          dependency_graph: Dict[str, List[str]]) -> Dict[str, List[str]]:
         """
-        使用provenance过滤依赖图
+        Filter dependency graph using provenance
 
         Args:
-            api_list: API列表，包含provenance信息
-            dependency_graph: 原始依赖图 {api_name: [dep1, dep2, ...]}
+            api_list: API list containing provenance information
+            dependency_graph: Original dependency graph {api_name: [dep1, dep2, ...]}
 
         Returns:
-            过滤后的依赖图
+            Filtered dependency graph
         """
 
-        # 构建API名称到API数据的映射
+        # Build mapping from API name to API data
         api_map = {api["function_name"]: api for api in api_list}
 
         filtered_graph = {}
@@ -181,15 +181,15 @@ class ProvenanceChecker:
 
             for dep_name in deps:
                 if dep_name not in api_map:
-                    # 依赖的API不在列表中，保守保留
+                    # Dependent API not in list, conservatively keep
                     filtered_deps.append(dep_name)
                     continue
 
                 source_api = api_map[dep_name]
 
-                # 检查返回值和所有参数的兼容性
-                # TODO: 这里简化处理，只检查返回值
-                # 更精确的实现需要检查类型匹配的参数
+                # Check compatibility of return value and all parameters
+                # TODO: Simplified handling here, only checking return value
+                # More precise implementation needs to check type-matched parameters
                 if ProvenanceChecker.check_api_compatibility(
                     source_api, sink_api, source_is_return=True, sink_param_idx=0
                 ):
@@ -202,7 +202,7 @@ class ProvenanceChecker:
     @staticmethod
     def get_provenance_statistics(api_list: List[Dict]) -> Dict[str, int]:
         """
-        统计API列表中的provenance分布
+        Get provenance distribution statistics in API list
 
         Returns:
             {provenance_tag: count}
@@ -210,7 +210,7 @@ class ProvenanceChecker:
         stats = {tag.value: 0 for tag in ProvenanceTag}
 
         for api in api_list:
-            # 检查返回值的provenance
+            # Check return value's provenance
             ret_metadata = api.get("return", {})
             ret_ats = ret_metadata.get("access_type_set", [])
 
@@ -218,7 +218,7 @@ class ProvenanceChecker:
                 prov = ProvenanceInfo.from_dict(at.get("provenance", "UNKNOWN"))
                 stats[prov.tag.value] += 1
 
-            # 检查参数的provenance
+            # Check parameters' provenance
             for key, value in api.items():
                 if key.startswith("param_"):
                     param_ats = value.get("access_type_set", [])
@@ -229,22 +229,22 @@ class ProvenanceChecker:
         return stats
 
 
-# 便捷函数
+# Convenience functions
 def is_provenance_compatible(source_tag_str: str, sink_tag_str: str) -> bool:
     """
-    便捷函数：检查两个provenance标签字符串是否兼容
+    Convenience function: Check if two provenance tag strings are compatible
 
     Args:
-        source_tag_str: 源provenance标签（字符串）
-        sink_tag_str: 目标provenance标签（字符串）
+        source_tag_str: Source provenance tag (string)
+        sink_tag_str: Target provenance tag (string)
 
     Returns:
-        bool: 是否兼容
+        bool: Whether compatible
     """
     try:
         source_prov = ProvenanceInfo(ProvenanceTag(source_tag_str))
         sink_prov = ProvenanceInfo(ProvenanceTag(sink_tag_str))
         return ProvenanceChecker.is_compatible(source_prov, sink_prov)
     except ValueError:
-        # 无效的标签，保守允许
+        # Invalid tag, conservatively allow
         return True
