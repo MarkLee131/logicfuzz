@@ -148,22 +148,22 @@ class APICompositionAnalyzer:
     
     def find_api_combinations(self, target_function: str, api_context: Optional[Dict] = None) -> Dict:
         """
-        查找可以与目标函数组合一起测试的API
+        Find APIs that can be combined with target function for testing together
         
-        优先从usage examples中提取真实的API组合模式，而不是基于函数名模式的猜测。
-        识别完整的API组合：包括配置、使用、清理等，而不仅仅是初始化函数。
+        Prioritize extracting real API composition patterns from usage examples, rather than guessing based on function name patterns.
+        Identify complete API compositions: including configuration, usage, cleanup, etc., not just initialization functions.
         
         Args:
-            target_function: 目标函数名（如 "igraph_sparsemat_arpack_rssolve"）
-            api_context: (Optional) 预先提取的 API context，避免重复查询 FuzzIntrospector
+            target_function: Target function name (e.g., "igraph_sparsemat_arpack_rssolve")
+            api_context: (Optional) Pre-extracted API context to avoid redundant FuzzIntrospector queries
         
         Returns:
-            包含以下字段的字典：
-            - prerequisites: 与目标函数组合使用的API列表（从真实代码中提取）
-            - data_dependencies: 参数依赖关系 [(producer, consumer), ...]
-            - call_sequence: 推荐的API组合调用顺序（基于真实使用场景）
-            - initialization_code: 建议的初始化代码模板
-            - llm_metadata: (if LLM mode) 额外的 LLM 分析信息
+            Dictionary containing the following fields:
+            - prerequisites: List of APIs used in combination with target function (extracted from real code)
+            - data_dependencies: Parameter dependency relationships [(producer, consumer), ...]
+            - call_sequence: Recommended API combination call order (based on real usage scenarios)
+            - initialization_code: Suggested initialization code template
+            - llm_metadata: (if LLM mode) Additional LLM analysis information
             
         Note: 
             The internal DiGraph object is not included in the result to avoid
@@ -176,7 +176,7 @@ class APICompositionAnalyzer:
             return self._build_with_llm(target_function)
         
         # Otherwise use heuristic approach
-        # 1. 使用 FuzzIntrospector 获取函数上下文（或使用提供的 api_context）
+        # 1. Use FuzzIntrospector to get function context (or use provided api_context)
         if api_context:
             logger.debug(f"Using provided api_context (avoiding redundant FI query)")
             context = api_context
@@ -185,8 +185,8 @@ class APICompositionAnalyzer:
             context = self.extractor.extract(target_function)
         
         if not context:
-            # 这里是核心数据路径，静默返回一堆空列表只会在后面制造“假成功”。
-            # 直接抛错，让调用方（比如 FuzzingContext.prepare）决定怎么处理。
+            # This is a core data path, silently returning empty lists will only create "false success" later.
+            # Directly raise error, let caller (e.g., FuzzingContext.prepare) decide how to handle.
             msg = (
                 f"Could not extract API context for target function '{target_function}' "
                 f"in project '{self.project_name}'. This usually indicates missing or "
@@ -195,19 +195,19 @@ class APICompositionAnalyzer:
             logger.error(msg)
             raise RuntimeError(msg)
         
-        # 2. 识别前置依赖（API组合）- 优先从usage examples中提取真实使用模式
+        # 2. Identify prerequisite dependencies (API composition) - prioritize extracting real usage patterns from usage examples
         prerequisites = self._find_prerequisite_functions(target_function, context)
         
-        # 3. 识别数据流依赖（参数来源）
+        # 3. Identify data flow dependencies (parameter sources)
         data_deps = self._analyze_data_dependencies(target_function, context)
         
-        # 3.5. 从 usage examples 中提取完整的API组合调用序列（核心改进）
-        # 这提取了真实代码中与目标函数一起使用的完整API集合
+        # 3.5. Extract complete API combination call sequence from usage examples (core improvement)
+        # This extracts the complete API set used together with target function in real code
         usage_call_sequence = self._extract_call_sequence_from_usage_examples(target_function, context)
         if usage_call_sequence:
             logger.info(f"✓ Extracted complete API combination sequence from usage examples: {len(usage_call_sequence)} APIs")
         
-        # 4. 构建图
+        # 4. Build graph
         self.graph.add_node(target_function, type='target', context=context)
         for prereq in prerequisites:
             self.graph.add_node(prereq, type='prerequisite')
@@ -217,16 +217,16 @@ class APICompositionAnalyzer:
             self.graph.add_node(src, type='producer')
             self.graph.add_edge(src, dst, type='data')
         
-        # 5. 生成调用顺序（优先使用从 usage examples 提取的序列）
+        # 5. Generate call order (prioritize sequence extracted from usage examples)
         if usage_call_sequence:
-            # 使用从 usage examples 中提取的完整序列
+            # Use complete sequence extracted from usage examples
             call_sequence = usage_call_sequence
             logger.debug(f"Using call sequence from usage examples: {call_sequence}")
         else:
-            # Fallback: 使用拓扑排序
+            # Fallback: use topological sort
             call_sequence = self._generate_call_sequence()
         
-        # 6. 生成初始化代码模板
+        # 6. Generate initialization code template
         init_code = self._generate_initialization_code(target_function, context, prerequisites)
         
         logger.info(
@@ -243,7 +243,7 @@ class APICompositionAnalyzer:
     
     def _build_with_llm(self, target_function: str) -> Dict:
         """
-        使用 LLM 分析API组合（增强模式）
+        Use LLM to analyze API composition (enhanced mode)
         
         This provides richer, more context-aware API composition analysis
         by leveraging LLM reasoning over cross-references and usage patterns.
@@ -273,18 +273,18 @@ class APICompositionAnalyzer:
         context: Dict
     ) -> List[str]:
         """
-        查找必须与目标函数组合使用的API集合
+        Find API set that must be used in combination with target function
         
-        策略（按优先级）：
-        1. 从 usage examples 中提取真实的API组合模式（最可靠，基于真实使用场景）
-        2. 从 related_functions 中提取（作为补充）
-        3. 使用启发式规则（仅在完全没有usage examples时使用，作为最后手段）
+        Strategy (by priority):
+        1. Extract real API composition patterns from usage examples (most reliable, based on real usage scenarios)
+        2. Extract from related_functions (as supplement)
+        3. Use heuristic rules (only used when there are no usage examples at all, as last resort)
         
-        注意：优先使用真实代码中的使用模式，而不是基于函数名模式的猜测
+        Note: Prioritize usage patterns from real code, not guesses based on function name patterns
         """
         prerequisites = []
         
-        # 策略 1: 从 usage examples 中提取真实的API组合模式（最高优先级）
+        # Strategy 1: Extract real API composition patterns from usage examples (highest priority)
         usage_based_prereqs = self._extract_prerequisites_from_usage_examples(func, context)
         if usage_based_prereqs:
             prerequisites.extend(usage_based_prereqs)

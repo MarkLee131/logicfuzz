@@ -179,26 +179,26 @@ class ConstraintCollector:
         # 2. Collect Hole-related constraints
         self._collect_hole_constraints(skeleton)
 
-        # 3. 收集变量依赖约束
+        # 3. Collect variable dependency constraints
         self._collect_dependency_constraints(skeleton)
 
         return self.constraints
 
     def _collect_type_constraints(self, skeleton: DriverSkeleton) -> None:
-        """收集类型约束"""
+        """Collect type constraints"""
         for var_name, var in skeleton.variables.items():
-            # 指针类型必须初始化为NULL或有效地址
+            # Pointer types must be initialized to NULL or valid address
             if var.is_pointer:
                 constraint = NotNullConstraint(
                     description=f"{var_name} should be valid pointer or NULL",
                     variables=[var_name],
                     variable=var_name,
-                    is_hard=False  # 软约束，NULL是允许的
+                    is_hard=False  # Soft constraint, NULL is allowed
                 )
                 self.constraints.add(constraint)
 
     def _collect_hole_constraints(self, skeleton: DriverSkeleton) -> None:
-        """收集Hole相关约束"""
+        """Collect Hole-related constraints"""
         for hole in skeleton.holes:
             if isinstance(hole, BufferSizeHole):
                 constraint = VarLenConstraint(
@@ -231,30 +231,30 @@ class ConstraintCollector:
                 self.constraints.add(constraint)
 
     def _collect_dependency_constraints(self, skeleton: DriverSkeleton) -> None:
-        """收集依赖约束"""
-        # 从语句顺序推断依赖
+        """Collect dependency constraints"""
+        # Infer dependencies from statement order
         defined_vars: Set[str] = set()
         for stmt in skeleton.statements:
             for var in stmt.variables:
                 if var not in defined_vars:
-                    # 变量使用前需要定义
+                    # Variable needs to be defined before use
                     pass
             defined_vars.update(stmt.variables)
 
 
 # =============================================================================
-# 约束求解器
+# Constraint Solvers
 # =============================================================================
 
 class RuleBasedSolver:
     """
-    基于规则的约束求解器
+    Rule-based constraint solver
 
-    用简单规则解决简单约束，不依赖外部求解器
+    Solves simple constraints with simple rules, does not depend on external solvers
     """
 
     def __init__(self):
-        # 默认值映射
+        # Default value mapping
         self.default_sizes = {
             "buffer": 1024,
             "array": 256,
@@ -268,7 +268,7 @@ class RuleBasedSolver:
         constraints: ConstraintSet
     ) -> Dict[str, Any]:
         """
-        用规则解决简单孔
+        Solve simple holes with rules
 
         Returns:
             {hole_name: filled_value}
@@ -286,7 +286,7 @@ class RuleBasedSolver:
         return solutions
 
     def _solve_hole(self, hole: Hole, constraints: ConstraintSet) -> Optional[Any]:
-        """解决单个孔"""
+        """Solve single hole"""
         if hole.kind == HoleKind.BUFFER_SIZE:
             return self._solve_buffer_size(hole, constraints)
         elif hole.kind == HoleKind.ARRAY_LENGTH:
@@ -306,9 +306,9 @@ class RuleBasedSolver:
         hole: Hole,
         constraints: ConstraintSet
     ) -> Optional[str]:
-        """解决buffer大小"""
+        """Solve buffer size"""
         if isinstance(hole, BufferSizeHole):
-            # 使用fuzz输入的size
+            # Use fuzz input size
             return "size"
         return str(self.default_sizes["buffer"])
 
@@ -317,9 +317,9 @@ class RuleBasedSolver:
         hole: Hole,
         constraints: ConstraintSet
     ) -> Optional[int]:
-        """解决数组长度"""
+        """Solve array length"""
         if isinstance(hole, ArrayLengthHole):
-            # 检查是否有范围约束
+            # Check if there are range constraints
             hole_constraints = constraints.get_for_variable(hole.name)
             for c in hole_constraints:
                 if isinstance(c, ValueRangeConstraint):
@@ -331,11 +331,11 @@ class RuleBasedSolver:
         return self.default_sizes["array"]
 
     def _solve_init_value(self, hole: Hole) -> Optional[str]:
-        """解决初始化值"""
+        """Solve initialization value"""
         if isinstance(hole, InitValueHole):
             if hole.is_pointer:
                 return "NULL"
-            # 根据类型返回默认值
+            # Return default value based on type
             type_defaults = {
                 "int": "0",
                 "unsigned int": "0",
@@ -354,17 +354,17 @@ class RuleBasedSolver:
         hole: Hole,
         constraints: ConstraintSet
     ) -> Optional[int]:
-        """解决循环边界"""
+        """Solve loop bound"""
         if isinstance(hole, LoopBoundHole):
             return hole.suggested_bound
         return self.default_sizes["loop"]
 
     def _solve_null_check(self, hole: Hole) -> Optional[str]:
-        """解决NULL检查"""
+        """Solve NULL check"""
         return "!= NULL"
 
     def _solve_type_cast(self, hole: Hole) -> Optional[str]:
-        """解决类型转换"""
+        """Solve type cast"""
         if isinstance(hole, SimpleHole):
             ctx = hole.context
             if "target_type" in ctx:
@@ -373,15 +373,15 @@ class RuleBasedSolver:
 
 
 # =============================================================================
-# Z3求解器适配器（可选）
+# Z3 Solver Adapter (Optional)
 # =============================================================================
 
 class Z3SolverAdapter:
     """
-    Z3求解器适配器
+    Z3 solver adapter
 
-    将约束转换为Z3可解的形式
-    注意: 需要安装z3-solver包
+    Converts constraints to Z3-solvable form
+    Note: Requires z3-solver package
     """
 
     def __init__(self):
@@ -401,7 +401,7 @@ class Z3SolverAdapter:
         self,
         constraints: List[ValueRangeConstraint]
     ) -> Dict[str, int]:
-        """解决数值约束"""
+        """Solve numeric constraints"""
         if not self._z3_available:
             return {}
 
@@ -409,12 +409,12 @@ class Z3SolverAdapter:
         solver = z3.Solver()
         variables = {}
 
-        # 创建Z3变量
+        # Create Z3 variables
         for c in constraints:
             if c.variable not in variables:
                 variables[c.variable] = z3.Int(c.variable)
 
-        # 添加约束
+        # Add constraints
         for c in constraints:
             var = variables[c.variable]
             if c.min_value is not None:
@@ -422,7 +422,7 @@ class Z3SolverAdapter:
             if c.max_value is not None:
                 solver.add(var <= c.max_value)
 
-        # 求解
+        # Solve
         if solver.check() == z3.sat:
             model = solver.model()
             return {
@@ -435,14 +435,14 @@ class Z3SolverAdapter:
 
 
 # =============================================================================
-# 综合约束求解器
+# Comprehensive Constraint Solver
 # =============================================================================
 
 class ConstraintSolver:
     """
-    综合约束求解器
+    Comprehensive constraint solver
 
-    组合规则求解和Z3求解
+    Combines rule-based solving and Z3 solving
     """
 
     def __init__(self, use_z3: bool = False):
@@ -455,7 +455,7 @@ class ConstraintSolver:
         constraints: Optional[ConstraintSet] = None
     ) -> Dict[str, Any]:
         """
-        解决骨架中的简单孔
+        Solve simple holes in skeleton
 
         Returns:
             {hole_name: filled_value}
@@ -466,11 +466,11 @@ class ConstraintSolver:
 
         solutions = {}
 
-        # 1. 尝试规则求解
+        # 1. Try rule-based solving
         rule_solutions = self.rule_solver.solve_simple_holes(skeleton, constraints)
         solutions.update(rule_solutions)
 
-        # 2. 尝试Z3求解（数值约束）
+        # 2. Try Z3 solving (numeric constraints)
         if self.z3_solver and self.z3_solver.is_available:
             numeric_constraints = [
                 c for c in constraints.get_by_kind(ConstraintKind.VALUE_RANGE)
@@ -480,7 +480,7 @@ class ConstraintSolver:
                 z3_solutions = self.z3_solver.solve_numeric_constraints(
                     numeric_constraints
                 )
-                # Z3解优先级更高
+                # Z3 solutions have higher priority
                 for name, value in z3_solutions.items():
                     if name in solutions:
                         solutions[name] = value
@@ -493,10 +493,10 @@ class ConstraintSolver:
         solutions: Dict[str, Any]
     ) -> int:
         """
-        将解应用到骨架
+        Apply solutions to skeleton
 
         Returns:
-            填充的孔数量
+            Number of filled holes
         """
         filled_count = 0
 
@@ -508,11 +508,11 @@ class ConstraintSolver:
 
 
 # =============================================================================
-# 工具函数
+# Utility Functions
 # =============================================================================
 
 def collect_and_solve(skeleton: DriverSkeleton, use_z3: bool = False) -> Tuple[ConstraintSet, Dict[str, Any]]:
-    """便捷函数：收集约束并求解"""
+    """Convenience function: collect constraints and solve"""
     collector = ConstraintCollector()
     constraints = collector.collect_from_skeleton(skeleton)
 
