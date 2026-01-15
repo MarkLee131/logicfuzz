@@ -71,6 +71,7 @@ python run_logicfuzz.py --list-models
 
 ```
 cp logicfuzz.env.example logicfuzz.env
+# Then edit logicfuzz.env and fill in DEEPSEEK_API_KEYY, LOGICFUZZ_MODEL, ENABLE_SOURCE_FILTER, SOURCE_FILTER_MIN_LINES, BENCHMARK_YAML etc.
 ```
 
 
