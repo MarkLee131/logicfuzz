@@ -1278,4 +1278,4 @@ class AIBinaryModel(GoogleModel):
     # Placeholder: To Be Implemented.
     return
 
-DefaultModel = GeminiV1D5
+DefaultModel = DeepSeekChat
