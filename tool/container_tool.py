@@ -14,10 +14,12 @@ class ProjectContainerTool(BaseTool):
   def __init__(self,
                benchmark: Benchmark,
                name: str = '',
-               project_name: str = '') -> None:
+               project_name: str = '',
+               use_llvm14_builder: bool = False) -> None:
     super().__init__(benchmark, name)
     self.project_name = project_name or benchmark.project
-    self.image_name = self._prepare_project_image(self.project_name)
+    self.image_name = self._prepare_project_image(
+        self.project_name, use_llvm14_builder=use_llvm14_builder)
     self.container_id = self._start_docker_container()
     self.build_script_path = '/src/build.sh'
     self._backup_default_build_script()
@@ -28,11 +30,12 @@ class ProjectContainerTool(BaseTool):
     return self._get_tutorial_file_content('container_tool.txt').replace(
         '{FUZZ_TARGET_PATH}', self.benchmark.target_path)
 
-  def _prepare_project_image(self, project_name: str) -> str:
+  def _prepare_project_image(self, project_name: str,
+                              use_llvm14_builder: bool = False) -> str:
     """Prepares the project's OSS-Fuzz docker image and returns the image name.
     """
     image_name = oss_fuzz_checkout.prepare_project_image(
-        self.benchmark, project_name)
+        self.benchmark, project_name, use_llvm14_builder=use_llvm14_builder)
     if image_name:
       return image_name
     raise Exception(f'Failed to build image for {project_name}')

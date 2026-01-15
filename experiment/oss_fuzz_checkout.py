@@ -26,6 +26,9 @@ OSS_FUZZ_DIR: str = os.path.join(
     os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'oss-fuzz')
 CLEAN_UP_OSS_FUZZ = bool(int(os.getenv('OFG_CLEAN_UP_OSS_FUZZ', '1')))
 
+# Custom base-builder with LLVM 14 for bitcode extraction
+CUSTOM_BASE_BUILDER = 'logicfuzz/base-builder-llvm14'
+
 VENV_DIR: str = 'venv'
 
 def _remove_temp_oss_fuzz_repo():
@@ -403,14 +406,44 @@ def create_ossfuzz_project(benchmark: benchmarklib.Benchmark,
   shutil.copytree(oss_fuzz_project_path, generated_project_path)
   return generated_project_path
 
+def patch_dockerfile_for_llvm14(generated_oss_fuzz_project: str) -> None:
+  """Patches project Dockerfile to use custom base-builder with LLVM 14."""
+  dockerfile_path = os.path.join(OSS_FUZZ_DIR, 'projects',
+                                 generated_oss_fuzz_project, 'Dockerfile')
+  if not os.path.exists(dockerfile_path):
+    logger.warning('Dockerfile not found at %s', dockerfile_path)
+    return
+
+  with open(dockerfile_path, 'r') as f:
+    content = f.read()
+
+  # Replace base-builder with our custom image
+  new_content = re.sub(
+      r'FROM\s+gcr\.io/oss-fuzz-base/base-builder\S*',
+      f'FROM {CUSTOM_BASE_BUILDER}',
+      content
+  )
+
+  if new_content != content:
+    with open(dockerfile_path, 'w') as f:
+      f.write(new_content)
+    logger.info('Patched Dockerfile to use %s', CUSTOM_BASE_BUILDER)
+  else:
+    logger.warning('Could not find base-builder reference in Dockerfile')
+
 def prepare_project_image(benchmark: benchmarklib.Benchmark,
-                          project_name: str = '') -> str:
+                          project_name: str = '',
+                          use_llvm14_builder: bool = False) -> str:
   """Prepares original image of the |project|'s fuzz target build container."""
   project = benchmark.project
   generated_oss_fuzz_project = project_name or f'{benchmark.id}-{uuid.uuid4().hex}'
   generated_oss_fuzz_project = rectify_docker_tag(generated_oss_fuzz_project)
   image_name = f'gcr.io/oss-fuzz/{generated_oss_fuzz_project}'
   create_ossfuzz_project(benchmark, generated_oss_fuzz_project)
+
+  # Patch Dockerfile to use custom base-builder with LLVM 14 if requested
+  if use_llvm14_builder:
+    patch_dockerfile_for_llvm14(generated_oss_fuzz_project)
 
   if not ENABLE_CACHING:
     logger.warning('Disabled caching when building image for %s', project)

@@ -29,20 +29,23 @@ class BaseAPIExtractor:
         self,
         benchmark: Benchmark,
         container: Optional[ProjectContainerTool] = None,
-        container_name: Optional[str] = None
+        container_name: Optional[str] = None,
+        use_llvm14_builder: bool = False
     ):
         """
         初始化基类
-        
+
         Args:
             benchmark: 项目基准对象
             container: 可选的容器工具（如果已创建）
             container_name: 容器名称（用于创建新容器）
+            use_llvm14_builder: 是否使用预装LLVM 14的自定义base-builder镜像
         """
         self.benchmark = benchmark
         self.container = container or ProjectContainerTool(
             benchmark,
-            name=container_name or 'api_extract'
+            name=container_name or 'api_extract',
+            use_llvm14_builder=use_llvm14_builder
         )
         
         # Liberator 工具路径：严格使用 liberator_adapter/liberator 下的文件

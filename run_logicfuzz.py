@@ -27,8 +27,10 @@ from typing import Optional, List
 
 # Liberator-related helpers (used to perform local Clang extraction)
 from liberator_adapter.extractors.clang_extractor import ClangAPIExtractor
+from liberator_adapter.extractors.llvm_extractor import LLVMAPIExtractor
 from liberator_adapter.dependency.type.TypeDependencyGraphGenerator import TypeDependencyGraphGenerator
 from liberator_adapter.common.api import Api, Arg
+from liberator_adapter.common.utils import Utils
 
 logger = logging.getLogger(__name__)
 # log the debug and info
@@ -439,8 +441,18 @@ def print_dependency_graph_stats(project: str, dep_graph: dict, output_dir: str 
     visualize_dependency_graph(project, dep_graph, output_dir, entry_points)
 
 
-def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output_base: str) -> tuple[str, dict]:
+def run_local_extraction_for_benchmark(
+    benchmark: benchmarklib.Benchmark,
+    output_base: str,
+    enable_llvm_extraction: bool = True
+) -> tuple[str, dict]:
   """Run Clang extraction for a Benchmark object and write type dependency graph.
+
+  Args:
+    benchmark: Benchmark object with project info
+    output_base: Base directory for output files
+    enable_llvm_extraction: If True, also run LLVM extraction to generate
+                           conditions.json with provenance data
 
   Returns the path to the directory containing extraction outputs.
   """
@@ -451,7 +463,10 @@ def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output
   outdir = os.path.abspath(os.path.join(output_base, project))
   os.makedirs(outdir, exist_ok=True)
 
-  clang_extractor = ClangAPIExtractor(benchmark)  # creates ProjectContainerTool internally
+  # If LLVM extraction is enabled, use custom base-builder with LLVM 14
+  clang_extractor = ClangAPIExtractor(
+      benchmark, use_llvm14_builder=enable_llvm_extraction
+  )  # creates ProjectContainerTool internally
   script_path = clang_extractor.extract_script
   if not Path(script_path).exists():
     raise RuntimeError(
@@ -547,16 +562,64 @@ def run_local_extraction_for_benchmark(benchmark: benchmarklib.Benchmark, output
     )
 
   apis_clang_path = _copy(apis_clang_container_path, 'apis_clang.json', required=True)
-  # optional files
-  _copy(f'{container_output_dir}/exported_functions.txt', 'exported_functions.txt', required=False)
-  _copy(f'{container_output_dir}/incomplete_types.txt', 'incomplete_types.txt', required=False)
-  _copy(f'{container_output_dir}/conditions.json', 'conditions.json', required=False)
-  _copy(f'{container_output_dir}/data_layout.txt', 'data_layout.txt', required=False)
+  _copy(f'{container_output_dir}/exported_functions.txt', 'exported_functions.txt', required=True)
+  _copy(f'{container_output_dir}/incomplete_types.txt', 'incomplete_types.txt', required=True)
+
+  # LLVM extraction for conditions.json with provenance data
+  if enable_llvm_extraction:
+    logger.info('LLVM extraction enabled, running condition extractor on HOST...')
+
+    # Create LLVM extractor (shares the same container)
+    llvm_extractor = LLVMAPIExtractor(benchmark, clang_extractor.container)
+
+    # Compile project to bitcode using wllvm (in container)
+    logger.info('Compiling project to bitcode with wllvm...')
+    bc_file = llvm_extractor.compile_to_bitcode()
+    logger.info(f'Generated bitcode file: {bc_file}')
+
+    # Run condition extractor on HOST (not in container)
+    # This avoids complex dependency installation in each container
+    logger.info('Running condition extractor on host...')
+    llvm_extractor.extract_apis_llvm_on_host(
+      bc_file=bc_file,
+      apis_clang_path=apis_clang_container_path,
+      output_dir=outdir
+    )
+
+    # Verify required files exist
+    conditions_path = os.path.join(outdir, 'conditions.json')
+    data_layout_path = os.path.join(outdir, 'data_layout.txt')
+    if not os.path.exists(conditions_path):
+      raise RuntimeError(f'conditions.json not found at {conditions_path}')
+    if not os.path.exists(data_layout_path):
+      raise RuntimeError(f'data_layout.txt not found at {data_layout_path}')
+
+    logger.info('LLVM extraction completed successfully')
+  else:
+    logger.info('LLVM extraction disabled, skipping condition extraction')
+    # Note: conditions.json will NOT be available, provenance filtering will not work
 
   api_list = convert_apis_clang_json_to_api_list(apis_clang_path)
   logger.info('Parsed %d APIs from clang output for project %s', len(api_list), project)
 
-  tdg = TypeDependencyGraphGenerator(api_list)
+  # Load conditions data for provenance filtering (always try if files exist)
+  function_conditions = None
+  conditions_path = os.path.join(outdir, 'conditions.json')
+  apis_llvm_path = os.path.join(outdir, 'apis_llvm.json')
+  if os.path.exists(conditions_path) and os.path.exists(apis_llvm_path):
+    try:
+      function_conditions = Utils.prase_function_conditions(conditions_path, apis_llvm_path)
+      logger.info('Loaded %d function conditions for provenance filtering',
+                  len(function_conditions.fun_cond_set))
+    except Exception as e:
+      logger.warning('Failed to parse conditions.json: %s', e)
+  else:
+    if not os.path.exists(conditions_path):
+      logger.info('conditions.json not found, provenance filtering will be skipped')
+    if not os.path.exists(apis_llvm_path):
+      logger.info('apis_llvm.json not found, provenance filtering will be skipped')
+
+  tdg = TypeDependencyGraphGenerator(api_list, function_conditions=function_conditions)
   dependency_graph = tdg.create()
 
   out_graph = {}
@@ -695,6 +758,12 @@ def parse_args() -> argparse.Namespace:
                       action='store_true',
                       default=False,
                       help='Only run Liberator Clang extraction for the provided benchmark YAML(s) and exit.')
+  parser.add_argument('--disable-llvm-extraction',
+                      action='store_true',
+                      default=False,
+                      dest='disable_llvm_extraction',
+                      help='Disable LLVM extraction (enabled by default). '
+                           'LLVM extraction generates conditions.json with provenance data.')
   parser.add_argument(
       '--delay',
       type=int,
@@ -1108,7 +1177,10 @@ def main():
   if args.extract_only:
     logger.info('Running extraction-only mode for %d benchmark(s).', len(experiment_targets))
     for benchmark in experiment_targets:
-      outdir, dep_graph = run_local_extraction_for_benchmark(benchmark, args.work_dir)
+      outdir, dep_graph = run_local_extraction_for_benchmark(
+        benchmark, args.work_dir,
+        enable_llvm_extraction=not args.disable_llvm_extraction
+      )
       logger.info('Extraction completed for %s. Results saved to %s', benchmark.project, outdir)
 
       # Display dependency graph statistics and generate visualization

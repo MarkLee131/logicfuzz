@@ -41,8 +41,9 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
         # 构建API名称到FunctionConditions的映射（用于快速查找）
         self.function_conditions_map = {}
         if function_conditions:
-            for fc in function_conditions.conditions_list:
-                self.function_conditions_map[fc.function_name] = fc
+            # FunctionConditionsSet uses fun_cond_set dict, iterate over values
+            for func_name, fc in function_conditions.fun_cond_set.items():
+                self.function_conditions_map[func_name] = fc
 
         # 初始化 Z3 剪枝器
         self.z3_pruner = None
