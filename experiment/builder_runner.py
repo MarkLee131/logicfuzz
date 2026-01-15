@@ -908,7 +908,11 @@ class BuilderRunner:
       # First check if binary already exists in mounted directory
       if os.path.exists(host_binary_path):
         logger.info('Binary already exists at %s (from volume mount)', host_binary_path)
-        os.chmod(host_binary_path, 0o755)
+        try:
+          os.chmod(host_binary_path, 0o755)
+        except PermissionError as e:
+          logger.warning('Could not set executable permissions on %s: %s (file may already be executable)', 
+                       host_binary_path, e)
       else:
         # Binary not in mounted directory, try to copy from container
         try:
@@ -919,8 +923,13 @@ class BuilderRunner:
           
           if cp_result.returncode == 0:
             # Set executable permissions
-            os.chmod(host_binary_path, 0o755)
-            logger.info('Successfully copied binary from container to %s', host_binary_path)
+            try:
+              os.chmod(host_binary_path, 0o755)
+              logger.info('Successfully copied binary from container to %s', host_binary_path)
+            except PermissionError as e:
+              logger.warning('Could not set executable permissions on %s: %s (file may already be executable)', 
+                           host_binary_path, e)
+              logger.info('Binary copied from container to %s (permissions unchanged)', host_binary_path)
           else:
             # Binary copy failed, try to list what's in /out to help debug
             logger.warning('Failed to copy binary from container: %s', cp_result.stderr.decode())
@@ -940,8 +949,13 @@ class BuilderRunner:
                       logger.info('Found executable binary in container: %s', file)
                       # Copy it to the expected location
                       shutil.copy2(os.path.join(f'{outdir}/.container_out', file), host_binary_path)
-                      os.chmod(host_binary_path, 0o755)
-                      logger.info('Copied binary %s to expected location %s', file, host_binary_path)
+                      try:
+                        os.chmod(host_binary_path, 0o755)
+                        logger.info('Copied binary %s to expected location %s', file, host_binary_path)
+                      except PermissionError as e:
+                        logger.warning('Could not set executable permissions on %s: %s (file may already be executable)', 
+                                     host_binary_path, e)
+                        logger.info('Binary %s copied to %s (permissions unchanged)', file, host_binary_path)
                       break
                 # Clean up temp directory
                 shutil.rmtree(f'{outdir}/.container_out', ignore_errors=True)
