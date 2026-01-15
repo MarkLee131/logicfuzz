@@ -1466,6 +1466,7 @@ def _setup_logging(verbose: str = 'info', is_cloud: bool = False) -> None:
   """Set up logging level."""
   # Note: Google Cloud Logging removed - not needed for local experiments.
   # If is_cloud is True, logs will still go to stdout/stderr.
+  # TODO: remove this deprecated arg to keep clean.
 
   if verbose == "debug":
     log_level = logging.DEBUG

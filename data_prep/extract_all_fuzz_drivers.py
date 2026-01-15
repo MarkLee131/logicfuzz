@@ -3,6 +3,7 @@
 Extract all human-written fuzz drivers from OSS-Fuzz projects.
 Download from Google Cloud Storage bucket oss-fuzz-llm-public.
 """
+import logging
 
 # Configure logging.
 logging.basicConfig(
