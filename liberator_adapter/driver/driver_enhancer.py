@@ -27,6 +27,7 @@ from liberator_adapter.constraints.special_patterns import (
     TLVAnalysisResult,
     LLMClient,
 )
+from llm_toolkit.adapter import create_llm_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -234,19 +235,23 @@ class DriverEnhancer:
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
-        self.llm_client = llm_client
-        self.pattern_analyzer = SpecialPatternAnalyzer(llm_client)
+        # Wrap the LLM model in an adapter to provide query() method
+        adapted_client = create_llm_adapter(llm_client)
+        self.llm_client = adapted_client
+        self.pattern_analyzer = SpecialPatternAnalyzer(adapted_client)
         self.stub_generator = EnhancedCallbackStubGenerator()
         self.cache = APIPatternCache()
 
-        if llm_client:
-            self.stub_generator.set_llm_client(llm_client)
+        if adapted_client:
+            self.stub_generator.set_llm_client(adapted_client)
 
     def set_llm_client(self, llm_client: LLMClient):
         """Set LLM client"""
-        self.llm_client = llm_client
-        self.pattern_analyzer.set_llm_client(llm_client)
-        self.stub_generator.set_llm_client(llm_client)
+        # Wrap the LLM model in an adapter to provide query() method
+        adapted_client = create_llm_adapter(llm_client)
+        self.llm_client = adapted_client
+        self.pattern_analyzer.set_llm_client(adapted_client)
+        self.stub_generator.set_llm_client(adapted_client)
 
     def analyze_api(self, api: Api) -> None:
         """
@@ -409,7 +414,8 @@ def analyze_api_patterns(apis: List[Api],
 def get_varlen_for_api(api: Api,
                        llm_client: Optional[LLMClient] = None) -> List[VarLenRelation]:
     """快速获取单个API的var-len关系"""
-    analyzer = VarLenAnalyzer(llm_client)
+    adapted_client = create_llm_adapter(llm_client)
+    analyzer = VarLenAnalyzer(adapted_client)
     result = analyzer.analyze(api)
     return result.relations
 
@@ -417,5 +423,6 @@ def get_varlen_for_api(api: Api,
 def get_loop_info_for_api(api: Api,
                           llm_client: Optional[LLMClient] = None) -> LoopPatternInfo:
     """快速获取单个API的循环模式信息"""
-    analyzer = LoopPatternAnalyzer(llm_client)
+    adapted_client = create_llm_adapter(llm_client)
+    analyzer = LoopPatternAnalyzer(adapted_client)
     return analyzer.analyze(api)

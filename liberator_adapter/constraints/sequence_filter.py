@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from liberator_adapter.common.api import Api
 from liberator_adapter.common.conditions import FunctionConditionsSet
 from liberator_adapter.prompt_loader import get_prompt_manager
+from llm_toolkit.adapter import create_llm_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -440,7 +441,9 @@ class LLMSequenceFilter:
             conditions: Function condition information (reserved)
         """
         self.basic_filter = SequenceFilter(conditions)
-        self.llm_validator = LLMLifecycleValidator(llm_client)
+        # Wrap the LLM model in an adapter to provide query() method
+        adapted_client = create_llm_adapter(llm_client)
+        self.llm_validator = LLMLifecycleValidator(adapted_client)
 
         self._stats: Dict[str, Any] = {
             "total": 0,
@@ -451,7 +454,9 @@ class LLMSequenceFilter:
 
     def set_llm_client(self, llm_client: LLMClient):
         """Set LLM client"""
-        self.llm_validator.set_llm_client(llm_client)
+        # Wrap the LLM model in an adapter to provide query() method
+        adapted_client = create_llm_adapter(llm_client)
+        self.llm_validator.set_llm_client(adapted_client)
 
     def filter(self, sequence: List[Api]) -> Tuple[bool, Optional[str]]:
         """

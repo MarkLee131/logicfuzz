@@ -28,6 +28,7 @@ from liberator_adapter.driver.synthesis.constraint_collector import (
     ConstraintSet, ConstraintCollector, ConstraintSolver
 )
 from liberator_adapter.prompt_loader import get_prompt_manager
+from llm_toolkit.adapter import create_llm_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -513,21 +514,25 @@ class HoleFiller:
         ]
 
         if llm_client:
-            self.strategies.append(LLMFillStrategy(llm_client))
+            # Wrap the LLM model in an adapter to provide complete() method
+            adapted_client = create_llm_adapter(llm_client)
+            self.strategies.append(LLMFillStrategy(adapted_client))
 
         self.llm_strategy: Optional[LLMFillStrategy] = None
 
     def set_llm_client(self, client: LLMClient) -> None:
         """Set LLM client"""
+        # Wrap the LLM model in an adapter to provide complete() method
+        adapted_client = create_llm_adapter(client)
         # Find or add LLM strategy
         for strategy in self.strategies:
             if isinstance(strategy, LLMFillStrategy):
-                strategy.set_llm_client(client)
+                strategy.set_llm_client(adapted_client)
                 self.llm_strategy = strategy
                 return
 
         # If not found, add it
-        llm_strategy = LLMFillStrategy(client)
+        llm_strategy = LLMFillStrategy(adapted_client)
         self.strategies.append(llm_strategy)
         self.llm_strategy = llm_strategy
 
