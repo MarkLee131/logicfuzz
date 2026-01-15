@@ -1,10 +1,10 @@
 """
-Provenance Checker - Python层的Provenance兼容性检查
+Provenance Checker - Python layer Provenance compatibility checking
 
-负责：
-1. 从JSON中解析provenance信息
-2. 提供provenance兼容性检查
-3. 用于依赖图过滤
+Responsibilities:
+1. Parse provenance information from JSON
+2. Provide provenance compatibility checking
+3. Used for dependency graph filtering
 """
 
 from enum import Enum
@@ -13,28 +13,28 @@ from dataclasses import dataclass
 
 
 class ProvenanceTag(Enum):
-    """Provenance标签枚举"""
-    HEAP_MALLOC = "HEAP_MALLOC"        # malloc/calloc分配
-    HEAP_CUSTOM = "HEAP_CUSTOM"        # 自定义allocator
-    RETURN_OPAQUE = "RETURN_OPAQUE"    # 返回opaque指针
-    PARAM_BORROWED = "PARAM_BORROWED"  # 参数借用
-    GLOBAL = "GLOBAL"                  # 全局变量
-    STACK = "STACK"                    # 栈上分配
-    UNKNOWN = "UNKNOWN"                # 未知来源
+    """Provenance tag enumeration"""
+    HEAP_MALLOC = "HEAP_MALLOC"        # malloc/calloc allocation
+    HEAP_CUSTOM = "HEAP_CUSTOM"        # Custom allocator
+    RETURN_OPAQUE = "RETURN_OPAQUE"    # Return opaque pointer
+    PARAM_BORROWED = "PARAM_BORROWED"  # Parameter borrowing
+    GLOBAL = "GLOBAL"                  # Global variable
+    STACK = "STACK"                    # Stack allocation
+    UNKNOWN = "UNKNOWN"                # Unknown source
 
 
 @dataclass
 class ProvenanceInfo:
-    """Provenance信息"""
+    """Provenance information"""
     tag: ProvenanceTag
     allocator_name: str = ""
     type_string: str = ""
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'ProvenanceInfo':
-        """从JSON字典构造ProvenanceInfo"""
+        """Construct ProvenanceInfo from JSON dictionary"""
         if isinstance(data, str):
-            # 如果直接是字符串，就是tag
+            # If it's directly a string, it's the tag
             tag_str = data
             allocator = ""
         else:
@@ -55,47 +55,47 @@ class ProvenanceInfo:
 
 
 class ProvenanceChecker:
-    """Provenance兼容性检查器"""
+    """Provenance compatibility checker"""
 
     @staticmethod
     def is_compatible(source_prov: ProvenanceInfo, sink_prov: ProvenanceInfo) -> bool:
         """
-        检查source的provenance是否可以传给sink的provenance
+        Check if source's provenance can be passed to sink's provenance
 
-        过滤规则：
-        1. HEAP_MALLOC 不能传给 RETURN_OPAQUE 参数
-        2. RETURN_OPAQUE 可以传给 同类型的RETURN_OPAQUE参数
-        3. HEAP_CUSTOM 可以传给 RETURN_OPAQUE（库内部分配的对象）
-        4. STACK/GLOBAL 不能传给需要heap分配的参数
-        5. UNKNOWN 保守处理：允许
+        Filtering rules:
+        1. HEAP_MALLOC cannot be passed to RETURN_OPAQUE parameters
+        2. RETURN_OPAQUE can be passed to same-type RETURN_OPAQUE parameters
+        3. HEAP_CUSTOM can be passed to RETURN_OPAQUE (library-internal allocated objects)
+        4. STACK/GLOBAL cannot be passed to parameters requiring heap allocation
+        5. UNKNOWN conservatively handled: allowed
         """
 
-        # 规则1: HEAP_MALLOC -> RETURN_OPAQUE (禁止)
+        # Rule 1: HEAP_MALLOC -> RETURN_OPAQUE (forbidden)
         if (source_prov.tag == ProvenanceTag.HEAP_MALLOC and
             sink_prov.tag == ProvenanceTag.RETURN_OPAQUE):
             return False
 
-        # 规则2: RETURN_OPAQUE -> RETURN_OPAQUE (允许)
+        # Rule 2: RETURN_OPAQUE -> RETURN_OPAQUE (allowed)
         if (source_prov.tag == ProvenanceTag.RETURN_OPAQUE and
             sink_prov.tag == ProvenanceTag.RETURN_OPAQUE):
             return True
 
-        # 规则3: HEAP_CUSTOM -> RETURN_OPAQUE (允许)
+        # Rule 3: HEAP_CUSTOM -> RETURN_OPAQUE (allowed)
         if (source_prov.tag == ProvenanceTag.HEAP_CUSTOM and
             sink_prov.tag == ProvenanceTag.RETURN_OPAQUE):
             return True
 
-        # 规则4: STACK/GLOBAL -> HEAP_MALLOC (禁止)
+        # Rule 4: STACK/GLOBAL -> HEAP_MALLOC (forbidden)
         if (source_prov.tag in [ProvenanceTag.STACK, ProvenanceTag.GLOBAL] and
             sink_prov.tag == ProvenanceTag.HEAP_MALLOC):
             return False
 
-        # 规则5: UNKNOWN 保守处理
+        # Rule 5: UNKNOWN conservatively handled
         if (source_prov.tag == ProvenanceTag.UNKNOWN or
             sink_prov.tag == ProvenanceTag.UNKNOWN):
             return True
 
-        # 规则6: 相同tag通常兼容
+        # Rule 6: Same tag usually compatible
         if source_prov.tag == sink_prov.tag:
             return True
 

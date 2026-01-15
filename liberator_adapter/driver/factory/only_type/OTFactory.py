@@ -19,7 +19,7 @@ from liberator_adapter.driver.ir import (
 
 class OTFactory(Factory):
     """
-    Only-Type Factory：基于文法和类型信息随机生成 Driver（Liberator 原生 only_type 流程移植）。
+    Only-Type Factory: Randomly generates Driver based on grammar and type information (ported from Liberator's native only_type flow).
     """
 
     def __init__(self, api_list: Set[Api], driver_size: int, grammar: Grammar, max_nonterminals: int = 3, max_expansion_trials: int = 16):
@@ -28,7 +28,7 @@ class OTFactory(Factory):
         self.driver_size = driver_size
         self.grammar = grammar
         self.dependency_graph = grammar.dependency_graph
-        # 防止死循环的展开上限（原始实现遗漏了定义）
+        # Upper limit for expansion to prevent infinite loops (original implementation missed this definition)
         self.max_expansion_trials = max_expansion_trials
 
     # === Public API ===

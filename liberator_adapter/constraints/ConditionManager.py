@@ -6,12 +6,12 @@ from liberator_adapter.driver.factory import Factory
 from liberator_adapter.common import Api, FunctionConditionsSet, ValueMetadata, Access
 from liberator_adapter.common import FunctionConditionsSet, DataLayout
 
-# 注意：ApiCall 和 Buffer 暂时未实现，ConditionManager 的部分功能可能需要这些类
-# 如果需要完整功能，需要从 liberator 复制这些类
+# Note: ApiCall and Buffer are not implemented yet, some functionality of ConditionManager may require these classes
+# If full functionality is needed, these classes need to be copied from liberator
 try:
     from liberator_adapter.driver.ir import ApiCall, Buffer
 except ImportError:
-    # 占位符，避免导入错误
+    # Placeholder to avoid import errors
     ApiCall = None
     Buffer = None
 

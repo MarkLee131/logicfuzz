@@ -103,7 +103,7 @@ class LiberatorPromptManager:
                                    callback_type=callback_type)
 
     def get_tlv_prompt(self, signature: str) -> str:
-        """获取TLV分析prompt"""
+        """Get TLV analysis prompt"""
         template = self._get_prompt("tlv_analyzer_prompt.txt")
         return self._format_prompt(template, signature=signature)
 
@@ -113,7 +113,7 @@ class LiberatorPromptManager:
 
     def get_lifecycle_classify_prompt(self, api_name: str, signature: str,
                                       return_type: str, parameters: str) -> str:
-        """获取生命周期分类prompt"""
+        """Get lifecycle classification prompt"""
         template = self._get_prompt("lifecycle_classify_prompt.txt")
         return self._format_prompt(template,
                                    api_name=api_name,
@@ -122,12 +122,12 @@ class LiberatorPromptManager:
                                    parameters=parameters)
 
     def get_lifecycle_validate_prompt(self, api_sequence: str) -> str:
-        """获取序列验证prompt"""
+        """Get sequence validation prompt"""
         template = self._get_prompt("lifecycle_validate_sequence_prompt.txt")
         return self._format_prompt(template, api_sequence=api_sequence)
 
     def get_lifecycle_batch_classify_prompt(self, api_list: str) -> str:
-        """获取批量分类prompt"""
+        """Get batch classification prompt"""
         template = self._get_prompt("lifecycle_batch_classify_prompt.txt")
         return self._format_prompt(template, api_list=api_list)
 
@@ -138,7 +138,7 @@ class LiberatorPromptManager:
     def get_hole_callback_impl_prompt(self, callback_signature: str,
                                       callback_type: str,
                                       expected_behavior: str = "") -> str:
-        """获取回调实现孔prompt"""
+        """Get callback implementation hole prompt"""
         template = self._get_prompt("hole_callback_impl_prompt.txt")
         return self._format_prompt(template,
                                    callback_signature=callback_signature,
@@ -148,7 +148,7 @@ class LiberatorPromptManager:
     def get_hole_loop_condition_prompt(self, loop_type: str,
                                        api_return_type: str,
                                        termination_hint: str = "") -> str:
-        """获取循环条件孔prompt"""
+        """Get loop condition hole prompt"""
         template = self._get_prompt("hole_loop_condition_prompt.txt")
         return self._format_prompt(template,
                                    loop_type=loop_type,
@@ -158,7 +158,7 @@ class LiberatorPromptManager:
     def get_hole_error_handling_prompt(self, error_source: str,
                                        error_type: str,
                                        cleanup_list: str) -> str:
-        """获取错误处理孔prompt"""
+        """Get error handling hole prompt"""
         template = self._get_prompt("hole_error_handling_prompt.txt")
         return self._format_prompt(template,
                                    error_source=error_source,
@@ -167,7 +167,7 @@ class LiberatorPromptManager:
 
     def get_hole_resource_cleanup_prompt(self, resources: str,
                                          cleanup_order: str) -> str:
-        """获取资源清理孔prompt"""
+        """Get resource cleanup hole prompt"""
         template = self._get_prompt("hole_resource_cleanup_prompt.txt")
         return self._format_prompt(template,
                                    resources=resources,
@@ -175,7 +175,7 @@ class LiberatorPromptManager:
 
     def get_hole_param_constraint_prompt(self, param_name: str,
                                          param_type: str) -> str:
-        """获取参数约束孔prompt"""
+        """Get parameter constraint hole prompt"""
         template = self._get_prompt("hole_param_constraint_prompt.txt")
         return self._format_prompt(template,
                                    param_name=param_name,
@@ -187,27 +187,27 @@ class LiberatorPromptManager:
 
     def get_raw_template(self, prompt_name: str) -> str:
         """
-        获取原始prompt模板（不格式化）
+        Get raw prompt template (unformatted)
 
         Args:
-            prompt_name: prompt文件名（不含.txt）
+            prompt_name: Prompt file name (without .txt)
 
         Returns:
-            原始模板内容
+            Raw template content
         """
         return self._get_prompt(f"{prompt_name}_prompt.txt")
 
     def clear_cache(self):
-        """清除缓存"""
+        """Clear cache"""
         self._cache.clear()
 
 
-# 全局实例
+# Global instance
 _prompt_manager: Optional[LiberatorPromptManager] = None
 
 
 def get_prompt_manager() -> LiberatorPromptManager:
-    """获取全局PromptManager实例"""
+    """Get global PromptManager instance"""
     global _prompt_manager
     if _prompt_manager is None:
         _prompt_manager = LiberatorPromptManager()

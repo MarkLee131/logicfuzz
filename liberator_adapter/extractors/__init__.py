@@ -1,7 +1,7 @@
 """
-Liberator API 提取器模块
+Liberator API Extractor Module
 
-提供从 Clang 和 LLVM 直接提取 API 信息的功能
+Provides functionality to extract API information directly from Clang and LLVM
 """
 
 from liberator_adapter.extractors.base_extractor import BaseAPIExtractor

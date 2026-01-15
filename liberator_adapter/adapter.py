@@ -164,7 +164,7 @@ class LiberatorAPIAdapter:
             bc_file=bc_file,
             compile_project=compile_project
         )
-        # 缓存最近的元数据（paths）
+        # Cache recent metadata (paths)
         try:
             self.last_metadata = self.hybrid_extractor.get_last_metadata() or {}
         except Exception:

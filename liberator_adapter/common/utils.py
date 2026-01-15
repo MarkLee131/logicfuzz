@@ -414,10 +414,10 @@ class Utils:
         type = at_json["type"]
         type_string = at_json["type_string"]
 
-        # 创建AccessType对象
+        # Create AccessType object
         at = AccessType(access, fields, type, type_string)
 
-        # 解析provenance信息（如果存在）
+        # Parse provenance information (if exists)
         if "provenance" in at_json:
             from liberator_adapter.constraints.provenance_checker import ProvenanceInfo
             prov_info = ProvenanceInfo.from_dict(at_json)

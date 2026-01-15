@@ -3,7 +3,7 @@ from typing import List, Set, Dict, Tuple, Optional
 from liberator_adapter.driver.ir import Type, PointerType
 from liberator_adapter.common import AccessTypeSet, AccessType, Access, ValueMetadata
 
-# 注意：Variable 暂时未实现
+# Note: Variable is not implemented yet
 try:
     from liberator_adapter.driver.ir import Variable
 except ImportError:

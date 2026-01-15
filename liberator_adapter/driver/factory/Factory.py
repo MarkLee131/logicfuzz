@@ -6,15 +6,15 @@ from liberator_adapter.driver.ir import Type, PointerType, TypeTag, ApiCall
 
 class Factory:
     """
-    Factory 工具类：
-    - normalize_type: 将 Liberator 抽取到的类型规范化为 IR Type
-    - api_to_apicall: 将 Api 对象转换为 ApiCall（上下文无关调用节点）
+    Factory utility class:
+    - normalize_type: Normalize types extracted by Liberator to IR Type
+    - api_to_apicall: Convert Api object to ApiCall (context-free call node)
     """
 
     @staticmethod
     def api_to_apicall(api: Api) -> ApiCall:
         """
-        将 Liberator Api 对象转换为 IR 层的 ApiCall。
+        Convert Liberator Api object to IR layer ApiCall.
         """
         function_name = api.function_name
         return_info = api.return_info
@@ -23,7 +23,7 @@ class Factory:
 
         arg_list_type = []
         for arg in arguments_info:
-            # NOTE: const 视为非 const，保持与 Liberator IR 兼容
+            # NOTE: const is treated as non-const to maintain compatibility with Liberator IR
             the_type = Factory.normalize_type(arg.type, arg.size, arg.flag, arg.is_const)
             arg_list_type.append(the_type)
 
@@ -39,7 +39,7 @@ class Factory:
     @staticmethod
     def normalize_type(a_type, a_size, a_flag, a_is_const) -> Type:
         """
-        规范化类型：将字符串类型转换为 Type 对象
+        Normalize type: Convert string type to Type object
         """
         if not isinstance(a_is_const, list):
             raise Exception(f"a_is_const must be a list, \"{type(a_is_const)}\" given!")
@@ -67,7 +67,7 @@ class Factory:
             pointer_level = a_type.count("*")
             a_type_core = a_type.replace("*", "").replace(" ", "")
             
-            # 修复一些类型名称
+            # Fix some type names
             if a_type_core == "unsignedlonglong":
                 a_type_core = "unsigned long long"
             if a_type_core == "longlong":
@@ -83,20 +83,20 @@ class Factory:
             if a_type_core == "unsignedshort":
                 a_type_core = "unsigned short"
             
-            # 获取类型大小和完整性信息
+            # Get type size and completeness information
             try:
                 a_size = DataLayout.instance().get_type_size(a_type_core)
             except:
-                # 如果 DataLayout 未初始化，使用默认值
+                # If DataLayout is not initialized, use default value
                 a_size = 0
             
             try:
                 a_incomplete_core = DataLayout.instance().is_incomplete(a_type_core)
             except:
-                # 如果 DataLayout 未初始化，假设类型是完整的
+                # If DataLayout is not initialized, assume type is complete
                 a_incomplete_core = False
 
-            # 判断是 STRUCT 还是 PRIMITIVE
+            # Determine if it's STRUCT or PRIMITIVE
             type_tag = TypeTag.PRIMITIVE
             try:
                 if DataLayout.instance().is_a_struct(a_type_core):

@@ -1,5 +1,5 @@
 """
-BackendDriver: 抽象基类，定义 driver 代码生成的接口
+BackendDriver: Abstract base class defining the interface for driver code generation
 """
 from typing import List, Set, Dict, Tuple, Optional
 from abc import ABC, abstractmethod
@@ -7,55 +7,55 @@ from abc import ABC, abstractmethod
 
 class BackendDriver(ABC):
     """
-    BackendDriver 抽象基类：定义 driver 代码生成的接口
+    BackendDriver abstract base class: Defines the interface for driver code generation
     
-    子类需要实现：
-    - get_name(): 生成 driver 文件名
-    - emit_driver(): 生成 driver 代码文件
-    - emit_seeds(): 生成初始种子文件
+    Subclasses need to implement:
+    - get_name(): Generate driver file name
+    - emit_driver(): Generate driver code file
+    - emit_seeds(): Generate initial seed files
     """
 
     @abstractmethod
     def __init__(self, working_dir, seeds_dir, num_seeds):
         """
-        初始化 BackendDriver
+        Initialize BackendDriver
         
         Args:
-            working_dir: driver 代码输出目录
-            seeds_dir: 种子文件输出目录
-            num_seeds: 每个 driver 的种子数量
+            working_dir: Driver code output directory
+            seeds_dir: Seed file output directory
+            num_seeds: Number of seeds per driver
         """
         pass
 
     @abstractmethod
     def get_name(self) -> str:
         """
-        生成下一个 driver 的文件名
+        Generate the next driver's file name
         
         Returns:
-            driver 文件名（如 "driver0.cc"）
+            Driver file name (e.g., "driver0.cc")
         """
         pass
 
     @abstractmethod
     def emit_driver(self, driver, driver_filename):
         """
-        生成 driver 代码文件
+        Generate driver code file
         
         Args:
-            driver: Driver 对象
-            driver_filename: 输出文件名
+            driver: Driver object
+            driver_filename: Output file name
         """
         pass
 
     @abstractmethod
     def emit_seeds(self, driver, driver_filename):
         """
-        生成初始种子文件
+        Generate initial seed files
         
         Args:
-            driver: Driver 对象
-            driver_filename: driver 文件名（用于创建对应的种子目录）
+            driver: Driver object
+            driver_filename: Driver file name (used to create corresponding seed directory)
         """
         pass
 
