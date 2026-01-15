@@ -27,7 +27,7 @@ T = TypeVar('T', str, list, dict, int)  # Generic type.
 TIMEOUT = 120
 MAX_RETRY = 5
 
-BENCHMARK_ROOT: str = './conti-benchmark'
+BENCHMARK_ROOT: str = './comparison'
 BENCHMARK_DIR: str = f'{BENCHMARK_ROOT}/conti-cmp'
 GENERATED_BENCHMARK: str = 'generated-benchmark-'
 

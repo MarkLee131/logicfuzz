@@ -1,5 +1,6 @@
 results/
 results-*/
+fuzz-introspector/
 oss-fuzz/
 oss-fuzz-data/
 venv/

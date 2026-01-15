@@ -72,7 +72,7 @@ class ProjectDriverGenerator:
             work_dir: 工作目录（用于存储生成的 driver）
         """
         self.project_name = project_name
-        self.work_dir = Path(work_dir) if work_dir else Path(f"./workdir_{project_name}")
+        self.work_dir = Path(work_dir) if work_dir else Path(f"./results/{project_name}")
         self.work_dir.mkdir(parents=True, exist_ok=True)
         
         # 初始化适配器
@@ -992,18 +992,80 @@ class ProjectDriverGenerator:
     
     def _generate_public_headers_file(self, include_dir: str, output_path: Path):
         """
-        Scan include_dir for header files and write to output_path.
+        Intelligently scan for public header files and write to output_path.
+
+        Strategy:
+        1. First look in include/ directory (if exists)
+        2. If a header matches project name (e.g., cjson.h), use only that
+        3. Otherwise collect all headers, excluding test/example directories
         """
         header_exts = {".h", ".hpp", ".hxx", ".hh"}
+        exclude_dirs = {'tests', 'test', 'testing', 'examples', 'example',
+                        'benchmarks', 'benchmark', 'docs', 'doc', 'unity'}
+
+        include_subdir = Path(include_dir) / "include"
+        search_dir = str(include_subdir) if include_subdir.exists() else include_dir
+
+        # Normalize project name for matching (e.g., "cjson" -> "cjson.h")
+        project_name_lower = self.project_name.lower().replace('-', '_').replace(' ', '_')
+        project_header_patterns = [
+            f"{project_name_lower}.h",
+            f"{project_name_lower}.hpp",
+            f"{self.project_name.lower()}.h",
+            f"{self.project_name}.h",
+        ]
+
         header_paths = []
-        for root, _, files in os.walk(include_dir):
+        project_header_found = None
+
+        def should_exclude(path: str) -> bool:
+            """Check if path should be excluded (test/example directories)"""
+            parts = Path(path).parts
+            return any(part.lower() in exclude_dirs for part in parts)
+
+        # Scan for headers
+        for root, dirs, files in os.walk(search_dir):
+            # Prune excluded directories from traversal
+            dirs[:] = [d for d in dirs if d.lower() not in exclude_dirs]
+
             for f in files:
-                if Path(f).suffix.lower() in header_exts:
-                    header_paths.append(os.path.relpath(os.path.join(root, f), include_dir))
-        
+                if Path(f).suffix.lower() not in header_exts:
+                    continue
+
+                rel_path = os.path.relpath(os.path.join(root, f), search_dir)
+
+                # Skip if in excluded directory
+                if should_exclude(rel_path):
+                    continue
+
+                # Check if this matches project name
+                f_lower = f.lower()
+                if f_lower in project_header_patterns or f_lower == f"{project_name_lower}.h":
+                    project_header_found = rel_path
+                    logger.info(f"Found project header: {rel_path}")
+
+                header_paths.append(rel_path)
+
+        # If project-named header found, use only that (+ closely related headers)
+        if project_header_found:
+            # Also include headers with similar names (e.g., cJSON.h + cJSON_Utils.h)
+            base_name = Path(project_header_found).stem.lower()
+            related_headers = [
+                h for h in header_paths
+                if Path(h).stem.lower().startswith(base_name)
+            ]
+            if related_headers:
+                header_paths = related_headers
+                logger.info(f"Using project-related headers: {related_headers}")
+            else:
+                header_paths = [project_header_found]
+                logger.info(f"Using single project header: {project_header_found}")
+
         if not header_paths:
-            raise RuntimeError(f"No headers found under {include_dir}")
-        
+            raise RuntimeError(f"No headers found under {search_dir}")
+
+        logger.info(f"Generated public headers list with {len(header_paths)} header(s)")
+
         with open(output_path, "w") as f:
             for h in sorted(header_paths):
                 f.write(h + "\n")

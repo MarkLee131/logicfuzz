@@ -218,37 +218,59 @@ class ClangAPIExtractor(BaseAPIExtractor):
     ) -> str:
         """
         提取 apis_clang.json
-        
+
         Args:
             include_dir: 头文件目录（容器内路径）
-            public_headers_file: 公共头文件列表（可选，容器内路径）
+            public_headers_file: 公共头文件列表（可选，主机路径或容器内路径）
             output_dir: 输出目录（容器内路径）
             project_name: 项目名称（用于查找 public_headers.txt）
-        
+
         Returns:
             apis_clang.json 的路径（容器内路径）
         """
         # 确保输出目录存在
         self._ensure_output_dir(output_dir)
-        
+
         # 设置 clang 环境
         self._setup_clang_environment()
-        
+
         # 准备输出文件路径
         apis_clang_path = f'{output_dir}/apis_clang.json'
-        
+
         # 复制脚本到容器
         script_path = self._copy_script_to_container()
-        
+
+        # 处理 public_headers_file - 如果是主机路径，复制到容器
+        container_public_headers = None
+        if public_headers_file:
+            from pathlib import Path
+            host_path = Path(public_headers_file)
+            if host_path.exists():
+                # 文件在主机上，需要复制到容器
+                container_public_headers = '/tmp/public_headers.txt'
+                self._copy_file_to_container(
+                    host_path,
+                    container_public_headers,
+                    make_executable=False
+                )
+                logger.info(f"Copied public_headers to container: {container_public_headers}")
+            elif self._file_exists_in_container(public_headers_file):
+                # 文件已在容器内
+                container_public_headers = public_headers_file
+            else:
+                raise FileNotFoundError(
+                    f"public_headers_file not found on host or in container: {public_headers_file}"
+                )
+
         # 构建 Python 命令
         python_cmd_parts = [
             f'python3 {script_path}',
             f'-i "{include_dir}"',
             f'-o "{output_dir}"',
         ]
-        
-        if public_headers_file:
-            python_cmd_parts.append(f'-p "{public_headers_file}"')
+
+        if container_public_headers:
+            python_cmd_parts.append(f'-p "{container_public_headers}"')
         
         python_cmd = ' '.join(python_cmd_parts)
         cmd = self._build_command_with_env(python_cmd)
@@ -299,32 +321,29 @@ class ClangAPIExtractor(BaseAPIExtractor):
     ) -> str:
         """
         自动检测 include 目录并提取
-        
+
         Args:
             output_dir: 输出目录
             project_name: 项目名称
-            public_headers_file: 公共头文件列表文件（容器内路径），必需。
-        
+            public_headers_file: 公共头文件列表文件（主机路径或容器内路径），必需。
+
         Returns:
             apis_clang.json 的路径
         """
         include_dir = self._find_include_dir()
         if not include_dir:
             raise RuntimeError("Could not find include directory. Please specify include_dir manually.")
-        
+
         logger.info(f"Auto-detected include directory: {include_dir}")
-        
+
         if not public_headers_file:
             raise ValueError(
                 "public_headers_file is required. "
                 "Please provide a file listing the header files to analyze."
             )
-        
-        if not self._file_exists_in_container(public_headers_file):
-            raise FileNotFoundError(
-                f"public_headers_file not found in container: {public_headers_file}"
-            )
-        
+
+        # Note: extract_apis_clang now handles host path to container path conversion
+        # So we just pass the public_headers_file as-is
         return self.extract_apis_clang(
             include_dir=include_dir,
             public_headers_file=public_headers_file,
