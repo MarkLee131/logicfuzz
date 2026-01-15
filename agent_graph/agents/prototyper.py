@@ -45,6 +45,8 @@ class LangGraphPrototyper(LangGraphAgent):
         api_sequences = context.get('api_sequences', [])
         dependency_graph = context.get('dependency_graph', {})
         condition_info = context.get('condition_info', {})
+        pattern_analysis = context.get('pattern_analysis', {})
+        skeleton_drivers = context.get('skeleton_drivers', [])
 
         language = benchmark.get('language', 'C++')
         is_regeneration = state.get("compile_success") == False and state.get("fuzz_target_source", "") != ""
@@ -65,6 +67,8 @@ class LangGraphPrototyper(LangGraphAgent):
         project_apis_text = self._format_project_apis(project_apis, limit=20)
         dep_graph_text = self._format_dependency_graph(dependency_graph, limit=12)
         condition_text = self._format_condition_info(condition_info)
+        pattern_text = self._format_pattern_analysis(pattern_analysis)
+        skeleton_text = self._format_skeleton_drivers(skeleton_drivers, limit=2)
 
         try:
             base_prompt = prompt_manager.build_user_prompt(
@@ -90,13 +94,21 @@ class LangGraphPrototyper(LangGraphAgent):
 **Liberator Constraints (ConditionManager):**
 {condition_text}
 
+**Special Pattern Analysis (VarLen/Loop/Callback/TLV):**
+{pattern_text}
+
+**Pre-generated Skeleton Drivers (reference):**
+{skeleton_text}
+
 **Instructions:**
 Generate a fuzz driver that uses one or more of the API sequences above.
 The driver should:
 1. Follow the dependency order in the sequences
 2. Initialize required resources
 3. Call APIs in the correct sequence
-4. Clean up resources properly
+4. Handle var-len relationships (buffer size matches length parameters)
+5. Use appropriate callback stubs if needed
+6. Clean up resources properly
 """
         except Exception as e:
             # Fallback: build prompt manually if template doesn't support project-level
@@ -115,6 +127,12 @@ The driver should:
 **Liberator Constraints (ConditionManager):**
 {condition_text}
 
+**Special Pattern Analysis (VarLen/Loop/Callback/TLV):**
+{pattern_text}
+
+**Pre-generated Skeleton Drivers (reference):**
+{skeleton_text}
+
 **SRS Specification:**
 {srs_specification}
 
@@ -123,7 +141,8 @@ The driver should:
 
 {additional_context}
 
-Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above."""
+Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above.
+Handle var-len relationships and use appropriate callback stubs if needed."""
 
         prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
         response = self.chat_llm(state, prompt)
@@ -218,6 +237,88 @@ Generate a complete LibFuzzer-compatible fuzz driver using the API sequences abo
         lines.append(f"  Sources ({len(sources)}): {', '.join(sources[:10])}" + (" ..." if len(sources) > 10 else ""))
         lines.append(f"  Sinks ({len(sinks)}): {', '.join(sinks[:10])}" + (" ..." if len(sinks) > 10 else ""))
         lines.append(f"  Init ({len(inits)}): {', '.join(inits[:10])}" + (" ..." if len(inits) > 10 else ""))
+        return "\n".join(lines)
+
+    def _format_pattern_analysis(self, pattern_analysis: Dict[str, Any]) -> str:
+        """Format pattern analysis results (VarLen/Loop/Callback/TLV) for prompt."""
+        if not pattern_analysis:
+            return "  (no pattern analysis available)"
+
+        lines = []
+
+        # Summary
+        summary = pattern_analysis.get("summary", {})
+        if summary:
+            lines.append(f"  Summary: {summary.get('apis_with_varlen', 0)} APIs with var-len, "
+                        f"{summary.get('apis_needing_loop', 0)} needing loop, "
+                        f"{summary.get('apis_with_callbacks', 0)} with callbacks, "
+                        f"{summary.get('structured_parsers', 0)} TLV parsers")
+
+        # VarLen relations
+        varlen = pattern_analysis.get("varlen", {})
+        if varlen:
+            lines.append("\n  **Var-Len Relations** (buffer ↔ size parameters):")
+            for api_name, relations in list(varlen.items())[:5]:
+                for rel in relations:
+                    lines.append(f"    • {api_name}: {rel['buffer_arg_name']} {rel['relationship']} {rel['length_arg_name']}")
+
+        # Loop patterns
+        loop = pattern_analysis.get("loop", {})
+        if loop:
+            lines.append("\n  **Loop Patterns** (APIs that may need loop calls):")
+            for api_name, info in list(loop.items())[:5]:
+                lines.append(f"    • {api_name}: {info['loop_type']} loop, terminate when {info['termination_condition']}")
+
+        # Callback info
+        callback = pattern_analysis.get("callback", {})
+        if callback:
+            lines.append("\n  **Callback Parameters** (function pointers):")
+            for api_name, cbs in list(callback.items())[:5]:
+                for cb in cbs:
+                    lines.append(f"    • {api_name}[{cb['arg_idx']}]: {cb['callback_type']} callback ({cb['arg_name']})")
+
+        # TLV parsers
+        tlv = pattern_analysis.get("tlv", {})
+        if tlv:
+            lines.append("\n  **Structured Data Parsers** (TLV/protocol):")
+            for api_name, info in list(tlv.items())[:5]:
+                lines.append(f"    • {api_name}: {info['format_type']} format, min_size={info['min_size']}")
+
+        return "\n".join(lines) if lines else "  (no patterns detected)"
+
+    def _format_skeleton_drivers(self, skeleton_drivers: List[Dict[str, Any]], limit: int = 2) -> str:
+        """Format pre-generated skeleton drivers for prompt."""
+        if not skeleton_drivers:
+            return "  (no skeleton drivers available)"
+
+        lines = []
+        for i, skeleton in enumerate(skeleton_drivers[:limit]):
+            name = skeleton.get("name", f"skeleton_{i}")
+            api_seq = skeleton.get("api_sequence", [])
+            holes = skeleton.get("holes", [])
+            code = skeleton.get("code", "")
+
+            lines.append(f"\n  **Skeleton {i+1}: {name}**")
+            lines.append(f"    API sequence: {' → '.join(api_seq[:5])}" + (" ..." if len(api_seq) > 5 else ""))
+
+            if holes:
+                unfilled = [h for h in holes if not h.get("filled", False)]
+                lines.append(f"    Holes to fill: {len(unfilled)} ({', '.join(h['hole_type'] for h in unfilled[:3])})")
+
+            # Show truncated code snippet
+            if code:
+                code_lines = code.split('\n')[:15]
+                lines.append("    Code preview:")
+                lines.append("    ```c")
+                for line in code_lines:
+                    lines.append(f"    {line}")
+                if len(code.split('\n')) > 15:
+                    lines.append("    // ... (truncated)")
+                lines.append("    ```")
+
+        if len(skeleton_drivers) > limit:
+            lines.append(f"\n  ... and {len(skeleton_drivers) - limit} more skeleton drivers")
+
         return "\n".join(lines)
     
     def _validate_api_usage(self, code: str, project_name: str) -> str:

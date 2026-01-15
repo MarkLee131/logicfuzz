@@ -116,7 +116,7 @@ class FuzzingContext:
         log.info(f'📦 Preparing project-level fuzzing context for {project_name}')
         
         # === Step 1: Create ProjectDriverGenerator ===
-        log.debug('  1/8 Creating ProjectDriverGenerator...')
+        log.debug('  1/10 Creating ProjectDriverGenerator...')
         try:
             if not benchmark:
                 raise ValueError(
@@ -138,7 +138,7 @@ class FuzzingContext:
             ) from e
         
         # === Step 2: Extract all APIs ===
-        log.debug('  2/8 Extracting all APIs from project...')
+        log.debug('  2/10 Extracting all APIs from project...')
         try:
             all_apis = generator.extract_all_apis()
             if not all_apis:
@@ -172,7 +172,7 @@ class FuzzingContext:
             ) from e
         
         # === Step 3: Build dependency graph ===
-        log.debug('  3/8 Building type dependency graph...')
+        log.debug('  3/10 Building type dependency graph...')
         try:
             dep_graph = generator.build_dependency_graph()
             
@@ -192,7 +192,7 @@ class FuzzingContext:
             ) from e
         
         # === Step 4: Generate grammar (API sequences) ===
-        log.debug('  4/8 Generating grammar and API sequences...')
+        log.debug('  4/10 Generating grammar and API sequences...')
         try:
             grammar = generator.build_grammar()
             
@@ -228,7 +228,7 @@ class FuzzingContext:
             )
         
         # === Step 5: Build condition manager ===
-        log.debug('  5/8 Building condition manager...')
+        log.debug('  5/10 Building condition manager...')
         try:
             condition_manager = generator.build_condition_manager()
             log.info('   ✅ Condition manager built')
@@ -258,7 +258,7 @@ class FuzzingContext:
                 condition_info = {}
         
         # === Step 6: LLM semantic filtering over API sequences (optional) ===
-        log.debug('  6/8 Filtering API sequences with LLM (optional)...')
+        log.debug('  6/10 Filtering API sequences with LLM (optional)...')
         filter_summary = {}
         if api_sequences:
             try:
@@ -282,7 +282,7 @@ class FuzzingContext:
         grammar_info['num_sequences'] = len(api_sequences)
         
         # === Step 7: Extract header information ===
-        log.debug('  7/8 Extracting headers...')
+        log.debug('  7/10 Extracting headers...')
         try:
             # For project-level, use existing fuzzer headers as reference
             # This provides headers commonly used in the project
@@ -309,7 +309,7 @@ class FuzzingContext:
             )
         
         # === Step 8: Extract existing fuzzer headers (for reference) ===
-        log.debug('  8/8 Extracting existing fuzzer headers...')
+        log.debug('  8/10 Extracting existing fuzzer headers...')
         try:
             existing_fuzzer_headers = _extract_existing_fuzzer_headers(
                 project_name, log
@@ -320,7 +320,134 @@ class FuzzingContext:
                 'standard_headers': [],
                 'project_headers': []
             }
-        
+
+        # === Step 9: Pattern analysis (P1 - DriverEnhancer integration) ===
+        log.debug('  9/10 Analyzing special patterns (VarLen/Loop/Callback/TLV)...')
+        pattern_analysis = {}
+        try:
+            # Analyze special patterns using DriverEnhancer
+            generator.analyze_special_patterns(llm_client=llm)
+            enhancer = generator.driver_enhancer
+
+            if enhancer:
+                # Serialize pattern analysis results
+                cache = enhancer.cache
+
+                # VarLen relations
+                varlen_data = {}
+                for api_name, relations in cache.varlen_relations.items():
+                    varlen_data[api_name] = [
+                        {
+                            'buffer_arg_idx': rel.buffer_arg_idx,
+                            'buffer_arg_name': rel.buffer_arg_name,
+                            'length_arg_idx': rel.length_arg_idx,
+                            'length_arg_name': rel.length_arg_name,
+                            'relationship': rel.relationship,
+                            'confidence': rel.confidence
+                        }
+                        for rel in relations
+                    ]
+
+                # Loop patterns
+                loop_data = {}
+                for api_name, info in cache.loop_patterns.items():
+                    if info.needs_loop:
+                        loop_data[api_name] = {
+                            'loop_type': info.loop_type.value,
+                            'termination_condition': info.termination_condition,
+                            'max_iterations': info.max_iterations,
+                            'confidence': info.confidence
+                        }
+
+                # Callback info
+                callback_data = {}
+                for api_name, callbacks in cache.callback_infos.items():
+                    if callbacks:
+                        callback_data[api_name] = [
+                            {
+                                'arg_idx': cb.arg_idx,
+                                'arg_name': cb.arg_name,
+                                'callback_type': cb.callback_type.value,
+                                'can_be_null': cb.can_be_null
+                            }
+                            for cb in callbacks
+                        ]
+
+                # TLV/structured parsers
+                tlv_data = {}
+                for api_name, result in cache.tlv_results.items():
+                    if result.is_structured:
+                        tlv_data[api_name] = {
+                            'format_type': result.format_type.value,
+                            'min_size': result.min_size
+                        }
+
+                pattern_analysis = {
+                    'varlen': varlen_data,
+                    'loop': loop_data,
+                    'callback': callback_data,
+                    'tlv': tlv_data,
+                    'summary': enhancer.get_enhancement_summary()
+                }
+
+                summary = pattern_analysis.get('summary', {})
+                log.info(
+                    f'   ✅ Pattern analysis: '
+                    f'{summary.get("apis_with_varlen", 0)} varlen, '
+                    f'{summary.get("apis_needing_loop", 0)} loop, '
+                    f'{summary.get("apis_with_callbacks", 0)} callback, '
+                    f'{summary.get("structured_parsers", 0)} TLV'
+                )
+        except Exception as e:
+            log.warning(f"Pattern analysis failed (non-critical): {e}")
+            pattern_analysis = {}
+
+        # === Step 10: Generate skeleton drivers (P0 - SkeletonGenerator integration) ===
+        log.debug('  10/10 Generating skeleton drivers...')
+        skeleton_drivers = []
+        try:
+            # Generate skeleton drivers using the synthesis module
+            skeletons = generator.generate_skeleton_drivers(
+                num_drivers=min(num_sequences, 5),  # Limit to 5 skeletons
+                driver_size=driver_size,
+                llm_client=llm
+            )
+
+            if skeletons:
+                from liberator_adapter.driver.synthesis.skeleton_generator import render_skeleton
+                for skeleton in skeletons:
+                    # Get API sequence from target_apis
+                    api_seq = [api.function_name for api in skeleton.target_apis] if skeleton.target_apis else []
+
+                    # Render skeleton code
+                    try:
+                        rendered_code = render_skeleton(skeleton, mark_holes=True)
+                    except Exception:
+                        rendered_code = str(skeleton)
+
+                    # Extract hole information
+                    holes_info = []
+                    if hasattr(skeleton, 'holes') and skeleton.holes:
+                        # HoleSet stores holes in .holes dict
+                        holes_dict = skeleton.holes.holes if hasattr(skeleton.holes, 'holes') else {}
+                        for hole in holes_dict.values():
+                            holes_info.append({
+                                'hole_type': hole.kind.value if hasattr(hole.kind, 'value') else str(hole.kind),
+                                'name': hole.name,
+                                'filled': hole.is_filled
+                            })
+
+                    skeleton_drivers.append({
+                        'name': skeleton.name,
+                        'api_sequence': api_seq,
+                        'code': rendered_code,
+                        'holes': holes_info
+                    })
+                log.info(f'   ✅ Generated {len(skeleton_drivers)} skeleton drivers')
+        except Exception as e:
+            log.warning(f"Skeleton generation failed (non-critical): {e}")
+            skeleton_drivers = []
+
         # === Create legacy api_dependencies format for backward compatibility ===
         # Convert project-level data to legacy format
         api_dependencies = {
@@ -353,6 +480,8 @@ class FuzzingContext:
             header_info=header_info,
             existing_fuzzer_headers=existing_fuzzer_headers,
             condition_info=condition_info,
+            pattern_analysis=pattern_analysis,
+            skeleton_drivers=skeleton_drivers,
             preparation_time=elapsed
         )
     
@@ -368,6 +497,8 @@ class FuzzingContext:
             'header_info': self.header_info,
             'existing_fuzzer_headers': self.existing_fuzzer_headers,
             'condition_info': self.condition_info,
+            'pattern_analysis': self.pattern_analysis,
+            'skeleton_drivers': self.skeleton_drivers,
             'preparation_time': self.preparation_time,
         }
     
