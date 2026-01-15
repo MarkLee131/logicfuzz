@@ -1,7 +1,7 @@
 """
-Clang API 提取器
+Clang API Extractor
 
-使用 Liberator 的 extract_included_functions.py 从头文件提取 apis_clang.json
+Uses Liberator's extract_included_functions.py to extract apis_clang.json from header files
 """
 import logging
 from typing import Optional, Tuple
@@ -16,13 +16,13 @@ logger = logging.getLogger(__name__)
 
 class ClangAPIExtractor(BaseAPIExtractor):
     """
-    使用 Clang Python bindings 从头文件提取 API 信息
+    Extract API information from header files using Clang Python bindings
     
-    封装 liberator/tool/misc/extract_included_functions.py
+    Wraps liberator/tool/misc/extract_included_functions.py
     """
     
-    # OSS-Fuzz 容器中常见的 clang 环境路径
-    # OSS-Fuzz 使用自编译的 Python，其 sys.path 不包括系统 dist-packages
+    # Common clang environment paths in OSS-Fuzz containers
+    # OSS-Fuzz uses self-compiled Python, its sys.path doesn't include system dist-packages
     SYSTEM_DIST_PACKAGES = '/usr/lib/python3/dist-packages'
     COMMON_LIBCLANG_PATHS = [
         '/usr/lib/llvm-10/lib/libclang.so.1',
@@ -34,17 +34,17 @@ class ClangAPIExtractor(BaseAPIExtractor):
     def __init__(self, benchmark: Benchmark, container: Optional[ProjectContainerTool] = None,
                  use_llvm14_builder: bool = False):
         """
-        初始化 Clang API 提取器
+        Initialize Clang API extractor
 
         Args:
-            benchmark: 项目基准对象
-            container: 可选的容器工具（如果已创建）
-            use_llvm14_builder: 是否使用预装LLVM 14的自定义base-builder镜像
+            benchmark: Project benchmark object
+            container: Optional container tool (if already created)
+            use_llvm14_builder: Whether to use custom base-builder image with LLVM 14 pre-installed
         """
         super().__init__(benchmark, container, container_name='clang_extract',
                          use_llvm14_builder=use_llvm14_builder)
         
-        # Liberator 工具路径：严格使用 liberator_adapter/liberator 下的文件
+        # Liberator tool path: strictly use files under liberator_adapter/liberator
         self.extract_script = self.liberator_root / 'tool' / 'misc' / 'extract_included_functions.py'
 
         if not self.extract_script.exists():
@@ -53,18 +53,18 @@ class ClangAPIExtractor(BaseAPIExtractor):
                 "Please ensure `liberator_adapter/liberator/tool/misc/extract_included_functions.py` exists."
             )
         
-        # 缓存 clang 环境配置
+        # Cache clang environment configuration
         self._clang_env_cache: Optional[Tuple[str, str]] = None
     
     def _setup_clang_environment(self) -> Tuple[Optional[str], Optional[str]]:
         """
-        设置 clang Python bindings 环境
+        Setup clang Python bindings environment
         
-        OSS-Fuzz 容器通常已预装 python3-clang，但由于使用自编译的 Python，
-        需要设置 PYTHONPATH 和 LIBCLANG_PATH 环境变量。
+        OSS-Fuzz containers usually have python3-clang pre-installed, but since they use
+        self-compiled Python, PYTHONPATH and LIBCLANG_PATH environment variables need to be set.
         
         Returns:
-            (libclang_path, pythonpath) 元组，如果不需要则为 None
+            (libclang_path, pythonpath) tuple, or None if not needed
         """
         if self._clang_env_cache is not None:
             return self._clang_env_cache
@@ -72,39 +72,39 @@ class ClangAPIExtractor(BaseAPIExtractor):
         libclang_path = None
         pythonpath = None
         
-        # 策略1: 检查 python3-clang 是否已安装（OSS-Fuzz 通常已安装）
+        # Strategy 1: Check if python3-clang is installed (usually installed in OSS-Fuzz)
         check_pkg = self.container.execute('dpkg -l python3-clang 2>/dev/null | grep -q "^ii"')
         if check_pkg.returncode == 0:
             logger.info('python3-clang package already installed')
             
-            # 检查系统 dist-packages 是否存在 clang 模块
+            # Check if clang module exists in system dist-packages
             check_module = self.container.execute(f'ls {self.SYSTEM_DIST_PACKAGES}/clang/__init__.py 2>/dev/null')
             if check_module.returncode == 0:
                 pythonpath = self.SYSTEM_DIST_PACKAGES
                 logger.info(f'Found clang module in {pythonpath}')
             
-            # 查找 libclang 库
+            # Find libclang library
             libclang_path = self._find_libclang()
             
-            # 验证配置是否工作
+            # Verify configuration works
             if self._verify_clang_import(libclang_path, pythonpath):
                 self._clang_env_cache = (libclang_path, pythonpath)
                 return self._clang_env_cache
         
-        # 策略2: 尝试标准导入（可能通过 pip 安装）
+        # Strategy 2: Try standard import (may be installed via pip)
         if self._verify_clang_import(None, None):
             logger.info('clang Python bindings available via standard import')
             self._clang_env_cache = (None, None)
             return self._clang_env_cache
         
-        # 策略3: 需要安装 clang bindings
+        # Strategy 3: Need to install clang bindings
         logger.info('clang Python bindings not found, attempting to install...')
         self._install_clang_bindings()
         
-        # 重新检测环境
+        # Re-detect environment
         libclang_path = self._find_libclang()
         
-        # 检查 dist-packages
+        # Check dist-packages
         check_module = self.container.execute(f'ls {self.SYSTEM_DIST_PACKAGES}/clang/__init__.py 2>/dev/null')
         if check_module.returncode == 0:
             pythonpath = self.SYSTEM_DIST_PACKAGES
@@ -116,15 +116,15 @@ class ClangAPIExtractor(BaseAPIExtractor):
         return self._clang_env_cache
     
     def _find_libclang(self) -> Optional[str]:
-        """查找 libclang 库路径"""
-        # 首先尝试常见路径（更快）
+        """Find libclang library path"""
+        # First try common paths (faster)
         for path in self.COMMON_LIBCLANG_PATHS:
             check = self.container.execute(f'test -f {path}')
             if check.returncode == 0:
                 logger.info(f'Found libclang at: {path}')
                 return path
         
-        # 回退到 find 命令
+        # Fallback to find command
         result = self.container.execute('find /usr -name "libclang*.so*" 2>/dev/null | head -1')
         if result.returncode == 0 and result.stdout.strip():
             path = result.stdout.strip()
@@ -134,7 +134,7 @@ class ClangAPIExtractor(BaseAPIExtractor):
         return None
     
     def _verify_clang_import(self, libclang_path: Optional[str], pythonpath: Optional[str]) -> bool:
-        """验证 clang Python bindings 是否可用"""
+        """Verify if clang Python bindings are available"""
         cmd_parts = []
         
         if pythonpath:
@@ -149,23 +149,23 @@ class ClangAPIExtractor(BaseAPIExtractor):
         return result.returncode == 0
     
     def _install_clang_bindings(self):
-        """安装 clang Python bindings"""
-        # 尝试 apt 安装
+        """Install clang Python bindings"""
+        # Try apt installation
         logger.info('Trying apt-get install python3-clang...')
         result = self.container.execute('apt-get update && apt-get install -y python3-clang 2>&1')
         if result.returncode == 0:
             logger.info('python3-clang installed successfully via apt')
             return
         
-        # 回退到 pip 安装
+        # Fallback to pip installation
         logger.warning('apt install failed, trying pip...')
         
-        # 确保 pip 可用
+        # Ensure pip is available
         pip_check = self.container.execute('which pip3 2>&1 || which pip 2>&1')
         if pip_check.returncode != 0:
             self.container.execute('apt-get install -y python3-pip 2>&1')
         
-        # 安装 libclang-dev（pip 版本需要）
+        # Install libclang-dev (required for pip version)
         self.container.execute('apt-get install -y libclang-dev 2>&1')
         
         # 尝试 pip install

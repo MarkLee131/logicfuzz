@@ -536,10 +536,10 @@ class ProjectDriverGenerator:
 
     def _get_loop_apis(self) -> Dict[str, dict]:
         """
-        从 pattern_cache 中获取需要循环调用的 API 信息
+        Get API information that needs loop calls from pattern_cache
 
         Returns:
-            Dict[api_name, loop_info]: 需要循环的 API 及其循环信息
+            Dict[api_name, loop_info]: APIs that need loops and their loop information
         """
         loop_apis = {}
 
@@ -1078,15 +1078,15 @@ class ProjectDriverGenerator:
         output_dir: Optional[str] = None
     ):
         """
-        保存生成的 driver 到文件（使用 backend 生成代码）
+        Save generated drivers to files (using backend to generate code)
         
         Args:
-            drivers: Driver 列表
-            backend: BackendDriver 实例（如果为 None，会尝试自动创建）
-            output_dir: 输出目录（已弃用，backend 会使用自己的 working_dir）
+            drivers: List of Drivers
+            backend: BackendDriver instance (if None, will try to auto-create)
+            output_dir: Output directory (deprecated, backend uses its own working_dir)
         
         Returns:
-            保存的 driver 文件列表
+            List of saved driver files
         """
         if backend is None:
             logger.info("No backend provided, attempting to create LibFuzzer backend...")

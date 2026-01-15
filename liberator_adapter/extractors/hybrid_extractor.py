@@ -136,20 +136,20 @@ class HybridAPIExtractor(BaseAPIExtractor):
         function_signatures: Optional[List[str]] = None
     ) -> Dict[str, Api]:
         """
-        使用 Utils.get_api_list() 合并 Clang 和 LLVM 数据
+        Merge Clang and LLVM data using Utils.get_api_list()
 
         Args:
-            apis_clang_path: apis_clang.json 路径（容器内）
-            llvm_output_dir: LLVM 提取结果目录（HOST 上，包含 apis_llvm.json, conditions.json 等）
-            function_signatures: 要提取的函数签名列表（可选）
+            apis_clang_path: Path to apis_clang.json (inside container)
+            llvm_output_dir: LLVM extraction result directory (on HOST, contains apis_llvm.json, conditions.json, etc.)
+            function_signatures: List of function signatures to extract (optional)
 
         Returns:
-            函数名到 Api 对象的字典
+            Dictionary mapping function names to Api objects
         """
-        # llvm_output_dir 已经是 local_temp_dir，直接使用
+        # llvm_output_dir is already local_temp_dir, use directly
         local_paths = {}
 
-        # LLVM 结果已经在 HOST 上（llvm_output_dir）
+        # LLVM results are already on HOST (llvm_output_dir)
         llvm_files = ['apis_llvm.json', 'conditions.json', 'data_layout.txt']
         for filename in llvm_files:
             host_path = os.path.join(llvm_output_dir, filename)
@@ -157,19 +157,19 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 local_paths[filename] = host_path
                 logger.debug(f"Using LLVM result from host: {host_path}")
 
-        # Clang 结果在容器内，需要复制
+        # Clang results are in container, need to copy
         local_apis_clang = os.path.join(llvm_output_dir, 'apis_clang.json')
         self._copy_from_container(apis_clang_path, local_apis_clang)
         local_paths['apis_clang.json'] = local_apis_clang
 
-        # 准备其他必需的文件路径（容器内）
+        # Prepare other required file paths (inside container)
         exported_functions_path = f'{self.output_dir}/exported_functions.txt'
         incomplete_types_path = f'{self.output_dir}/incomplete_types.txt'
-        minimum_apis_path = ''  # 可选
+        minimum_apis_path = ''  # Optional
 
-        # 如果指定了函数签名，创建 minimum_apis 文件
+        # If function signatures specified, create minimum_apis file
         if function_signatures:
-            # 提取函数名
+            # Extract function names
             function_names = [self._extract_function_name(sig) for sig in function_signatures]
             function_names = [name for name in function_names if name]
 
@@ -179,7 +179,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
                     f.write('\n'.join(function_names))
                 local_paths['minimum_apis.txt'] = minimum_apis_path
 
-        # 复制容器内的其他可选文件
+        # Copy other optional files from container
         optional_container_files = [
             (exported_functions_path, 'exported_functions.txt'),
             (incomplete_types_path, 'incomplete_types.txt'),
@@ -211,7 +211,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
             if filename not in local_paths or not os.path.exists(local_paths[filename]):
                 raise RuntimeError(f"Required file {filename} not found in local_paths")
 
-        # 使用 Utils.get_api_list() 读取
+        # Read using Utils.get_api_list()
         try:
             api_set = Utils.get_api_list(
                 apis_llvm=local_paths['apis_llvm.json'],
@@ -222,12 +222,12 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 minimum_apis=local_paths.get('minimum_apis.txt', '')
             )
             
-            # 转换为字典
+            # Convert to dictionary
             apis_dict = {}
             for api in api_set:
                 apis_dict[api.function_name] = api
 
-            # 记录元数据供后续 DataLayout/ConditionManager 使用
+            # Record metadata for subsequent DataLayout/ConditionManager usage
             # Note: LLVM results are on HOST, Clang results copied from container
             self.last_metadata = {
                 "container": {
