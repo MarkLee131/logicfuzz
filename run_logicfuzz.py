@@ -698,13 +698,12 @@ def generate_type_aware_sequences(
   source_per_type = getattr(condition_manager, 'source_per_type', {})
   sink_map = getattr(condition_manager, 'sink_map', {})
 
-  # Classify all APIs by role
+  # Classify all APIs by role (based on static analysis, no heuristics)
   classification = {
     'SOURCE': set(),      # Creates resources (return pointer to struct)
     'SINK': set(),        # Destroys resources (DELETE access)
     'INIT': set(),        # Initializes existing objects
-    'OPERATE': set(),     # Other operations
-    'OTHER': set()
+    'OTHER': set()        # All other APIs
   }
 
   for api in api_list:
@@ -715,14 +714,8 @@ def generate_type_aware_sequences(
     elif api in init_apis:
       classification['INIT'].add(api.function_name)
     else:
-      # Use heuristic for OPERATE vs OTHER
-      name = api.function_name.lower()
-      if any(p in name for p in ['get', 'add', 'set', 'insert', 'replace', 'detach',
-                                  'remove', 'append', 'prepend', 'is', 'has', 'find',
-                                  'compare', 'print', 'write', 'dump']):
-        classification['OPERATE'].add(api.function_name)
-      else:
-        classification['OTHER'].add(api.function_name)
+      # No heuristic - all non-SOURCE/SINK/INIT APIs go to OTHER
+      classification['OTHER'].add(api.function_name)
 
   # Build reverse dependency graph (who can come after me)
   all_apis_set = set(dep_graph_api.keys())
@@ -795,9 +788,9 @@ def generate_type_aware_sequences(
     if sink_api:
       add_sequence([source_api, sink_api])
 
-  # Strategy 2: SOURCE -> OPERATE -> matched SINK
-  logger.info('Generating SOURCE -> OPERATE -> SINK sequences...')
-  operate_apis = {name_to_api[name] for name in classification['OPERATE'] if name in name_to_api}
+  # Strategy 2: SOURCE -> OTHER -> matched SINK
+  logger.info('Generating SOURCE -> OTHER -> SINK sequences...')
+  other_apis = {name_to_api[name] for name in classification['OTHER'] if name in name_to_api}
 
   for source_api in source_apis:
     if len(sequences) >= max_sequences:
@@ -807,23 +800,23 @@ def generate_type_aware_sequences(
     if not sink_api:
       continue
 
-    # Find OPERATE APIs that can follow SOURCE
-    operate_followers = find_followers(source_api, operate_apis)
+    # Find OTHER APIs that can follow SOURCE
+    other_followers = find_followers(source_api, other_apis)
 
-    for op_api in operate_followers[:5]:
+    for op_api in other_followers[:5]:
       if len(sequences) >= max_sequences:
         break
 
       add_sequence([source_api, op_api, sink_api])
 
-      # Try chaining two OPERATE APIs
-      op_followers2 = find_followers(op_api, operate_apis)
-      for op_api2 in op_followers2[:3]:
+      # Try chaining two OTHER APIs
+      other_followers2 = find_followers(op_api, other_apis)
+      for op_api2 in other_followers2[:3]:
         if op_api2 != op_api:
           add_sequence([source_api, op_api, op_api2, sink_api])
 
-  # Strategy 3: SOURCE -> INIT -> OPERATE -> SINK (with initialization)
-  logger.info('Generating SOURCE -> INIT -> OPERATE -> SINK sequences...')
+  # Strategy 3: SOURCE -> INIT -> OTHER -> SINK (with initialization)
+  logger.info('Generating SOURCE -> INIT -> OTHER -> SINK sequences...')
   init_api_set = {name_to_api[name] for name in classification['INIT'] if name in name_to_api}
 
   for source_api in source_apis:
@@ -839,12 +832,12 @@ def generate_type_aware_sequences(
     for init_api in init_followers[:3]:
       add_sequence([source_api, init_api, sink_api])
 
-      # Add OPERATE between INIT and SINK
-      op_followers = find_followers(init_api, operate_apis)
-      for op_api in op_followers[:2]:
+      # Add OTHER between INIT and SINK
+      other_init_followers = find_followers(init_api, other_apis)
+      for op_api in other_init_followers[:2]:
         add_sequence([source_api, init_api, op_api, sink_api])
 
-  # Strategy 4: Multiple SOURCEs with shared operations
+  # Strategy 4: Multiple SOURCEs with shared OTHER APIs
   logger.info('Generating multi-source sequences...')
   source_list = list(source_apis)[:10]
 
@@ -861,13 +854,13 @@ def generate_type_aware_sequences(
       if not sink2:
         continue
 
-      # Find common OPERATE APIs
-      followers1 = set(find_followers(source1, operate_apis))
-      followers2 = set(find_followers(source2, operate_apis))
-      common_ops = followers1 & followers2
+      # Find common OTHER APIs
+      followers1 = set(find_followers(source1, other_apis))
+      followers2 = set(find_followers(source2, other_apis))
+      common_others = followers1 & followers2
 
-      for op_api in list(common_ops)[:2]:
-        add_sequence([source1, source2, op_api, sink1, sink2])
+      for other_api in list(common_others)[:2]:
+        add_sequence([source1, source2, other_api, sink1, sink2])
 
   # Sort sequences by length (longer first) then alphabetically
   sequences.sort(key=lambda x: (-len(x), x[0]))
@@ -877,7 +870,6 @@ def generate_type_aware_sequences(
     'SOURCE': sorted(classification['SOURCE']),
     'SINK': sorted(classification['SINK']),
     'INIT': sorted(classification['INIT']),
-    'OPERATE': sorted(classification['OPERATE']),
     'OTHER': sorted(classification['OTHER'])
   }
 
@@ -928,28 +920,6 @@ def print_dependency_graph_stats(project: str, dep_graph: dict, output_dir: str 
   logger.info('  APIs with outgoing dependencies: %d', total_apis_with_deps)
   logger.info('  Total dependency edges: %d', total_dependencies)
   logger.info('  Average dependencies per API: %.2f', avg_dependencies)
-
-  # Entry points analysis
-  logger.info('')
-  logger.info('=' * 40)
-  logger.info('ENTRY POINTS (APIs without dependencies):')
-  logger.info('=' * 40)
-  if entry_points:
-    logger.info('  Found %d entry point(s) (%.1f%% of all APIs)', 
-                len(entry_points), 100 * len(entry_points) / total_all_apis if total_all_apis > 0 else 0)
-    logger.info('')
-    # Sort entry points alphabetically for consistent output
-    sorted_entry_points = sorted(entry_points)
-    for i, api in enumerate(sorted_entry_points[:20], 1):
-      logger.info('  %2d. %s', i, api)
-    if len(entry_points) > 20:
-      logger.info('  ... and %d more', len(entry_points) - 20)
-  else:
-    logger.warning('  NO ENTRY POINTS FOUND! The graph may have circular dependencies.')
-    logger.warning('  Consider adding APIs that only use primitive types as inputs.')
-
-  logger.info('')
-  logger.info('=' * 80)
   logger.info('')
 
   # Generate visualization if output directory is provided
