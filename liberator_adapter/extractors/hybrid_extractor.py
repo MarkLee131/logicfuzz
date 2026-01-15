@@ -3,11 +3,9 @@ Integrate Clang and LLVM extractors, provide complete API extraction functionali
 """
 import os
 import logging
-import subprocess as sp
 import tempfile
 import shutil
-from typing import Dict, List, Optional, Set
-from pathlib import Path
+from typing import Dict, List, Optional
 
 from tool.container_tool import ProjectContainerTool
 from experiment.benchmark import Benchmark
@@ -24,25 +22,31 @@ logger = logging.getLogger(__name__)
 class HybridAPIExtractor(BaseAPIExtractor):
     """
     Integrate Clang and LLVM extractors, provide complete API extraction functionality.
-    
+
     Workflow:
     1. Use Clang extractor to extract apis_clang.json from header files
     2. Use wllvm to compile project to bitcode
     3. Use LLVM extractor to extract apis_llvm.json from bitcode
     4. Use Utils.get_api_list() to merge data and generate Api objects
     """
-    
-    def __init__(self, benchmark: Benchmark, container: Optional[ProjectContainerTool] = None):
+
+    def __init__(self, benchmark: Benchmark, container: Optional[ProjectContainerTool] = None,
+                 use_llvm14_builder: bool = True):
         """
         Initialize hybrid extractor
-        
+
         Args:
             benchmark: benchmark object
             container: optional container tool (if created)
+            use_llvm14_builder: whether to use custom base-builder with LLVM 14
+                               (default True since LLVM extraction requires clang-14)
         """
-        super().__init__(benchmark, container, container_name='hybrid_extract')
-        
-        # Create sub-extractors (share the same container)
+        # LLVM extraction requires clang-14, so use_llvm14_builder should default to True
+        super().__init__(benchmark, container, container_name='hybrid_extract',
+                         use_llvm14_builder=use_llvm14_builder)
+
+        # Create sub-extractors (share the same container, no need to pass use_llvm14_builder
+        # since they share the already-created container)
         self.clang_extractor = ClangAPIExtractor(benchmark, self.container)
         self.llvm_extractor = LLVMAPIExtractor(benchmark, self.container)
         
@@ -100,9 +104,9 @@ class HybridAPIExtractor(BaseAPIExtractor):
             else:
                 raise ValueError("bc_file not provided and compile_project=False")
         
-        # 3. 提取 apis_llvm.json
-        logger.info("Step 3: Extracting apis_llvm.json...")
-        apis_llvm_path = self.llvm_extractor.extract_apis_llvm(
+        # 3. 提取 apis_llvm.json (在 host 上运行)
+        logger.info("Step 3: Extracting apis_llvm.json on host...")
+        apis_llvm_path = self.llvm_extractor.extract_apis_llvm_on_host(
             bc_file=bc_file,
             apis_clang_path=apis_clang_path,
             output_dir=self.output_dir
