@@ -102,24 +102,24 @@ class VarLenAnalyzer:
         self._cache: Dict[str, VarLenAnalysisResult] = {}
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_client = llm_client
 
     def analyze(self, api: Api) -> VarLenAnalysisResult:
         """
-        分析API的var-len关系
+        Analyze API's var-len relationships
 
         Args:
-            api: API对象
+            api: API object
 
         Returns:
-            VarLenAnalysisResult: 分析结果
+            VarLenAnalysisResult: Analysis result
         """
-        # 检查缓存
+        # Check cache
         if api.function_name in self._cache:
             return self._cache[api.function_name]
 
-        # Phase 1: 静态分析识别候选
+        # Phase 1: Static analysis identifies candidates
         candidates = self._phase1_static_analysis(api)
 
         result = VarLenAnalysisResult(
@@ -131,12 +131,12 @@ class VarLenAnalyzer:
             self._cache[api.function_name] = result
             return result
 
-        # Phase 2: LLM确认
+        # Phase 2: LLM confirmation
         if self.llm_client:
             result = self._phase2_llm_confirm(api, candidates)
             result.llm_confirmed = True
         else:
-            # 没有LLM，使用启发式构建关系
+            # No LLM, use heuristics to build relationships
             result.relations = self._heuristic_build_relations(api, candidates)
 
         self._cache[api.function_name] = result
@@ -144,9 +144,9 @@ class VarLenAnalyzer:
 
     def _phase1_static_analysis(self, api: Api) -> List[Tuple[int, int]]:
         """
-        Phase 1: 静态分析识别候选 (buffer_idx, length_idx) 对
+        Phase 1: Static analysis identifies candidate (buffer_idx, length_idx) pairs
 
-        策略: 宽松匹配，允许误报
+        Strategy: Loose matching, allows false positives
         """
         candidates = []
         args = api.arguments_info
@@ -154,7 +154,7 @@ class VarLenAnalyzer:
         if len(args) < 2:
             return candidates
 
-        # 识别指针参数和整数参数
+        # Identify pointer parameters and integer parameters
         pointer_indices = []
         integer_indices = []
 
@@ -164,7 +164,7 @@ class VarLenAnalyzer:
             if self._is_length_type(arg.type):
                 integer_indices.append(i)
 
-        # 对每个指针参数，找可能的长度参数
+        # For each pointer parameter, find possible length parameter
         for ptr_idx in pointer_indices:
             ptr_arg = args[ptr_idx]
 
@@ -174,44 +174,44 @@ class VarLenAnalyzer:
 
                 int_arg = args[int_idx]
 
-                # 检查命名模式
+                # Check naming patterns
                 if self._names_match(ptr_arg.name, int_arg.name):
                     candidates.append((ptr_idx, int_idx))
-                # 检查位置模式 (相邻参数)
+                # Check position patterns (adjacent parameters)
                 elif abs(ptr_idx - int_idx) == 1:
                     candidates.append((ptr_idx, int_idx))
 
-        # 去重
+        # Deduplicate
         candidates = list(set(candidates))
 
         logger.debug(f"Phase1 candidates for {api.function_name}: {candidates}")
         return candidates
 
     def _is_pointer_type(self, type_str: str) -> bool:
-        """检查是否是指针类型"""
+        """Check if it's a pointer type"""
         type_str = type_str.strip()
 
-        # 直接匹配
+        # Direct match
         if type_str in self.POINTER_TYPES:
             return True
 
-        # 模式匹配: 包含 * 且不是函数指针
+        # Pattern match: contains * and is not a function pointer
         if '*' in type_str and '(*)' not in type_str:
-            # 排除 char** 等二级指针（通常不是buffer）
+            # Exclude char** etc. secondary pointers (usually not buffers)
             if type_str.count('*') == 1:
                 return True
 
         return False
 
     def _is_length_type(self, type_str: str) -> bool:
-        """检查是否是长度类型"""
+        """Check if it's a length type"""
         type_str = type_str.strip()
 
-        # 直接匹配
+        # Direct match
         if type_str in self.LENGTH_TYPES:
             return True
 
-        # 模式匹配
+        # Pattern match
         for length_type in self.LENGTH_TYPES:
             if length_type in type_str and '*' not in type_str:
                 return True
@@ -219,7 +219,7 @@ class VarLenAnalyzer:
         return False
 
     def _names_match(self, ptr_name: str, int_name: str) -> bool:
-        """检查命名是否匹配"""
+        """Check if names match"""
         for buf_pattern, len_pattern in self.NAME_PATTERNS:
             if re.search(buf_pattern, ptr_name) and re.search(len_pattern, int_name):
                 return True
@@ -227,7 +227,7 @@ class VarLenAnalyzer:
 
     def _heuristic_build_relations(self, api: Api,
                                     candidates: List[Tuple[int, int]]) -> List[VarLenRelation]:
-        """启发式构建var-len关系（无LLM时使用）"""
+        """Heuristically build var-len relationships (used when no LLM)"""
         relations = []
         args = api.arguments_info
 
@@ -235,7 +235,7 @@ class VarLenAnalyzer:
             ptr_arg = args[ptr_idx]
             int_arg = args[int_idx]
 
-            # 计算置信度
+            # Calculate confidence
             confidence = 0.5
             if self._names_match(ptr_arg.name, int_arg.name):
                 confidence = 0.8
@@ -249,7 +249,7 @@ class VarLenAnalyzer:
                 length_arg_idx=int_idx,
                 length_arg_name=int_arg.name,
                 length_arg_type=int_arg.type,
-                relationship=">=",  # 保守假设
+                relationship=">=",  # Conservative assumption
                 confidence=confidence,
                 reasoning="Heuristic: type and name pattern matching"
             ))
@@ -258,17 +258,17 @@ class VarLenAnalyzer:
 
     def _phase2_llm_confirm(self, api: Api,
                             candidates: List[Tuple[int, int]]) -> VarLenAnalysisResult:
-        """Phase 2: LLM确认语义关系"""
-        # 构建签名
+        """Phase 2: LLM confirms semantic relationships"""
+        # Build signature
         params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info])
         signature = f"{api.return_info.type} {api.function_name}({params})"
 
-        # 构建参数描述
+        # Build parameter description
         param_desc = []
         for i, arg in enumerate(api.arguments_info):
             param_desc.append(f"  [{i}] {arg.type} {arg.name}")
 
-        # 使用prompt_loader获取prompt
+        # Use prompt_loader to get prompt
         pm = get_prompt_manager()
         prompt = pm.get_varlen_prompt(
             signature=signature,
@@ -281,7 +281,7 @@ class VarLenAnalyzer:
             return result
         except Exception as e:
             logger.warning(f"LLM var-len analysis failed for {api.function_name}: {e}")
-            # 失败时使用启发式
+            # Use heuristics on failure
             return VarLenAnalysisResult(
                 api_name=api.function_name,
                 phase1_candidates=candidates,
@@ -291,7 +291,7 @@ class VarLenAnalyzer:
 
     def _parse_llm_response(self, api: Api, response: str,
                             candidates: List[Tuple[int, int]]) -> VarLenAnalysisResult:
-        """解析LLM响应"""
+        """Parse LLM response"""
         import json
 
         result = VarLenAnalysisResult(
@@ -299,9 +299,9 @@ class VarLenAnalyzer:
             phase1_candidates=candidates
         )
 
-        # 尝试解析JSON
+        # Try to parse JSON
         try:
-            # 提取JSON
+            # Extract JSON
             json_match = re.search(r'\{[\s\S]*\}', response)
             if json_match:
                 data = json.loads(json_match.group())
@@ -314,7 +314,7 @@ class VarLenAnalyzer:
         if data.get("no_varlen", False):
             return result
 
-        # 构建参数名到索引的映射
+        # Build parameter name to index mapping
         name_to_idx = {arg.name: i for i, arg in enumerate(api.arguments_info)}
 
         for rel in data.get("relations", []):
@@ -336,14 +336,14 @@ class VarLenAnalyzer:
                     length_arg_name=len_name,
                     length_arg_type=len_arg.type,
                     relationship=rel.get("relationship", ">="),
-                    confidence=0.9,  # LLM确认的高置信度
+                    confidence=0.9,  # High confidence for LLM confirmation
                     reasoning=rel.get("reasoning", "LLM confirmed")
                 ))
 
         return result
 
     def clear_cache(self):
-        """清除缓存"""
+        """Clear cache"""
         self._cache.clear()
 
 

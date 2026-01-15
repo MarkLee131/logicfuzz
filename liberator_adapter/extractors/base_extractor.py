@@ -1,7 +1,7 @@
 """
 Base API Extractor
 
-提供所有 API 提取器的公共基类功能
+Provides common base class functionality for all API extractors
 """
 import logging
 import subprocess
@@ -16,13 +16,13 @@ logger = logging.getLogger(__name__)
 
 class BaseAPIExtractor:
     """
-    API 提取器基类
+    Base class for API extractors
     
-    提供公共功能：
-    - 容器操作
-    - 文件存在性检查
-    - 资源清理
-    - 错误处理
+    Provides common functionality:
+    - Container operations
+    - File existence checks
+    - Resource cleanup
+    - Error handling
     """
     
     def __init__(
@@ -33,13 +33,13 @@ class BaseAPIExtractor:
         use_llvm14_builder: bool = False
     ):
         """
-        初始化基类
+        Initialize base class
 
         Args:
-            benchmark: 项目基准对象
-            container: 可选的容器工具（如果已创建）
-            container_name: 容器名称（用于创建新容器）
-            use_llvm14_builder: 是否使用预装LLVM 14的自定义base-builder镜像
+            benchmark: Project benchmark object
+            container: Optional container tool (if already created)
+            container_name: Container name (for creating new container)
+            use_llvm14_builder: Whether to use custom base-builder image with pre-installed LLVM 14
         """
         self.benchmark = benchmark
         self.container = container or ProjectContainerTool(
@@ -48,7 +48,7 @@ class BaseAPIExtractor:
             use_llvm14_builder=use_llvm14_builder
         )
         
-        # Liberator 工具路径：严格使用 liberator_adapter/liberator 下的文件
+        # Liberator tool path: strictly use files under liberator_adapter/liberator
         self.liberator_root = Path(__file__).parent.parent / 'liberator'
         
         if not self.liberator_root.exists():
@@ -59,13 +59,13 @@ class BaseAPIExtractor:
     
     def _file_exists_in_container(self, file_path: str) -> bool:
         """
-        检查容器内文件是否存在
+        Check if file exists in container
         
         Args:
-            file_path: 文件路径（容器内路径）
+            file_path: File path (container path)
         
         Returns:
-            文件是否存在
+            Whether file exists
         """
         result = self.container.execute(
             f'test -f "{file_path}" && echo "exists" || echo "not_found"'
@@ -74,13 +74,13 @@ class BaseAPIExtractor:
     
     def _dir_exists_in_container(self, dir_path: str) -> bool:
         """
-        检查容器内目录是否存在
+        Check if directory exists in container
         
         Args:
-            dir_path: 目录路径（容器内路径）
+            dir_path: Directory path (container path)
         
         Returns:
-            目录是否存在
+            Whether directory exists
         """
         result = self.container.execute(
             f'test -d "{dir_path}" && echo "exists" || echo "not_found"'
@@ -89,10 +89,10 @@ class BaseAPIExtractor:
     
     def _ensure_output_dir(self, output_dir: str) -> None:
         """
-        确保输出目录存在
+        Ensure output directory exists
         
         Args:
-            output_dir: 输出目录路径（容器内路径）
+            output_dir: Output directory path (container path)
         """
         result = self.container.execute(f'mkdir -p {output_dir}')
         if result.returncode != 0:
@@ -107,15 +107,15 @@ class BaseAPIExtractor:
         make_executable: bool = False
     ) -> str:
         """
-        复制文件到容器
+        Copy file to container
         
         Args:
-            host_path: 主机上的文件路径
-            container_path: 容器内的目标路径
-            make_executable: 是否设置为可执行
+            host_path: File path on host
+            container_path: Target path in container
+            make_executable: Whether to make it executable
         
         Returns:
-            容器内的文件路径
+            File path in container
         """
         if not host_path.exists():
             raise FileNotFoundError(f"Source file not found: {host_path}")
@@ -149,14 +149,14 @@ class BaseAPIExtractor:
         container_dir: str
     ) -> str:
         """
-        复制目录到容器
+        Copy directory to container
         
         Args:
-            host_dir: 主机上的目录路径
-            container_dir: 容器内的目标目录路径
+            host_dir: Directory path on host
+            container_dir: Target directory path in container
         
         Returns:
-            容器内的目录路径
+            Directory path in container
         """
         if not host_dir.exists():
             raise FileNotFoundError(f"Source directory not found: {host_dir}")
@@ -182,15 +182,15 @@ class BaseAPIExtractor:
         required: bool = True
     ) -> str:
         """
-        从容器复制文件到本地
+        Copy file from container to local
         
         Args:
-            container_path: 容器内的文件路径
-            local_path: 本地目标路径
-            required: 如果为 True，文件不存在时抛出异常；否则返回空字符串
+            container_path: File path in container
+            local_path: Local target path
+            required: If True, raise exception when file doesn't exist; otherwise return empty string
         
         Returns:
-            本地文件路径，如果 required=False 且复制失败则返回空字符串
+            Local file path, or empty string if required=False and copy failed
         """
         try:
             cmd = [
@@ -227,19 +227,19 @@ class BaseAPIExtractor:
         output_file: Optional[str] = None
     ) -> subprocess.CompletedProcess:
         """
-        执行命令并检查错误
+        Execute command and check for errors
         
         Args:
-            cmd: 要执行的命令
-            error_msg: 错误消息前缀
-            check_output: 是否检查输出文件
-            output_file: 输出文件路径（如果 check_output=True）
+            cmd: Command to execute
+            error_msg: Error message prefix
+            check_output: Whether to check output file
+            output_file: Output file path (if check_output=True)
         
         Returns:
-            命令执行结果
+            Command execution result
         
         Raises:
-            RuntimeError: 如果命令执行失败或输出文件不存在
+            RuntimeError: If command execution fails or output file doesn't exist
         """
         logger.debug(f"Executing command: {cmd}")
         result = self.container.execute(cmd)

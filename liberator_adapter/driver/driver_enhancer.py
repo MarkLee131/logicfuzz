@@ -100,8 +100,8 @@ void {func_name}(void) {{
 
     def _customize_stub_name(self, stub: str, func_name: str,
                              callback_info: CallbackInfo) -> str:
-        """自定义stub名称"""
-        # 替换模板中的占位符
+        """Customize stub name"""
+        # Replace placeholders in template
         old_patterns = [
             f"fuzz_comparator_{callback_info.arg_name}",
             f"fuzz_handler_{callback_info.arg_name}",
@@ -118,7 +118,7 @@ void {func_name}(void) {{
                 stub = stub.replace(pattern, func_name)
                 break
 
-        # 替换Context类型名
+        # Replace Context type name
         stub = stub.replace(
             f"FuzzReaderCtx_{callback_info.arg_name}",
             f"FuzzReaderCtx_{func_name}"
@@ -128,7 +128,7 @@ void {func_name}(void) {{
 
     def _generate_from_template(self, func_name: str,
                                 callback_info: CallbackInfo) -> str:
-        """根据callback类型生成stub"""
+        """Generate stub based on callback type"""
         templates = {
             CallbackType.COMPARATOR: f'''
 int {func_name}(const void* a, const void* b) {{
@@ -189,17 +189,17 @@ int {func_name}(void* item, void* user_data) {{
                             self._generate_empty_stub(func_name))
 
     def get_all_stubs(self) -> Dict[str, str]:
-        """获取所有生成的stub"""
+        """Get all generated stubs"""
         return self._generated_stubs.copy()
 
 
 # =============================================================================
-# API模式信息缓存
+# API Pattern Information Cache
 # =============================================================================
 
 @dataclass
 class APIPatternCache:
-    """API模式分析结果缓存"""
+    """API pattern analysis result cache"""
     varlen_relations: Dict[str, List[VarLenRelation]] = field(default_factory=dict)
     loop_patterns: Dict[str, LoopPatternInfo] = field(default_factory=dict)
     callback_infos: Dict[str, List[CallbackInfo]] = field(default_factory=dict)
@@ -219,18 +219,18 @@ class APIPatternCache:
 
 
 # =============================================================================
-# Driver增强器
+# Driver Enhancer
 # =============================================================================
 
 class DriverEnhancer:
     """
-    Driver增强器
+    Driver Enhancer
 
-    在Driver生成流程中集成特殊模式分析，提供：
-    1. Callback stub增强
-    2. VarLen关系信息
-    3. Loop模式检测
-    4. TLV解析器标记
+    Integrates special pattern analysis into driver generation workflow, providing:
+    1. Callback stub enhancement
+    2. VarLen relationship information
+    3. Loop pattern detection
+    4. TLV parser marking
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
@@ -243,21 +243,21 @@ class DriverEnhancer:
             self.stub_generator.set_llm_client(llm_client)
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_client = llm_client
         self.pattern_analyzer.set_llm_client(llm_client)
         self.stub_generator.set_llm_client(llm_client)
 
     def analyze_api(self, api: Api) -> None:
         """
-        分析单个API并缓存结果
+        Analyze single API and cache results
 
         Args:
-            api: API对象
+            api: API object
         """
         result = self.pattern_analyzer.analyze(api)
 
-        # 缓存结果
+        # Cache results
         if result.varlen:
             self.cache.varlen_relations[api.function_name] = result.varlen.relations
 
@@ -271,39 +271,39 @@ class DriverEnhancer:
             self.cache.tlv_results[api.function_name] = result.tlv
 
     def analyze_apis(self, apis: List[Api]) -> None:
-        """批量分析API"""
+        """Batch analyze APIs"""
         for api in apis:
             self.analyze_api(api)
 
     def get_varlen_relations(self, api_name: str) -> List[VarLenRelation]:
-        """获取API的var-len关系"""
+        """Get API's var-len relationships"""
         return self.cache.varlen_relations.get(api_name, [])
 
     def get_loop_pattern(self, api_name: str) -> Optional[LoopPatternInfo]:
-        """获取API的循环模式信息"""
+        """Get API's loop pattern information"""
         return self.cache.loop_patterns.get(api_name)
 
     def needs_loop(self, api_name: str) -> bool:
-        """检查API是否需要循环调用"""
+        """Check if API needs loop calls"""
         return self.cache.needs_loop(api_name)
 
     def get_callback_infos(self, api_name: str) -> List[CallbackInfo]:
-        """获取API的callback信息"""
+        """Get API's callback information"""
         return self.cache.callback_infos.get(api_name, [])
 
     def is_structured_parser(self, api_name: str) -> bool:
-        """检查API是否是结构化数据解析器"""
+        """Check if API is a structured data parser"""
         return self.cache.is_structured_parser(api_name)
 
     def generate_callback_stub(self, api: Api, arg_idx: int,
                                 func_name: str) -> Tuple[str, CallbackType]:
         """
-        为callback参数生成stub代码
+        Generate stub code for callback parameter
 
         Args:
-            api: API对象
-            arg_idx: callback参数索引
-            func_name: 生成的函数名
+            api: API object
+            arg_idx: Callback parameter index
+            func_name: Generated function name
 
         Returns:
             (stub_code, callback_type)
@@ -313,10 +313,10 @@ class DriverEnhancer:
     def get_buffer_size_constraint(self, api_name: str,
                                     buffer_arg_idx: int) -> Optional[Tuple[int, str]]:
         """
-        获取buffer参数的size约束
+        Get buffer parameter's size constraint
 
         Args:
-            api_name: API名称
+            api_name: API name
             buffer_arg_idx: buffer参数索引
 
         Returns:

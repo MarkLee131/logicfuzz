@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 class APIContextExtractor:
-    """从 FuzzIntrospector 提取 API 上下文"""
+    """Extract API context from FuzzIntrospector"""
     
     def __init__(self, project_name: str):
         self.project_name = project_name
@@ -38,19 +38,19 @@ class APIContextExtractor:
     
     def extract(self, function_signature: str) -> Dict:
         """
-        提取函数的 API 上下文
+        Extract function's API context
         
         Args:
-            function_signature: 函数签名（如 "igraph_sparsemat_arpack_rssolve"）
+            function_signature: Function signature (e.g., "igraph_sparsemat_arpack_rssolve")
         
         Returns:
-            包含以下字段的字典：
-            - parameters: 参数列表
-            - return_type: 返回类型
-            - type_definitions: 类型定义字典
-            - usage_examples: 用法示例列表
-            - initialization_patterns: 初始化模式列表
-            - related_functions: 相关函数列表
+            Dictionary containing the following fields:
+            - parameters: Parameter list
+            - return_type: Return type
+            - type_definitions: Type definition dictionary
+            - usage_examples: Usage example list
+            - initialization_patterns: Initialization pattern list
+            - related_functions: Related function list
         """
         logger.info(f"Extracting API context for {function_signature}")
         
@@ -61,26 +61,26 @@ class APIContextExtractor:
             'usage_examples': [],
             'initialization_patterns': [],
             'related_functions': [],
-            'side_effects': {}  # NEW: 副作用分析
+            'side_effects': {}  # NEW: Side effect analysis
         }
         
         try:
-            # 1. 提取函数信息（参数和返回类型）
+            # 1. Extract function information (parameters and return type)
             self._extract_function_info(function_signature, context)
             
-            # 2. 提取类型定义
+            # 2. Extract type definitions
             self._extract_type_definitions(context)
             
-            # 3. 提取用法示例
+            # 3. Extract usage examples
             self._extract_usage_examples(function_signature, context)
             
-            # 4. 识别初始化模式
+            # 4. Identify initialization patterns
             self._identify_initialization_patterns(context)
             
-            # 5. 查找相关函数
+            # 5. Find related functions
             self._find_related_functions(context)
             
-            # 6. 识别副作用 (NEW)
+            # 6. Identify side effects (NEW)
             self._identify_side_effects(function_signature, context)
             
             logger.info(f"Successfully extracted API context for {function_signature}")
@@ -96,16 +96,16 @@ class APIContextExtractor:
         return context
     
     def _extract_function_info(self, func_sig: str, context: Dict):
-        """提取函数签名信息"""
+        """Extract function signature information"""
         logger.debug(f"Extracting function info for {func_sig}")
         
-        # 方法 1 (NEW): 使用 Debug Types API（更准确）
+        # Method 1 (NEW): Use Debug Types API (more accurate)
         try:
             arg_types = introspector.query_introspector_function_debug_arg_types(
                 self.project_name, func_sig
             )
             if arg_types:
-                # Debug types 返回参数类型列表
+                # Debug types returns parameter type list
                 context['parameters'] = [
                     {
                         'name': f'param{i}',
@@ -115,19 +115,19 @@ class APIContextExtractor:
                 ]
                 logger.debug(f"Extracted {len(arg_types)} parameters from debug types")
                 
-                # 尝试获取返回类型（从函数签名推断）
+                # Try to get return type (infer from function signature)
                 context['return_type'] = self._infer_return_type_from_signature(func_sig)
                 return
         except Exception as e:
             logger.debug(f"Could not get debug types: {e}")
         
-        # 方法 2 (Fallback): 从源码解析
+        # Method 2 (Fallback): Parse from source code
         func_source = introspector.query_introspector_function_source(
             self.project_name, func_sig
         )
         
         if func_source:
-            # 从源码中解析函数签名
+            # Parse function signature from source code
             parsed = self._parse_function_signature_from_source(func_source)
             if parsed:
                 context['parameters'] = parsed.get('parameters', [])
@@ -135,14 +135,14 @@ class APIContextExtractor:
                 logger.debug(f"Parsed {len(context['parameters'])} parameters from source")
                 return
         
-        # 方法 3: 使用默认值（最后手段）
+        # Method 3: Use default values (last resort)
         logger.warning(f"Could not get function info for {func_sig}, using defaults")
         context['parameters'] = []
-        context['return_type'] = 'int'  # 默认
+        context['return_type'] = 'int'  # Default
     
     def _infer_return_type_from_signature(self, func_sig: str) -> str:
-        """从函数签名推断返回类型"""
-        # 简单启发式规则
+        """Infer return type from function signature"""
+        # Simple heuristic rules
         if func_sig.startswith('void '):
             return 'void'
         elif func_sig.startswith('int '):
@@ -154,12 +154,12 @@ class APIContextExtractor:
         elif '*' in func_sig.split('(')[0]:
             return 'pointer'
         else:
-            return 'int'  # 默认
+            return 'int'  # Default
     
     def _parse_function_signature_from_source(self, source: str) -> Optional[Dict]:
-        """从源码中解析函数签名"""
-        # 简单的正则表达式解析
-        # 匹配: return_type function_name(params) {
+        """Parse function signature from source code"""
+        # Simple regex parsing
+        # Match: return_type function_name(params) {
         pattern = r'^\s*([a-zA-Z_][\w\s\*]*?)\s+([a-zA-Z_]\w*)\s*\((.*?)\)\s*\{'
         
         match = re.search(pattern, source, re.MULTILINE | re.DOTALL)
@@ -169,7 +169,7 @@ class APIContextExtractor:
         return_type = match.group(1).strip()
         params_str = match.group(3).strip()
         
-        # 解析参数
+        # Parse parameters
         parameters = []
         if params_str and params_str != 'void':
             for param in params_str.split(','):
@@ -177,7 +177,7 @@ class APIContextExtractor:
                 if not param:
                     continue
                 
-                # 简单解析: type name
+                # Simple parsing: type name
                 parts = param.rsplit(None, 1)
                 if len(parts) == 2:
                     param_type, param_name = parts
@@ -186,7 +186,7 @@ class APIContextExtractor:
                         'type': param_type
                     })
                 else:
-                    # 只有类型，没有名字
+                    # Only type, no name
                     parameters.append({
                         'name': f'param{len(parameters)}',
                         'type': param
@@ -198,39 +198,39 @@ class APIContextExtractor:
         }
     
     def _extract_type_definitions(self, context: Dict):
-        """提取参数类型的定义"""
+        """Extract parameter type definitions"""
         logger.debug("Extracting type definitions")
         
-        # 获取项目的所有类型定义（一次性查询）
+        # Get all type definitions for project (single query)
         try:
             all_types = introspector.query_introspector_type_definition(
                 self.project_name
             )
-            # 构建类型名到定义的映射
+            # Build type name to definition mapping
             type_map = {t.get('name', ''): t for t in all_types if t.get('name')}
             logger.debug(f"Loaded {len(type_map)} type definitions")
         except Exception as e:
             logger.debug(f"Could not get type definitions: {e}")
             type_map = {}
         
-        # 为每个参数查找类型定义
+        # Look up type definition for each parameter
         for param in context['parameters']:
             param_type = clean_type_name(param['type'])
             
-            # 跳过基本类型
+            # Skip primitive types
             if is_primitive_type(param_type):
                 continue
             
-            # 查找类型定义
+            # Look up type definition
             if param_type in type_map:
                 context['type_definitions'][param_type] = type_map[param_type]
                 logger.debug(f"Found type definition for {param_type}")
     
     def _extract_usage_examples(self, func_sig: str, context: Dict):
-        """从现有代码中提取用法示例（优化采样策略）"""
+        """Extract usage examples from existing code (optimized sampling strategy)"""
         logger.debug(f"Extracting usage examples for {func_sig}")
         
-        # 方法 0 (HIGHEST PRIORITY): 从测试文件提取用法（最干净的API使用示例）
+        # Method 0 (HIGHEST PRIORITY): Extract usage from test files (cleanest API usage examples)
         try:
             # Extract simple function name from signature for test xref query
             # e.g., "void curl_easy_perform(CURL *)" -> "curl_easy_perform"
@@ -280,7 +280,7 @@ class APIContextExtractor:
         except Exception as e:
             logger.debug(f"Could not get test xrefs: {e}")
         
-        # 方法 1 (Fallback): 使用 Sample XRefs API（预处理的高质量示例）
+        # Method 1 (Fallback): Use Sample XRefs API (preprocessed high-quality examples)
         try:
             sample_xrefs = introspector.query_introspector_sample_xrefs(
                 self.project_name, func_sig
@@ -288,25 +288,25 @@ class APIContextExtractor:
             if sample_xrefs:
                 logger.debug(f"Found {len(sample_xrefs)} sample cross-references")
                 
-                # Sample xrefs 已经是预处理的代码片段
-                for i, source_code in enumerate(sample_xrefs[:3]):  # 限制3个
+                # Sample xrefs are already preprocessed code snippets
+                for i, source_code in enumerate(sample_xrefs[:3]):  # Limit to 3
                     context['usage_examples'].append({
                         'source': source_code,
-                        'file': '',  # Sample xrefs 不包含文件信息
+                        'file': '',  # Sample xrefs don't contain file information
                         'function': f'example_{i+1}',
                         'line': 0,
                         'source_type': 'sample_xref'
                     })
                 logger.debug(f"Added {len(context['usage_examples'])} sample xref examples")
-                return  # 如果有 sample xrefs，优先使用
+                return  # If sample xrefs exist, prioritize using them
         except Exception as e:
             logger.debug(f"Could not get sample xrefs: {e}")
         
-        # Note: 方法2 (call_sites) 已移除
-        # 理由：
-        #  - test_xrefs 和 sample_xrefs 已提供足够高质量的示例
-        #  - call_sites 需要二次查询、优先级排序、snippet提取，复杂度高
-        #  - 质量不如前两者（包含内部实现、业务逻辑）
+        # Note: Method 2 (call_sites) has been removed
+        # Reasons:
+        #  - test_xrefs and sample_xrefs already provide sufficiently high-quality examples
+        #  - call_sites requires secondary queries, priority sorting, snippet extraction, high complexity
+        #  - Quality is not as good as the former two (contains internal implementation, business logic)
         # 特殊用例（如 function_analyzer 的迭代学习）仍可直接调用底层 API
     
     def _identify_initialization_patterns(self, context: Dict):

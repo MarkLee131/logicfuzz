@@ -1,11 +1,11 @@
 """
 Z3 Constraint Solver for LogicFuzz
 
-提供基于 Z3 的约束求解功能，用于：
-1. API 序列可行性验证
-2. 约束可满足性检查
-3. 依赖图精确剪枝
-4. 路径约束验证
+Provides Z3-based constraint solving functionality for:
+1. API sequence feasibility validation
+2. Constraint satisfiability checking
+3. Dependency graph precise pruning
+4. Path constraint validation
 
 Author: LogicFuzz Team
 """
@@ -24,7 +24,7 @@ try:
     Z3_AVAILABLE = True
 except ImportError:
     Z3_AVAILABLE = False
-    # 提供 stub 以防 Z3 不可用
+    # Provide stubs in case Z3 is unavailable
     Solver = None
     Bool = None
     Int = None
@@ -46,19 +46,19 @@ logger = logging.getLogger(__name__)
 
 
 class ConstraintType(Enum):
-    """约束类型枚举"""
-    TYPE_MATCH = "type_match"           # 类型匹配约束
-    ACCESS_ORDER = "access_order"       # 访问顺序约束 (CREATE before DELETE)
-    PROVENANCE = "provenance"           # Provenance 兼容性约束
-    DEPENDENCY = "dependency"           # 参数依赖约束
-    NULLABILITY = "nullability"         # 可空性约束
-    ARRAY_BOUNDS = "array_bounds"       # 数组边界约束
-    RESOURCE_LIFECYCLE = "lifecycle"    # 资源生命周期约束
+    """Constraint type enumeration"""
+    TYPE_MATCH = "type_match"           # Type matching constraint
+    ACCESS_ORDER = "access_order"       # Access order constraint (CREATE before DELETE)
+    PROVENANCE = "provenance"           # Provenance compatibility constraint
+    DEPENDENCY = "dependency"           # Parameter dependency constraint
+    NULLABILITY = "nullability"         # Nullability constraint
+    ARRAY_BOUNDS = "array_bounds"       # Array bounds constraint
+    RESOURCE_LIFECYCLE = "lifecycle"    # Resource lifecycle constraint
 
 
 @dataclass
 class Z3Constraint:
-    """Z3 约束的包装类"""
+    """Z3 constraint wrapper class"""
     constraint_type: ConstraintType
     z3_expr: Any  # Z3 expression
     description: str
@@ -68,9 +68,9 @@ class Z3Constraint:
 
 class Z3ConstraintBuilder:
     """
-    Z3 约束构建器
+    Z3 constraint builder
 
-    将 LogicFuzz 的约束模型转换为 Z3 表达式
+    Converts LogicFuzz constraint model to Z3 expressions
     """
 
     def __init__(self):
@@ -80,16 +80,16 @@ class Z3ConstraintBuilder:
         self.solver = Solver()
         self.constraints: List[Z3Constraint] = []
 
-        # 变量映射
-        self.api_vars: Dict[str, Any] = {}      # API 名称 -> Z3 变量
-        self.type_vars: Dict[str, Any] = {}     # 类型名称 -> Z3 变量
-        self.order_vars: Dict[str, Int] = {}    # API 序号变量
+        # Variable mappings
+        self.api_vars: Dict[str, Any] = {}      # API name -> Z3 variable
+        self.type_vars: Dict[str, Any] = {}     # Type name -> Z3 variable
+        self.order_vars: Dict[str, Int] = {}    # API order variables
 
-        # 类型兼容性缓存
+        # Type compatibility cache
         self._type_compat_cache: Dict[Tuple[str, str], bool] = {}
 
     def reset(self):
-        """重置求解器状态"""
+        """Reset solver state"""
         self.solver.reset()
         self.constraints.clear()
         self.api_vars.clear()
@@ -97,25 +97,25 @@ class Z3ConstraintBuilder:
         self.order_vars.clear()
 
     def _get_or_create_api_var(self, api_name: str) -> Any:
-        """获取或创建 API 的布尔变量（表示 API 是否被调用）"""
+        """Get or create API's boolean variable (indicates whether API is called)"""
         if api_name not in self.api_vars:
             self.api_vars[api_name] = Bool(f"api_{api_name}")
         return self.api_vars[api_name]
 
     def _get_or_create_order_var(self, api_name: str) -> Int:
-        """获取或创建 API 的序号变量（表示调用顺序）"""
+        """Get or create API's order variable (indicates call order)"""
         if api_name not in self.order_vars:
             self.order_vars[api_name] = Int(f"order_{api_name}")
         return self.order_vars[api_name]
 
     def _get_or_create_type_var(self, type_name: str) -> Int:
-        """获取或创建类型变量（表示类型 ID）"""
+        """Get or create type variable (represents type ID)"""
         if type_name not in self.type_vars:
-            # 使用整数表示类型 ID
+            # Use integer to represent type ID
             self.type_vars[type_name] = Int(f"type_{type_name}")
         return self.type_vars[type_name]
 
-    # ========== 约束构建方法 ==========
+    # ========== Constraint Building Methods ==========
 
     def add_type_match_constraint(
         self,
@@ -125,22 +125,22 @@ class Z3ConstraintBuilder:
         target_type: str
     ) -> Z3Constraint:
         """
-        添加类型匹配约束
+        Add type matching constraint
 
-        如果 target_api 依赖 source_api 的输出，则类型必须兼容
+        If target_api depends on source_api's output, types must be compatible
         """
         source_var = self._get_or_create_type_var(source_type)
         target_var = self._get_or_create_type_var(target_type)
 
-        # 简化：去除指针和空格后比较
+        # Simplify: compare after removing pointers and spaces
         source_clean = source_type.replace("*", "").replace(" ", "")
         target_clean = target_type.replace("*", "").replace(" ", "")
 
-        # 如果类型相同，则添加等价约束
+        # If types are the same, add equivalence constraint
         if source_clean == target_clean:
             expr = source_var == target_var
         else:
-            # 类型不同，约束为 False（不兼容）
+            # Types differ, constraint is False (incompatible)
             expr = Bool(f"type_compat_{source_api}_{target_api}")
             self.solver.add(Not(expr))  # 默认不兼容
 

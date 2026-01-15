@@ -1,7 +1,7 @@
 """
-LLVM API 提取器
+LLVM API Extractor
 
-使用 Liberator 的 condition_extractor/bin/extractor 从 bitcode 提取 apis_llvm.json
+Uses Liberator's condition_extractor/bin/extractor to extract apis_llvm.json from bitcode
 """
 import os
 import logging
@@ -18,22 +18,22 @@ logger = logging.getLogger(__name__)
 
 class LLVMAPIExtractor(BaseAPIExtractor):
     """
-    使用 LLVM bitcode 提取 API 信息
+    Extract API information using LLVM bitcode
     
-    封装 liberator/condition_extractor/bin/extractor
+    Wraps liberator/condition_extractor/bin/extractor
     """
     
     def __init__(self, benchmark: Benchmark, container: Optional[ProjectContainerTool] = None):
         """
-        初始化 LLVM API 提取器
+        Initialize LLVM API extractor
         
         Args:
-            benchmark: 项目基准对象
-            container: 可选的容器工具（如果已创建）
+            benchmark: Project benchmark object
+            container: Optional container tool (if already created)
         """
         super().__init__(benchmark, container, container_name='llvm_extract')
         
-        # Liberator 工具路径：严格使用 liberator_adapter/liberator 下的文件
+        # Liberator tool path: strictly use files under liberator_adapter/liberator
         self.extractor_bin = self.liberator_root / 'condition_extractor' / 'bin' / 'extractor'
     
     # NOTE: extract_apis_llvm (container-based) has been removed.
@@ -46,30 +46,30 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         output_bc: Optional[str] = None
     ) -> str:
         """
-        使用 wllvm 编译项目到 bitcode
+        Compile project to bitcode using wllvm
 
-        使用clang-12来编译，以确保生成的bitcode与host上的extractor兼容
-        (host的extractor是用LLVM 14构建的，不支持opaque pointers)
-        clang-12 生成的bitcode使用typed pointers，与LLVM 14兼容
+        Uses clang-14 to compile, ensuring generated bitcode is compatible with host extractor
+        (host extractor is built with LLVM 14, doesn't support opaque pointers)
+        clang-14 generated bitcode uses typed pointers, compatible with LLVM 14
 
         Args:
-            source_dir: 源代码目录（默认使用 project_dir）
-            output_bc: 输出 bitcode 文件路径（可选）
+            source_dir: Source code directory (defaults to project_dir)
+            output_bc: Output bitcode file path (optional)
 
         Returns:
-            bitcode 文件路径
+            Bitcode file path
         """
         if not source_dir:
             source_dir = self.container.project_dir
 
-        # 确保 wllvm 和 clang-14 已安装（通过自定义base-builder镜像预装）
+        # Ensure wllvm and clang-14 are installed (pre-installed via custom base-builder image)
         self._ensure_wllvm_installed()
         self._ensure_clang14_installed()
 
-        # 编译项目：使用 clang-14 而不是默认的 clang (可能是22+)
-        # 这样生成的bitcode不使用opaque pointers，与host的extractor兼容
-        # 注意：禁用sanitizers，因为clang-14没有对应的运行时库
-        # 我们只需要bitcode用于静态分析，不需要sanitizers
+        # Compile project: use clang-14 instead of default clang (may be 22+)
+        # This way generated bitcode doesn't use opaque pointers, compatible with host extractor
+        # Note: Disable sanitizers, as clang-14 doesn't have corresponding runtime libraries
+        # We only need bitcode for static analysis, don't need sanitizers
         logger.info("Compiling project with wllvm using clang-14...")
         compile_cmd = (
             'export LLVM_COMPILER=clang && '
@@ -88,7 +88,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             logger.warning(f"Compile script returned error, but library may still exist")
             logger.debug(f"Compile output: {compile_result.stdout}")
 
-        # 查找库文件并提取 bitcode
+        # Find library file and extract bitcode
         if not output_bc:
             find_result = self.container.execute(
                 f'find {source_dir} -name "*.a" -type f | head -1'
@@ -99,7 +99,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             else:
                 raise RuntimeError("Could not find library file to extract bitcode from")
 
-        # 使用 extract-bc 提取 bitcode（使用 clang-14）
+        # Use extract-bc to extract bitcode (using clang-14)
         extract_cmd = (
             'export LLVM_COMPILER=clang && '
             'export LLVM_COMPILER_PATH=/usr/lib/llvm-14/bin && '
@@ -116,7 +116,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         return output_bc
 
     def _ensure_clang14_installed(self):
-        """确保 clang-14 已安装（应该已经在自定义base-builder镜像中预装）"""
+        """Ensure clang-14 is installed (should already be pre-installed in custom base-builder image)"""
         result = self.container.execute('test -x /usr/lib/llvm-14/bin/clang && echo ok')
         if result.returncode == 0 and 'ok' in result.stdout:
             return
@@ -130,7 +130,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         )
     
     def _ensure_wllvm_installed(self):
-        """确保 wllvm 已安装"""
+        """Ensure wllvm is installed"""
         result = self.container.execute('which wllvm extract-bc')
         if result.returncode == 0:
             return
@@ -147,52 +147,52 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         output_dir: str
     ) -> str:
         """
-        在Host上运行extractor分析bitcode（推荐方式）
+        Run extractor on host to analyze bitcode (recommended approach)
 
-        这种方式避免了在每个容器内配置复杂的LLVM/SVF/Z3依赖。
-        Host上的extractor只需构建一次，所有项目都可以复用。
+        This approach avoids configuring complex LLVM/SVF/Z3 dependencies in each container.
+        Host extractor only needs to be built once, can be reused for all projects.
 
         Args:
-            bc_file: 容器内的bitcode文件路径
-            apis_clang_path: 容器内的apis_clang.json路径
-            output_dir: 本地输出目录
+            bc_file: Bitcode file path in container
+            apis_clang_path: apis_clang.json path in container
+            output_dir: Local output directory
 
         Returns:
-            apis_llvm.json的本地路径
+            Local path to apis_llvm.json
         """
         import tempfile
         import shutil
 
-        # 验证host上的extractor存在
+        # Verify extractor exists on host
         if not self.extractor_bin.exists():
             raise RuntimeError(
                 f"Extractor binary not found at {self.extractor_bin}. "
                 f"Please build it first: cd liberator_adapter/liberator/condition_extractor && ./bootstrap.sh"
             )
 
-        # 创建临时目录用于host端处理
+        # Create temporary directory for host-side processing
         temp_dir = tempfile.mkdtemp(prefix='llvm_extract_')
         logger.info(f'Created temp directory for host extraction: {temp_dir}')
 
         try:
-            # 1. 从容器复制bitcode文件到host
+            # 1. Copy bitcode file from container to host
             local_bc_file = os.path.join(temp_dir, 'input.bc')
             self._copy_from_container(bc_file, local_bc_file, required=True)
             logger.info(f'Copied bitcode from container: {bc_file} -> {local_bc_file}')
 
-            # 2. 从容器复制apis_clang.json到host
+            # 2. Copy apis_clang.json from container to host
             local_apis_clang = os.path.join(temp_dir, 'apis_clang.json')
             self._copy_from_container(apis_clang_path, local_apis_clang, required=True)
             logger.info(f'Copied apis_clang.json from container')
 
-            # 3. 准备输出文件路径
+            # 3. Prepare output file paths
             local_conditions = os.path.join(temp_dir, 'conditions.json')
             local_apis_llvm = os.path.join(temp_dir, 'apis_llvm.json')
             local_data_layout = os.path.join(temp_dir, 'data_layout.txt')
             local_minimized_apis = os.path.join(temp_dir, 'apis_minimized.txt')
 
-            # 4. 在host上运行extractor
-            # 需要设置环境变量
+            # 4. Run extractor on host
+            # Need to set environment variables
             env = os.environ.copy()
             env['LIBFUZZ_LOG_PATH'] = temp_dir
 

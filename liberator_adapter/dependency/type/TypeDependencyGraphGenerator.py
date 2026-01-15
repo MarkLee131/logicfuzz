@@ -5,7 +5,7 @@ from liberator_adapter.common import Utils, Api, Arg
 from liberator_adapter.dependency import DependencyGraphGenerator, DependencyGraph
 from liberator_adapter.constraints.provenance_checker import ProvenanceChecker, ProvenanceInfo, ProvenanceTag
 
-# Z3 约束剪枝（可选）
+# Z3 constraint pruning (optional)
 try:
     from liberator_adapter.constraints.z3_solver import (
         Z3DependencyPruner, is_z3_available
@@ -22,13 +22,13 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
     def __init__(self, api_list, function_conditions=None, enable_provenance_filter=True,
                  enable_z3_pruning=False):
         """
-        初始化类型依赖图生成器
+        Initialize type dependency graph generator
 
         Args:
-            api_list: API 列表
-            function_conditions: 函数约束条件集合
-            enable_provenance_filter: 是否启用 Provenance 过滤
-            enable_z3_pruning: 是否启用 Z3 约束剪枝（需要安装 z3-solver）
+            api_list: API list
+            function_conditions: Function constraint condition set
+            enable_provenance_filter: Whether to enable Provenance filtering
+            enable_z3_pruning: Whether to enable Z3 constraint pruning (requires z3-solver installation)
         """
         super().__init__()
         self.apis_list = api_list
@@ -38,14 +38,14 @@ class TypeDependencyGraphGenerator(DependencyGraphGenerator):
         self.provenance_stats = {"filtered": 0, "kept": 0}
         self.z3_stats = {"filtered": 0, "kept": 0}
 
-        # 构建API名称到FunctionConditions的映射（用于快速查找）
+        # Build API name to FunctionConditions mapping (for fast lookup)
         self.function_conditions_map = {}
         if function_conditions:
             # FunctionConditionsSet uses fun_cond_set dict, iterate over values
             for func_name, fc in function_conditions.fun_cond_set.items():
                 self.function_conditions_map[func_name] = fc
 
-        # 初始化 Z3 剪枝器
+        # Initialize Z3 pruner
         self.z3_pruner = None
         if self.enable_z3_pruning:
             try:
