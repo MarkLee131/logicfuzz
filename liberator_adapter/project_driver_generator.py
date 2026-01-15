@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-项目级 Driver 生成器
+Project-level Driver Generator
 
-基于 Liberator 的静态建模功能，对整个项目生成 driver，不需要指定单个 API。
+Based on Liberator's static modeling capabilities, generates drivers for entire projects
+without needing to specify individual APIs.
 
-功能：
-1. 提取项目中的所有 API
-2. 生成类型依赖图
-3. 生成语义序列（Grammar）
-4. 管理约束条件（ConditionManager）
-5. 生成 driver 代码
+Features:
+1. Extract all APIs from the project
+2. Generate type dependency graph
+3. Generate semantic sequences (Grammar)
+4. Manage constraint conditions (ConditionManager)
+5. Generate driver code
 """
 import logging
 import os
@@ -31,7 +32,7 @@ from liberator_adapter.bias import Bias
 from liberator_adapter.backend.libfuzz import LFBackendDriver
 from liberator_adapter.driver.driver_enhancer import DriverEnhancer, APIPatternCache
 
-# 混合合成模块
+# Hybrid synthesis module
 from liberator_adapter.driver.synthesis import (
     SkeletonGenerator,
     SkeletonRenderer,
@@ -47,12 +48,12 @@ logger = logging.getLogger(__name__)
 
 class ProjectDriverGenerator:
     """
-    项目级 Driver 生成器
+    Project-level Driver Generator
     
-    使用 Liberator 的完整静态建模功能：
-    - 类型系统：类型依赖图
-    - 语义序列：语法生成器
-    - 约束管理：ConditionManager
+    Uses Liberator's complete static modeling capabilities:
+    - Type system: Type dependency graph
+    - Semantic sequences: Grammar generator
+    - Constraint management: ConditionManager
     """
     
     def __init__(
@@ -63,26 +64,26 @@ class ProjectDriverGenerator:
         work_dir: Optional[str] = None
     ):
         """
-        初始化项目级 driver 生成器
+        Initialize project-level driver generator
         
         Args:
-            project_name: 项目名称
-            benchmark: Benchmark 对象（当 use_clang_llvm=True 时必需）
-            use_clang_llvm: 是否使用 Clang/LLVM 直接提取（推荐）
-            work_dir: 工作目录（用于存储生成的 driver）
+            project_name: Project name
+            benchmark: Benchmark object (required when use_clang_llvm=True)
+            use_clang_llvm: Whether to use Clang/LLVM direct extraction (recommended)
+            work_dir: Working directory (for storing generated drivers)
         """
         self.project_name = project_name
         self.work_dir = Path(work_dir) if work_dir else Path(f"./results/{project_name}")
         self.work_dir.mkdir(parents=True, exist_ok=True)
         
-        # 初始化适配器
+        # Initialize adapter
         self.adapter = LiberatorAPIAdapter(
             project_name=project_name,
             use_clang_llvm=use_clang_llvm,
             benchmark=benchmark
         )
         
-        # 组件（延迟初始化）
+        # Components (lazy initialization)
         self.all_apis: Set[Api] = set()
         self.dependency_graph: Optional[DependencyGraph] = None
         self.grammar = None
@@ -90,7 +91,7 @@ class ProjectDriverGenerator:
         self.function_conditions: Optional[FunctionConditionsSet] = None
         self.extract_metadata: Dict = {}
 
-        # 特殊模式分析增强器
+        # Special pattern analysis enhancer
         self.driver_enhancer: Optional[DriverEnhancer] = None
         self.pattern_cache: Optional[APIPatternCache] = None
 
@@ -105,17 +106,17 @@ class ProjectDriverGenerator:
         compile_project: bool = True
     ) -> Set[Api]:
         """
-        提取项目中的所有 API
+        Extract all APIs from the project
         
         Args:
-            function_signatures: 要提取的函数签名列表（可选，None 表示提取所有）
-            include_dir: 头文件目录
-            public_headers_file: 公共头文件列表
-            bc_file: bitcode 文件路径
-            compile_project: 是否编译项目
+            function_signatures: List of function signatures to extract (optional, None means extract all)
+            include_dir: Header file directory
+            public_headers_file: Public header file list
+            bc_file: Bitcode file path
+            compile_project: Whether to compile the project
         
         Returns:
-            API 集合
+            API set
         """
         logger.info(f"📦 Extracting all APIs for project {self.project_name}...")
         
@@ -129,7 +130,7 @@ class ProjectDriverGenerator:
             public_headers_file=public_headers_file
         )
         
-        # 使用适配器提取所有 API
+        # Use adapter to extract all APIs
         apis_dict = self.adapter.extract_all_apis(
             function_signatures=function_signatures,
             include_dir=include_dir,
@@ -137,7 +138,7 @@ class ProjectDriverGenerator:
             bc_file=bc_file,
             compile_project=compile_project
         )
-        # 保存提取元数据（如 apis_llvm/conditions/data_layout 路径）
+        # Save extraction metadata (e.g., apis_llvm/conditions/data_layout paths)
         try:
             self.extract_metadata = getattr(self.adapter, "last_metadata", {}) or {}
         except Exception:
@@ -155,15 +156,15 @@ class ProjectDriverGenerator:
         enable_z3_pruning: bool = False
     ) -> DependencyGraph:
         """
-        构建类型依赖图
+        Build type dependency graph
 
         Args:
-            function_conditions: 函数约束条件集合（可选，用于provenance过滤）
-            enable_provenance_filter: 是否启用provenance过滤（默认True）
-            enable_z3_pruning: 是否启用Z3约束剪枝（需要安装z3-solver）
+            function_conditions: Function constraint condition set (optional, for provenance filtering)
+            enable_provenance_filter: Whether to enable provenance filtering (default True)
+            enable_z3_pruning: Whether to enable Z3 constraint pruning (requires z3-solver)
 
         Returns:
-            类型依赖图
+            Type dependency graph
         """
         if not self.all_apis:
             raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
@@ -172,7 +173,7 @@ class ProjectDriverGenerator:
         if enable_z3_pruning:
             logger.info("   Z3 constraint pruning: enabled")
 
-        # 如果启用provenance过滤但没有提供条件，尝试加载
+        # If provenance filtering enabled but no conditions provided, try to load
         if enable_provenance_filter and function_conditions is None:
             conditions_file = None
             apis_llvm_file = None
@@ -189,7 +190,7 @@ class ProjectDriverGenerator:
                     logger.warning("Continuing with provenance filter disabled")
                     enable_provenance_filter = False
 
-        # 使用 TypeDependencyGraphGenerator 生成依赖图
+        # Use TypeDependencyGraphGenerator to generate dependency graph
         dep_gen = TypeDependencyGraphGenerator(
             list(self.all_apis),
             function_conditions=function_conditions,
@@ -204,22 +205,22 @@ class ProjectDriverGenerator:
     
     def build_grammar(self) -> Grammar:
         """
-        从依赖图生成语法规则（语义序列）
+        Generate grammar rules (semantic sequences) from dependency graph
         
         Returns:
-            语法对象
+            Grammar object
         """
         if not self.dependency_graph:
             raise RuntimeError("No dependency graph. Call build_dependency_graph() first.")
         
         logger.info("📝 Generating grammar from dependency graph...")
         
-        # 创建语法生成器
+        # Create grammar generator
         start_term = NonTerminal("start")
         end_term = Terminal("end")
         grammar_gen = GrammarGenerator(start_term, end_term)
         
-        # 从依赖图生成语法
+        # Generate grammar from dependency graph
         self.grammar = grammar_gen.create(self.dependency_graph)
         
         logger.info(f"✅ Grammar generated: {self.grammar.num_symbols()} symbols")
@@ -231,20 +232,20 @@ class ProjectDriverGenerator:
         function_conditions: Optional[FunctionConditionsSet] = None
     ) -> ConditionManager:
         """
-        构建约束管理器
+        Build constraint manager
         
         Args:
-            function_conditions: 函数约束条件集合（可选，如果为 None 则创建空的）
+            function_conditions: Function constraint condition set (optional, creates empty if None)
         
         Returns:
-            ConditionManager 实例
+            ConditionManager instance
         """
         if not self.all_apis:
             raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
         
         logger.info("🔒 Building condition manager...")
         
-        # 如果没有提供约束条件，尝试从提取的 conditions.json 解析
+        # If no constraint conditions provided, try to parse from extracted conditions.json
         if function_conditions is None:
             parsed = None
             conditions_file = None
@@ -265,11 +266,11 @@ class ProjectDriverGenerator:
         
         self.function_conditions = function_conditions
         
-        # 获取 ConditionManager 实例并设置
+        # Get ConditionManager instance and setup
         condition_manager = ConditionManager.instance()
         condition_manager.setup(
             api_list=self.all_apis,
-            api_list_all=self.all_apis,  # 使用相同的 API 列表
+            api_list_all=self.all_apis,  # Use the same API list
             conditions=function_conditions
         )
         
@@ -284,29 +285,29 @@ class ProjectDriverGenerator:
     
     def analyze_special_patterns(self, llm_client=None) -> APIPatternCache:
         """
-        分析API的特殊模式（VarLen、Loop、Callback、TLV）
+        Analyze special patterns of APIs (VarLen, Loop, Callback, TLV)
 
         Args:
-            llm_client: LLM客户端（可选，用于Phase 2语义验证）
+            llm_client: LLM client (optional, for Phase 2 semantic validation)
 
         Returns:
-            APIPatternCache: 分析结果缓存
+            APIPatternCache: Analysis result cache
         """
         if not self.all_apis:
             raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
 
         logger.info("🔍 Analyzing special patterns for APIs...")
 
-        # 创建增强器
+        # Create enhancer
         self.driver_enhancer = DriverEnhancer(llm_client)
 
-        # 分析所有API
+        # Analyze all APIs
         self.driver_enhancer.analyze_apis(list(self.all_apis))
 
-        # 保存缓存
+        # Save cache
         self.pattern_cache = self.driver_enhancer.cache
 
-        # 打印摘要
+        # Print summary
         summary = self.driver_enhancer.get_enhancement_summary()
         logger.info(f"✅ Special pattern analysis complete:")
         logger.info(f"   - APIs with var-len: {summary['apis_with_varlen']}")
@@ -317,7 +318,7 @@ class ProjectDriverGenerator:
         return self.pattern_cache
 
     # =========================================================================
-    # 混合合成方法 (Hybrid Synthesis)
+    # Hybrid Synthesis Methods
     # =========================================================================
 
     def generate_skeleton_drivers(
@@ -328,35 +329,35 @@ class ProjectDriverGenerator:
         llm_client=None
     ) -> List[DriverSkeleton]:
         """
-        使用混合合成生成Driver骨架
+        Generate driver skeletons using hybrid synthesis
 
-        混合合成流程:
-        1. 生成API序列（使用Grammar或给定序列）
-        2. 对每个序列生成骨架（带Hole）
-        3. 用规则/约束填充简单Hole
-        4. 用LLM填充复杂Hole
+        Hybrid synthesis process:
+        1. Generate API sequences (using Grammar or given sequences)
+        2. Generate skeleton (with Holes) for each sequence
+        3. Fill simple Holes with rules/constraints
+        4. Fill complex Holes with LLM
 
         Args:
-            api_sequences: 预定义的API序列（可选，None则自动生成）
-            num_drivers: 要生成的driver数量
-            driver_size: 每个driver的API调用数量
-            llm_client: LLM客户端（用于复杂Hole填充）
+            api_sequences: Predefined API sequences (optional, auto-generate if None)
+            num_drivers: Number of drivers to generate
+            driver_size: Number of API calls per driver
+            llm_client: LLM client (for complex Hole filling)
 
         Returns:
-            DriverSkeleton列表
+            List of DriverSkeleton
         """
         if not self.all_apis:
             raise RuntimeError("No APIs extracted. Call extract_all_apis() first.")
 
         logger.info(f"🔧 Generating {num_drivers} skeleton drivers (hybrid synthesis)...")
 
-        # 准备特殊模式信息
+        # Prepare special pattern information
         varlen_relations = {}
         loop_patterns = {}
         callback_infos = {}
 
         if self.pattern_cache:
-            # 转换为SkeletonGenerator需要的格式
+            # Convert to format required by SkeletonGenerator
             for api_name, relations in self.pattern_cache.varlen_relations.items():
                 varlen_relations[api_name] = [
                     (r.buffer_arg_idx, r.length_arg_idx, r.relationship)
@@ -381,18 +382,18 @@ class ProjectDriverGenerator:
                     for cb in cbs
                 ]
 
-        # 生成或使用API序列
+        # Generate or use API sequences
         if api_sequences is None:
             api_sequences = self._generate_api_sequences(num_drivers, driver_size)
 
-        # 创建骨架生成器和填充器
+        # Create skeleton generator and filler
         skeleton_generator = SkeletonGenerator()
         hole_filler = HoleFiller(llm_client=llm_client)
 
         skeletons = []
         for i, sequence in enumerate(api_sequences[:num_drivers]):
             try:
-                # 1. 生成骨架
+                # 1. Generate skeleton
                 skeleton = skeleton_generator.generate(
                     api_sequence=sequence,
                     varlen_relations=varlen_relations,
@@ -401,7 +402,7 @@ class ProjectDriverGenerator:
                     driver_name=f"fuzz_driver_{i}"
                 )
 
-                # 2. 填充Hole
+                # 2. Fill Holes
                 report = hole_filler.fill_all(skeleton)
 
                 logger.debug(
@@ -424,14 +425,14 @@ class ProjectDriverGenerator:
         mark_holes: bool = False
     ) -> str:
         """
-        将骨架渲染为C代码
+        Render skeleton to C code
 
         Args:
-            skeleton: Driver骨架
-            mark_holes: 是否在代码中标记未填充的Hole
+            skeleton: Driver skeleton
+            mark_holes: Whether to mark unfilled Holes in code
 
         Returns:
-            C代码字符串
+            C code string
         """
         renderer = SkeletonRenderer()
         if mark_holes:
@@ -444,14 +445,14 @@ class ProjectDriverGenerator:
         output_dir: Optional[str] = None
     ) -> List[str]:
         """
-        保存骨架driver到文件
+        Save skeleton drivers to files
 
         Args:
-            skeletons: DriverSkeleton列表
-            output_dir: 输出目录
+            skeletons: List of DriverSkeleton
+            output_dir: Output directory
 
         Returns:
-            保存的文件路径列表
+            List of saved file paths
         """
         if output_dir is None:
             out_path = self.work_dir / "skeleton_drivers"
@@ -464,13 +465,13 @@ class ProjectDriverGenerator:
         for skeleton in skeletons:
             code = self.render_skeleton_to_code(skeleton)
 
-            # 检查是否有未填充的Hole
+            # Check if there are unfilled Holes
             unfilled = skeleton.get_unfilled_holes()
             if unfilled:
                 logger.warning(
                     f"Driver {skeleton.name} has {len(unfilled)} unfilled holes"
                 )
-                # 仍然保存，但添加注释标记
+                # Still save, but add comment marker
                 code = f"// WARNING: {len(unfilled)} holes not filled\n" + code
 
             file_path = out_path / f"{skeleton.name}.cc"
@@ -490,44 +491,44 @@ class ProjectDriverGenerator:
         sequence_size: int
     ) -> List[List[Api]]:
         """
-        生成API序列（使用Grammar或简单策略），支持循环模式感知
+        Generate API sequences (using Grammar or simple strategy), supports loop pattern awareness
 
         Args:
-            num_sequences: 序列数量
-            sequence_size: 每个序列的长度
+            num_sequences: Number of sequences
+            sequence_size: Length of each sequence
 
         Returns:
-            API序列列表
+            List of API sequences
         """
         import random
         sequences = []
 
-        # 获取需要循环的 API 列表（从 pattern_cache 中）
+        # Get list of APIs that need loops (from pattern_cache)
         loop_apis = self._get_loop_apis()
 
         if self.grammar:
-            # 使用Grammar生成序列
+            # Use Grammar to generate sequences
             for _ in range(num_sequences):
                 try:
-                    # 从Grammar采样一个序列
+                    # Sample a sequence from Grammar
                     sequence = self._sample_sequence_from_grammar(sequence_size)
                     if sequence:
-                        # 应用循环模式增强
+                        # Apply loop pattern enhancement
                         sequence = self._apply_loop_patterns(sequence, loop_apis)
                         sequences.append(sequence)
                 except Exception as e:
                     logger.debug(f"Failed to sample from grammar: {e}")
 
-        # 如果Grammar不可用或生成不足，使用简单策略
+        # If Grammar unavailable or insufficient generation, use simple strategy
         while len(sequences) < num_sequences:
-            # 简单策略: 随机选择API组成序列
+            # Simple strategy: randomly select APIs to form sequence
             api_list = list(self.all_apis)
             if len(api_list) >= sequence_size:
                 sequence = random.sample(api_list, sequence_size)
             else:
                 sequence = random.choices(api_list, k=sequence_size)
 
-            # 应用循环模式增强
+            # Apply loop pattern enhancement
             sequence = self._apply_loop_patterns(sequence, loop_apis)
             sequences.append(sequence)
 
@@ -559,17 +560,17 @@ class ProjectDriverGenerator:
         loop_apis: Dict[str, dict]
     ) -> List[Api]:
         """
-        对序列中需要循环的 API 应用循环模式
+        Apply loop patterns to APIs in sequence that need loops
 
-        如果序列中的某个 API 被识别为需要循环调用（如迭代器、增量读取等），
-        则在序列中将该 API 重复多次以模拟循环行为。
+        If an API in the sequence is identified as needing loop calls (e.g., iterator, incremental read),
+        repeat that API multiple times in the sequence to simulate loop behavior.
 
         Args:
-            sequence: 原始 API 序列
-            loop_apis: 需要循环的 API 及其循环信息
+            sequence: Original API sequence
+            loop_apis: APIs that need loops and their loop information
 
         Returns:
-            增强后的 API 序列
+            Enhanced API sequence
         """
         if not loop_apis:
             return sequence
@@ -584,20 +585,20 @@ class ProjectDriverGenerator:
                 loop_type = loop_info.get('loop_type', 'iterator')
                 max_iterations = loop_info.get('max_iterations', 3)
 
-                # 根据循环类型决定重复次数
-                # - iterator: 通常需要多次调用直到返回 NULL 或终止条件
-                # - incremental: 增量读取/写入，需要多次调用
-                # - state_machine: 状态机驱动，直到达到终止状态
+                # Determine repeat count based on loop type
+                # - iterator: Usually needs multiple calls until returns NULL or termination condition
+                # - incremental: Incremental read/write, needs multiple calls
+                # - state_machine: State machine driven, until termination state reached
                 if loop_type == 'iterator':
-                    repeat_count = min(max_iterations, 3)  # 迭代器模式：重复2-3次
+                    repeat_count = min(max_iterations, 3)  # Iterator mode: repeat 2-3 times
                 elif loop_type == 'incremental':
-                    repeat_count = min(max_iterations, 4)  # 增量模式：重复3-4次
+                    repeat_count = min(max_iterations, 4)  # Incremental mode: repeat 3-4 times
                 elif loop_type == 'state_machine':
-                    repeat_count = min(max_iterations, 5)  # 状态机：重复更多次
+                    repeat_count = min(max_iterations, 5)  # State machine: repeat more times
                 else:
-                    repeat_count = 2  # 默认重复2次
+                    repeat_count = 2  # Default: repeat 2 times
 
-                # 添加重复调用
+                # Add repeated calls
                 for _ in range(repeat_count):
                     enhanced_sequence.append(api)
 
@@ -611,30 +612,30 @@ class ProjectDriverGenerator:
         return enhanced_sequence
 
     def _sample_sequence_from_grammar(self, max_size: int) -> List[Api]:
-        """从Grammar采样一个API序列"""
+        """Sample an API sequence from Grammar"""
         if not self.grammar:
             return []
 
-        # 简单的采样实现
-        # TODO: 使用更智能的采样策略
+        # Simple sampling implementation
+        # TODO: Use smarter sampling strategy
         sequence = []
         visited = set()
 
-        # 找到起始规则
+        # Find start rule
         start = self.grammar.start
         if hasattr(start, 'rules') and start.rules:
             import random
-            # 随机遍历规则
-            for _ in range(max_size * 2):  # 允许一些尝试
+            # Randomly traverse rules
+            for _ in range(max_size * 2):  # Allow some attempts
                 if len(sequence) >= max_size:
                     break
 
-                # 随机选择一个可达的API
+                # Randomly select a reachable API
                 for rule in start.rules:
                     if hasattr(rule, 'rhs') and rule.rhs:
                         for symbol in rule.rhs:
                             if hasattr(symbol, 'token') and symbol.token not in visited:
-                                # 找到对应的API
+                                # Find corresponding API
                                 for api in self.all_apis:
                                     if api.function_name == symbol.token:
                                         sequence.append(api)
@@ -652,20 +653,20 @@ class ProjectDriverGenerator:
         enum_types_path: Optional[str] = None
     ):
         """
-        初始化 DataLayout（类型布局信息）
+        Initialize DataLayout (type layout information)
         
         Args:
-            apis_clang_path: Clang API 文件路径
-            apis_llvm_path: LLVM API 文件路径
-            incomplete_types_path: 不完整类型列表路径
-            data_layout_path: 数据布局文件路径
-            enum_types_path: 枚举类型列表路径
+            apis_clang_path: Clang API file path
+            apis_llvm_path: LLVM API file path
+            incomplete_types_path: Incomplete types list path
+            data_layout_path: Data layout file path
+            enum_types_path: Enum types list path
         """
         logger.info("📊 Building data layout...")
         
         data_layout = DataLayout.instance()
         
-        # 如果提供了路径，则设置 DataLayout
+        # If paths provided, setup DataLayout
         if all([apis_clang_path, apis_llvm_path, incomplete_types_path, 
                 data_layout_path, enum_types_path]):
             data_layout.setup(
@@ -676,14 +677,14 @@ class ProjectDriverGenerator:
                 enum_types_p=enum_types_path
             )
             logger.info("✅ Data layout initialized from files")
-        # 尝试使用提取元数据自动配置
+        # Try to auto-configure using extraction metadata
         elif self.extract_metadata:
             local_meta = self.extract_metadata.get("local", {})
             ac = local_meta.get("apis_clang")
             al = local_meta.get("apis_llvm")
             inc = local_meta.get("incomplete_types")
             dl = local_meta.get("data_layout")
-            et = enum_types_path  # 仍允许外部传入
+            et = enum_types_path  # Still allow external input
             if all([ac, al, inc, dl, et]):
                 data_layout.setup(
                     apis_clang_p=ac,
@@ -706,16 +707,16 @@ class ProjectDriverGenerator:
         enable_z3_validation: bool = False
     ) -> List[Driver]:
         """
-        生成 driver 列表
+        Generate driver list
 
         Args:
-            num_drivers: 要生成的 driver 数量
-            driver_size: 每个 driver 中的 API 调用数量
-            policy: 生成策略（"only_type" 或 "constraint_based"）
-            enable_z3_validation: 是否启用Z3序列验证（仅constraint_based策略）
+            num_drivers: Number of drivers to generate
+            driver_size: Number of API calls in each driver
+            policy: Generation policy ("only_type" or "constraint_based")
+            enable_z3_validation: Whether to enable Z3 sequence validation (constraint_based policy only)
 
         Returns:
-            Driver 列表
+            List of Drivers
         """
         if not self.grammar:
             raise RuntimeError("No grammar. Call build_grammar() first.")
@@ -726,7 +727,7 @@ class ProjectDriverGenerator:
 
         drivers = []
 
-        # 根据策略选择 Factory
+        # Select Factory based on policy
         if policy == "only_type":
             factory = self._create_ot_factory(driver_size)
         elif policy == "constraint_based":
@@ -734,7 +735,7 @@ class ProjectDriverGenerator:
         else:
             raise ValueError(f"Unknown policy: {policy}. Supported: 'only_type', 'constraint_based'")
         
-        # 生成 driver
+        # Generate drivers
         for i in range(num_drivers):
             try:
                 driver = factory.create_random_driver()
@@ -758,39 +759,39 @@ class ProjectDriverGenerator:
         **extract_kwargs
     ) -> List[Driver]:
         """
-        完整的生成流程：提取 API -> 构建依赖图 -> 生成语法 -> 管理约束 -> 分析模式 -> 生成 driver
+        Complete generation pipeline: Extract API -> Build dependency graph -> Generate grammar -> Manage constraints -> Analyze patterns -> Generate drivers
 
         Args:
-            num_drivers: 要生成的 driver 数量
-            driver_size: 每个 driver 中的 API 调用数量
-            policy: 生成策略
-            function_conditions: 函数约束条件（可选）
-            analyze_patterns: 是否分析特殊模式（VarLen/Loop/Callback/TLV）
-            llm_client: LLM客户端（用于特殊模式的Phase 2分析）
-            **extract_kwargs: 传递给 extract_all_apis 的参数
+            num_drivers: Number of drivers to generate
+            driver_size: Number of API calls in each driver
+            policy: Generation policy
+            function_conditions: Function constraint conditions (optional)
+            analyze_patterns: Whether to analyze special patterns (VarLen/Loop/Callback/TLV)
+            llm_client: LLM client (for Phase 2 analysis of special patterns)
+            **extract_kwargs: Arguments passed to extract_all_apis
 
         Returns:
-            Driver 列表
+            List of Drivers
         """
         logger.info("🎯 Starting complete driver generation pipeline...")
 
-        # 1. 提取所有 API
+        # 1. Extract all APIs
         self.extract_all_apis(**extract_kwargs)
 
-        # 2. 构建依赖图
+        # 2. Build dependency graph
         self.build_dependency_graph()
 
-        # 3. 生成语法
+        # 3. Generate grammar
         self.build_grammar()
 
-        # 4. 构建约束管理器
+        # 4. Build constraint manager
         self.build_condition_manager(function_conditions)
 
-        # 5. 分析特殊模式（可选）
+        # 5. Analyze special patterns (optional)
         if analyze_patterns:
             self.analyze_special_patterns(llm_client)
 
-        # 6. 生成 driver
+        # 6. Generate drivers
         drivers = self.generate_drivers(
             num_drivers=num_drivers,
             driver_size=driver_size,
@@ -803,11 +804,11 @@ class ProjectDriverGenerator:
     
     def save_drivers(self, drivers: List[Driver], output_dir: Optional[str] = None):
         """
-        保存生成的 driver 到文件
+        Save generated drivers to files
         
         Args:
-            drivers: Driver 列表
-            output_dir: 输出目录（默认使用 work_dir/drivers）
+            drivers: List of Drivers
+            output_dir: Output directory (defaults to work_dir/drivers)
         """
         if output_dir is None:
             output_dir = self.work_dir / "drivers"
@@ -818,15 +819,15 @@ class ProjectDriverGenerator:
         
         logger.info(f"💾 Saving {len(drivers)} drivers to {output_dir}...")
         
-        # TODO: 实现 driver 序列化和保存逻辑
-        # 这需要实现 backend（如 LibFuzzerBackend）来将 Driver 对象转换为代码
+        # TODO: Implement driver serialization and saving logic
+        # This requires implementing a backend (e.g., LibFuzzerBackend) to convert Driver objects to code
         logger.warning("Driver saving not yet implemented")
         
         return output_dir
     
     def _create_ot_factory(self, driver_size: int):
         """
-        创建 OTFactory（only_type 策略）
+        Create OTFactory (only_type policy)
         """
         if not self.grammar:
             raise RuntimeError("No grammar available for OTFactory")
@@ -841,11 +842,11 @@ class ProjectDriverGenerator:
     
     def _create_cb_factory(self, driver_size: int, enable_z3_validation: bool = False):
         """
-        创建 CBFactory（constraint_based 策略）
+        Create CBFactory (constraint_based policy)
 
         Args:
-            driver_size: driver 中 API 调用的数量
-            enable_z3_validation: 是否启用Z3序列验证
+            driver_size: Number of API calls in driver
+            enable_z3_validation: Whether to enable Z3 sequence validation
         """
         if not self.dependency_graph:
             raise RuntimeError("No dependency graph available for CBFactory")
@@ -863,7 +864,7 @@ class ProjectDriverGenerator:
             conditions=self.function_conditions or FunctionConditionsSet(),
             bias=bias,
             enable_z3_validation=enable_z3_validation,
-            driver_enhancer=self.driver_enhancer  # 传递 DriverEnhancer 用于增强 callback 生成
+            driver_enhancer=self.driver_enhancer  # Pass DriverEnhancer for enhanced callback generation
         )
     
     def create_backend(
@@ -874,22 +875,22 @@ class ProjectDriverGenerator:
         num_seeds: int = 10
     ):
         """
-        创建 Backend 用于生成 driver 代码
+        Create Backend for generating driver code
         
         Args:
-            backend_type: backend 类型（目前只支持 "libfuzz"）
-            headers_dir: 头文件目录
-            public_headers_file: 公共头文件列表文件路径
-            num_seeds: 每个 driver 的种子数量
+            backend_type: Backend type (currently only "libfuzz" supported)
+            headers_dir: Header file directory
+            public_headers_file: Public header file list file path
+            num_seeds: Number of seeds per driver
         
         Returns:
-            BackendDriver 实例
+            BackendDriver instance
         """
         if backend_type != "libfuzz":
             raise ValueError(f"Unsupported backend type: {backend_type}. Only 'libfuzz' is supported.")
         
         if not headers_dir:
-            # 尝试从 extract_metadata 获取
+            # Try to get from extract_metadata
             if self.extract_metadata:
                 local_meta = self.extract_metadata.get("local", {})
                 headers_dir = local_meta.get("headers_dir")
@@ -898,7 +899,7 @@ class ProjectDriverGenerator:
             raise ValueError("headers_dir is required for LibFuzzer backend")
         
         if not public_headers_file:
-            # 尝试从 extract_metadata 获取
+            # Try to get from extract_metadata
             if self.extract_metadata:
                 local_meta = self.extract_metadata.get("local", {})
                 public_headers_file = local_meta.get("public_headers")
@@ -948,7 +949,7 @@ class ProjectDriverGenerator:
             except Exception as e:
                 logger.warning(f"Failed to generate public headers list: {e}")
         
-        # record into metadata for downstream usage
+        # Record into metadata for downstream usage
         local_meta = self.extract_metadata.get("local", {}) if self.extract_metadata else {}
         if include_dir:
             local_meta["headers_dir"] = include_dir

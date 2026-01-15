@@ -1,14 +1,15 @@
 """
-Skeleton Generator - 骨架生成器
+Skeleton Generator
 
-基于传统程序合成技术生成Driver骨架，骨架包含:
-1. 确定性部分: API调用序列、变量声明、控制流结构
-2. 孔(Holes): 需要后续填充的不确定部分
+Generates driver skeletons using traditional program synthesis techniques.
+A skeleton contains:
+1. Deterministic parts: API call sequences, variable declarations, control flow structures
+2. Holes: Uncertain parts that need to be filled later
 
-设计原则:
-- 骨架覆盖Driver的整体结构
-- 孔表示需要语义推理的部分
-- 支持增量式填充和验证
+Design principles:
+- Skeleton covers the overall structure of the driver
+- Holes represent parts requiring semantic reasoning
+- Supports incremental filling and validation
 """
 
 import logging
@@ -28,45 +29,45 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 骨架IR定义
+# Skeleton IR Definition
 # =============================================================================
 
 class StatementKind(Enum):
-    """语句类型"""
-    BUFFER_DECL = auto()        # Buffer声明
-    BUFFER_INIT = auto()        # Buffer初始化
-    API_CALL = auto()           # API调用
-    ASSIGNMENT = auto()         # 赋值
-    IF_CHECK = auto()           # 条件检查
-    LOOP_START = auto()         # 循环开始
-    LOOP_END = auto()           # 循环结束
-    CLEANUP = auto()            # 资源清理
-    RETURN = auto()             # 返回
-    COMMENT = auto()            # 注释
-    RAW_CODE = auto()           # 原始代码
+    """Statement types"""
+    BUFFER_DECL = auto()        # Buffer declaration
+    BUFFER_INIT = auto()        # Buffer initialization
+    API_CALL = auto()           # API call
+    ASSIGNMENT = auto()         # Assignment
+    IF_CHECK = auto()           # Condition check
+    LOOP_START = auto()         # Loop start
+    LOOP_END = auto()           # Loop end
+    CLEANUP = auto()            # Resource cleanup
+    RETURN = auto()             # Return
+    COMMENT = auto()            # Comment
+    RAW_CODE = auto()           # Raw code
 
 
 class AllocationType(Enum):
-    """内存分配类型"""
-    STACK = auto()      # 栈上分配
-    HEAP = auto()       # 堆上分配
-    FUZZ_INPUT = auto() # 来自fuzzer输入
+    """Memory allocation types"""
+    STACK = auto()      # Stack allocation
+    HEAP = auto()       # Heap allocation
+    FUZZ_INPUT = auto() # From fuzzer input
 
 
 @dataclass
 class SkeletonVariable:
-    """骨架变量"""
+    """Skeleton variable"""
     name: str
     c_type: str
     allocation: AllocationType = AllocationType.STACK
     is_pointer: bool = False
     is_array: bool = False
-    array_size: Optional[str] = None  # 可能是Hole占位符
-    init_value: Optional[str] = None  # 可能是Hole占位符
-    source_api: Optional[str] = None  # 产生该变量的API（如果有）
+    array_size: Optional[str] = None  # May be a Hole placeholder
+    init_value: Optional[str] = None  # May be a Hole placeholder
+    source_api: Optional[str] = None  # API that produces this variable (if any)
 
     def get_declaration(self) -> str:
-        """生成声明代码"""
+        """Generate declaration code"""
         if self.is_array and self.array_size:
             return f"{self.c_type} {self.name}[{self.array_size}]"
         elif self.init_value:
@@ -77,13 +78,13 @@ class SkeletonVariable:
 
 @dataclass
 class SkeletonStatement:
-    """骨架语句"""
+    """Skeleton statement"""
     kind: StatementKind
-    code: str = ""                              # 代码字符串
-    holes: List[str] = field(default_factory=list)  # 包含的Hole名称
-    api: Optional[Api] = None                   # 关联的API（如果是API调用）
-    variables: List[str] = field(default_factory=list)  # 涉及的变量名
-    indent: int = 1                             # 缩进级别
+    code: str = ""                              # Code string
+    holes: List[str] = field(default_factory=list)  # Contained Hole names
+    api: Optional[Api] = None                   # Associated API (if API call)
+    variables: List[str] = field(default_factory=list)  # Involved variable names
+    indent: int = 1                             # Indentation level
 
     def has_holes(self) -> bool:
         return len(self.holes) > 0
@@ -91,74 +92,74 @@ class SkeletonStatement:
 
 @dataclass
 class DriverSkeleton:
-    """Driver骨架"""
+    """Driver skeleton"""
 
-    # 基本信息
+    # Basic information
     name: str
     target_apis: List[Api]
 
-    # 结构组件
+    # Structure components
     includes: List[str] = field(default_factory=list)
     variables: Dict[str, SkeletonVariable] = field(default_factory=dict)
     statements: List[SkeletonStatement] = field(default_factory=list)
     cleanup_statements: List[SkeletonStatement] = field(default_factory=list)
     stub_functions: List[str] = field(default_factory=list)
 
-    # 孔管理
+    # Hole management
     holes: HoleSet = field(default_factory=HoleSet)
 
-    # 元数据
+    # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def add_variable(self, var: SkeletonVariable) -> None:
-        """添加变量"""
+        """Add variable"""
         self.variables[var.name] = var
 
     def add_statement(self, stmt: SkeletonStatement) -> None:
-        """添加语句"""
+        """Add statement"""
         self.statements.append(stmt)
 
     def add_cleanup(self, stmt: SkeletonStatement) -> None:
-        """添加清理语句"""
+        """Add cleanup statement"""
         self.cleanup_statements.append(stmt)
 
     def add_hole(self, hole: Hole) -> None:
-        """添加孔"""
+        """Add hole"""
         self.holes.add(hole)
 
     def get_unfilled_holes(self) -> List[Hole]:
-        """获取未填充的孔"""
+        """Get unfilled holes"""
         return self.holes.get_unfilled()
 
     def is_complete(self) -> bool:
-        """检查骨架是否完整（所有孔已填充）"""
+        """Check if skeleton is complete (all holes filled)"""
         return self.holes.all_filled()
 
 
 # =============================================================================
-# 骨架生成器
+# Skeleton Generator
 # =============================================================================
 
 class SkeletonGenerator:
     """
-    骨架生成器
+    Skeleton generator
 
-    从API序列生成Driver骨架，包含:
-    1. 变量声明（带Hole占位符）
-    2. API调用序列
-    3. 错误检查（带Hole占位符）
-    4. 资源清理
+    Generates driver skeleton from API sequence, including:
+    1. Variable declarations (with Hole placeholders)
+    2. API call sequences
+    3. Error checks (with Hole placeholders)
+    4. Resource cleanup
 
-    设计原则:
-    - 确定性结构：API调用顺序、变量绑定
-    - Holes：参数值、回调实现、循环条件
+    Design principles:
+    - Deterministic structure: API call order, variable binding
+    - Holes: parameter values, callback implementations, loop conditions
     """
 
     def __init__(self):
         self._var_counter = 0
         self._hole_counter = 0
 
-        # 类型到初始化值的映射
+        # Type to initialization value mapping
         self.type_init_map = {
             "int": "0",
             "unsigned int": "0",
@@ -178,17 +179,17 @@ class SkeletonGenerator:
                  callback_infos: Optional[Dict[str, List[Dict]]] = None,
                  driver_name: str = "fuzz_driver") -> DriverSkeleton:
         """
-        生成Driver骨架
+        Generate driver skeleton
 
         Args:
-            api_sequence: API调用序列
-            varlen_relations: API的var-len关系 {api_name: [(buf_idx, len_idx, rel), ...]}
-            loop_patterns: API的循环模式 {api_name: {needs_loop, loop_type, ...}}
-            callback_infos: API的回调信息 {api_name: [{arg_idx, type, ...}, ...]}
-            driver_name: 生成的driver名称
+            api_sequence: API call sequence
+            varlen_relations: API var-len relationships {api_name: [(buf_idx, len_idx, rel), ...]}
+            loop_patterns: API loop patterns {api_name: {needs_loop, loop_type, ...}}
+            callback_infos: API callback information {api_name: [{arg_idx, type, ...}, ...]}
+            driver_name: Generated driver name
 
         Returns:
-            DriverSkeleton: 带孔的骨架
+            DriverSkeleton: Skeleton with holes
         """
         self._var_counter = 0
         self._hole_counter = 0
@@ -198,18 +199,18 @@ class SkeletonGenerator:
             target_apis=api_sequence
         )
 
-        # 1. 生成includes
+        # 1. Generate includes
         skeleton.includes = self._generate_includes(api_sequence)
 
-        # 2. 分析变量需求
+        # 2. Analyze variable requirements
         var_requirements = self._analyze_variable_requirements(
             api_sequence, varlen_relations or {}
         )
 
-        # 3. 生成变量声明
+        # 3. Generate variable declarations
         self._generate_variable_declarations(skeleton, var_requirements)
 
-        # 4. 生成API调用序列
+        # 4. Generate API call sequence
         self._generate_api_calls(
             skeleton, api_sequence,
             varlen_relations or {},
@@ -217,13 +218,13 @@ class SkeletonGenerator:
             callback_infos or {}
         )
 
-        # 5. 生成清理代码
+        # 5. Generate cleanup code
         self._generate_cleanup(skeleton)
 
         return skeleton
 
     def _generate_includes(self, apis: List[Api]) -> List[str]:
-        """生成include列表"""
+        """Generate include list"""
         includes = [
             "#include <stdint.h>",
             "#include <stddef.h>",
@@ -238,7 +239,7 @@ class SkeletonGenerator:
         varlen_relations: Dict[str, List[Tuple[int, int, str]]]
     ) -> Dict[str, Dict]:
         """
-        分析变量需求
+        Analyze variable requirements
 
         Returns:
             {api_name: {
@@ -254,11 +255,11 @@ class SkeletonGenerator:
                 'return': None
             }
 
-            # 获取该API的var-len关系
+            # Get var-len relationships for this API
             api_varlen = varlen_relations.get(api.function_name, [])
             varlen_map = {buf_idx: (len_idx, rel) for buf_idx, len_idx, rel in api_varlen}
 
-            # 分析参数
+            # Analyze parameters
             for idx, arg in enumerate(api.arguments_info):
                 arg_info = {
                     'name': arg.name or f"arg{idx}",
@@ -271,7 +272,7 @@ class SkeletonGenerator:
                 }
                 api_req['args'].append(arg_info)
 
-            # 分析返回值
+            # Analyze return value
             if api.return_info and api.return_info.type not in ['void', '']:
                 api_req['return'] = {
                     'type': api.return_info.type,
@@ -283,8 +284,8 @@ class SkeletonGenerator:
         return requirements
 
     def _is_input_param(self, arg: Arg) -> bool:
-        """判断是否是输入参数"""
-        # const指针或值传递通常是输入
+        """Determine if parameter is input"""
+        # const pointer or value passing is usually input
         if arg.is_const and any(arg.is_const):
             return True
         if '*' not in arg.type:
@@ -292,19 +293,19 @@ class SkeletonGenerator:
         return False
 
     def _is_output_param(self, arg: Arg) -> bool:
-        """判断是否是输出参数"""
-        # 非const指针通常是输出
+        """Determine if parameter is output"""
+        # Non-const pointer is usually output
         if '*' in arg.type and (not arg.is_const or not any(arg.is_const)):
             return True
         return False
 
     def _is_callback_param(self, arg: Arg) -> bool:
-        """判断是否是回调参数"""
+        """Determine if parameter is callback"""
         type_str = arg.type
-        # 函数指针特征
+        # Function pointer characteristics
         if '(*)' in type_str or '(*' in type_str:
             return True
-        # 常见回调typedef
+        # Common callback typedefs
         callback_suffixes = ['_func', '_callback', '_handler', '_t']
         for suffix in callback_suffixes:
             if arg.name and suffix in arg.name.lower():
@@ -318,11 +319,11 @@ class SkeletonGenerator:
         skeleton: DriverSkeleton,
         var_requirements: Dict[str, Dict]
     ) -> None:
-        """生成变量声明"""
+        """Generate variable declarations"""
         declared_vars: Set[str] = set()
 
         for api_name, req in var_requirements.items():
-            # 返回值变量
+            # Return value variable
             if req['return']:
                 ret_name = req['return']['name']
                 if ret_name not in declared_vars:
@@ -332,7 +333,7 @@ class SkeletonGenerator:
                     skeleton.add_variable(var)
                     declared_vars.add(ret_name)
 
-            # 参数变量
+            # Parameter variables
             for arg_info in req['args']:
                 var_name = f"{arg_info['name']}_{api_name}"
                 if var_name not in declared_vars:
@@ -342,10 +343,10 @@ class SkeletonGenerator:
                         declared_vars.add(var_name)
 
     def _create_variable_for_type(self, name: str, c_type: str) -> SkeletonVariable:
-        """为类型创建变量"""
+        """Create variable for type"""
         is_pointer = '*' in c_type
 
-        # 确定初始值
+        # Determine initial value
         if is_pointer:
             init_value = "NULL"
         else:
@@ -365,11 +366,11 @@ class SkeletonGenerator:
         arg_info: Dict,
         skeleton: DriverSkeleton
     ) -> Optional[SkeletonVariable]:
-        """为参数创建变量"""
+        """Create variable for parameter"""
         c_type = arg_info['type']
         is_pointer = '*' in c_type
 
-        # 回调参数 - 创建Hole
+        # Callback parameter - create Hole
         if arg_info['is_callback']:
             hole = create_callback_hole(
                 name=f"callback_{self._next_hole_id()}",
@@ -383,9 +384,9 @@ class SkeletonGenerator:
                 init_value=hole.get_placeholder()
             )
 
-        # 输入buffer参数 - 可能需要从fuzz输入获取
+        # Input buffer parameter - may need to get from fuzz input
         if arg_info['is_input'] and is_pointer:
-            # 检查是否有var-len关系
+            # Check if there's var-len relationship
             if arg_info.get('varlen_target'):
                 len_idx, rel = arg_info['varlen_target']
                 hole = create_buffer_size_hole(
@@ -400,12 +401,12 @@ class SkeletonGenerator:
                     c_type=c_type,
                     allocation=AllocationType.FUZZ_INPUT,
                     is_pointer=True,
-                    init_value="(void*)data"  # 默认使用fuzz数据
+                    init_value="(void*)data"  # Default to use fuzz data
                 )
 
-        # 输出参数 - 需要分配buffer
+        # Output parameter - need to allocate buffer
         if arg_info['is_output'] and is_pointer:
-            # 创建数组长度Hole
+            # Create array length Hole
             hole = ArrayLengthHole(
                 name=f"arrlen_{self._next_hole_id()}",
                 priority=HolePriority.HIGH,
@@ -420,7 +421,7 @@ class SkeletonGenerator:
                 allocation=AllocationType.STACK
             )
 
-        # 普通参数
+        # Regular parameter
         if is_pointer:
             init_value = "NULL"
         else:
@@ -442,10 +443,10 @@ class SkeletonGenerator:
         loop_patterns: Dict[str, Dict],
         callback_infos: Dict[str, List[Dict]]
     ) -> None:
-        """生成API调用序列"""
+        """Generate API call sequence"""
 
         for api in apis:
-            # 检查是否需要循环
+            # Check if loop is needed
             loop_info = loop_patterns.get(api.function_name, {})
             if loop_info.get('needs_loop'):
                 self._generate_loop_call(skeleton, api, loop_info)
@@ -453,22 +454,22 @@ class SkeletonGenerator:
                 self._generate_single_call(skeleton, api)
 
     def _generate_single_call(self, skeleton: DriverSkeleton, api: Api) -> None:
-        """生成单次API调用"""
+        """Generate single API call"""
 
-        # 构建参数列表
+        # Build argument list
         args = []
         for idx, arg in enumerate(api.arguments_info):
             var_name = f"{arg.name or f'arg{idx}'}_{api.function_name}"
             if var_name in skeleton.variables:
                 var = skeleton.variables[var_name]
                 if var.is_array:
-                    args.append(var.name)  # 数组名即地址
+                    args.append(var.name)  # Array name is address
                 elif var.is_pointer:
                     args.append(var.name)
                 else:
                     args.append(var.name)
             else:
-                # 变量未声明，使用占位符
+                # Variable not declared, use placeholder
                 hole = InitValueHole(
                     name=f"param_{self._next_hole_id()}",
                     target_type=arg.type,
@@ -477,7 +478,7 @@ class SkeletonGenerator:
                 skeleton.add_hole(hole)
                 args.append(hole.get_placeholder())
 
-        # 构建调用代码
+        # Build call code
         args_str = ", ".join(args)
         if api.return_info and api.return_info.type not in ['void', '']:
             ret_name = f"ret_{api.function_name}"
@@ -493,7 +494,7 @@ class SkeletonGenerator:
         )
         skeleton.add_statement(stmt)
 
-        # 添加错误检查（如果返回指针）
+        # Add error check (if returns pointer)
         if api.return_info and '*' in api.return_info.type:
             ret_name = f"ret_{api.function_name}"
             check_code = f"if ({ret_name} == NULL) return 0;"
@@ -510,11 +511,11 @@ class SkeletonGenerator:
         api: Api,
         loop_info: Dict
     ) -> None:
-        """生成循环API调用"""
+        """Generate loop API call"""
 
         loop_type = loop_info.get('loop_type', 'iterator')
 
-        # 创建循环条件Hole
+        # Create loop condition Hole
         cond_hole = create_loop_condition_hole(
             name=f"loopcond_{self._next_hole_id()}",
             loop_type=loop_type,
@@ -522,14 +523,14 @@ class SkeletonGenerator:
         )
         skeleton.add_hole(cond_hole)
 
-        # 创建循环边界Hole
+        # Create loop bound Hole
         bound_hole = LoopBoundHole(
             name=f"loopbound_{self._next_hole_id()}",
             suggested_bound=loop_info.get('max_iterations', 100)
         )
         skeleton.add_hole(bound_hole)
 
-        # 循环开始
+        # Loop start
         loop_start = SkeletonStatement(
             kind=StatementKind.LOOP_START,
             code=f"int __iter_count = 0;\nwhile ({cond_hole.get_placeholder()} && __iter_count++ < {bound_hole.get_placeholder()}) {{",
@@ -537,10 +538,10 @@ class SkeletonGenerator:
         )
         skeleton.add_statement(loop_start)
 
-        # 循环体内的API调用
+        # API call in loop body
         self._generate_single_call(skeleton, api)
 
-        # 循环结束
+        # Loop end
         loop_end = SkeletonStatement(
             kind=StatementKind.LOOP_END,
             code="}"
@@ -548,9 +549,9 @@ class SkeletonGenerator:
         skeleton.add_statement(loop_end)
 
     def _generate_cleanup(self, skeleton: DriverSkeleton) -> None:
-        """生成清理代码"""
+        """Generate cleanup code"""
 
-        # 创建资源清理Hole
+        # Create resource cleanup Hole
         cleanup_hole = ResourceCleanupHole(
             name=f"cleanup_{self._next_hole_id()}",
             resources=list(skeleton.variables.keys()),
@@ -566,29 +567,29 @@ class SkeletonGenerator:
         skeleton.add_cleanup(cleanup_stmt)
 
     def _next_var_id(self) -> int:
-        """获取下一个变量ID"""
+        """Get next variable ID"""
         self._var_counter += 1
         return self._var_counter
 
     def _next_hole_id(self) -> int:
-        """获取下一个Hole ID"""
+        """Get next Hole ID"""
         self._hole_counter += 1
         return self._hole_counter
 
 
 # =============================================================================
-# 骨架渲染器
+# Skeleton Renderer
 # =============================================================================
 
 class SkeletonRenderer:
     """
-    骨架渲染器
+    Skeleton renderer
 
-    将DriverSkeleton渲染为C代码字符串
+    Renders DriverSkeleton to C code string
     """
 
     def render(self, skeleton: DriverSkeleton) -> str:
-        """渲染骨架为C代码"""
+        """Render skeleton to C code"""
         lines = []
 
         # 1. Includes
@@ -596,25 +597,25 @@ class SkeletonRenderer:
             lines.append(inc)
         lines.append("")
 
-        # 2. Stub函数
+        # 2. Stub functions
         for stub in skeleton.stub_functions:
             lines.append(stub)
             lines.append("")
 
-        # 3. Fuzz函数签名
+        # 3. Fuzz function signature
         lines.append("extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
 
-        # 4. 最小size检查
+        # 4. Minimum size check
         lines.append("    if (size < 1) return 0;")
         lines.append("")
 
-        # 5. 变量声明
+        # 5. Variable declarations
         for var_name, var in skeleton.variables.items():
             decl = var.get_declaration()
             lines.append(f"    {decl};")
         lines.append("")
 
-        # 6. 语句
+        # 6. Statements
         for stmt in skeleton.statements:
             indent = "    " * stmt.indent
             for code_line in stmt.code.split('\n'):
@@ -622,23 +623,23 @@ class SkeletonRenderer:
 
         lines.append("")
 
-        # 7. 清理
+        # 7. Cleanup
         for stmt in skeleton.cleanup_statements:
             indent = "    " * stmt.indent
             for code_line in stmt.code.split('\n'):
                 lines.append(f"{indent}{code_line}")
 
-        # 8. 返回
+        # 8. Return
         lines.append("    return 0;")
         lines.append("}")
 
         return "\n".join(lines)
 
     def render_with_holes_marked(self, skeleton: DriverSkeleton) -> str:
-        """渲染骨架，标记所有Hole的位置"""
+        """Render skeleton, marking all Hole positions"""
         code = self.render(skeleton)
 
-        # 为每个Hole添加注释
+        # Add comment for each Hole
         for hole in skeleton.holes:
             placeholder = hole.get_placeholder()
             if placeholder in code:
@@ -649,7 +650,7 @@ class SkeletonRenderer:
 
 
 # =============================================================================
-# 工具函数
+# Utility Functions
 # =============================================================================
 
 def generate_skeleton_for_sequence(
@@ -659,7 +660,7 @@ def generate_skeleton_for_sequence(
     callback_infos: Optional[Dict] = None,
     driver_name: str = "fuzz_driver"
 ) -> DriverSkeleton:
-    """便捷函数：为API序列生成骨架"""
+    """Convenience function: generate skeleton for API sequence"""
     generator = SkeletonGenerator()
     return generator.generate(
         api_sequence,
@@ -671,7 +672,7 @@ def generate_skeleton_for_sequence(
 
 
 def render_skeleton(skeleton: DriverSkeleton, mark_holes: bool = False) -> str:
-    """便捷函数：渲染骨架"""
+    """Convenience function: render skeleton"""
     renderer = SkeletonRenderer()
     if mark_holes:
         return renderer.render_with_holes_marked(skeleton)

@@ -50,7 +50,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
         self.clang_extractor = ClangAPIExtractor(benchmark, self.container)
         self.llvm_extractor = LLVMAPIExtractor(benchmark, self.container)
         
-        # Output directory (container内)
+        # Output directory (inside container)
         self.output_dir = '/tmp/liberator_extract'
         
         # Local temporary directory (for storing files copied from container)
@@ -104,7 +104,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
             else:
                 raise ValueError("bc_file not provided and compile_project=False")
 
-        # 3. 提取 apis_llvm.json (在 host 上运行)
+        # 3. Extract apis_llvm.json (runs on host)
         # Note: LLVM extraction runs on HOST, so output goes to a HOST directory
         logger.info("Step 3: Extracting apis_llvm.json on host...")
         if not self.local_temp_dir:
@@ -118,7 +118,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
             output_dir=self.local_temp_dir  # Use HOST temp dir, not container path
         )
 
-        # 4. 读取并合并数据
+        # 4. Read and merge data
         logger.info("Step 4: Merging Clang and LLVM data...")
         apis = self._merge_apis(
             apis_clang_path=apis_clang_path,  # Container path
@@ -190,15 +190,35 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 local_path = os.path.join(llvm_output_dir, local_name)
                 self._copy_from_container(container_path, local_path)
                 local_paths[local_name] = local_path
-        
+
+        # Utils.get_api_list requires all file paths to exist (doesn't handle empty strings)
+        # Create empty files for optional ones that don't exist
+        optional_files_with_defaults = [
+            ('coerce.log', ''),
+            ('exported_functions.txt', ''),
+            ('incomplete_types.txt', ''),
+        ]
+        for filename, default_content in optional_files_with_defaults:
+            if filename not in local_paths:
+                local_path = os.path.join(llvm_output_dir, filename)
+                with open(local_path, 'w') as f:
+                    f.write(default_content)
+                local_paths[filename] = local_path
+
+        # Verify required files exist
+        required_files = ['apis_llvm.json', 'apis_clang.json']
+        for filename in required_files:
+            if filename not in local_paths or not os.path.exists(local_paths[filename]):
+                raise RuntimeError(f"Required file {filename} not found in local_paths")
+
         # 使用 Utils.get_api_list() 读取
         try:
             api_set = Utils.get_api_list(
-                apis_llvm=local_paths.get('apis_llvm.json', ''),
-                apis_clang=local_paths.get('apis_clang.json', ''),
-                coerce_map=local_paths.get('coerce.log', ''),
-                hedader_folder=local_paths.get('exported_functions.txt', ''),
-                incomplete_types=local_paths.get('incomplete_types.txt', ''),
+                apis_llvm=local_paths['apis_llvm.json'],
+                apis_clang=local_paths['apis_clang.json'],
+                coerce_map=local_paths['coerce.log'],
+                hedader_folder=local_paths['exported_functions.txt'],
+                incomplete_types=local_paths['incomplete_types.txt'],
                 minimum_apis=local_paths.get('minimum_apis.txt', '')
             )
             
@@ -235,34 +255,34 @@ class HybridAPIExtractor(BaseAPIExtractor):
     # _copy_from_container is inherited from BaseAPIExtractor
     
     def _extract_function_name(self, signature: str) -> Optional[str]:
-        """从函数签名中提取函数名"""
+        """Extract function name from function signature"""
         import re
         match = re.search(r'\b([a-zA-Z_][a-zA-Z0-9_]*(?:_[a-zA-Z0-9_]+)*)\s*\(', signature)
         return match.group(1) if match else None
     
     def get_last_metadata(self):
-        """返回最近一次提取的元数据（容器/本地路径）。"""
+        """Return metadata from the most recent extraction (container/local paths)"""
         return self.last_metadata
     
     def get_api(self, function_name: str) -> Optional[Api]:
         """
-        获取单个函数的 API 信息
+        Get API information for a single function
         
         Args:
-            function_name: 函数名
+            function_name: Function name
         
         Returns:
-            Api 对象，如果不存在则返回 None
+            Api object, or None if not found
         """
-        # 如果还没有提取，先提取所有
+        # If not yet extracted, extract all first
         if not hasattr(self, '_cached_apis'):
             self._cached_apis = self.extract()
         
         return self._cached_apis.get(function_name)
     
     def cleanup(self):
-        """清理资源"""
-        # 清理本地临时目录
+        """Clean up resources"""
+        # Clean up local temporary directory
         if self.local_temp_dir and os.path.exists(self.local_temp_dir):
             try:
                 shutil.rmtree(self.local_temp_dir)
@@ -270,6 +290,6 @@ class HybridAPIExtractor(BaseAPIExtractor):
             except Exception as e:
                 logger.warning(f"Failed to clean up temp directory: {e}")
         
-        # 调用基类的清理方法（关闭容器）
+        # Call base class cleanup method (close container)
         super().cleanup()
 
