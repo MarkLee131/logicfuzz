@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 class FuzzingContext:
     """
     Immutable data context containing ALL information needed for fuzzing.
-    
+
     Philosophy:
     - Prepared once, used everywhere
     - No fallbacks - if data is missing, preparation failed
     - Immutable - once created, never modified
     - Explicit failures - missing data raises ValueError, not returns None
-    
+
     Fields (Project-level mode):
     - project_name: Target project (e.g., "zlib")
     - project_apis: All APIs extracted from the project (Liberator Api objects)
@@ -37,11 +37,13 @@ class FuzzingContext:
     - header_info: Header files needed for compilation
     - condition_info: Summary of Liberator ConditionManager (sources/sinks/init/setby)
     - existing_fuzzer_headers: Headers used in existing fuzzers (for reference)
+    - pattern_analysis: Special pattern analysis results (VarLen, Loop, Callback, TLV)
+    - skeleton_drivers: Pre-generated skeleton drivers with holes
     """
-    
+
     # === Core identifiers ===
     project_name: str
-    
+
     # === Required data (must be present) ===
     project_apis: List[Dict[str, Any]]  # List of API information (from Liberator)
     api_sequences: List[List[str]]  # List of API call sequences (from grammar)
@@ -51,6 +53,12 @@ class FuzzingContext:
     header_info: Dict[str, List[str]]
     existing_fuzzer_headers: Dict[str, List[str]]
     condition_info: Dict[str, Any] = field(default_factory=dict)
+
+    # === Pattern analysis (P1: DriverEnhancer integration) ===
+    pattern_analysis: Dict[str, Any] = field(default_factory=dict)  # VarLen/Loop/Callback/TLV
+
+    # === Skeleton drivers (P0: SkeletonGenerator integration) ===
+    skeleton_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Pre-generated skeletons
     
     # === Metadata ===
     preparation_time: float = 0.0

@@ -35,6 +35,8 @@ from liberator_adapter.common.datalayout import DataLayout
 from liberator_adapter.constraints.ConditionManager import ConditionManager
 from liberator_adapter.common import FunctionConditionsSet
 from liberator_adapter.driver.factory import Factory
+from liberator_adapter.project_driver_generator import ProjectDriverGenerator
+from liberator_adapter.dependency import DependencyGraph
 
 logger = logging.getLogger(__name__)
 # log the debug and info
@@ -413,174 +415,6 @@ def visualize_dependency_graph(project: str, dep_graph: dict, output_dir: str,
   return ''
 
 
-def generate_api_sequences_from_graph(
-    dep_graph: dict,
-    max_sequences: int = 100,
-    max_length: int = 5
-) -> tuple[list, dict]:
-  """
-  Generate API call sequences from the dependency graph.
-
-  Uses role-based classification to generate meaningful sequences:
-  CREATE -> OPERATE* -> OUTPUT? -> CLEANUP
-
-  Args:
-    dep_graph: {api_name: [dependency1, dependency2, ...]}
-    max_sequences: Maximum number of sequences to generate
-    max_length: Maximum length of each sequence
-
-  Returns:
-    Tuple of (sequences, apis_by_role):
-      - sequences: List of API call sequences
-      - apis_by_role: Dict mapping role to list of APIs
-  """
-  if not dep_graph:
-    return ([], {})
-
-  # Collect all APIs
-  all_apis = set(dep_graph.keys())
-  for deps in dep_graph.values():
-    all_apis.update(deps)
-
-  # Build reverse graph: who depends on me? (i.e., who can come after me)
-  reverse_graph = {api: [] for api in all_apis}
-  for api, deps in dep_graph.items():
-    for dep in deps:
-      if dep in reverse_graph:
-        reverse_graph[dep].append(api)
-
-  # Classify APIs by role
-  def classify_api(api_name: str) -> str:
-    name = api_name.lower()
-    # Order matters: check more specific patterns first
-    if any(p in name for p in ['delete', 'free', 'destroy', 'close', 'release', 'cleanup']):
-      return 'CLEANUP'
-    if any(p in name for p in ['print', 'tostring', 'dump', 'serialize', 'write']):
-      return 'OUTPUT'
-    if any(p in name for p in ['parse', 'create', 'new', 'init', 'open', 'alloc', 'load', 'read']):
-      return 'CREATE'
-    if any(p in name for p in ['get', 'add', 'set', 'insert', 'replace', 'detach', 'remove',
-                                'append', 'prepend', 'is', 'has', 'find', 'compare']):
-      return 'OPERATE'
-    return 'OTHER'
-
-  # Group APIs by role
-  apis_by_role = {'CREATE': [], 'OPERATE': [], 'OUTPUT': [], 'CLEANUP': [], 'OTHER': []}
-  for api in all_apis:
-    role = classify_api(api)
-    apis_by_role[role].append(api)
-
-  # Log classification for debugging
-  # print(f"CREATE: {len(apis_by_role['CREATE'])}, OPERATE: {len(apis_by_role['OPERATE'])}, "
-  #       f"OUTPUT: {len(apis_by_role['OUTPUT'])}, CLEANUP: {len(apis_by_role['CLEANUP'])}")
-
-  sequences = []
-  seen = set()
-
-  def add_sequence(seq):
-    """Add sequence if unique and valid"""
-    if len(seq) >= 2:
-      seq_tuple = tuple(seq)
-      if seq_tuple not in seen:
-        seen.add(seq_tuple)
-        sequences.append(seq)
-        return True
-    return False
-
-  def can_follow(api_a: str, api_b: str) -> bool:
-    """Check if api_b can follow api_a based on dependency graph"""
-    # api_b depends on api_a means api_b can come after api_a
-    return api_a in dep_graph.get(api_b, [])
-
-  def find_followers(api: str, target_role: str = None) -> list:
-    """Find APIs that can follow the given api"""
-    followers = reverse_graph.get(api, [])
-    if target_role:
-      followers = [f for f in followers if classify_api(f) == target_role]
-    return followers
-
-  # Strategy 1: CREATE -> OPERATE -> CLEANUP (most common pattern)
-  for create_api in apis_by_role['CREATE'][:15]:
-    if len(sequences) >= max_sequences:
-      break
-
-    # Find OPERATE APIs that can follow this CREATE
-    operate_followers = find_followers(create_api, 'OPERATE')
-
-    for operate_api in operate_followers[:5]:
-      if len(sequences) >= max_sequences:
-        break
-
-      # Find CLEANUP that can follow OPERATE
-      cleanup_followers = find_followers(operate_api, 'CLEANUP')
-      if cleanup_followers:
-        add_sequence([create_api, operate_api, cleanup_followers[0]])
-
-      # Try another OPERATE before CLEANUP
-      operate_followers2 = find_followers(operate_api, 'OPERATE')
-      for operate_api2 in operate_followers2[:3]:
-        if operate_api2 != operate_api:
-          cleanup_followers2 = find_followers(operate_api2, 'CLEANUP')
-          if cleanup_followers2:
-            add_sequence([create_api, operate_api, operate_api2, cleanup_followers2[0]])
-
-  # Strategy 2: CREATE -> OUTPUT -> CLEANUP
-  for create_api in apis_by_role['CREATE'][:15]:
-    if len(sequences) >= max_sequences:
-      break
-
-    output_followers = find_followers(create_api, 'OUTPUT')
-    for output_api in output_followers[:3]:
-      cleanup_followers = find_followers(output_api, 'CLEANUP')
-      # Also check cleanup that follows create directly
-      if not cleanup_followers:
-        cleanup_followers = find_followers(create_api, 'CLEANUP')
-      if cleanup_followers:
-        add_sequence([create_api, output_api, cleanup_followers[0]])
-
-  # Strategy 3: CREATE -> OPERATE -> OUTPUT -> CLEANUP
-  for create_api in apis_by_role['CREATE'][:10]:
-    if len(sequences) >= max_sequences:
-      break
-
-    operate_followers = find_followers(create_api, 'OPERATE')
-    for operate_api in operate_followers[:3]:
-      output_followers = find_followers(operate_api, 'OUTPUT')
-      for output_api in output_followers[:2]:
-        cleanup_followers = find_followers(output_api, 'CLEANUP')
-        if not cleanup_followers:
-          cleanup_followers = find_followers(create_api, 'CLEANUP')
-        if cleanup_followers:
-          add_sequence([create_api, operate_api, output_api, cleanup_followers[0]])
-
-  # Strategy 4: CREATE -> OPERATE (multiple) without explicit cleanup
-  for create_api in apis_by_role['CREATE'][:10]:
-    if len(sequences) >= max_sequences:
-      break
-
-    operate_followers = find_followers(create_api, 'OPERATE')
-    for op1 in operate_followers[:5]:
-      for op2 in find_followers(op1, 'OPERATE')[:3]:
-        if op2 != op1:
-          add_sequence([create_api, op1, op2])
-          for op3 in find_followers(op2, 'OPERATE')[:2]:
-            if op3 not in [op1, op2]:
-              add_sequence([create_api, op1, op2, op3])
-
-  # Strategy 5: Simple CREATE -> CLEANUP pairs
-  for create_api in apis_by_role['CREATE']:
-    if len(sequences) >= max_sequences:
-      break
-    cleanup_followers = find_followers(create_api, 'CLEANUP')
-    for cleanup in cleanup_followers[:2]:
-      add_sequence([create_api, cleanup])
-
-  # Sort by length (longer first) then alphabetically for consistency
-  sequences.sort(key=lambda x: (-len(x), x[0]))
-
-  return sequences[:max_sequences], apis_by_role
-
-
 def setup_condition_manager(
     api_list: List[Api],
     function_conditions: FunctionConditionsSet,
@@ -931,7 +765,7 @@ def run_local_extraction_for_benchmark(
     benchmark: benchmarklib.Benchmark,
     output_base: str,
     enable_llvm_extraction: bool = True
-) -> tuple[str, dict]:
+) -> tuple[str, dict, dict]:
   """Run Clang extraction for a Benchmark object and write type dependency graph.
 
   Args:
@@ -940,7 +774,11 @@ def run_local_extraction_for_benchmark(
     enable_llvm_extraction: If True, also run LLVM extraction to generate
                            conditions.json with provenance data
 
-  Returns the path to the directory containing extraction outputs.
+  Returns:
+    Tuple of (outdir, dep_graph, extraction_data):
+      - outdir: Path to the directory containing extraction outputs
+      - dep_graph: Type dependency graph as dict
+      - extraction_data: Additional data for driver generation
   """
   project = benchmark.project
   # Use the OSS-Fuzz project image/container (ProjectContainerTool) by
@@ -1191,37 +1029,169 @@ def run_local_extraction_for_benchmark(
         f.write(f"{i}. {' -> '.join(seq)}\n")
 
   else:
-    # Fallback to heuristic-based generation
-    logger.info('Using HEURISTIC-based sequence generation (no ConditionManager)')
-    sequences, role_stats = generate_api_sequences_from_graph(out_graph, max_sequences=50, max_length=5)
+    # No ConditionManager available - cannot generate type-aware sequences
+    logger.warning('ConditionManager not available - skipping API sequence generation')
+    logger.warning('To enable sequence generation, ensure LLVM extraction is enabled')
+    sequences = []
 
-    with open(sequences_path, 'w') as f:
-      f.write("# API Sequences generated from type dependency graph\n")
-      f.write(f"# Total sequences: {len(sequences)}\n")
-      f.write("# Classification: Heuristic-based (name patterns)\n\n")
+  if sequences:
+    logger.info('Wrote %d API sequences to %s', len(sequences), sequences_path)
 
-      # Write role classification statistics
-      f.write("=" * 60 + "\n")
-      f.write("API ROLE CLASSIFICATION (heuristic-based)\n")
-      f.write("=" * 60 + "\n\n")
-      for role, apis in role_stats.items():
-        f.write(f"{role} ({len(apis)} APIs):\n")
-        for api in sorted(apis)[:15]:
-          f.write(f"  - {api}\n")
-        if len(apis) > 15:
-          f.write(f"  ... and {len(apis) - 15} more\n")
-        f.write("\n")
+  # Collect extraction data for downstream use (e.g., driver generation)
+  extraction_data = {
+    'api_list': api_list,
+    'dependency_graph': dependency_graph,
+    'function_conditions': function_conditions,
+    'condition_manager': condition_manager,
+    'apis_clang_path': apis_clang_path,
+    'apis_llvm_path': apis_llvm_path,
+    'data_layout_path': data_layout_path,
+    'public_headers_path': public_headers_path,
+    'headers_dir': None,  # Will be set if available
+  }
 
-      f.write("=" * 60 + "\n")
-      f.write("GENERATED SEQUENCES\n")
-      f.write("=" * 60 + "\n\n")
-      for i, seq in enumerate(sequences, 1):
-        f.write(f"{i}. {' -> '.join(seq)}\n")
+  # Try to get headers directory from container
+  try:
+    if hasattr(clang_extractor, '_include_dir'):
+      extraction_data['headers_dir'] = clang_extractor._include_dir
+  except Exception:
+    pass
 
-  logger.info('Wrote %d API sequences to %s', len(sequences), sequences_path)
+  # Return output directory, dependency graph, and extraction data
+  return outdir, out_graph, extraction_data
 
-  # Return both output directory and dependency graph for analysis
-  return outdir, out_graph
+
+def generate_drivers_for_benchmark(
+    benchmark: benchmarklib.Benchmark,
+    output_dir: str,
+    api_list: List[Api],
+    dep_graph: DependencyGraph,
+    function_conditions: FunctionConditionsSet,
+    condition_manager: ConditionManager,
+    num_drivers: int = 10,
+    driver_size: int = 5,
+    headers_dir: str = None,
+    public_headers_file: str = None
+) -> List[str]:
+  """Generate fuzz drivers using Liberator's CBFactory.
+
+  Args:
+    benchmark: Benchmark object with project info
+    output_dir: Directory to save generated drivers
+    api_list: List of extracted APIs
+    dep_graph: Type dependency graph
+    function_conditions: Function conditions from static analysis
+    condition_manager: Initialized ConditionManager
+    num_drivers: Number of drivers to generate
+    driver_size: Number of API calls per driver
+    headers_dir: Directory containing header files
+    public_headers_file: Path to public headers list file
+
+  Returns:
+    List of generated driver file paths
+  """
+  project = benchmark.project
+  logger.info('Generating %d fuzz drivers for project %s...', num_drivers, project)
+
+  drivers_dir = os.path.join(output_dir, 'drivers')
+  seeds_dir = os.path.join(output_dir, 'seeds')
+  os.makedirs(drivers_dir, exist_ok=True)
+  os.makedirs(seeds_dir, exist_ok=True)
+
+  try:
+    from liberator_adapter.driver.factory.constraint_based import CBFactory
+    from liberator_adapter.bias import Bias
+    from liberator_adapter.backend.libfuzz import LFBackendDriver
+
+    # Filter API list to only include APIs with conditions
+    available_conditions = set(function_conditions.fun_cond_set.keys())
+    filtered_api_list = [api for api in api_list if api.function_name in available_conditions]
+
+    if len(filtered_api_list) < len(api_list):
+      logger.info('Filtered %d APIs without conditions (keeping %d for driver generation)',
+                  len(api_list) - len(filtered_api_list), len(filtered_api_list))
+
+    if not filtered_api_list:
+      logger.warning('No APIs with conditions available for driver generation')
+      return []
+
+    # Filter dependency graph to only include APIs with conditions
+    filtered_dep_graph = DependencyGraph()
+    api_name_to_api = {api.function_name: api for api in filtered_api_list}
+    for api in dep_graph.graph:
+      if api.function_name in available_conditions:
+        deps = dep_graph.graph.get(api, set())
+        filtered_deps = {d for d in deps if d.function_name in available_conditions}
+        if filtered_deps:
+          filtered_dep_graph.graph[api] = filtered_deps
+
+    # Create bias (default random selection)
+    bias = Bias()
+
+    # Create CBFactory
+    factory = CBFactory(
+        api_list=set(filtered_api_list),
+        driver_size=driver_size,
+        dgraph=filtered_dep_graph,
+        conditions=function_conditions,
+        bias=bias,
+        enable_z3_validation=False
+    )
+
+    # Generate drivers
+    drivers = []
+    for i in range(num_drivers):
+      try:
+        driver = factory.create_random_driver()
+        drivers.append(driver)
+        logger.debug('Generated driver %d/%d', i + 1, num_drivers)
+      except Exception as e:
+        logger.warning('Failed to generate driver %d: %s', i + 1, str(e))
+        continue
+
+    if not drivers:
+      logger.warning('No drivers were generated')
+      return []
+
+    logger.info('Successfully generated %d drivers', len(drivers))
+
+    # Save drivers using LFBackendDriver if headers are available
+    saved_files = []
+    if headers_dir and public_headers_file and os.path.exists(public_headers_file):
+      try:
+        backend = LFBackendDriver(
+            working_dir=drivers_dir,
+            seeds_dir=seeds_dir,
+            num_seeds=5,
+            headers_dir=headers_dir,
+            public_headers=public_headers_file
+        )
+
+        for driver in drivers:
+          try:
+            driver_filename = backend.get_name()
+            backend.emit_driver(driver, driver_filename)
+            backend.emit_seeds(driver, driver_filename)
+            saved_files.append(os.path.join(drivers_dir, driver_filename))
+            logger.debug('Saved driver: %s', driver_filename)
+          except Exception as e:
+            logger.warning('Failed to save driver: %s', str(e))
+
+        logger.info('Saved %d drivers to %s', len(saved_files), drivers_dir)
+      except Exception as e:
+        logger.warning('Failed to create backend for saving drivers: %s', str(e))
+    else:
+      logger.warning('Headers not available, drivers generated but not saved to files')
+      logger.warning('  headers_dir: %s', headers_dir)
+      logger.warning('  public_headers_file: %s', public_headers_file)
+
+    return saved_files
+
+  except Exception as e:
+    logger.error('Failed to generate drivers: %s', str(e))
+    traceback.print_exc()
+    return []
+
 
 def run_experiments(benchmark: benchmarklib.Benchmark, args) -> Result:
   """Runs an experiment based on the |benchmark| config."""
@@ -1346,6 +1316,18 @@ def parse_args() -> argparse.Namespace:
                       action='store_true',
                       default=False,
                       help='Only run Liberator Clang extraction for the provided benchmark YAML(s) and exit.')
+  parser.add_argument('--generate-drivers',
+                      action='store_true',
+                      default=False,
+                      help='Generate fuzz drivers using Liberator CBFactory after extraction.')
+  parser.add_argument('--num-drivers',
+                      type=int,
+                      default=10,
+                      help='Number of drivers to generate (default: 10).')
+  parser.add_argument('--driver-size',
+                      type=int,
+                      default=5,
+                      help='Number of API calls per driver (default: 5).')
   parser.add_argument('--disable-llvm-extraction',
                       action='store_true',
                       default=False,
@@ -1762,10 +1744,11 @@ def main():
   run_single_fuzz.prepare(args.oss_fuzz_dir)
 
   experiment_targets = prepare_experiment_targets(args)
-  if args.extract_only:
-    logger.info('Running extraction-only mode for %d benchmark(s).', len(experiment_targets))
+  if args.extract_only or args.generate_drivers:
+    mode = 'extraction + driver generation' if args.generate_drivers else 'extraction-only'
+    logger.info('Running %s mode for %d benchmark(s).', mode, len(experiment_targets))
     for benchmark in experiment_targets:
-      outdir, dep_graph = run_local_extraction_for_benchmark(
+      outdir, dep_graph, extraction_data = run_local_extraction_for_benchmark(
         benchmark, args.work_dir,
         enable_llvm_extraction=not args.disable_llvm_extraction
       )
@@ -1773,6 +1756,29 @@ def main():
 
       # Display dependency graph statistics and generate visualization
       print_dependency_graph_stats(benchmark.project, dep_graph, output_dir=outdir)
+
+      # Generate drivers if requested
+      if args.generate_drivers:
+        if extraction_data.get('condition_manager') and extraction_data.get('function_conditions'):
+          saved_drivers = generate_drivers_for_benchmark(
+            benchmark=benchmark,
+            output_dir=outdir,
+            api_list=extraction_data['api_list'],
+            dep_graph=extraction_data['dependency_graph'],
+            function_conditions=extraction_data['function_conditions'],
+            condition_manager=extraction_data['condition_manager'],
+            num_drivers=args.num_drivers,
+            driver_size=args.driver_size,
+            headers_dir=extraction_data.get('headers_dir'),
+            public_headers_file=extraction_data.get('public_headers_path')
+          )
+          if saved_drivers:
+            logger.info('Generated %d drivers for %s', len(saved_drivers), benchmark.project)
+          else:
+            logger.warning('No drivers generated for %s', benchmark.project)
+        else:
+          logger.warning('Cannot generate drivers for %s: ConditionManager not available', benchmark.project)
+          logger.warning('Ensure LLVM extraction is enabled (--disable-llvm-extraction not set)')
     return
   if oss_fuzz_checkout.ENABLE_CACHING:
     oss_fuzz_checkout.prepare_cached_images(experiment_targets)

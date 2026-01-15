@@ -490,7 +490,7 @@ class ProjectDriverGenerator:
         sequence_size: int
     ) -> List[List[Api]]:
         """
-        生成API序列（使用Grammar或简单策略）
+        生成API序列（使用Grammar或简单策略），支持循环模式感知
 
         Args:
             num_sequences: 序列数量
@@ -499,7 +499,11 @@ class ProjectDriverGenerator:
         Returns:
             API序列列表
         """
+        import random
         sequences = []
+
+        # 获取需要循环的 API 列表（从 pattern_cache 中）
+        loop_apis = self._get_loop_apis()
 
         if self.grammar:
             # 使用Grammar生成序列
@@ -508,6 +512,8 @@ class ProjectDriverGenerator:
                     # 从Grammar采样一个序列
                     sequence = self._sample_sequence_from_grammar(sequence_size)
                     if sequence:
+                        # 应用循环模式增强
+                        sequence = self._apply_loop_patterns(sequence, loop_apis)
                         sequences.append(sequence)
                 except Exception as e:
                     logger.debug(f"Failed to sample from grammar: {e}")
@@ -515,15 +521,94 @@ class ProjectDriverGenerator:
         # 如果Grammar不可用或生成不足，使用简单策略
         while len(sequences) < num_sequences:
             # 简单策略: 随机选择API组成序列
-            import random
             api_list = list(self.all_apis)
             if len(api_list) >= sequence_size:
                 sequence = random.sample(api_list, sequence_size)
             else:
                 sequence = random.choices(api_list, k=sequence_size)
+
+            # 应用循环模式增强
+            sequence = self._apply_loop_patterns(sequence, loop_apis)
             sequences.append(sequence)
 
         return sequences
+
+    def _get_loop_apis(self) -> Dict[str, dict]:
+        """
+        从 pattern_cache 中获取需要循环调用的 API 信息
+
+        Returns:
+            Dict[api_name, loop_info]: 需要循环的 API 及其循环信息
+        """
+        loop_apis = {}
+
+        if self.pattern_cache:
+            for api_name, loop_info in self.pattern_cache.loop_patterns.items():
+                if loop_info.needs_loop:
+                    loop_apis[api_name] = {
+                        'loop_type': loop_info.loop_type.value if loop_info.loop_type else 'iterator',
+                        'max_iterations': loop_info.max_iterations or 3,
+                        'termination_condition': loop_info.termination_condition,
+                    }
+
+        return loop_apis
+
+    def _apply_loop_patterns(
+        self,
+        sequence: List[Api],
+        loop_apis: Dict[str, dict]
+    ) -> List[Api]:
+        """
+        对序列中需要循环的 API 应用循环模式
+
+        如果序列中的某个 API 被识别为需要循环调用（如迭代器、增量读取等），
+        则在序列中将该 API 重复多次以模拟循环行为。
+
+        Args:
+            sequence: 原始 API 序列
+            loop_apis: 需要循环的 API 及其循环信息
+
+        Returns:
+            增强后的 API 序列
+        """
+        if not loop_apis:
+            return sequence
+
+        enhanced_sequence = []
+
+        for api in sequence:
+            api_name = api.function_name
+
+            if api_name in loop_apis:
+                loop_info = loop_apis[api_name]
+                loop_type = loop_info.get('loop_type', 'iterator')
+                max_iterations = loop_info.get('max_iterations', 3)
+
+                # 根据循环类型决定重复次数
+                # - iterator: 通常需要多次调用直到返回 NULL 或终止条件
+                # - incremental: 增量读取/写入，需要多次调用
+                # - state_machine: 状态机驱动，直到达到终止状态
+                if loop_type == 'iterator':
+                    repeat_count = min(max_iterations, 3)  # 迭代器模式：重复2-3次
+                elif loop_type == 'incremental':
+                    repeat_count = min(max_iterations, 4)  # 增量模式：重复3-4次
+                elif loop_type == 'state_machine':
+                    repeat_count = min(max_iterations, 5)  # 状态机：重复更多次
+                else:
+                    repeat_count = 2  # 默认重复2次
+
+                # 添加重复调用
+                for _ in range(repeat_count):
+                    enhanced_sequence.append(api)
+
+                logger.debug(
+                    f"Applied loop pattern for {api_name}: "
+                    f"{loop_type}, repeated {repeat_count} times"
+                )
+            else:
+                enhanced_sequence.append(api)
+
+        return enhanced_sequence
 
     def _sample_sequence_from_grammar(self, max_size: int) -> List[Api]:
         """从Grammar采样一个API序列"""
@@ -777,7 +862,8 @@ class ProjectDriverGenerator:
             dgraph=self.dependency_graph,
             conditions=self.function_conditions or FunctionConditionsSet(),
             bias=bias,
-            enable_z3_validation=enable_z3_validation
+            enable_z3_validation=enable_z3_validation,
+            driver_enhancer=self.driver_enhancer  # 传递 DriverEnhancer 用于增强 callback 生成
         )
     
     def create_backend(

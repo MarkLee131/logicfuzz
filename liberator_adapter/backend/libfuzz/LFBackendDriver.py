@@ -92,21 +92,36 @@ class LFBackendDriver(BackendDriver):
                 f.write(complete_seed_buffer)
 
     def emit_stub_functions(self, stub_functions: List[Function]) -> str:
-        stubs = ""
+        """
+        生成回调函数的 stub 实现
 
-        # print("emit_stub_functions")
-        # from IPython import embed; embed(); exit(1)
+        如果 Function 对象有 stub_code 属性（由 DriverEnhancer 生成的增强 stub），
+        则使用增强的 stub；否则生成默认的空实现。
+        """
+        stubs = ""
 
         for _, f in stub_functions.items():
             f_name = f.token
             f_return = f.ret_type
             f_arguments = f.arg_types
 
-            stubs += f"{f_return} {f_name} {f_arguments} {{\n"
-            if f_return != "void":
-                stubs += f"\treturn ({f_return})0;\n"
-            stubs += "}\n"
-            stubs += "\n"
+            # 检查是否有 DriverEnhancer 生成的增强 stub
+            if hasattr(f, 'stub_code') and f.stub_code:
+                # 使用增强的 stub 代码
+                stubs += f"// Enhanced callback stub"
+                if hasattr(f, 'callback_type') and f.callback_type:
+                    stubs += f" (type: {f.callback_type})"
+                stubs += "\n"
+                stubs += f.stub_code
+                stubs += "\n"
+            else:
+                # 使用默认的空 stub
+                stubs += f"// Default callback stub\n"
+                stubs += f"{f_return} {f_name} {f_arguments} {{\n"
+                if f_return != "void":
+                    stubs += f"\treturn ({f_return})0;\n"
+                stubs += "}\n"
+                stubs += "\n"
 
         return stubs
 

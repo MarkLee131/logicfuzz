@@ -18,9 +18,15 @@ from liberator_adapter.driver import Driver
 from liberator_adapter.driver.factory import Factory
 from liberator_adapter.driver.ir import (
     ApiCall, PointerType, Variable, AllocType, Constant,
-    NullConstant, AssertNull, SetNull, Address
+    NullConstant, AssertNull, SetNull, Address, Function
 )
 from liberator_adapter.bias import Bias
+
+# DriverEnhancer 用于增强 callback 生成（可选）
+try:
+    from liberator_adapter.driver.driver_enhancer import DriverEnhancer
+except ImportError:
+    DriverEnhancer = None
 
 # Z3 序列验证（可选）
 try:
@@ -47,7 +53,8 @@ class CBFactory(Factory):
     
     def __init__(self, api_list: Set[Api], driver_size: int,
                  dgraph: DependencyGraph, conditions: FunctionConditionsSet,
-                 bias: Bias, enable_z3_validation: bool = False):
+                 bias: Bias, enable_z3_validation: bool = False,
+                 driver_enhancer: Optional['DriverEnhancer'] = None):
         """
         初始化 CBFactory
 
@@ -58,12 +65,14 @@ class CBFactory(Factory):
             conditions: 函数约束条件集合
             bias: 随机选择策略
             enable_z3_validation: 是否启用 Z3 序列验证
+            driver_enhancer: DriverEnhancer 实例（可选，用于增强 callback 生成）
         """
         self.api_list = api_list
         self.driver_size = driver_size
         self.conditions = conditions
         self.bias = bias
         self.enable_z3_validation = enable_z3_validation and Z3_AVAILABLE
+        self.driver_enhancer = driver_enhancer
 
         # 初始化 Z3 验证器
         self.z3_validator = None
@@ -101,6 +110,11 @@ class CBFactory(Factory):
         self.source_api = list(self.condition_manager.get_source_api())
         self.init_api = list(self.condition_manager.get_init_api())
 
+        # 建立 API 名称到 Api 对象的映射（用于增强 callback 生成）
+        self.api_name_to_api: Dict[str, Api] = {
+            api.function_name: api for api in self.api_list
+        }
+
     def try_to_instantiate_api_call(self, api_call: ApiCall,
                                     conditions: FunctionConditions, 
                                     rng_ctx: RunningContext) -> Tuple[Optional[RunningContext], Set]:
@@ -116,12 +130,30 @@ class CBFactory(Factory):
         # 第一轮：初始化依赖参数（len_depends_on）
         for arg_pos, arg_type in api_call.get_pos_args_types():
             arg_cond = conditions.argument_at[arg_pos]
-            
-            if (arg_cond.len_depends_on != "" and 
+
+            # 获取 var-len 依赖索引
+            # 优先使用静态分析结果，如果没有则尝试 DriverEnhancer 分析
+            len_depends_idx = None
+            if arg_cond.len_depends_on != "":
+                # 静态分析已发现 var-len 关系
+                len_depends_idx = int(arg_cond.len_depends_on.replace("param_", ""))
+            elif self.driver_enhancer is not None:
+                # 使用 DriverEnhancer 的 VarLen 分析作为备选
+                varlen_info = self.driver_enhancer.get_buffer_size_constraint(
+                    api_call.function_name, arg_pos
+                )
+                if varlen_info:
+                    len_depends_idx, relationship = varlen_info
+                    logger.debug(
+                        f"VarLen fallback for {api_call.function_name} "
+                        f"arg {arg_pos}: len_idx={len_depends_idx}, rel={relationship}"
+                    )
+
+            if (len_depends_idx is not None and
                 (isinstance(arg_type, PointerType) and
                 (not arg_type.get_base_type().is_incomplete or
                  arg_type.get_base_type() == rng_ctx.stub_void))):
-                idx = int(arg_cond.len_depends_on.replace("param_", ""))
+                idx = len_depends_idx
                 idx_type = api_call.arg_types[idx]
 
                 if idx_type.get_token() not in DataLayout.size_types:
@@ -179,7 +211,10 @@ class CBFactory(Factory):
 
             try:
                 if isinstance(arg_type, PointerType) and arg_type.to_function:
-                    arg_var = rng_ctx.get_function_pointer(arg_type)
+                    # 使用 DriverEnhancer 生成增强的 callback stub（如果可用）
+                    arg_var = self._get_enhanced_function_pointer(
+                        arg_type, api_call.function_name, arg_pos, rng_ctx
+                    )
                 else:
                     arg_var = rng_ctx.try_to_get_var(api_call, conditions, arg_pos)
                 
@@ -238,7 +273,60 @@ class CBFactory(Factory):
         rng_ctx.new_vars.clear()
 
         return (rng_ctx, {})
-    
+
+    def _get_enhanced_function_pointer(
+        self,
+        arg_type: PointerType,
+        api_name: str,
+        arg_pos: int,
+        rng_ctx: RunningContext
+    ) -> Function:
+        """
+        获取 callback 函数指针，优先使用 DriverEnhancer 生成增强的 stub
+
+        Args:
+            arg_type: callback 参数类型
+            api_name: API 名称
+            arg_pos: 参数位置
+            rng_ctx: RunningContext
+
+        Returns:
+            Function 对象
+        """
+        # 如果 DriverEnhancer 可用，使用增强的 stub 生成
+        if self.driver_enhancer is not None:
+            api = self.api_name_to_api.get(api_name)
+            if api is not None:
+                try:
+                    func_name = f"fuzz_cb_{api_name}_{arg_pos}"
+                    stub_code, cb_type = self.driver_enhancer.generate_callback_stub(
+                        api, arg_pos, func_name
+                    )
+
+                    # 检查是否已经为此类型生成过 stub
+                    if arg_type in rng_ctx.stub_functions:
+                        return rng_ctx.stub_functions[arg_type]
+
+                    # 创建 Function 对象
+                    func = Function(func_name, arg_type)
+                    func.stub_code = stub_code
+                    # 保存到 context 的 stub_functions 中
+                    rng_ctx.stub_functions[arg_type] = func
+
+                    logger.debug(
+                        f"Generated enhanced callback stub for {api_name} "
+                        f"arg {arg_pos}: {cb_type.value if hasattr(cb_type, 'value') else cb_type}"
+                    )
+                    return func
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to generate enhanced callback for {api_name} "
+                        f"arg {arg_pos}: {e}, falling back to default"
+                    )
+
+        # 回退到默认的 function pointer 生成
+        return rng_ctx.get_function_pointer(arg_type)
+
     def validate_sequence_with_z3(self, api_sequence: List[Api]) -> Tuple[bool, List[str]]:
         """
         使用 Z3 验证 API 序列是否满足约束条件
