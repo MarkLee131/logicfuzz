@@ -935,15 +935,18 @@ class ProjectDriverGenerator:
         if not include_dir:
             try:
                 fetched_src_dir = self._fetch_source_from_oss_fuzz_image()
-                include_dir = fetched_src_dir
-                logger.info(f"📥 Fetched source from OSS-Fuzz image: {include_dir}")
+                # NOTE: Do NOT set include_dir here! The fetched path is a HOST path,
+                # but clang extraction runs INSIDE the container. Let the extractor
+                # auto-detect the correct container path (e.g., /src/cjson/).
+                logger.info(f"📥 Fetched source from OSS-Fuzz image: {fetched_src_dir}")
             except Exception as e:
                 logger.warning(f"Failed to fetch source from OSS-Fuzz image: {e}")
-        
-        if not public_headers_file and include_dir:
+
+        # Use fetched_src_dir (host path) to generate public_headers.txt
+        if not public_headers_file and fetched_src_dir:
             try:
                 headers_path = Path(self.work_dir) / "public_headers.txt"
-                self._generate_public_headers_file(include_dir, headers_path)
+                self._generate_public_headers_file(fetched_src_dir, headers_path)
                 public_headers_file = str(headers_path)
                 logger.info(f"📄 Generated public headers list: {public_headers_file}")
             except Exception as e:

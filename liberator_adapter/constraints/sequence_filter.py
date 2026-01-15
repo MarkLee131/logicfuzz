@@ -150,7 +150,7 @@ class LLMLifecycleValidator:
             for info in batch_results:
                 self._cache[info.api_name] = info
 
-        # 返回所有结果（从缓存）
+        # Return all results (from cache)
         return [
             self._cache.get(
                 api.function_name,
@@ -161,41 +161,41 @@ class LLMLifecycleValidator:
 
     def validate_sequence(self, sequence: List[Api]) -> LifecycleValidationResult:
         """
-        验证API序列的生命周期有效性
+        Validate API sequence lifecycle validity
 
-        完全使用LLM进行语义验证，不使用硬编码规则。
+        Completely uses LLM for semantic validation, does not use hardcoded rules.
 
         Args:
-            sequence: API序列
+            sequence: API sequence
 
         Returns:
-            LifecycleValidationResult: 验证结果
+            LifecycleValidationResult: Validation result
         """
         if not sequence:
             return LifecycleValidationResult(is_valid=True)
 
         if self.llm_client is None:
-            # 没有LLM，无法验证，默认通过
+            # No LLM, cannot validate, default to pass
             return LifecycleValidationResult(
                 is_valid=True,
                 reasoning="No LLM client available, skipping validation"
             )
 
-        # 先获取生命周期分类（用于结果返回）
+        # First get lifecycle classification (for result return)
         lifecycle_infos = self.classify_batch(sequence)
 
-        # 使用LLM验证序列
+        # Use LLM to validate sequence
         return self._llm_validate_sequence(sequence, lifecycle_infos)
 
     def _llm_classify_single(self, api: Api) -> APILifecycleInfo:
-        """使用LLM分类单个API"""
+        """Use LLM to classify single API"""
         params_desc = ", ".join([
             f"{arg.type} {arg.name}" for arg in api.arguments_info
         ]) or "void"
 
         signature = f"{api.return_info.type} {api.function_name}({params_desc})"
 
-        # 使用prompt_loader获取prompt
+        # Use prompt_loader to get prompt
         pm = get_prompt_manager()
         prompt = pm.get_lifecycle_classify_prompt(
             api_name=api.function_name,
@@ -231,15 +231,15 @@ class LLMLifecycleValidator:
             )
 
     def _llm_classify_batch(self, apis: List[Api]) -> List[APILifecycleInfo]:
-        """使用LLM批量分类API"""
-        # 构建API列表描述
+        """Use LLM to batch classify APIs"""
+        # Build API list description
         api_descriptions = []
         for i, api in enumerate(apis):
             params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info]) or "void"
             sig = f"{api.return_info.type} {api.function_name}({params})"
             api_descriptions.append(f"{i+1}. {sig}")
 
-        # 使用prompt_loader获取prompt
+        # Use prompt_loader to get prompt
         pm = get_prompt_manager()
         prompt = pm.get_lifecycle_batch_classify_prompt(
             api_list="\n".join(api_descriptions)
@@ -260,7 +260,7 @@ class LLMLifecycleValidator:
             infos = []
             classifications = result.get("classifications", [])
 
-            # 按API名称匹配结果
+            # Match results by API name
             api_name_to_api = {api.function_name: api for api in apis}
 
             for cls in classifications:
@@ -273,7 +273,7 @@ class LLMLifecycleValidator:
                         reasoning=""
                     ))
 
-            # 补充未分类的API
+            # Supplement unclassified APIs
             classified_names = {info.api_name for info in infos}
             for api in apis:
                 if api.function_name not in classified_names:
@@ -294,8 +294,8 @@ class LLMLifecycleValidator:
 
     def _llm_validate_sequence(self, sequence: List[Api],
                                 lifecycle_infos: List[APILifecycleInfo]) -> LifecycleValidationResult:
-        """使用LLM验证序列"""
-        # 构建序列描述
+        """Use LLM to validate sequence"""
+        # Build sequence description
         api_descriptions = []
         for i, (api, info) in enumerate(zip(sequence, lifecycle_infos)):
             params = ", ".join([f"{arg.type} {arg.name}" for arg in api.arguments_info]) or "void"
@@ -303,7 +303,7 @@ class LLMLifecycleValidator:
             phase_str = f"[{info.phase.value}]" if info.phase != APILifecyclePhase.UNKNOWN else ""
             api_descriptions.append(f"{i+1}. {sig} {phase_str}")
 
-        # 使用prompt_loader获取prompt
+        # Use prompt_loader to get prompt
         pm = get_prompt_manager()
         prompt = pm.get_lifecycle_validate_prompt(
             api_sequence="\n".join(api_descriptions)
@@ -323,23 +323,23 @@ class LLMLifecycleValidator:
         except Exception as e:
             logger.warning(f"LLM sequence validation failed: {e}")
             return LifecycleValidationResult(
-                is_valid=True,  # 出错时默认通过，避免误杀
+                is_valid=True,  # Default to pass on error, avoid false positives
                 reasoning=f"LLM error: {e}",
                 lifecycle_info=lifecycle_infos
             )
 
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
-        """解析LLM的JSON响应"""
+        """Parse LLM's JSON response"""
         import json
         import re
 
-        # 尝试直接解析
+        # Try direct parsing
         try:
             return json.loads(response)
         except json.JSONDecodeError:
             pass
 
-        # 尝试提取JSON块
+        # Try extracting JSON block
         json_patterns = [
             r'```json\s*([\s\S]*?)\s*```',
             r'```\s*([\s\S]*?)\s*```',
@@ -355,30 +355,30 @@ class LLMLifecycleValidator:
                 except (json.JSONDecodeError, IndexError):
                     continue
 
-        # 解析失败，返回空字典
+        # Parsing failed, return empty dictionary
         logger.warning(f"Failed to parse JSON from response: {response[:200]}...")
         return {}
 
     def clear_cache(self):
-        """清除分类缓存"""
+        """Clear classification cache"""
         self._cache.clear()
 
 
 # =============================================================================
-# Sequence Filter (简化版，主要依赖LLM)
+# Sequence Filter (Simplified version, mainly relies on LLM)
 # =============================================================================
 
 class SequenceFilter:
     """
-    API序列过滤器
+    API sequence filter
 
-    简化版本，只做最基本的检查，主要过滤逻辑交给LLM。
+    Simplified version, only performs basic checks, main filtering logic delegated to LLM.
     """
 
     def __init__(self, conditions: Optional[FunctionConditionsSet] = None):
         """
         Args:
-            conditions: 函数条件信息（可选，预留接口）
+            conditions: Function condition information (optional, reserved interface)
         """
         self.conditions = conditions
         self._stats = {
@@ -389,18 +389,18 @@ class SequenceFilter:
 
     def filter_sequence(self, sequence: List[Api]) -> FilterResult:
         """
-        基本过滤检查
+        Basic filtering check
 
-        只做最基本的检查，不使用复杂的启发式规则。
+        Only performs basic checks, does not use complex heuristic rules.
         """
         self._stats["total"] += 1
 
-        # 基本检查：空序列
+        # Basic check: empty sequence
         if not sequence:
             self._stats["filtered"] += 1
             return FilterResult.invalid("Empty sequence")
 
-        # 基本检查：序列过长（可能是无效路径）
+        # Basic check: sequence too long (may be invalid path)
         if len(sequence) > 20:
             self._stats["filtered"] += 1
             return FilterResult.invalid(f"Sequence too long: {len(sequence)} APIs")
@@ -409,35 +409,35 @@ class SequenceFilter:
         return FilterResult.valid()
 
     def filter_sequences(self, sequences: List[List[Api]]) -> List[List[Api]]:
-        """批量过滤"""
+        """Batch filter"""
         return [seq for seq in sequences if self.filter_sequence(seq).is_valid]
 
     def get_stats(self) -> Dict[str, Any]:
-        """获取统计信息"""
+        """Get statistics"""
         return self._stats.copy()
 
     def reset_stats(self):
-        """重置统计"""
+        """Reset statistics"""
         self._stats = {"total": 0, "passed": 0, "filtered": 0}
 
 
 # =============================================================================
-# 组合过滤器
+# Combined Filter
 # =============================================================================
 
 class LLMSequenceFilter:
     """
-    基于LLM的API序列过滤器
+    LLM-based API sequence filter
 
-    主要使用LLM进行语义过滤，替代传统的启发式规则。
+    Mainly uses LLM for semantic filtering, replacing traditional heuristic rules.
     """
 
     def __init__(self, llm_client: Optional[LLMClient] = None,
                  conditions: Optional[FunctionConditionsSet] = None):
         """
         Args:
-            llm_client: LLM客户端
-            conditions: 函数条件信息（预留）
+            llm_client: LLM client
+            conditions: Function condition information (reserved)
         """
         self.basic_filter = SequenceFilter(conditions)
         self.llm_validator = LLMLifecycleValidator(llm_client)
@@ -450,25 +450,25 @@ class LLMSequenceFilter:
         }
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.llm_validator.set_llm_client(llm_client)
 
     def filter(self, sequence: List[Api]) -> Tuple[bool, Optional[str]]:
         """
-        过滤单个序列
+        Filter single sequence
 
         Returns:
-            (是否有效, 拒绝原因)
+            (is_valid, rejection_reason)
         """
         self._stats["total"] += 1
 
-        # Step 1: 基本检查
+        # Step 1: Basic check
         basic_result = self.basic_filter.filter_sequence(sequence)
         if not basic_result.is_valid:
             self._stats["basic_filtered"] += 1
             return False, f"[Basic] {basic_result.reason}"
 
-        # Step 2: LLM语义验证
+        # Step 2: LLM semantic validation
         llm_result = self.llm_validator.validate_sequence(sequence)
         if not llm_result.is_valid:
             self._stats["llm_filtered"] += 1
@@ -479,7 +479,7 @@ class LLMSequenceFilter:
         return True, None
 
     def filter_batch(self, sequences: List[List[Api]]) -> List[List[Api]]:
-        """批量过滤"""
+        """Batch filter"""
         valid = []
         for seq in sequences:
             is_valid, reason = self.filter(seq)
@@ -491,20 +491,20 @@ class LLMSequenceFilter:
 
     def classify_apis(self, apis: List[Api]) -> List[APILifecycleInfo]:
         """
-        分类API列表的生命周期阶段
+        Classify API list lifecycle phases
 
-        可以单独使用，用于理解API语义。
+        Can be used independently to understand API semantics.
         """
         return self.llm_validator.classify_batch(apis)
 
     def get_stats(self) -> Dict[str, Any]:
-        """获取统计信息"""
+        """Get statistics"""
         stats = self._stats.copy()
         stats["basic_filter_stats"] = self.basic_filter.get_stats()
         return stats
 
     def reset_stats(self):
-        """重置统计"""
+        """Reset statistics"""
         self._stats = {
             "total": 0,
             "basic_filtered": 0,
