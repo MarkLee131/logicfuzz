@@ -4,6 +4,12 @@ Extract all human-written fuzz drivers from OSS-Fuzz projects.
 Download from Google Cloud Storage bucket oss-fuzz-llm-public.
 """
 import logging
+from google.cloud import storage
+from typing import List, Set, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import argparse
+import os
+import sys
 
 # Configure logging.
 logging.basicConfig(
