@@ -93,7 +93,8 @@ class HybridAPIExtractor(BaseAPIExtractor):
         else:
             apis_clang_path = self.clang_extractor.extract_with_auto_detect(
                 output_dir=self.output_dir,
-                project_name=self.benchmark.project
+                project_name=self.benchmark.project,
+                public_headers_file=public_headers_file
             )
         
         # 2. Prepare bitcode file

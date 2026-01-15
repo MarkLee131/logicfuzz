@@ -1,15 +1,15 @@
 """
-Special Pattern Analyzers - 特殊场景分析器
+Special Pattern Analyzers
 
-实现四个特殊场景的两阶段分析:
-- S1. Var-len: 变长参数关系
-- S2. TLV: Type-Length-Value格式
-- S3. Loop: 循环调用模式
-- S4. Callback: 回调函数
+Implements two-phase analysis for four special scenarios:
+- S1. Var-len: Variable-length parameter relationships
+- S2. TLV: Type-Length-Value format
+- S3. Loop: Loop call patterns
+- S4. Callback: Callback functions
 
-设计原则:
-- Phase 1 (静态分析): 高召回，允许误报
-- Phase 2 (LLM推理): 高精确，过滤误报
+Design principles:
+- Phase 1 (Static analysis): High recall, allows false positives
+- Phase 2 (LLM reasoning): High precision, filters false positives
 """
 
 import re
@@ -29,48 +29,48 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class LLMClient(Protocol):
-    """LLM客户端协议"""
+    """LLM client protocol"""
     def query(self, prompt: str) -> str:
-        """发送prompt并返回响应"""
+        """Send prompt and return response"""
         ...
 
 
 # =============================================================================
-# S1. Var-len 变长参数分析
+# S1. Var-len Variable-length Parameter Analysis
 # =============================================================================
 
 @dataclass
 class VarLenRelation:
-    """变长参数关系"""
-    buffer_arg_idx: int          # buffer参数索引
-    buffer_arg_name: str         # buffer参数名
-    buffer_arg_type: str         # buffer参数类型
-    length_arg_idx: int          # 长度参数索引
-    length_arg_name: str         # 长度参数名
-    length_arg_type: str         # 长度参数类型
-    relationship: str = "=="     # 关系: ==, >=, size*count, etc.
-    confidence: float = 0.0      # 置信度 (0-1)
-    reasoning: str = ""          # 推理依据
+    """Variable-length parameter relationship"""
+    buffer_arg_idx: int          # Buffer parameter index
+    buffer_arg_name: str         # Buffer parameter name
+    buffer_arg_type: str         # Buffer parameter type
+    length_arg_idx: int          # Length parameter index
+    length_arg_name: str         # Length parameter name
+    length_arg_type: str         # Length parameter type
+    relationship: str = "=="     # Relationship: ==, >=, size*count, etc.
+    confidence: float = 0.0      # Confidence (0-1)
+    reasoning: str = ""          # Reasoning basis
 
 
 @dataclass
 class VarLenAnalysisResult:
-    """Var-len分析结果"""
+    """Var-len analysis result"""
     api_name: str
     relations: List[VarLenRelation] = field(default_factory=list)
-    phase1_candidates: List[Tuple[int, int]] = field(default_factory=list)  # Phase1候选
-    llm_confirmed: bool = False  # 是否经过LLM确认
+    phase1_candidates: List[Tuple[int, int]] = field(default_factory=list)  # Phase1 candidates
+    llm_confirmed: bool = False  # Whether confirmed by LLM
 
 
 class VarLenAnalyzer:
     """
-    变长参数分析器
+    Variable-length parameter analyzer
 
-    Phase 1: 静态分析识别候选 (pointer, integer) 对
-    Phase 2: LLM确认语义关系
+    Phase 1: Static analysis identifies candidate (pointer, integer) pairs
+    Phase 2: LLM confirms semantic relationships
     """
 
-    # 指针类型模式
+    # Pointer type patterns
     POINTER_TYPES = {
         'char *', 'char*', 'const char *', 'const char*',
         'void *', 'void*', 'const void *', 'const void*',
@@ -80,14 +80,14 @@ class VarLenAnalyzer:
         'byte *', 'byte*', 'BYTE *', 'BYTE*',
     }
 
-    # 长度类型模式
+    # Length type patterns
     LENGTH_TYPES = {
         'size_t', 'int', 'unsigned int', 'uint32_t', 'uint64_t',
         'long', 'unsigned long', 'ssize_t', 'int32_t', 'int64_t',
         'unsigned', 'uint', 'DWORD', 'SIZE_T',
     }
 
-    # 命名模式 (buffer_pattern, length_pattern)
+    # Naming patterns (buffer_pattern, length_pattern)
     NAME_PATTERNS = [
         (r'(?i)(buf|buffer|data|input|output|src|dst|ptr|mem|bytes)',
          r'(?i)(len|length|size|sz|n|count|num|cb)'),

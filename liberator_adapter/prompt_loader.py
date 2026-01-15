@@ -1,15 +1,15 @@
 """
 Prompt Loader for Liberator Adapter
 
-统一加载liberator_adapter模块使用的所有prompts。
-Prompts存储在 prompts/ 目录下，以文件形式管理。
+Unified loading of all prompts used by liberator_adapter module.
+Prompts are stored in prompts/ directory, managed as files.
 """
 
 import os
 from typing import Dict, Optional
 
 
-# Prompts目录路径
+# Prompts directory path
 PROMPT_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.dirname(__file__)), 'prompts')
 )
@@ -17,16 +17,16 @@ PROMPT_DIR = os.path.normpath(
 
 def load_prompt_file(filename: str) -> str:
     """
-    从prompts目录加载prompt文件
+    Load prompt file from prompts directory
 
     Args:
-        filename: 文件名
+        filename: File name
 
     Returns:
-        Prompt内容
+        Prompt content
 
     Raises:
-        FileNotFoundError: 文件不存在时抛出
+        FileNotFoundError: Raised when file does not exist
     """
     filepath = os.path.join(PROMPT_DIR, filename)
 
@@ -39,34 +39,34 @@ def load_prompt_file(filename: str) -> str:
 
 class LiberatorPromptManager:
     """
-    Liberator Adapter的Prompt管理器
+    Prompt manager for Liberator Adapter
 
-    支持的prompts:
-    - varlen_analyzer_prompt.txt - Var-len关系分析
-    - loop_analyzer_prompt.txt - 循环模式分析
-    - callback_analyzer_prompt.txt - 回调函数分析
-    - tlv_analyzer_prompt.txt - TLV格式分析
-    - lifecycle_classify_prompt.txt - 生命周期分类
-    - lifecycle_validate_sequence_prompt.txt - 序列验证
-    - lifecycle_batch_classify_prompt.txt - 批量分类
-    - hole_callback_impl_prompt.txt - 回调实现孔
-    - hole_loop_condition_prompt.txt - 循环条件孔
-    - hole_error_handling_prompt.txt - 错误处理孔
-    - hole_resource_cleanup_prompt.txt - 资源清理孔
-    - hole_param_constraint_prompt.txt - 参数约束孔
+    Supported prompts:
+    - varlen_analyzer_prompt.txt - Var-len relationship analysis
+    - loop_analyzer_prompt.txt - Loop pattern analysis
+    - callback_analyzer_prompt.txt - Callback function analysis
+    - tlv_analyzer_prompt.txt - TLV format analysis
+    - lifecycle_classify_prompt.txt - Lifecycle classification
+    - lifecycle_validate_sequence_prompt.txt - Sequence validation
+    - lifecycle_batch_classify_prompt.txt - Batch classification
+    - hole_callback_impl_prompt.txt - Callback implementation hole
+    - hole_loop_condition_prompt.txt - Loop condition hole
+    - hole_error_handling_prompt.txt - Error handling hole
+    - hole_resource_cleanup_prompt.txt - Resource cleanup hole
+    - hole_param_constraint_prompt.txt - Parameter constraint hole
     """
 
     def __init__(self):
         self._cache: Dict[str, str] = {}
 
     def _get_prompt(self, filename: str) -> str:
-        """加载并缓存prompt"""
+        """Load and cache prompt"""
         if filename not in self._cache:
             self._cache[filename] = load_prompt_file(filename)
         return self._cache[filename]
 
     def _format_prompt(self, template: str, **kwargs) -> str:
-        """格式化prompt模板"""
+        """Format prompt template"""
         result = template
         for key, value in kwargs.items():
             placeholder = "{" + key + "}"
@@ -78,7 +78,7 @@ class LiberatorPromptManager:
     # =========================================================================
 
     def get_varlen_prompt(self, signature: str, parameters: str) -> str:
-        """获取Var-len分析prompt"""
+        """Get Var-len analysis prompt"""
         template = self._get_prompt("varlen_analyzer_prompt.txt")
         return self._format_prompt(template,
                                    signature=signature,
@@ -86,7 +86,7 @@ class LiberatorPromptManager:
 
     def get_loop_prompt(self, signature: str, return_type: str,
                         parameters: str) -> str:
-        """获取循环模式分析prompt"""
+        """Get loop pattern analysis prompt"""
         template = self._get_prompt("loop_analyzer_prompt.txt")
         return self._format_prompt(template,
                                    signature=signature,
@@ -95,7 +95,7 @@ class LiberatorPromptManager:
 
     def get_callback_prompt(self, signature: str, callback_param: str,
                             callback_type: str) -> str:
-        """获取回调分析prompt"""
+        """Get callback analysis prompt"""
         template = self._get_prompt("callback_analyzer_prompt.txt")
         return self._format_prompt(template,
                                    signature=signature,

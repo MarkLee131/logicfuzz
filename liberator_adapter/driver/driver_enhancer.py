@@ -1,13 +1,13 @@
 """
-Driver Enhancer - 使用特殊模式分析增强Driver生成
+Driver Enhancer - Enhance Driver generation using special pattern analysis
 
-将特殊模式分析（VarLen、Loop、Callback、TLV）集成到Driver生成流程中。
+Integrates special pattern analysis (VarLen, Loop, Callback, TLV) into driver generation workflow.
 
-主要功能:
-1. 增强Callback stub生成（使用CallbackAnalyzer）
-2. 提供VarLen关系信息给参数分配
-3. 识别需要循环的API
-4. 标记TLV解析器用于种子生成
+Main features:
+1. Enhanced Callback stub generation (using CallbackAnalyzer)
+2. Provide VarLen relationship information for parameter allocation
+3. Identify APIs that need loops
+4. Mark TLV parsers for seed generation
 """
 
 import logging
@@ -32,14 +32,14 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 增强后的Callback Stub代码生成
+# Enhanced Callback Stub Code Generation
 # =============================================================================
 
 class EnhancedCallbackStubGenerator:
     """
-    增强的Callback Stub生成器
+    Enhanced Callback Stub Generator
 
-    根据CallbackAnalyzer的分析结果生成更合适的stub代码
+    Generates more appropriate stub code based on CallbackAnalyzer analysis results
     """
 
     def __init__(self, callback_analyzer: Optional[CallbackAnalyzer] = None):
@@ -47,26 +47,26 @@ class EnhancedCallbackStubGenerator:
         self._generated_stubs: Dict[str, str] = {}  # func_name -> stub_code
 
     def set_llm_client(self, llm_client: LLMClient):
-        """设置LLM客户端"""
+        """Set LLM client"""
         self.callback_analyzer.set_llm_client(llm_client)
 
     def generate_stub_for_api(self, api: Api, arg_idx: int,
                                func_name: str) -> Tuple[str, CallbackType]:
         """
-        为API的特定callback参数生成stub
+        Generate stub for specific callback parameter of API
 
         Args:
-            api: API对象
-            arg_idx: callback参数的索引
-            func_name: 生成的函数名
+            api: API object
+            arg_idx: Callback parameter index
+            func_name: Generated function name
 
         Returns:
             (stub_code, callback_type)
         """
-        # 分析callback
+        # Analyze callback
         result = self.callback_analyzer.analyze(api)
 
-        # 找到对应的callback info
+        # Find corresponding callback info
         callback_info = None
         for cb in result.callbacks:
             if cb.arg_idx == arg_idx:
@@ -74,24 +74,24 @@ class EnhancedCallbackStubGenerator:
                 break
 
         if callback_info is None:
-            # 没有分析到，返回空stub
+            # Not analyzed, return empty stub
             return self._generate_empty_stub(func_name), CallbackType.UNKNOWN
 
-        # 使用分析得到的stub代码
+        # Use analyzed stub code
         if callback_info.stub_code:
             stub = callback_info.stub_code
-            # 替换占位符名称
+            # Replace placeholder name
             stub = self._customize_stub_name(stub, func_name, callback_info)
             self._generated_stubs[func_name] = stub
             return stub, callback_info.callback_type
 
-        # 使用模板生成
+        # Generate from template
         stub = self._generate_from_template(func_name, callback_info)
         self._generated_stubs[func_name] = stub
         return stub, callback_info.callback_type
 
     def _generate_empty_stub(self, func_name: str) -> str:
-        """生成空stub"""
+        """Generate empty stub"""
         return f'''
 void {func_name}(void) {{
     // Generic empty callback stub

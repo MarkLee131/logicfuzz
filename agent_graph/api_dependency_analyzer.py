@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-API Composition Analyzer
+API Dependency Analyzer
 
-分析可以组合一起测试的API，而不是API依赖关系。
-从真实使用场景和文档中识别API组合模式。
+Analyzes APIs that can be combined for testing together, rather than API dependencies.
+Identifies API composition patterns from real usage scenarios and documentation.
 """
 
 import os
