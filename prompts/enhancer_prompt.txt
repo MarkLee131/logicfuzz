@@ -1,4 +1,4 @@
-Fix compilation for {FUNCTION_NAME} ({LANGUAGE})
+Fix compilation for project: {PROJECT_NAME}
 
 CODE:
 ```
@@ -16,7 +16,7 @@ DEBUG PROCESS:
 1. Read error → identify error type
 2. Check headers → internal paths? conflicts?
 3. Apply minimal fix
-4. Verify target function still called
+4. Verify API sequence still intact
 
 COMMON ERROR PATTERNS & FIXES:
 
@@ -27,14 +27,14 @@ COMMON ERROR PATTERNS & FIXES:
    - "typedef redefinition" → Header conflict, keep only one
 
 2. Linker errors:
-   - "undefined reference to {FUNCTION_NAME}" → Add #include "impl.cpp" (not forward declare)
+   - "undefined reference" → Add #include "impl.cpp" (not forward declare)
    - Check existing fuzzers: grep '#include.*\.cpp' for pattern
    - If no .cpp pattern exists → Report UNABLE_TO_FIX
 
-3. Function call errors:
-   - "{FUNCTION_NAME} was not called" → Add {FUNCTION_NAME} call (exact name!)
+3. API call errors:
    - Type mismatch → Fix signatures/casts
    - Const violations → Add/remove const qualifiers
+   - Wrong parameters → Check API documentation
 
 4. Types/API:
    - Deprecated APIs → Update to current API
@@ -43,12 +43,12 @@ COMMON ERROR PATTERNS & FIXES:
 
 SPECIAL CASES:
 
-- If function doesn't exist: UNABLE_TO_FIX: function {FUNCTION_NAME} does not exist
+- If API doesn't exist: UNABLE_TO_FIX: API does not exist
 - If linker error but no .cpp available: Check existing fuzzers for pattern, or UNABLE_TO_FIX
 
 OUTPUT FORMAT:
 
-<conclusion>Errors found, root causes, fixes applied, confirm {FUNCTION_NAME} called</conclusion>
+<conclusion>Errors found, root causes, fixes applied</conclusion>
 <fuzz_target>[Complete corrected code]</fuzz_target>
 <build_script>[Only if modified, otherwise omit]</build_script>
 

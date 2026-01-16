@@ -1,10 +1,7 @@
 Analyze the following fuzz target to determine why it has low coverage and how to improve it.
 
 **Project**: {PROJECT}
-**Function Under Test**: {FUNCTION_SIGNATURE}
 **Language**: {LANGUAGE}
-**Project Language**: {PROJECT_LANGUAGE}
-**Project Directory**: {PROJECT_DIR}
 
 **Current Fuzz Target**:
 ```
@@ -14,49 +11,44 @@ Analyze the following fuzz target to determine why it has low coverage and how t
 **Fuzzing Log**:
 {FUZZING_LOG}
 
-**Function Requirements**:
+**API Sequence Information**:
 {FUNCTION_REQUIREMENTS}
 
 {ADDITIONAL_CONTEXT}
 
 **Your Task**:
-Investigate why coverage is low, identify uncovered code blocks reachable from the target function, and determine how to enhance the fuzz target. Use bash commands to examine the project source code when needed.
+Investigate why coverage is low and determine how to enhance the fuzz target. The driver calls multiple APIs in sequence - analyze which API calls are not being reached or are taking limited code paths.
 
 **Analysis Steps**:
 
 1. **Examine Current Coverage**:
    - Review the fuzzing log to understand current coverage levels
-   - Identify which code blocks or functions are NOT being executed
+   - Identify which code blocks or APIs are NOT being executed
    - Determine which branches are always taking the same path
 
-2. **Analyze the Fuzz Target** (use bash to read source if needed):
+2. **Analyze the Fuzz Target**:
    - How are parameters extracted from fuzzer input?
    - What values are used (constants, naive values, processed input)?
    - Is the approach too narrow (single code path)?
-   - Are inputs properly preprocessed?
+   - Are all APIs in the sequence being called?
 
-3. **Identify Coverage Gaps** (use bash to examine uncovered code):
+3. **Identify Coverage Gaps**:
+   - Which API calls are never reached?
    - Which conditionals or branches are never taken?
-   - Which functions should be called but aren't?
    - What edge cases are not being tested?
    - Which error paths are never executed?
 
 4. **Determine Root Causes**:
    - Why does the fuzz target exercise only one narrow code path?
    - Is input too naive or unprocessed?
-   - Are there missing preparation or setup functions?
+   - Are there missing setup/initialization calls?
    - Is parameter variation insufficient?
 
 5. **Develop Improvement Solutions**:
    - **Fine-grained Input Preprocessing**: Split raw input into multiple meaningful parameters
    - **Test Edge Cases**: Empty inputs, very short/long inputs, boundary values
-   - **Call Preparation Functions**: Setup functions needed before the target function
-   - **Improve Initialization**: Properly create complex data structures
-   - **Increase Variation**: Test different parameter combinations
-
-6. **Validate Against Requirements**:
-   - Ensure suggested changes DO NOT violate function requirements
-   - Verify suggestions will actually increase coverage
+   - **Vary API Parameters**: Use FuzzedDataProvider for all inputs
+   - **Try Different Sequences**: If current sequence saturated, try different API sequence
 
 **Output Format**:
 
@@ -73,9 +65,9 @@ Use these XML tags to provide your final analysis:
 
 Example:
 The low coverage stems from:
-* **Single Argument Limitation**: Fuzz target provides naive/unprocessed arguments (e.g., NULL, constant strings)
+* **Fixed Parameters**: Using constants instead of fuzzed values
 * **Lack of Input Variation**: Input used verbatim without preprocessing
-* **Untested Functions**: Missing setup/initialization function calls
+* **Missing API Calls**: Not all APIs in sequence are being called
 * **Missing Edge Cases**: No testing of boundary conditions
 </insights>
 
@@ -84,58 +76,35 @@ The low coverage stems from:
 
 Provide specific, actionable suggestions with code examples:
 
-1. **Fine-grained Input Preprocessing**:
+1. **Use FuzzedDataProvider for All Parameters**:
 ```cpp
-// Before: naive approach
-target_function(NULL);
-
-// After: proper preprocessing
-if (size < 4) return 0;
-int param1 = data[0];
-const uint8_t* param2 = &data[1];
-size_t param2_len = size - 1;
-target_function(param1, param2, param2_len);
+FuzzedDataProvider fdp(data, size);
+std::string input1 = fdp.ConsumeRandomLengthString(1024);
+int param1 = fdp.ConsumeIntegral<int>();
 ```
 
-2. **Call Preparation Functions**:
+2. **Call All APIs in Sequence**:
 ```cpp
-context_t* ctx = create_context();
-init_context(ctx, config_value);
-target_function(ctx, input);
-cleanup_context(ctx);
+ctx = api_create();
+api_init(ctx, config);
+api_process(ctx, input);  // Don't skip any API!
+api_cleanup(ctx);
 ```
 
 3. **Test Edge Cases**:
 ```cpp
-// Test empty, short, and max size inputs
-target_function(NULL, 0);
-if (size >= 1) target_function(data, 1);
-if (size >= MAX_SIZE) target_function(data, MAX_SIZE);
+// Test empty, short, and boundary inputs
+if (size == 0) return 0;
 ```
-
-4. **Improve Data Structure Initialization** (for C++):
-```cpp
-FuzzedDataProvider fdp(data, size);
-struct param_t param;
-param.field1 = fdp.ConsumeIntegral<int>();
-param.field2 = fdp.ConsumeIntegral<uint32_t>();
-target_function(&param);
-```
-
-[Optional: Provide complete revised fuzz target if changes are extensive]
 </suggestions>
 
 **Critical Requirements**:
-- Use `<conclusion>True</conclusion>` or `<conclusion>False</conclusion>` to indicate if improvement is needed
-- Provide detailed analysis with source code evidence inside `<insights>` tags
+- Use `<conclusion>True</conclusion>` if improvement is needed, `<conclusion>False</conclusion>` otherwise
+- Provide detailed analysis inside `<insights>` tags
 - Provide specific recommendations with code examples inside `<suggestions>` tags
-- Ensure suggestions DO NOT violate function requirements
-- Use bash commands to investigate source code when needed
 
 OUTPUT DISCIPLINE:
 Follow exact XML format: <conclusion>, <insights>, <suggestions>
 Keep <insights> concise (2-3 key findings max)
 Include code examples in suggestions
 No extra commentary outside XML tags
-
-

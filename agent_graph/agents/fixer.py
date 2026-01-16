@@ -3,7 +3,6 @@ LangGraphEnhancer agent for LangGraph workflow.
 """
 from typing import Any, Dict
 import argparse
-import re
 
 import logger
 from llm_toolkit.models import LLM
@@ -37,13 +36,12 @@ class LangGraphEnhancer(LangGraphAgent):
         
         benchmark = state["benchmark"]
         current_code = state.get("fuzz_target_source", "")
-        previous_code = state.get("previous_fuzz_target_source", "")
         build_errors = state.get("build_errors", [])
         workflow_phase = state.get("workflow_phase", "compilation")
 
         language = benchmark.get('language', 'C++')
         error_text = "\n".join(build_errors[:10])
-        code_context = self._generate_code_context(current_code, previous_code, build_errors)
+        code_context = self._generate_code_context(current_code, build_errors)
 
         function_analysis = state.get("function_analysis", {})
         header_info = function_analysis.get("header_information", {})
@@ -61,8 +59,8 @@ class LangGraphEnhancer(LangGraphAgent):
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
             "enhancer",
+            project_name=benchmark.get('project', 'unknown'),
             language=language,
-            function_name=benchmark.get('function_name', 'unknown'),
             current_code=code_context,
             build_errors=error_text,
             additional_context=additional_context
@@ -102,17 +100,16 @@ class LangGraphEnhancer(LangGraphAgent):
         
         return state_update
     
-    def _generate_code_context(self, current_code: str, previous_code: str, build_errors: list) -> str:
+    def _generate_code_context(self, current_code: str, build_errors: list) -> str:
         """
         Generate code context for enhancer based on diff strategy.
-        
+
         Strategy: Extract only the error-relevant parts of code to reduce token usage.
-        
+
         Args:
             current_code: Current fuzz target code
-            previous_code: Previous version (if any)
             build_errors: List of build errors
-        
+
         Returns:
             Code context string (diff or relevant sections)
         """

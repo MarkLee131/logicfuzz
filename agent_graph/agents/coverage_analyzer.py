@@ -244,10 +244,7 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
         base_prompt = prompt_manager.build_user_prompt(
             "coverage_analyzer",
             project=benchmark.project,
-            function_signature=benchmark.function_signature,
             language=benchmark.file_type.value,
-            project_language=benchmark.language,
-            project_dir=self.inspect_tool.project_dir,
             fuzz_target=fuzz_target_source,
             fuzzing_log=fuzzing_log,
             function_requirements=function_requirements,

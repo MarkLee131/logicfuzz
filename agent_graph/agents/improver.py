@@ -44,8 +44,7 @@ class LangGraphImprover(LangGraphAgent):
         current_code = state.get("fuzz_target_source", "")
         coverage_analysis = state.get("coverage_analysis", {})
 
-        language = benchmark.get('language', 'C++')
-        target_function = benchmark.get('function_name', 'unknown')
+        project_name = benchmark.get('project', 'unknown')
 
         suggestions = coverage_analysis.get("suggestions", "No specific suggestions provided")
         insights = coverage_analysis.get("insights", "")
@@ -64,8 +63,7 @@ class LangGraphImprover(LangGraphAgent):
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
             "improver",
-            language=language,
-            function_name=target_function,
+            project_name=project_name,
             current_code=current_code,
             coverage_percent=f"{coverage_percent:.2%}",
             line_coverage_diff=f"{line_coverage_diff:.2%}",

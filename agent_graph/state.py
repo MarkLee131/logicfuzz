@@ -334,14 +334,13 @@ def get_token_usage_summary(state: FuzzingWorkflowState) -> str:
 
 def get_state_summary(state: FuzzingWorkflowState) -> str:
     """Get a human-readable summary of the current state."""
-    
+
     benchmark = state.get("benchmark", {})
     project = benchmark.get("project", "unknown")
-    function = benchmark.get("function_name", "unknown")
     iteration = state.get("current_iteration", 0)
     status = state.get("workflow_status", "unknown")
-    
-    summary = f"Fuzzing workflow for {project}::{function} (iteration {iteration}, status: {status})"
+
+    summary = f"Fuzzing workflow for {project} (iteration {iteration}, status: {status})"
     
     # Add build status
     if state.get("compile_success") is not None:
