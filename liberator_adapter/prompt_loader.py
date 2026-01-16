@@ -1,8 +1,10 @@
 """
 Prompt Loader for Liberator Adapter
 
-Unified loading of all prompts used by liberator_adapter module.
-Prompts are stored in prompts/ directory, managed as files.
+NOTE: Most prompt-loading methods have been removed because the corresponding
+LLM calls were disabled in favor of heuristic-based analysis.
+
+Kept for potential future use if LLM-based analysis is re-enabled.
 """
 
 import os
@@ -41,19 +43,8 @@ class LiberatorPromptManager:
     """
     Prompt manager for Liberator Adapter
 
-    Supported prompts:
-    - varlen_analyzer_prompt.txt - Var-len relationship analysis
-    - loop_analyzer_prompt.txt - Loop pattern analysis
-    - callback_analyzer_prompt.txt - Callback function analysis
-    - tlv_analyzer_prompt.txt - TLV format analysis
-    - lifecycle_classify_prompt.txt - Lifecycle classification
-    - lifecycle_validate_sequence_prompt.txt - Sequence validation
-    - lifecycle_batch_classify_prompt.txt - Batch classification
-    - hole_callback_impl_prompt.txt - Callback implementation hole
-    - hole_loop_condition_prompt.txt - Loop condition hole
-    - hole_error_handling_prompt.txt - Error handling hole
-    - hole_resource_cleanup_prompt.txt - Resource cleanup hole
-    - hole_param_constraint_prompt.txt - Parameter constraint hole
+    NOTE: Most methods removed - LLM-based pattern analysis disabled.
+    Using heuristics instead for VarLen, Loop, Callback, TLV, Lifecycle analysis.
     """
 
     def __init__(self):
@@ -72,118 +63,6 @@ class LiberatorPromptManager:
             placeholder = "{" + key + "}"
             result = result.replace(placeholder, str(value))
         return result
-
-    # =========================================================================
-    # Special Patterns Prompts
-    # =========================================================================
-
-    def get_varlen_prompt(self, signature: str, parameters: str) -> str:
-        """Get Var-len analysis prompt"""
-        template = self._get_prompt("varlen_analyzer_prompt.txt")
-        return self._format_prompt(template,
-                                   signature=signature,
-                                   parameters=parameters)
-
-    def get_loop_prompt(self, signature: str, return_type: str,
-                        parameters: str) -> str:
-        """Get loop pattern analysis prompt"""
-        template = self._get_prompt("loop_analyzer_prompt.txt")
-        return self._format_prompt(template,
-                                   signature=signature,
-                                   return_type=return_type,
-                                   parameters=parameters)
-
-    def get_callback_prompt(self, signature: str, callback_param: str,
-                            callback_type: str) -> str:
-        """Get callback analysis prompt"""
-        template = self._get_prompt("callback_analyzer_prompt.txt")
-        return self._format_prompt(template,
-                                   signature=signature,
-                                   callback_param=callback_param,
-                                   callback_type=callback_type)
-
-    def get_tlv_prompt(self, signature: str) -> str:
-        """Get TLV analysis prompt"""
-        template = self._get_prompt("tlv_analyzer_prompt.txt")
-        return self._format_prompt(template, signature=signature)
-
-    # =========================================================================
-    # Lifecycle Prompts
-    # =========================================================================
-
-    def get_lifecycle_classify_prompt(self, api_name: str, signature: str,
-                                      return_type: str, parameters: str) -> str:
-        """Get lifecycle classification prompt"""
-        template = self._get_prompt("lifecycle_classify_prompt.txt")
-        return self._format_prompt(template,
-                                   api_name=api_name,
-                                   signature=signature,
-                                   return_type=return_type,
-                                   parameters=parameters)
-
-    def get_lifecycle_validate_prompt(self, api_sequence: str) -> str:
-        """Get sequence validation prompt"""
-        template = self._get_prompt("lifecycle_validate_sequence_prompt.txt")
-        return self._format_prompt(template, api_sequence=api_sequence)
-
-    def get_lifecycle_batch_classify_prompt(self, api_list: str) -> str:
-        """Get batch classification prompt"""
-        template = self._get_prompt("lifecycle_batch_classify_prompt.txt")
-        return self._format_prompt(template, api_list=api_list)
-
-    # =========================================================================
-    # Hole Filling Prompts
-    # =========================================================================
-
-    def get_hole_callback_impl_prompt(self, callback_signature: str,
-                                      callback_type: str,
-                                      expected_behavior: str = "") -> str:
-        """Get callback implementation hole prompt"""
-        template = self._get_prompt("hole_callback_impl_prompt.txt")
-        return self._format_prompt(template,
-                                   callback_signature=callback_signature,
-                                   callback_type=callback_type,
-                                   expected_behavior=expected_behavior or "Generic callback stub")
-
-    def get_hole_loop_condition_prompt(self, loop_type: str,
-                                       api_return_type: str,
-                                       termination_hint: str = "") -> str:
-        """Get loop condition hole prompt"""
-        template = self._get_prompt("hole_loop_condition_prompt.txt")
-        return self._format_prompt(template,
-                                   loop_type=loop_type,
-                                   api_return_type=api_return_type,
-                                   termination_hint=termination_hint or "None")
-
-    def get_hole_error_handling_prompt(self, error_source: str,
-                                       error_type: str,
-                                       cleanup_list: str) -> str:
-        """Get error handling hole prompt"""
-        template = self._get_prompt("hole_error_handling_prompt.txt")
-        return self._format_prompt(template,
-                                   error_source=error_source,
-                                   error_type=error_type,
-                                   cleanup_list=cleanup_list)
-
-    def get_hole_resource_cleanup_prompt(self, resources: str,
-                                         cleanup_order: str) -> str:
-        """Get resource cleanup hole prompt"""
-        template = self._get_prompt("hole_resource_cleanup_prompt.txt")
-        return self._format_prompt(template,
-                                   resources=resources,
-                                   cleanup_order=cleanup_order)
-
-    def get_hole_param_constraint_prompt(self, param_name: str,
-                                         param_type: str) -> str:
-        """Get parameter constraint hole prompt"""
-        template = self._get_prompt("hole_param_constraint_prompt.txt")
-        return self._format_prompt(template,
-                                   param_name=param_name,
-                                   param_type=param_type)
-
-    # =========================================================================
-    # Raw Template Access
-    # =========================================================================
 
     def get_raw_template(self, prompt_name: str) -> str:
         """

@@ -1,6 +1,8 @@
-Generate fuzz target for {FUNCTION_NAME} ({PROJECT_NAME})
+Generate fuzz driver for project: {PROJECT_NAME}
 
-SIGNATURE: {FUNCTION_SIGNATURE}
+API SEQUENCES (from static analysis):
+The following API call sequences have been validated by lifecycle analysis.
+Pick ONE sequence and implement a complete fuzz driver for it.
 
 SRS SPECIFICATION:
 {SRS_SPECIFICATION}
@@ -8,58 +10,56 @@ SRS SPECIFICATION:
 REFERENCE SKELETON (use these headers):
 {SKELETON_CODE}
 
-REQUIREMENTS:
-1. MUST call {FUNCTION_NAME} (exact name)
-2. Use skeleton headers only (filtered, safe)
-3. Implement [MANDATORY] items from SRS
-4. Follow API dependencies (init → use → cleanup)
-
 {ADDITIONAL_CONTEXT}
 
-PARAMETER STRATEGY (from SRS):
+REQUIREMENTS:
+1. Pick ONE API sequence from the provided list
+2. Implement the COMPLETE sequence (all APIs in order)
+3. Use skeleton headers only (filtered, safe)
+4. Handle resource lifecycle: init -> use -> cleanup
+5. Match buffer sizes with length parameters (var-len relationships)
 
-DEFAULT: FuzzedDataProvider for 2+ parameters
+PARAMETER STRATEGY:
+
+DEFAULT: FuzzedDataProvider for splitting fuzzer input
 
 ```cpp
 #include <fuzzer/FuzzedDataProvider.h>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   FuzzedDataProvider fdp(data, size);
-  
-  // Split input into varied parameters
-  std::string p1 = fdp.ConsumeRandomLengthString(256);
-  int p2 = fdp.ConsumeIntegral<int>();
-  
-  {FUNCTION_NAME}(p1.c_str(), p2);
+
+  // Consume data for each API call
+  std::string input1 = fdp.ConsumeRandomLengthString(1024);
+  int param1 = fdp.ConsumeIntegral<int>();
+
+  // Call APIs in sequence order
+  void* ctx = api_create(...);
+  if (!ctx) return 0;
+
+  api_init(ctx, input1.data(), input1.size());
+  api_process(ctx, param1);
+
+  api_cleanup(ctx);
   return 0;
 }
 ```
 
-DIRECT_FUZZ: Single buffer function (pass-through)
+VAR-LEN HANDLING:
+- When buffer and size parameters are related, use the SAME source:
 ```cpp
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
-  {FUNCTION_NAME}(data, size);
-  return 0;
+std::string buf = fdp.ConsumeRandomLengthString(4096);
+api_func(buf.data(), buf.size());  // size matches buffer
+```
+
+CALLBACK HANDLING:
+- Use stub functions for callback parameters:
+```cpp
+void my_callback(void* ctx, int status) {
+    // Minimal stub - just return
 }
+api_register_callback(ctx, my_callback, NULL);
 ```
-
-CONSTRAIN: Bounded values
-```cpp
-FuzzedDataProvider fdp(data, size);
-int port = fdp.ConsumeIntegralInRange<int>(1, 65535);
-{FUNCTION_NAME}(port);
-```
-
-CONSTRUCT: Struct/object parameters
-```cpp
-FuzzedDataProvider fdp(data, size);
-struct Config cfg = {0};
-cfg.field1 = fdp.ConsumeIntegral<int>();
-cfg.field2 = fdp.ConsumeRandomLengthString(256).c_str();
-{FUNCTION_NAME}(&cfg);
-```
-
-FIX: API requires fixed value (document rationale in SRS)
 
 IMPLEMENTATION STEPS:
 
@@ -67,41 +67,27 @@ IMPLEMENTATION STEPS:
    - Use ONLY reference skeleton headers
    - Filter out internal/*, detail/*, private/*
 
-2. Preconditions:
-   - Check PRE-* conditions from SRS
-   - Return 0 if preconditions cannot be satisfied
+2. Resource initialization:
+   - Call create/init APIs first
+   - Check return values before proceeding
 
-3. Parameter construction:
-   - Follow SRS strategy per parameter
-   - Use FuzzedDataProvider for multi-param (default)
-   - For structs: breakdown fields per SRS field_breakdown
+3. API sequence execution:
+   - Follow exact order from chosen sequence
+   - Use FuzzedDataProvider for varied inputs
+   - Handle var-len relationships
 
-4. API lifecycle:
-   - Call init/setup functions if required
-   - Call {FUNCTION_NAME}
-   - Check POST-* conditions if specified
-   - Cleanup in reverse order (destroy → close → cleanup)
-
-5. Multi-API fuzzing (if API dependency analysis provided):
-   - Call ALL APIs in recommended order
-   - Vary parameters for EACH call
-   - Test different combinations
-   - Cleanup in reverse order
-
-EXCEPTIONS TO FuzzedDataProvider:
-- Single buffer functions (DIRECT_FUZZ)
-- API constraints requiring fixed values (must be documented in SRS)
+4. Cleanup:
+   - Call cleanup/free/destroy APIs
+   - Cleanup in REVERSE order of creation
 
 OUTPUT FORMAT:
 
-<conclusion>Skeleton used, [MANDATORY] implemented, {FUNCTION_NAME} called</conclusion>
-<fuzz_target>[Complete code with LLVMFuzzerTestOneInput]</fuzz_target>
-<build_script>[Only if needed, otherwise omit]</build_script>
+<conclusion>Chosen sequence, APIs called, var-len handling, cleanup order</conclusion>
+<fuzz_target>[Complete LibFuzzer code with LLVMFuzzerTestOneInput]</fuzz_target>
 
 CRITICAL REQUIREMENTS:
-✅ Follow exact XML format above
-✅ Keep <conclusion> brief (max 3 sentences)
-✅ Include complete, compilable code in <fuzz_target> - NO placeholders
-✅ Confirm {FUNCTION_NAME} is called
-❌ No extra commentary outside XML tags
-❌ No markdown formatting around XML tags
+- Follow exact XML format above
+- Keep <conclusion> brief (max 3 sentences)
+- Include complete, compilable code in <fuzz_target> - NO placeholders
+- NO markdown formatting around XML tags
+- NO extra commentary outside XML tags

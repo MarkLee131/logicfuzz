@@ -1,4 +1,4 @@
-Improve fuzz driver coverage for {FUNCTION_NAME} ({LANGUAGE})
+Improve fuzz driver coverage for project: {PROJECT_NAME}
 
 CURRENT STATUS
 
@@ -27,90 +27,75 @@ Rewrite driver to maximize coverage by addressing the diagnosis above.
 
 REQUIREMENTS:
 1. Implement coverage analyzer's recommended actions
-2. Use FuzzedDataProvider for multi-parameter functions
+2. Use FuzzedDataProvider for all variable inputs
 3. Replace fixed/constant parameters with varied inputs
 4. Test edge cases (NULL, empty, boundary values)
-5. MUST call {FUNCTION_NAME} (exact function name)
-6. Don't violate API constraints from function_analyzer
+5. Maintain correct API sequence order
+6. Don't violate API lifecycle constraints
 
 IMPROVEMENT STRATEGIES (priority order):
 
-1. Use FuzzedDataProvider:
-   - Split input → vary all parameters independently
-   - Override fixed values if coverage low
-   - Example:
+1. Vary more parameters:
 ```cpp
 #include <fuzzer/FuzzedDataProvider.h>
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   FuzzedDataProvider fdp(data, size);
-  std::string p1 = fdp.ConsumeRandomLengthString(256);
-  int p2 = fdp.ConsumeIntegral<int>();
-  {FUNCTION_NAME}(p1.c_str(), p2);
+
+  // Vary ALL inputs, not just the first one
+  std::string input1 = fdp.ConsumeRandomLengthString(1024);
+  std::string input2 = fdp.ConsumeRandomLengthString(512);
+  int flags = fdp.ConsumeIntegral<int>();
+
+  // Call API sequence with varied inputs
+  ctx = api_create();
+  api_configure(ctx, input1.data(), input1.size());
+  api_process(ctx, input2.data(), input2.size(), flags);
+  api_cleanup(ctx);
   return 0;
 }
 ```
 
 2. Test edge cases:
-   - NULL pointers
-   - Empty strings/buffers
-   - Boundary values (0, MAX, MIN)
-   - Success and error paths
-   - Example:
 ```cpp
-// Test empty, short, and max size inputs
-{FUNCTION_NAME}(NULL, 0);
-if (size >= 1) {FUNCTION_NAME}(data, 1);
-if (size >= MAX_SIZE) {FUNCTION_NAME}(data, MAX_SIZE);
+// Test empty, short, and boundary inputs
+if (size == 0) return 0;  // Handle empty input gracefully
+// Test with minimal input
+// Test with maximum reasonable input
 ```
 
-3. Vary struct fields:
-   - If fixed → use FuzzedDataProvider per field
-   - Check field-dependent branches (if (cfg->timeout > 0))
-   - Example:
+3. Try different API sequences:
+   - If current sequence has low coverage, try a DIFFERENT sequence
+   - Focus on sequences that exercise different code paths
+
+4. Vary struct fields:
 ```cpp
 FuzzedDataProvider fdp(data, size);
-struct Config cfg;
-memset(&cfg, 0, sizeof(cfg));
-cfg.field1 = fdp.ConsumeIntegral<int>();  // Vary fields, not fixed!
+struct Config cfg = {0};
+cfg.field1 = fdp.ConsumeIntegral<int>();
 cfg.field2 = fdp.ConsumeIntegralInRange<uint32_t>(0, 100);
-{FUNCTION_NAME}(&cfg);
-```
-
-4. Call preparation functions:
-   - Setup/init functions needed before target
-   - Properly create complex data structures
-   - Example:
-```cpp
-context_t* ctx = create_context();
-init_context(ctx, config_value);
-{FUNCTION_NAME}(ctx, input);
-cleanup_context(ctx);
+api_init(ctx, &cfg);
 ```
 
 OVERRIDE AUTHORITY:
-- Change FIX → varied when coverage low
-- Override previous design decisions if they limit coverage
+- Change FIX -> varied when coverage low
+- Try different API sequence if current one saturated
 - Document rationale when overriding
 
 COMMON ISSUES & FIXES:
-- Fixed params → Use FuzzedDataProvider
-- Naive input → Split into multiple params
-- No edge cases → Test NULL/empty/boundary
-- Missing setup → Call init/preparation functions
-- Single code path → Vary parameter combinations
+- Fixed params -> Use FuzzedDataProvider
+- Single sequence -> Try different sequences
+- No edge cases -> Test NULL/empty/boundary
+- Missing API calls -> Add more APIs from the same sequence
 
 OUTPUT FORMAT:
 
-<conclusion>Root cause, changes made, expected improvement, confirm {FUNCTION_NAME} called</conclusion>
+<conclusion>Root cause, changes made, expected improvement</conclusion>
 <fuzz_target>[Complete improved code]</fuzz_target>
-<decision reason="...">Optional: if overriding previous decisions</decision>
-<coverage_strategy target="{FUNCTION_NAME}">New paths, edge cases, why better</coverage_strategy>
+<coverage_strategy>New paths targeted, why better coverage expected</coverage_strategy>
 
 CRITICAL REQUIREMENTS:
-✅ Follow exact XML format above
-✅ Keep each tag brief (max 3 sentences)
-✅ Include complete, compilable code in <fuzz_target> - NO placeholders like "// ... unchanged ..."
-✅ Confirm {FUNCTION_NAME} is called
-❌ No extra commentary outside XML tags
-❌ No markdown formatting around XML tags
-
+- Follow exact XML format above
+- Keep each tag brief (max 3 sentences)
+- Include complete, compilable code in <fuzz_target> - NO placeholders
+- NO markdown formatting around XML tags
+- NO extra commentary outside XML tags

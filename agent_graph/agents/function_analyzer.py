@@ -163,50 +163,60 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         dependency_graph: Dict[str, Any]
     ) -> str:
         """
-        Execute project-level analysis using API sequences from Liberator.
-        
-        This method analyzes the project's API sequences and generates
-        requirements for driver generation based on the dependency graph.
-        """
-        logger.info('🔬 Project-level API sequence analysis', trial=self.trial)
+        Generate project-level analysis summary from Liberator data.
 
+        NOTE: This method NO LONGER calls LLM. Liberator already provides
+        all necessary information (APIs, sequences, dependencies).
+        We just format it for downstream agents.
+        """
+        logger.info('📊 Generating analysis summary from Liberator data (no LLM)', trial=self.trial)
+
+        # Format sequences
         sequences_text = '\n'.join([
             f'  Sequence {i+1}: {" → ".join(seq)}'
             for i, seq in enumerate(api_sequences[:10])
         ])
 
-        apis_text = '\n'.join([
-            f'  • {api.get("function_name", "?")}({", ".join([arg.get("name", "?") for arg in api.get("arguments", [])[:3]])})'
-            for api in project_apis[:20]
-        ])
+        # Identify init/cleanup APIs using simple heuristics
+        init_apis = []
+        cleanup_apis = []
+        for api in project_apis:
+            name = api.get("function_name", "").lower()
+            if any(p in name for p in ['create', 'new', 'init', 'open', 'alloc', 'parse']):
+                init_apis.append(api.get("function_name"))
+            if any(p in name for p in ['free', 'delete', 'destroy', 'close', 'cleanup']):
+                cleanup_apis.append(api.get("function_name"))
 
-        analysis_prompt = f"""Analyze the following project APIs and sequences for fuzzing driver generation.
+        # Generate structured summary (no LLM needed)
+        response = f"""## Project Analysis Summary (from Liberator static analysis)
 
 Project: {project_name}
 Total APIs: {len(project_apis)}
 API Sequences: {len(api_sequences)}
-
-API Sequences (from Liberator grammar):
-{sequences_text}
-
-Project APIs:
-{apis_text}
-
 Dependency Graph: {dependency_graph.get('num_nodes', 0)} nodes
 
-Please analyze:
-1. Common API usage patterns
-2. Initialization requirements
-3. Resource management (cleanup)
-4. Parameter constraints
-5. Recommended driver structure
+### Identified Patterns
 
-Generate a structured analysis that will guide driver generation."""
-        
-        logger.info(f'📤 Project-level analysis call: {len(analysis_prompt)} chars', trial=self.trial)
-        response = self.call_llm_stateless(analysis_prompt, state, "PROJECT_LEVEL")
-        
-        logger.info(f'📊 Project-level analysis complete', trial=self.trial)
+**Initialization APIs** (call first):
+{chr(10).join(['  - ' + api for api in init_apis[:10]]) or '  (none identified)'}
+
+**Cleanup APIs** (call last):
+{chr(10).join(['  - ' + api for api in cleanup_apis[:10]]) or '  (none identified)'}
+
+### Recommended API Sequences
+
+{sequences_text}
+
+### Driver Generation Guidelines
+
+1. Pick one sequence from above
+2. Initialize resources before use
+3. Match buffer sizes with length parameters
+4. Cleanup resources in reverse order
+5. Use FuzzedDataProvider for varied inputs
+"""
+
+        logger.info(f'📊 Analysis summary generated ({len(response)} chars, no LLM call)', trial=self.trial)
         return response
 
     def _extract_srs_json(self, response: str) -> Optional[Dict[str, Any]]:

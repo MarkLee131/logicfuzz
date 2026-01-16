@@ -260,28 +260,27 @@ class FuzzingContext:
                 log.warning(f"Failed to summarize condition manager: {e}")
                 condition_info = {}
         
-        # === Step 6: LLM semantic filtering over API sequences (optional) ===
-        log.debug('  6/10 Filtering API sequences with LLM (optional)...')
+        # === Step 6: Simple heuristic filtering (no LLM needed) ===
+        log.debug('  6/10 Filtering API sequences with heuristics...')
         filter_summary = {}
         if api_sequences:
             try:
-                filtered, filter_summary = _semantic_filter_sequences(
+                filtered, filter_summary = _heuristic_filter_sequences(
                     api_sequences,
                     condition_info=condition_info,
-                    llm=llm,
                     top_k=filter_top_k,
                     logger_instance=log
                 )
                 if filtered:
                     api_sequences = filtered
-                    log.info(f'   ✅ LLM filter applied: {len(api_sequences)} sequences kept (top_k={filter_top_k})')
+                    log.info(f'   ✅ Heuristic filter applied: {len(api_sequences)} sequences kept')
                 else:
-                    log.warning('LLM filter returned empty set, fallback to raw sequences')
+                    log.warning('Filter returned empty set, using raw sequences')
             except Exception as e:
-                log.warning(f"LLM filtering failed: {e}, fallback to raw sequences")
+                log.warning(f"Filtering failed: {e}, using raw sequences")
         else:
             log.warning("No API sequences to filter")
-        grammar_info['llm_filter'] = filter_summary
+        grammar_info['filter'] = filter_summary
         grammar_info['num_sequences'] = len(api_sequences)
         
         # === Step 7: Extract header information ===
@@ -325,11 +324,13 @@ class FuzzingContext:
             }
 
         # === Step 9: Pattern analysis (P1 - DriverEnhancer integration) ===
-        log.debug('  9/10 Analyzing special patterns (VarLen/Loop/Callback/TLV)...')
+        # NOTE: LLM disabled - using heuristics only for pattern analysis
+        # Each analyzer (VarLen, Loop, Callback, TLV) has built-in heuristic fallbacks
+        log.debug('  9/10 Analyzing special patterns (VarLen/Loop/Callback/TLV) using heuristics...')
         pattern_analysis = {}
         try:
-            # Analyze special patterns using DriverEnhancer
-            generator.analyze_special_patterns(llm_client=llm)
+            # Analyze special patterns using DriverEnhancer (heuristics only, no LLM)
+            generator.analyze_special_patterns(llm_client=None)
             enhancer = generator.driver_enhancer
 
             if enhancer:
@@ -609,15 +610,282 @@ def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:
     return unique
 
 
+def _heuristic_filter_sequences(
+    api_sequences: List[List[str]],
+    condition_info: Dict[str, Any],
+    top_k: int = 12,
+    logger_instance: logging.Logger = None
+) -> Tuple[List[List[str]], Dict[str, Any]]:
+    """
+    Filter API sequences using simple heuristic rules (no LLM needed).
+
+    Heuristics:
+    1. Prefer sequences with init/create APIs at the start
+    2. Prefer sequences with cleanup/free APIs at the end
+    3. Prefer longer sequences (more API coverage)
+    4. Deduplicate
+
+    This replaces LLM-based filtering for efficiency.
+    """
+    log = logger_instance or logger
+
+    if not api_sequences:
+        return [], {'mode': 'empty_input'}
+
+    # Deduplicate
+    api_sequences = _dedup_sequences(api_sequences)
+
+    # Get init/cleanup hints from condition_info
+    inits = set(condition_info.get('inits', []))
+    sinks = set(condition_info.get('sinks', []))
+
+    # Common init/cleanup patterns
+    init_patterns = {'create', 'new', 'init', 'open', 'alloc', 'start', 'begin'}
+    cleanup_patterns = {'free', 'delete', 'destroy', 'close', 'cleanup', 'end', 'finish', 'release'}
+
+    def score_sequence(seq: List[str]) -> float:
+        """Score a sequence based on heuristics."""
+        score = 0.0
+
+        if not seq:
+            return -1000
+
+        first_api = seq[0].lower()
+        last_api = seq[-1].lower()
+
+        # Bonus for init-like start
+        if seq[0] in inits:
+            score += 10
+        elif any(p in first_api for p in init_patterns):
+            score += 5
+
+        # Bonus for cleanup-like end
+        if seq[-1] in sinks:
+            score += 10
+        elif any(p in last_api for p in cleanup_patterns):
+            score += 5
+
+        # Bonus for sequence length (more coverage)
+        score += len(seq) * 0.5
+
+        # Bonus for diversity (unique APIs)
+        score += len(set(seq)) * 0.3
+
+        return score
+
+    # Score and sort sequences
+    scored = [(score_sequence(seq), seq) for seq in api_sequences]
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Take top_k
+    filtered = [seq for _, seq in scored[:top_k]]
+
+    summary = {
+        'mode': 'heuristic',
+        'input_sequences': len(api_sequences),
+        'output_sequences': len(filtered),
+        'top_scores': [s for s, _ in scored[:5]]
+    }
+
+    log.info(f'   📊 Heuristic filter: {len(api_sequences)} -> {len(filtered)} sequences')
+
+    return filtered, summary
+
+
+def _semantic_filter_sequences_v2(
+    api_sequences: List[List[str]],
+    all_apis: List[Any],
+    condition_info: Dict[str, Any],
+    llm: Any = None,
+    top_k: int = 12,
+    logger_instance: logging.Logger = None
+) -> Tuple[List[List[str]], Dict[str, Any]]:
+    """
+    [DEPRECATED] Use LLMSequenceFilter for full lifecycle validation of API sequences.
+
+    NOTE: This function is currently disabled in favor of _heuristic_filter_sequences
+    which provides similar filtering without LLM calls, significantly reducing token usage.
+    Kept for reference and potential future re-enablement.
+
+    This version uses the complete LLMSequenceFilter which includes:
+    1. Basic filtering (empty sequences, too long sequences)
+    2. LLM-based lifecycle validation (CREATE -> INIT -> USE -> CLEANUP)
+
+    Args:
+        api_sequences: List of API name sequences
+        all_apis: Original Api objects for lifecycle analysis
+        condition_info: Condition information from Liberator
+        llm: LLM instance for semantic validation
+        top_k: Maximum number of sequences to keep
+        logger_instance: Logger for progress reporting
+
+    Returns:
+        Tuple of (filtered_sequences, filter_summary)
+    """
+    from liberator_adapter.constraints import LLMSequenceFilter
+
+    log = logger_instance or logger
+
+    if not api_sequences:
+        return [], {'mode': 'empty_input'}
+
+    # Deduplicate first
+    api_sequences = _dedup_sequences(api_sequences)
+
+    # If no LLM provided, return top_k unique sequences
+    if not llm:
+        return api_sequences[:top_k], {'mode': 'passthrough', 'reason': 'llm_not_provided'}
+
+    # Build API name to Api object mapping
+    api_name_to_obj = {api.function_name: api for api in all_apis}
+
+    # Create LLMSequenceFilter
+    sequence_filter = LLMSequenceFilter(llm_client=llm)
+
+    # Convert sequences to Api objects and filter
+    valid_sequences: List[List[str]] = []
+    filter_details: List[Dict[str, Any]] = []
+
+    log.info(f'   🔍 Running LLMSequenceFilter on {len(api_sequences)} sequences...')
+
+    for idx, seq_names in enumerate(api_sequences):
+        # Convert API names to Api objects
+        api_objects = []
+        missing_apis = []
+        for name in seq_names:
+            if name in api_name_to_obj:
+                api_objects.append(api_name_to_obj[name])
+            else:
+                missing_apis.append(name)
+
+        # Skip sequences with missing APIs
+        if missing_apis:
+            filter_details.append({
+                'index': idx,
+                'sequence': seq_names,
+                'valid': False,
+                'reason': f'Missing API objects: {missing_apis}'
+            })
+            continue
+
+        # Run LLMSequenceFilter
+        is_valid, reason = sequence_filter.filter(api_objects)
+
+        filter_details.append({
+            'index': idx,
+            'sequence': seq_names,
+            'valid': is_valid,
+            'reason': reason
+        })
+
+        if is_valid:
+            valid_sequences.append(seq_names)
+            log.debug(f'      ✅ Sequence {idx}: {" -> ".join(seq_names[:3])}...')
+        else:
+            log.debug(f'      ❌ Sequence {idx}: {reason}')
+
+        # Stop if we have enough valid sequences
+        if len(valid_sequences) >= top_k:
+            log.info(f'   ⏹️ Reached top_k={top_k}, stopping early')
+            break
+
+    # Get filter statistics
+    filter_stats = sequence_filter.get_stats()
+
+    # Build summary
+    summary = {
+        'mode': 'llm_sequence_filter',
+        'input_sequences': len(api_sequences),
+        'valid_sequences': len(valid_sequences),
+        'filter_stats': filter_stats,
+        'details': filter_details[:50],  # Limit details to avoid huge output
+        'api_lifecycle_cache_size': len(sequence_filter.llm_validator._cache)
+    }
+
+    log.info(
+        f'   📊 LLMSequenceFilter stats: '
+        f'{filter_stats["total"]} total, '
+        f'{filter_stats["basic_filtered"]} basic-filtered, '
+        f'{filter_stats["llm_filtered"]} llm-filtered, '
+        f'{filter_stats["passed"]} passed'
+    )
+
+    # Fallback if no valid sequences
+    if not valid_sequences:
+        log.warning('LLMSequenceFilter rejected all sequences, falling back to simple selection')
+        return _semantic_filter_sequences_simple(
+            api_sequences, condition_info, llm, top_k, log
+        )
+
+    return valid_sequences, summary
+
+
+def _semantic_filter_sequences_simple(
+    api_sequences: List[List[str]],
+    condition_info: Dict[str, Any],
+    llm: Any,
+    top_k: int,
+    log: logging.Logger
+) -> Tuple[List[List[str]], Dict[str, Any]]:
+    """
+    Simple LLM-based sequence selection (fallback when full filter rejects all).
+
+    This is the original simple selection logic that just asks LLM to pick indices.
+    """
+    inits = condition_info.get('inits', [])
+    sinks = condition_info.get('sinks', [])
+    sources = condition_info.get('sources', [])
+
+    lines = []
+    for idx, seq in enumerate(api_sequences):
+        lines.append(f"{idx}: " + " -> ".join(seq))
+    sequences_text = "\n".join(lines[:50])
+
+    instructions = (
+        "You are selecting API call sequences for a fuzzing driver.\n"
+        "- Prefer sequences that include initialization before use, and cleanup/finalization at the end if present.\n"
+        "- Prefer sequences that start with init APIs and end with sink/cleanup APIs when relevant.\n"
+        "- Drop duplicates and trivial single-call sequences unless no alternatives.\n"
+        f"- Init candidates: {inits}\n"
+        f"- Sink candidates: {sinks}\n"
+        f"- Source candidates: {sources}\n"
+        f"Pick up to {top_k} sequences by index. Respond ONLY with JSON like: "
+        '{"selected_indices":[0,2,3]}'
+    )
+
+    messages = [
+        {"role": "system", "content": "You are a precise assistant that returns strict JSON."},
+        {"role": "user", "content": instructions + "\nSequences:\n" + sequences_text}
+    ]
+
+    try:
+        raw = llm.chat_with_messages(messages)
+        selected_indices = _parse_selected_indices(raw, len(api_sequences))
+        if not selected_indices:
+            raise ValueError("no indices parsed")
+        filtered = [api_sequences[i] for i in selected_indices if 0 <= i < len(api_sequences)]
+        return filtered, {
+            'mode': 'llm_simple_fallback',
+            'selected_indices': selected_indices,
+            'response': raw[:2000]
+        }
+    except Exception as e:
+        log.warning(f"Simple filter also failed, returning top_k: {e}")
+        return api_sequences[:top_k], {'mode': 'fallback', 'reason': str(e)}
+
+
 def _semantic_filter_sequences(api_sequences: List[List[str]],
                                condition_info: Dict[str, Any],
                                llm: Any = None,
                                top_k: int = 12,
                                logger_instance: logging.Logger = None) -> Tuple[List[List[str]], Dict[str, Any]]:
     """
-    Use LLM to select the best API sequences.
-    
-    Returns filtered sequences and a summary dict.
+    [DEPRECATED] LLM-based sequence filtering is disabled.
+
+    Use _heuristic_filter_sequences instead, which provides similar filtering
+    without LLM calls, significantly reducing token usage.
+
+    Kept for reference and potential future re-enablement.
     """
     log = logger_instance or logger
     
@@ -745,6 +1013,21 @@ def save_intermediate_results(
                 ]
             }, f, indent=2)
         log.info(f"   📄 Saved filtered sequences ({len(filtered_sequences)}): {filtered_seq_path}")
+
+        # Save detailed LLM filter results (if available)
+        llm_filter_info = grammar_info.get('llm_filter', {})
+        if llm_filter_info and llm_filter_info.get('mode') == 'llm_sequence_filter':
+            filter_details_path = results_path / "llm_filter_details.json"
+            with open(filter_details_path, 'w') as f:
+                json.dump({
+                    'filter_mode': llm_filter_info.get('mode'),
+                    'input_sequences': llm_filter_info.get('input_sequences', 0),
+                    'valid_sequences': llm_filter_info.get('valid_sequences', 0),
+                    'filter_stats': llm_filter_info.get('filter_stats', {}),
+                    'api_lifecycle_cache_size': llm_filter_info.get('api_lifecycle_cache_size', 0),
+                    'sequence_details': llm_filter_info.get('details', [])
+                }, f, indent=2)
+            log.info(f"   📄 Saved LLM filter details: {filter_details_path}")
 
         # Save pattern analysis
         pattern_path = results_path / "pattern_analysis.json"
