@@ -40,8 +40,7 @@ class FuzzingWorkflow:
             args: Command line arguments
             use_checkpointer: Whether to use memory checkpointer for persistence
             shared_data: Pre-fetched shared data (optional, for optimization)
-                        Contains: source_code, api_context, api_dependencies, 
-                                 header_info, existing_fuzzer_headers
+                        Contains: source_code, api_context, header_info, existing_fuzzer_headers
         """
         self.llm = llm
         self.args = args

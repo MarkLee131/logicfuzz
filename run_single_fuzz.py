@@ -190,7 +190,6 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       - api_sequences: API call sequences from grammar
       - dependency_graph: Type dependency graph
       - grammar_info: Grammar metadata
-      - api_dependencies: Legacy format for compatibility
       - header_info: Header file information
       - existing_fuzzer_headers: Headers from existing fuzzers
   """

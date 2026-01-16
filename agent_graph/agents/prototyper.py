@@ -310,7 +310,8 @@ Handle var-len relationships and use appropriate callback stubs if needed."""
 
             if holes:
                 unfilled = [h for h in holes if not h.get("filled", False)]
-                lines.append(f"    Holes to fill: {len(unfilled)} ({', '.join(h['hole_type'] for h in unfilled[:3])})")
+                hole_types = [str(h['hole_type']) for h in unfilled[:3]]
+                lines.append(f"    Holes to fill: {len(unfilled)} ({', '.join(hole_types)})")
 
             # Show truncated code snippet
             if code:
@@ -484,18 +485,6 @@ Handle var-len relationships and use appropriate callback stubs if needed."""
             output.append(f"- **Recommended Approach**: {metadata.get('recommended_approach', 'direct_call')}")
             output.append(f"- **Purpose**: {metadata.get('purpose', 'N/A')}")
             output.append("")
-        
-        # Add API Composition Information
-        api_dependencies = function_analysis.get('api_dependencies')
-        if api_dependencies and api_dependencies.get('call_sequence'):
-            from agent_graph.api_composition_analyzer import format_api_combinations_for_prompt
-            
-            func_sig = function_analysis.get('function_signature', '')
-            api_dep_text = format_api_combinations_for_prompt(api_dependencies, func_sig)
-            
-            if api_dep_text:
-                output.append(api_dep_text)
-                output.append("")
         
         return "\n".join(output)
     

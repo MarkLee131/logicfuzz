@@ -50,7 +50,6 @@ class FuzzingContext:
     api_sequences: List[List[str]]  # List of API call sequences (from grammar)
     dependency_graph: Dict[str, Any]  # Type dependency graph
     grammar_info: Dict[str, Any]  # Grammar metadata
-    api_dependencies: Dict[str, Any]  # Legacy format for backward compatibility
     header_info: Dict[str, List[str]]
     existing_fuzzer_headers: Dict[str, List[str]]
     condition_info: Dict[str, Any] = field(default_factory=dict)
@@ -452,18 +451,6 @@ class FuzzingContext:
             log.warning(f"Skeleton generation failed (non-critical): {e}")
             skeleton_drivers = []
 
-        # === Create legacy api_dependencies format for backward compatibility ===
-        # Convert project-level data to legacy format
-        api_dependencies = {
-            'prerequisites': [api['function_name'] for api in project_apis],
-            'data_dependencies': [],
-            'call_sequence': api_sequences[0] if api_sequences else [],
-            'initialization_code': [],
-            'all_apis': [api['function_name'] for api in project_apis],
-            'api_sequences': api_sequences,
-            'dependency_graph': dep_graph_dict
-        }
-        
         # === Create context ===
         elapsed = time.time() - start_time
         log.info(f'✅ Project-level fuzzing context prepared in {elapsed:.2f}s')
@@ -496,7 +483,6 @@ class FuzzingContext:
             api_sequences=api_sequences,
             dependency_graph=dep_graph_dict,
             grammar_info=grammar_info,
-            api_dependencies=api_dependencies,
             header_info=header_info,
             existing_fuzzer_headers=existing_fuzzer_headers,
             condition_info=condition_info,
@@ -513,7 +499,6 @@ class FuzzingContext:
             'api_sequences': self.api_sequences,
             'dependency_graph': self.dependency_graph,
             'grammar_info': self.grammar_info,
-            'api_dependencies': self.api_dependencies,
             'header_info': self.header_info,
             'existing_fuzzer_headers': self.existing_fuzzer_headers,
             'condition_info': self.condition_info,

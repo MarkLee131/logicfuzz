@@ -65,7 +65,6 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         project_apis = context.get('project_apis', [])
         api_sequences = context.get('api_sequences', [])
         dependency_graph = context.get('dependency_graph', {})
-        api_dependencies = context.get('api_dependencies', {})
         header_info = context.get('header_info', {})
         existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
 
@@ -124,8 +123,7 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
             "raw_analysis": response,
             "analyzed": True,
             "header_information": header_info,
-            "srs_data": srs_data,
-            "api_dependencies": api_dependencies
+            "srs_data": srs_data
         }
 
         requirements_path = ""
