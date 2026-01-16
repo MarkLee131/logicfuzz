@@ -9,6 +9,16 @@ import re
 import sys
 import time
 import traceback
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load environment variables from logicfuzz.env
+_env_file = Path(__file__).parent / "logicfuzz.env"
+if _env_file.exists():
+    load_dotenv(_env_file)
+else:
+    print(f"Warning: {_env_file} not found. API keys may not be configured.")
 from datetime import timedelta
 from multiprocessing import Pool, Process
 from typing import Any
