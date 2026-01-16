@@ -42,7 +42,7 @@ echo "${PROJECTS_TO_ANALYSE}"
 
 # Create a minor clone of OSS-Fuzz where we will populate it with data
 # for Fuzz Introspector webapp
-git clone --depth=1 https://github.com/google/oss-fuzz
+git clone --depth=1 https://github.com/gejingquan/oss-fuzz
 
 cd oss-fuzz
 rsync -avu "$BASE/$DATA_DIR/oss-fuzz2/" .

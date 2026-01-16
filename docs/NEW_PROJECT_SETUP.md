@@ -39,7 +39,7 @@ LogicFuzz can test projects beyond OSS-Fuzz's library:
 cd /path/to/logic-fuzz
 
 # Clone OSS-Fuzz if not already present
-git clone https://github.com/google/oss-fuzz
+git clone https://github.com/gejingquan/oss-fuzz
 
 # Install dependencies
 pip install -r requirements.txt
