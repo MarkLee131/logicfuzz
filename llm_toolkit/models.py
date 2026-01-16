@@ -717,6 +717,11 @@ class GPT51(GPT5):
 
   name = 'gpt-5.1'
 
+class GPT52(GPT5):
+  """OpenAI's GPT-5.2 model."""
+
+  name = 'gpt-5.2'
+
 
 class GPT5Chat(GPT):
   """OpenAI's GPT-5-Chat model (with temperature setting)."""

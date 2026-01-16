@@ -1,11 +1,8 @@
 """
 LangGraphPrototyper agent for LangGraph workflow.
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import argparse
-import os
-import re
-import json
 
 import logger
 from llm_toolkit.models import LLM
@@ -204,7 +201,17 @@ Handle var-len relationships and use appropriate callback stubs if needed."""
             fn = api.get("function_name", "unknown")
             rt = api.get("return_type", "void")
             args = api.get("arguments", [])
-            args_str = ", ".join(args[:3])
+            # Handle args that can be either strings or dicts
+            args_formatted = []
+            for arg in args[:3]:
+                if isinstance(arg, dict):
+                    # Format dict args as "type name"
+                    arg_type = arg.get("type", arg.get("type_clang", ""))
+                    arg_name = arg.get("name", "")
+                    args_formatted.append(f"{arg_type} {arg_name}".strip())
+                else:
+                    args_formatted.append(str(arg))
+            args_str = ", ".join(args_formatted)
             if len(args) > 3:
                 args_str += ", ..."
             lines.append(f"  • {rt} {fn}({args_str})")
@@ -494,70 +501,20 @@ Handle var-len relationships and use appropriate callback stubs if needed."""
     
     def _retrieve_skeleton(self, function_analysis: dict) -> str:
         """
-        Retrieve skeleton code from long-term memory based on archetype.
-        Injects header information into the skeleton.
-        
+        Retrieve skeleton code based on archetype.
+
+        Note: long_term_memory module has been removed. This method now returns
+        empty string. Skeleton generation is handled by Liberator's CBFactory.
+
         Args:
             function_analysis: Analysis containing archetype and header information
-            
+
         Returns:
-            Skeleton code with header information or empty string if not found
+            Empty string (skeleton retrieval disabled)
         """
-        try:
-            from long_term_memory.retrieval import KnowledgeRetriever
-            
-            # Extract archetype from analysis
-            # Priority 1: Check SRS JSON data (most reliable)
-            srs_data = function_analysis.get('srs_data', {})
-            archetype_info = srs_data.get('archetype', {})
-            archetype = archetype_info.get('primary_pattern')
-            
-            # Priority 2: Fallback to raw analysis text
-            if not archetype:
-                raw_analysis = function_analysis.get('raw_analysis', '')
-                archetype = self._extract_archetype_from_analysis(raw_analysis)
-            
-            if not archetype:
-                logger.info('No archetype found in analysis, skipping skeleton retrieval', trial=self.trial)
-                return ""
-            
-            retriever = KnowledgeRetriever()
-            
-            if archetype not in retriever.list_archetypes():
-                logger.warning(f'Unknown archetype: {archetype}, skipping skeleton retrieval', trial=self.trial)
-                return ""
-            
-            logger.info(f'Retrieving skeleton for archetype: {archetype}', trial=self.trial)
-            skeleton = retriever.get_skeleton(archetype)
-            
-            # Inject header information into skeleton
-            header_info = function_analysis.get('header_information', {})
-            header_section = self._format_header_section(header_info, archetype)
-            
-            # Insert header info at the top of skeleton
-            skeleton_with_headers = f"""{header_section}
-
-{skeleton}"""
-            
-            return f"""
-# Reference Skeleton
-
-**⚠️ CRITICAL: This is a TEMPLATE showing the PATTERN, NOT code to copy literally!**
-
-**How to use:**
-1. 🥇 **COPY patterns from EXISTING FUZZERS** (highest priority - proven to compile)
-2. 🥈 **Replace PLACEHOLDERS** with actual function calls from the public API
-3. 🥉 **Keep the STRUCTURE** (error handling, cleanup order) but adapt the content
-
-**Placeholders** like `PARSE_FUNCTION()`, `RESULT_TYPE`, `MIN_SIZE` are NOT real identifiers - replace them with actual API calls!
-
-```c
-{skeleton_with_headers}
-```
-"""
-        except Exception as e:
-            logger.warning(f'Failed to retrieve skeleton: {e}', trial=self.trial)
-            return ""
+        # long_term_memory module has been removed
+        # Skeleton generation is now handled by Liberator's driver generation pipeline
+        return ""
     
     def _format_header_section(self, header_info: dict, archetype: str = None) -> str:
         """
