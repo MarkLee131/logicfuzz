@@ -89,13 +89,17 @@ COMMON ISSUES & FIXES:
 
 OUTPUT FORMAT:
 
-<conclusion>Root cause, changes made, expected improvement</conclusion>
-<fuzz_target>[Complete improved code]</fuzz_target>
-<coverage_strategy>New paths targeted, why better coverage expected</coverage_strategy>
+**Conclusion:** Root cause, changes made, expected improvement
+
+```cpp
+[Complete improved code]
+```
+
+**Coverage Strategy:** New paths targeted, why better coverage expected
 
 CRITICAL REQUIREMENTS:
-- Follow exact XML format above
-- Keep each tag brief (max 3 sentences)
-- Include complete, compilable code in <fuzz_target> - NO placeholders
-- NO markdown formatting around XML tags
-- NO extra commentary outside XML tags
+- Follow exact markdown format above
+- Keep conclusion and strategy brief (max 3 sentences each)
+- Include complete, compilable code in ```cpp block - NO placeholders
+- Only ONE ```cpp code block containing the complete fuzz target
+- NO extra commentary outside conclusion, code block, and strategy

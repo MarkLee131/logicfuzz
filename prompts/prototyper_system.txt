@@ -26,11 +26,11 @@ CALLBACK POLICY:
 - Don't implement complex callback logic
 
 OUTPUT FORMAT:
-- XML tags only: <conclusion>, <fuzz_target>
-- No extra commentary outside XML tags
+- Use markdown: **Conclusion:** for analysis, ```cpp for code
+- No extra commentary outside these sections
 - Complete compilable code (no placeholders/truncation)
 
 OUTPUT DISCIPLINE:
-- Be concise: <conclusion> max 3 sentences
+- Be concise: Conclusion max 3 sentences
 - Be precise: Your output directly drives compilation
 - Be complete: Include ALL necessary code

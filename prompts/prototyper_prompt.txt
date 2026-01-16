@@ -82,12 +82,15 @@ IMPLEMENTATION STEPS:
 
 OUTPUT FORMAT:
 
-<conclusion>Chosen sequence, APIs called, var-len handling, cleanup order</conclusion>
-<fuzz_target>[Complete LibFuzzer code with LLVMFuzzerTestOneInput]</fuzz_target>
+**Conclusion:** Chosen sequence, APIs called, var-len handling, cleanup order
+
+```cpp
+[Complete LibFuzzer code with LLVMFuzzerTestOneInput]
+```
 
 CRITICAL REQUIREMENTS:
-- Follow exact XML format above
-- Keep <conclusion> brief (max 3 sentences)
-- Include complete, compilable code in <fuzz_target> - NO placeholders
-- NO markdown formatting around XML tags
-- NO extra commentary outside XML tags
+- Follow exact markdown format above
+- Keep conclusion brief (max 3 sentences)
+- Include complete, compilable code in ```cpp block - NO placeholders
+- Only ONE ```cpp code block containing the complete fuzz target
+- NO extra commentary outside conclusion and code block

@@ -78,7 +78,9 @@ class LangGraphEnhancer(LangGraphAgent):
 
         fuzz_target_code = parse_tag(response, 'fuzz_target')
         if not fuzz_target_code:
-            fuzz_target_code = response
+            # Fallback: use entire response, but still strip CDATA if present
+            from agent_graph.agents.utils import strip_cdata
+            fuzz_target_code = strip_cdata(response)
 
         state_update = {
             "fuzz_target_source": fuzz_target_code,

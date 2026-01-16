@@ -153,7 +153,9 @@ Handle var-len relationships and use appropriate callback stubs if needed."""
 
         fuzz_target_code = parse_tag(response, 'fuzz_target')
         if not fuzz_target_code:
-            fuzz_target_code = response
+            # Fallback: use entire response, but still strip CDATA if present
+            from agent_graph.agents.utils import strip_cdata
+            fuzz_target_code = strip_cdata(response)
 
         validation_warnings = self._validate_api_usage(
             fuzz_target_code,

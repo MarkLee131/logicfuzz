@@ -26,8 +26,8 @@ CONSTRAINTS:
 - Cleanup resources in reverse order
 
 OUTPUT FORMAT:
-- XML tags only: <conclusion>, <fuzz_target>, <coverage_strategy>
-- No extra commentary outside XML tags
+- Use markdown: **Conclusion:** for analysis, ```cpp for code, **Coverage Strategy:** for strategy
+- No extra commentary outside these sections
 - Complete compilable code (no placeholders/truncation)
 - Be precise: Your output directly drives compilation
 - Be complete: Include ALL necessary code, no "... rest unchanged ..."

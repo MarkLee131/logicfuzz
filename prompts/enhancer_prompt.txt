@@ -48,12 +48,19 @@ SPECIAL CASES:
 
 OUTPUT FORMAT:
 
-<conclusion>Errors found, root causes, fixes applied</conclusion>
-<fuzz_target>[Complete corrected code]</fuzz_target>
-<build_script>[Only if modified, otherwise omit]</build_script>
+**Conclusion:** Errors found, root causes, fixes applied
+
+```cpp
+[Complete corrected code]
+```
+
+```build_script
+[Only if build script modified, otherwise omit this block entirely]
+```
 
 CRITICAL REQUIREMENTS:
-Follow exact XML format above
-Keep <conclusion> brief (max 3 sentences)
-Include complete, compilable code in <fuzz_target> - NO placeholders like "// ... unchanged ..."
-No extra commentary outside XML tags
+- Follow exact markdown format above
+- Keep conclusion brief (max 3 sentences)
+- Include complete, compilable code in ```cpp block - NO placeholders like "// ... unchanged ..."
+- Only ONE ```cpp code block containing the complete fuzz target
+- NO extra commentary outside conclusion and code block
