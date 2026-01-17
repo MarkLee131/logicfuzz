@@ -213,13 +213,68 @@ class Results:
     return ''
 
   def get_logs(self, benchmark: str, sample: str) -> list[LogPart]:
+    # Try legacy format: status/{sample}/log.txt
     status_dir = os.path.join(self._results_dir, benchmark, 'status')
     results_path = os.path.join(status_dir, sample, 'log.txt')
-    if not FileSystem(results_path).exists():
-      return []
+    if FileSystem(results_path).exists():
+      with FileSystem(results_path).open() as f:
+        return _parse_log_parts(f.read())
 
-    with FileSystem(results_path).open() as f:
-      return _parse_log_parts(f.read())
+    # Try new LangGraph format: logs/trial_{sample}/*.jsonl
+    logs_dir = os.path.join(self._results_dir, benchmark, 'logs')
+    trial_dir = os.path.join(logs_dir, f'trial_{sample}')
+    if FileSystem(trial_dir).exists():
+      return self._parse_jsonl_logs(trial_dir)
+
+    return []
+
+  def _parse_jsonl_logs(self, trial_dir: str) -> list[LogPart]:
+    """Parse JSONL log files from LangGraph workflow into LogPart format."""
+    log_parts = []
+    jsonl_files = sorted([
+        f for f in FileSystem(trial_dir).listdir() if f.endswith('.jsonl')
+    ])
+
+    for jsonl_file in jsonl_files:
+      jsonl_path = os.path.join(trial_dir, jsonl_file)
+      try:
+        with FileSystem(jsonl_path).open() as f:
+          for line in f:
+            line = line.strip()
+            if not line:
+              continue
+            try:
+              entry = json.loads(line)
+              agent = entry.get('agent', 'unknown')
+              round_num = entry.get('round', 0)
+              entry_type = entry.get('type', '')
+              content = entry.get('content', '')
+              timestamp = entry.get('timestamp', '')
+
+              # Format content with agent header for LogsParser compatibility
+              formatted_content = f"🤖 Agent: {agent}_cycle_{round_num}\n"
+              if timestamp:
+                # Add timestamp in format expected by LogsParser
+                ts_parts = timestamp.split('T')
+                if len(ts_parts) == 2:
+                  date_part = ts_parts[0]
+                  time_part = ts_parts[1].split('.')[0]
+                  formatted_content += f"Trial ID: {round_num}\n"
+                  formatted_content += f"{date_part} {time_part}\n"
+              formatted_content += content
+
+              is_prompt = entry_type == 'prompt'
+              is_response = entry_type == 'response'
+              log_parts.append(
+                  LogPart(content=formatted_content,
+                          chat_prompt=is_prompt,
+                          chat_response=is_response))
+            except json.JSONDecodeError:
+              continue
+      except Exception as e:
+        logging.warning('Error reading JSONL file %s: %s', jsonl_path, e)
+
+    return log_parts
 
   def get_run_logs(self, benchmark: str, sample: str) -> str:
     """Returns the content of the last run log."""
@@ -358,6 +413,8 @@ class Results:
   def get_prompt(self, benchmark: str) -> Optional[str]:
     """Gets the prompt for a given benchmark."""
     root_dir = os.path.join(self._results_dir, benchmark)
+
+    # Try legacy format: prompt*.txt in benchmark root
     for name in FileSystem(root_dir).listdir():
       if re.match(r'^prompt.*txt$', name):
         with FileSystem(os.path.join(root_dir, name)).open() as f:
@@ -366,6 +423,42 @@ class Results:
         # Prepare prompt text for HTML.
         return self._prepare_prompt_for_html_text(content)
 
+    # Try new LangGraph format: logs/trial_XX/*.jsonl
+    logs_dir = os.path.join(root_dir, 'logs')
+    if FileSystem(logs_dir).exists():
+      # Find trial directories and get the first one (usually trial_01)
+      trial_dirs = sorted([
+          d for d in FileSystem(logs_dir).listdir()
+          if d.startswith('trial_')
+      ])
+      if trial_dirs:
+        trial_dir = os.path.join(logs_dir, trial_dirs[0])
+        # Try prototyper.jsonl first (most relevant for fuzz target generation)
+        for jsonl_name in ['prototyper.jsonl', 'function_analyzer.jsonl']:
+          jsonl_path = os.path.join(trial_dir, jsonl_name)
+          if FileSystem(jsonl_path).exists():
+            prompt = self._extract_prompt_from_jsonl(jsonl_path)
+            if prompt:
+              return prompt
+
+    return None
+
+  def _extract_prompt_from_jsonl(self, jsonl_path: str) -> Optional[str]:
+    """Extract the first prompt from a JSONL log file."""
+    try:
+      with FileSystem(jsonl_path).open() as f:
+        for line in f:
+          line = line.strip()
+          if not line:
+            continue
+          try:
+            entry = json.loads(line)
+            if entry.get('type') == 'prompt' and entry.get('content'):
+              return entry['content']
+          except json.JSONDecodeError:
+            continue
+    except Exception as e:
+      logging.warning('Error reading JSONL file %s: %s', jsonl_path, e)
     return None
 
   def get_results(self,
