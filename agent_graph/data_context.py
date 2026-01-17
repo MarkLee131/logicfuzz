@@ -229,8 +229,16 @@ class FuzzingContext:
                 f"This might indicate the dependency graph is empty or grammar generation failed."
             )
         
-        # === Step 5: Build condition manager ===
-        log.debug('  5/10 Building condition manager...')
+        # === Step 5: Build data layout (required for ConditionManager) ===
+        log.debug('  5/10 Building data layout...')
+        try:
+            generator.build_data_layout()
+            log.info('   ✅ Data layout built')
+        except Exception as e:
+            log.warning(f"Failed to build data layout: {e} (ConditionManager may have reduced precision)")
+
+        # === Step 5b: Build condition manager ===
+        log.debug('  5b/10 Building condition manager...')
         try:
             condition_manager = generator.build_condition_manager()
             log.info('   ✅ Condition manager built')

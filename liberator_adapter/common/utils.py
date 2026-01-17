@@ -1,6 +1,8 @@
 
-import json, collections, copy, os, random, string
+import json, collections, copy, os, random, string, logging
 from typing import List, Set #, Dict, Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 from liberator_adapter.common.api import Api, Arg
 from liberator_adapter.common.conditions import *
@@ -204,7 +206,7 @@ class Utils:
                     if l:
                         minimum_apis_list += [l]
         else:
-            print("WARNING, minimum_apis not found, considering all APIs")
+            logger.debug("minimum_apis file not found, considering all APIs")
 
         if len(minimum_apis_list) != 0:
             included_functions = minimum_apis_list

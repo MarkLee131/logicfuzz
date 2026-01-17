@@ -275,14 +275,6 @@ class DataLayout:
         #     return False
     
     def is_fuzz_friendly(self, a_type: str) -> bool:
-        # for k, s in self.data_layout.items():
-            # if 
-        # if "TIFF" in a_type:
-        #     print("is_a_struct")
-        #     from IPython import embed; embed(); exit(1)
-
-        # if not self.is_a_struct(a_type):
-        #     return True
 
         if a_type not in self.clang_to_llvm_struct:
             return False
@@ -301,7 +293,7 @@ class DataLayout:
 
     def has_incomplete_type(self) -> bool:
         return len(self.incomplete_types) != 0
-    
+
     def is_enum_type(self, a_type: str) -> bool:
         return a_type in self.enum_type
     
@@ -317,17 +309,10 @@ class DataLayout:
         return False
 
     def is_incomplete(self, a_type: str) -> bool:
-        
+
         tmp_type = "%" + a_type
 
-        # # removing trailing stars
-        # x = tmp_type
-        # while x[-1] == "*":
-        #     x = x[:-1]
-
         if "void" in tmp_type:
-            # print("is void?")
-            # from IPython import embed; embed(); exit(1)
             return True
 
         if tmp_type in self.incomplete_types:

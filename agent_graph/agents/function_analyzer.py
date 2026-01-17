@@ -116,14 +116,16 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         )
         updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
 
-        srs_data = self._extract_srs_json(response)
+        # NOTE: SRS extraction has been removed. The analysis is now generated
+        # directly from Liberator data without LLM call, so there is no srs_json.
+        # The raw_analysis text is passed directly to downstream agents.
 
         analysis_result = {
             "summary": response[:500],
             "raw_analysis": response,
             "analyzed": True,
             "header_information": header_info,
-            "srs_data": srs_data
+            "srs_data": None  # SRS removed - always None
         }
 
         requirements_path = ""
@@ -217,32 +219,7 @@ Dependency Graph: {dependency_graph.get('num_nodes', 0)} nodes
         logger.info(f'📊 Analysis summary generated ({len(response)} chars, no LLM call)', trial=self.trial)
         return response
 
-    def _extract_srs_json(self, response: str) -> Optional[Dict[str, Any]]:
-        """Extract and parse SRS JSON from the response.
-        
-        Args:
-            response: The LLM response containing SRS specification
-            
-        Returns:
-            Parsed SRS JSON data or None if not found/invalid
-        """
-        import json
-        import re
-
-        try:
-            match = re.search(r'<srs_json>\s*(\{.*?\})\s*</srs_json>', response, re.DOTALL)
-            if match:
-                json_str = match.group(1)
-                srs_data = json.loads(json_str)
-                logger.info(f'Successfully extracted SRS JSON data', trial=self.trial)
-                return srs_data
-            else:
-                logger.warning(f'No <srs_json> tags found in response', trial=self.trial)
-                return None
-        except json.JSONDecodeError as e:
-            logger.warning(f'Failed to parse SRS JSON: {e}', trial=self.trial)
-            return None
-        except Exception as e:
-            logger.warning(f'Error extracting SRS JSON: {e}', trial=self.trial)
-            return None
+    # NOTE: _extract_srs_json method removed - SRS has been deprecated.
+    # The function analyzer now generates plain text analysis from Liberator data
+    # without calling LLM, so there is no srs_json to extract.
 

@@ -4,7 +4,7 @@ API SEQUENCES (from static analysis):
 The following API call sequences have been validated by lifecycle analysis.
 Pick ONE sequence and implement a complete fuzz driver for it.
 
-SRS SPECIFICATION:
+PROJECT ANALYSIS:
 {SRS_SPECIFICATION}
 
 REFERENCE SKELETON (use these headers):

@@ -684,7 +684,8 @@ class ProjectDriverGenerator:
             al = local_meta.get("apis_llvm")
             inc = local_meta.get("incomplete_types")
             dl = local_meta.get("data_layout")
-            et = enum_types_path  # Still allow external input
+            # Use parameter if provided, otherwise get from metadata
+            et = enum_types_path or local_meta.get("enum_types")
             if all([ac, al, inc, dl, et]):
                 data_layout.setup(
                     apis_clang_p=ac,
