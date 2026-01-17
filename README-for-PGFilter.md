@@ -12,7 +12,7 @@ bash report/launch_local_introspector.sh
 After the command finishes running, you can access the Fuzz Introspector page by entering ```<server_ip>:8080``` in your browser.
 
 
-After logicfuzz finishes running, you can stop the server by entering the following command in the terminal.
+You can stop the server by entering the following command in the terminal.
 ```
 kill $(lsof -t -i :8080)
 ```
@@ -103,7 +103,7 @@ python3 -m report.web -r results -s
 
 After the command finishes running, you can access the results page by entering ```<server_ip>:8012``` in your browser.
 
-After viewing the results, press ```Ctrl+C``` to stop it.
+You can press ```Ctrl+C``` to stop it.
 
 # Part 3: How to run the logicfuzz project in Docker
 
