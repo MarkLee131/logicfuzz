@@ -96,7 +96,7 @@ pip install -r requirements.txt
 python3 -m report.web -r results -s
 ```
 
-
+## Step 2: After the command finishes running, you can access the results page by entering ```<server ip>:8012``` in your browser.
 
 
 
