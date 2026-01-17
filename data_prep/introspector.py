@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, OrderedDict, TypeVar
 from urllib.parse import urlencode
 
 import requests
-from google.cloud import storage
+ 
 
 from data_prep import project_src
 from experiment import benchmark as benchmarklib
@@ -42,7 +42,7 @@ ORACLE_ONLY_REFERENCED_FUNCTIONS = bool(
 ORACLE_ONLY_FUNCTIONS_WITH_HEADER_DECLARATIONS = bool(
     int(os.getenv('OSS_FUZZ_ONLY_FUNCS_WITH_HEADER_DECLARATION', '1')))
 
-DEFAULT_INTROSPECTOR_ENDPOINT = 'https://introspector.oss-fuzz.com/api'
+DEFAULT_INTROSPECTOR_ENDPOINT = 'http://localhost:8000/api'
 INTROSPECTOR_ENDPOINT = ''
 INTROSPECTOR_CFG = ''
 INTROSPECTOR_ORACLE_FAR_REACH = ''
@@ -1347,35 +1347,26 @@ def get_target_name(project_name: str, harness: str) -> Optional[str]:
 ##### Helper logic for downloading fuzz introspector reports.
 # Download introspector report.
 def _identify_latest_report(project_name: str):
-  """Returns the latest summary in the FuzzIntrospector bucket or local API."""
-  # First try to use local introspector endpoint if available
+  """Returns the latest summary from a local FuzzIntrospector API.
+
+  This function ONLY attempts to use a locally configured FuzzIntrospector API.
+  It does not fall back to any cloud storage or remote service.
+  """
+  # Only try local introspector endpoint if explicitly configured.
   if INTROSPECTOR_ENDPOINT and INTROSPECTOR_ENDPOINT != DEFAULT_INTROSPECTOR_ENDPOINT:
     try:
-      # Try to get project summary from local API
       local_summary_url = f'{INTROSPECTOR_ENDPOINT}/project-summary?project={project_name}'
       response = requests.get(local_summary_url, timeout=10)
       if response.status_code == 200:
         data = response.json()
         if data.get('result') == 'success':
           logger.info('Found project %s in local introspector API', project_name)
-          return local_summary_url  # Return the API endpoint
+          return local_summary_url
     except Exception as e:
       logger.debug('Local introspector API not available for %s: %s', project_name, e)
-  
-  # Fallback to Google Cloud Storage
-  try:
-    client = storage.Client.create_anonymous_client()
-    bucket = client.get_bucket('oss-fuzz-introspector')
-    blobs = bucket.list_blobs(prefix=project_name)
-    summaries = sorted(
-        [blob.name for blob in blobs if blob.name.endswith('summary.json')])
-    if summaries:
-      return ('https://storage.googleapis.com/oss-fuzz-introspector/'
-              f'{summaries[-1]}')
-  except Exception as e:
-    logger.debug('Failed to access cloud storage for %s: %s', project_name, e)
-  
-  logger.error('Error: %s has no summary.', project_name)
+
+  # Do not attempt cloud fallbacks. If no local API is available, return None.
+  logger.error('Error: %s has no summary via local introspector API.', project_name)
   return None
 
 def _extract_introspector_report(project_name):

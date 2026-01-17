@@ -23,12 +23,30 @@ export QWEN_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
 You can obtain a Qwen API key from Alibaba Cloud Model Studio.
 
+### Fuzz Introspector (required for CLI runs without Docker)
+
+If you run LogicFuzz via the command-line (not using Docker), a local Fuzz Introspector web server must be available because some CLI workflows call its API (default port `8080`). You can either run Fuzz Introspector in Docker (no extra setup) or launch it locally using the helper scripts in `report/`:
+
+- Start a quick local server using your local checkout (Recommended):
+  ```bash
+  bash report/launch_local_introspector.sh
+  ```
+
+- Or, start the server and build the database:
+  ```bash
+  bash report/launch_introspector.sh --source benchmark
+  ```
+
+Both scripts default to port `8080`. If the port is already in use, the scripts will warn; use `sudo lsof -i :8080` or `ss -ltnp | grep ':8080'` to check and free the port.
+
+If you prefer Docker, run LogicFuzz inside the provided Docker setup — no local Fuzz Introspector process is required.
+
 ### 2. Minimal example
 Generate fuzzers for the sample `cjson` benchmark:
 
 ```bash
 python run_logicfuzz.py \
-  -y conti-benchmark/cjson.yaml \
+  -y conti-benchmark/curl.yaml \
   -n 1 \
   --model gpt-5.1
 ```
@@ -37,7 +55,7 @@ To use a different model:
 
 ```bash
 python run_logicfuzz.py \
-  -y conti-benchmark/cjson.yaml \
+  -y conti-benchmark/curl.yaml \
   -n 1 \
   --model qwen-plus
 ```

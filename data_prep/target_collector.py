@@ -11,22 +11,19 @@ import logging
 import os
 import shutil
 import sys
-from typing import Set
+from typing import Set, Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-def _extract_introspector_report(project_name, date_str):
-  project_url = ('https://storage.googleapis.com/oss-fuzz-introspector/'
-                 f'{project_name}/inspector-report/{date_str}/summary.json')
-  # Read the introspector artifact.
+def _extract_introspector_report(project_name, date_str) -> Optional[dict]:
+  """Retrieve introspector report using local introspector helpers (no cloud)."""
   try:
-    raw_introspector_json_request = requests.get(project_url, timeout=10)
-    introspector_report = json.loads(raw_introspector_json_request.text)
-  except:
+    from data_prep import introspector as _introspector
+    return _introspector._extract_introspector_report(project_name)
+  except Exception:
     return None
-  return introspector_report
 
 def _get_targets(project_name: str) -> Set[str]:
   """Fetches the latest fuzz targets and function signatures of |project_name|
