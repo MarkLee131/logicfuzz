@@ -9,7 +9,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 bash report/launch_local_introspector.sh
 ```
-
+After the command finishes running, you can access the Fuzz Introspector page by entering ```<server_ip>:8080``` in your browser.
 
 
 ## Step 2, open terminal B and set up a virtual environment and install dependencies (in terminal B).
