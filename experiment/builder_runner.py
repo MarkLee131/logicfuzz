@@ -829,10 +829,14 @@ class BuilderRunner:
 
     outdir = get_build_artifact_dir(generated_project, 'out')
     workdir = get_build_artifact_dir(generated_project, 'work')
+    
+    # Generate a unique container name to allow docker cp after build
+    container_name = f'{generated_project}-build-{uuid.uuid4().hex[:8]}'
+    
     command = [
         'docker',
         'run',
-        '--rm',
+        '--name', container_name,
         '--privileged',
         '--shm-size=2g',
         '--platform',
@@ -879,6 +883,8 @@ class BuilderRunner:
     build_command = pre_build_command + ['compile'] + post_build_command
     build_bash_command = ['-c', ' '.join(build_command)]
     command.extend(build_bash_command)
+    
+    build_succeeded = False
     with open(log_path, 'w+') as log_file:
       try:
         sp.run(command,
@@ -887,14 +893,90 @@ class BuilderRunner:
                stdout=log_file,
                stderr=sp.STDOUT,
                check=True)
+        build_succeeded = True
       except sp.CalledProcessError:
         logger.info('Failed to build fuzzer for %s with %s', generated_project,
                     sanitizer)
-        return False
+        build_succeeded = False
+    
+    # Try to copy binary from container using docker cp if build succeeded
+    if build_succeeded:
+      target_binary_name = self.benchmark.target_name
+      container_binary_path = f'/out/{target_binary_name}'
+      host_binary_path = os.path.join(outdir, target_binary_name)
+      
+      # First check if binary already exists in mounted directory
+      if os.path.exists(host_binary_path):
+        logger.info('Binary already exists at %s (from volume mount)', host_binary_path)
+        try:
+          os.chmod(host_binary_path, 0o755)
+        except PermissionError as e:
+          logger.warning('Could not set executable permissions on %s: %s (file may already be executable)', 
+                       host_binary_path, e)
+      else:
+        # Binary not in mounted directory, try to copy from container
+        try:
+          logger.info('Binary not found in mounted directory, attempting to copy from container %s:%s to %s', 
+                     container_name, container_binary_path, host_binary_path)
+          cp_cmd = ['docker', 'cp', f'{container_name}:{container_binary_path}', host_binary_path]
+          cp_result = sp.run(cp_cmd, capture_output=True, timeout=30)
+          
+          if cp_result.returncode == 0:
+            # Set executable permissions
+            try:
+              os.chmod(host_binary_path, 0o755)
+              logger.info('Successfully copied binary from container to %s', host_binary_path)
+            except PermissionError as e:
+              logger.warning('Could not set executable permissions on %s: %s (file may already be executable)', 
+                           host_binary_path, e)
+              logger.info('Binary copied from container to %s (permissions unchanged)', host_binary_path)
+          else:
+            # Binary copy failed, try to list what's in /out to help debug
+            logger.warning('Failed to copy binary from container: %s', cp_result.stderr.decode())
+            # Try to inspect what files are in the container's /out directory
+            try:
+              # Use docker cp to list directory contents (works even if container stopped)
+              list_cmd = ['docker', 'cp', f'{container_name}:/out/.', f'{outdir}/.container_out']
+              list_result = sp.run(list_cmd, capture_output=True, timeout=30)
+              if list_result.returncode == 0 and os.path.isdir(f'{outdir}/.container_out'):
+                files = os.listdir(f'{outdir}/.container_out')
+                logger.info('Files found in container /out directory: %s', files)
+                # Try to find the binary with a different name or copy all binaries
+                for file in files:
+                  if os.path.isfile(os.path.join(f'{outdir}/.container_out', file)):
+                    # Check if it's an executable binary
+                    if os.access(os.path.join(f'{outdir}/.container_out', file), os.X_OK):
+                      logger.info('Found executable binary in container: %s', file)
+                      # Copy it to the expected location
+                      shutil.copy2(os.path.join(f'{outdir}/.container_out', file), host_binary_path)
+                      try:
+                        os.chmod(host_binary_path, 0o755)
+                        logger.info('Copied binary %s to expected location %s', file, host_binary_path)
+                      except PermissionError as e:
+                        logger.warning('Could not set executable permissions on %s: %s (file may already be executable)', 
+                                     host_binary_path, e)
+                        logger.info('Binary %s copied to %s (permissions unchanged)', file, host_binary_path)
+                      break
+                # Clean up temp directory
+                shutil.rmtree(f'{outdir}/.container_out', ignore_errors=True)
+            except Exception as e:
+              logger.debug('Could not inspect container /out directory: %s', e)
+        except (sp.TimeoutExpired, Exception) as e:
+          logger.warning('Error while trying to copy binary from container: %s', e)
+    
+    # Clean up: remove the container
+    try:
+      rm_cmd = ['docker', 'rm', '-f', container_name]
+      sp.run(rm_cmd, capture_output=True, timeout=10)
+    except Exception as e:
+      logger.warning('Failed to remove container %s: %s', container_name, e)
 
-    logger.info('Successfully build fuzzer for %s with %s', generated_project,
-                sanitizer)
-    return True
+    if build_succeeded:
+      logger.info('Successfully build fuzzer for %s with %s', generated_project,
+                  sanitizer)
+      return True
+    else:
+      return False
 
   def _get_coverage_text_filename(self, project_name: str) -> str:
     """Get the filename of the text coverage file for C/C++."""

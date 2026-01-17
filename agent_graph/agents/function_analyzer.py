@@ -74,6 +74,86 @@ class LangGraphFunctionAnalyzer(LangGraphAgent):
         
         # Extract data from context - all guaranteed to exist
         func_source = context.get('source_code', '')
+        
+        # ========== PGFilter: Filter function source code if enabled ==========
+        if getattr(self.args, 'enable_source_filter', False) and func_source:
+            from agent_graph.source_code_filter import SourceCodeFilter
+            
+            # Calculate source code line count, only filter large functions
+            min_lines = getattr(self.args, 'source_filter_min_lines', 50)
+            line_count = len(func_source.splitlines())
+            
+            if line_count >= min_lines:
+                filter_tool = SourceCodeFilter()
+                
+                # Extract parameter names from function signature
+                function_signature = benchmark.get('function_signature', '')
+                target_params = self._extract_params_from_signature(function_signature)
+                
+                # If no parameters extracted from signature, try to extract from function source first line
+                if not target_params and func_source:
+                    import re
+                    lines = func_source.splitlines()
+                    if lines:
+                        # Extract from function definition line (first line)
+                        func_def_line = lines[0]
+                        func_def_params = self._extract_params_from_signature(func_def_line)
+                        if func_def_params:
+                            target_params = func_def_params
+                
+                # Log extracted parameters
+                logger.info(
+                    f'🔍 PGFilter: Extracted initial parameters from signature: {target_params}',
+                    trial=self.trial
+                )
+                
+                # Log original source code (before filtering)
+                logger.info(
+                    f'📄 PGFilter: Original source code ({line_count} lines):\n'
+                    f'```c\n{func_source}```',
+                    trial=self.trial
+                )
+                
+                # Filter source code
+                filtered_source, filter_metadata = filter_tool.filter_function_source(
+                    func_source,
+                    target_params=target_params
+                )
+                
+                # Log expanded parameters
+                initial_params = filter_metadata.get('initial_params', target_params)
+                expanded_params = filter_metadata.get('expanded_params', filter_metadata.get('target_params', []))
+                
+                logger.info(
+                    f'🔍 PGFilter: Initial parameters: {initial_params}',
+                    trial=self.trial
+                )
+                logger.info(
+                    f'🔍 PGFilter: Expanded parameters ({len(expanded_params)}): {expanded_params}',
+                    trial=self.trial
+                )
+                
+                # Log filtered source code (after filtering)
+                logger.info(
+                    f'📄 PGFilter: Filtered source code ({filter_metadata["filtered_line_count"]} lines):\n'
+                    f'```c\n{filtered_source}```',
+                    trial=self.trial
+                )
+                
+                logger.info(
+                    f'📉 Source code filtered: {filter_metadata["original_line_count"]} → '
+                    f'{filter_metadata["filtered_line_count"]} lines '
+                    f'({filter_metadata["reduction_ratio"]:.1f}% reduction)',
+                    trial=self.trial
+                )
+                
+                func_source = filtered_source
+            else:
+                logger.debug(
+                    f'⏭️  Skipping filter for small function ({line_count} lines < {min_lines})',
+                    trial=self.trial
+                )
+        # ========== PGFilter: End ==========
         # 2025-11: API 组合信息分析已在数据准备阶段移除，仅使用数据准备阶段构造的轻量级 api_dependencies。
         api_dependencies = context["api_dependencies"]
         # 对分析逻辑本身，仅使用轻量级 api_context。
@@ -518,6 +598,11 @@ Generate complete SRS incorporating all knowledge above.
             logger.debug(f'Could not get source for caller function: {caller_sig}', trial=self.trial)
             return None
         
+        # ========== PGFilter: Caller source code filtering disabled ==========
+        # Note: We keep the full caller source code for better context analysis.
+        # PGFilter is only applied to the target function, not to caller functions.
+        # ========== PGFilter: End ==========
+        
         lines = caller_source.splitlines()
         
         # Extract callee function name from function_signature
@@ -560,13 +645,19 @@ Generate complete SRS incorporating all knowledge above.
                 )
         
         if call_line_idx is None:
-            # 不要瞎编“调用行”——找不到就老老实实说找不到，跳过这个样本。
+            # 不要瞎编"调用行"——找不到就老老实实说找不到，跳过这个样本。
             logger.warning(
                 f'Could not locate call to {callee_name} in caller {src_func}, '
                 f'skipping this call site',
                 trial=self.trial
             )
             return None
+        
+        # ========== PGFilter: Caller source code filtering disabled ==========
+        # Note: We keep the full caller source code for better context analysis.
+        # PGFilter is only applied to the target function, not to caller functions.
+        # The caller_source and lines remain unchanged (full source code).
+        # ========== PGFilter: End ==========
         
         # Extract context
         start_idx = max(0, call_line_idx - context_lines)
@@ -1256,4 +1347,61 @@ Generate complete SRS incorporating all knowledge above.
         except Exception as e:
             logger.warning(f'Error extracting SRS JSON: {e}', trial=self.trial)
             return None
+    
+    def _extract_params_from_signature(self, function_signature: str) -> List[str]:
+        """
+        Extract parameter names from function signature.
+        
+        Example:
+            "int foo(int a, char *b)" -> ["a", "b"]
+            "void bar(int, char *)" -> [] (no parameter names)
+        
+        Args:
+            function_signature: Full function signature
+        
+        Returns:
+            List of parameter names (empty if no names found)
+        """
+        import re
+        
+        # Match function parameters: (param1, param2, ...)
+        param_pattern = re.compile(r'\(([^)]*)\)')
+        match = param_pattern.search(function_signature)
+        
+        if not match:
+            return []
+        
+        params_str = match.group(1).strip()
+        if not params_str:
+            return []
+        
+        # Split by comma and extract variable names
+        params = []
+        for param in params_str.split(','):
+            param = param.strip()
+            # Extract all identifiers from the parameter
+            # Handle: "int a", "char *b", "const char *c", "XML_Parser parser"
+            identifiers = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', param)
+            
+            if not identifiers:
+                continue
+            
+            # If there are multiple identifiers, the last one is usually the parameter name
+            # If there's only one identifier, check if it's likely a type name
+            if len(identifiers) > 1:
+                # Multiple identifiers: last one is the parameter name
+                params.append(identifiers[-1])
+            elif len(identifiers) == 1:
+                # Single identifier: check if it's likely a type name
+                identifier = identifiers[0]
+                # Skip if it starts with uppercase (likely a type like XML_Parser, int, char, etc.)
+                # or is a known type keyword
+                if identifier[0].isupper() or identifier in ['int', 'char', 'void', 'float', 'double', 'long', 'short', 'unsigned', 'signed', 'const', 'struct', 'enum']:
+                    # This is likely a type name, not a parameter name, skip it
+                    continue
+                else:
+                    # Single lowercase identifier, likely a parameter name
+                    params.append(identifier)
+        
+        return params
 
