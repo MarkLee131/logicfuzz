@@ -518,7 +518,8 @@ function createDurationChart(containerEl, title, data, labelKey, valueKey, fillC
 	titleEl.textContent = title;
 	titleEl.style.fontWeight = '600';
 	const select = document.createElement('select');
-	select.innerHTML = `<option value="${TIME_UNITS.SECONDS.code}">Seconds</option><option value="${TIME_UNITS.MINUTES.code}" selected>Minutes</option><option value="${TIME_UNITS.HOURS.code}">Hours</option>`;
+	// Default to Seconds for better visibility of small values
+	select.innerHTML = `<option value="${TIME_UNITS.SECONDS.code}" selected>Seconds</option><option value="${TIME_UNITS.MINUTES.code}">Minutes</option><option value="${TIME_UNITS.HOURS.code}">Hours</option>`;
 	titleContainer.appendChild(titleEl);
 	titleContainer.appendChild(select);
 	containerEl.appendChild(titleContainer);
@@ -527,24 +528,39 @@ function createDurationChart(containerEl, title, data, labelKey, valueKey, fillC
 
 	function renderDuration(unitCode) {
 		plotContainer.innerHTML = '';
-		const { width } = containerSize(containerEl);
-		const unit = Object.values(TIME_UNITS).find(u => u.code === unitCode) || TIME_UNITS.MINUTES;
+		let { width } = containerSize(containerEl);
+		// Ensure minimum width for visibility
+		width = Math.max(width, 400);
+		const unit = Object.values(TIME_UNITS).find(u => u.code === unitCode) || TIME_UNITS.SECONDS;
 		const transformedData = data.map(d => ({
 			[labelKey]: d[labelKey],
 			fullLabel: d.fullLabel || d[labelKey],
 			duration: d[valueKey] / unit.divisor
 		}));
+		// Calculate reasonable x-axis max based on data
+		const maxDuration = Math.max(...transformedData.map(d => d.duration), 1);
+		const xMax = Math.ceil(maxDuration * 1.2); // Add 20% padding
 		setContainerHeight(containerEl, heightConfig.containerHeight);
 		const plot = Plot.plot({
 			title: null,
-			x: { label: unit.label },
+			x: { label: unit.label, grid: true, domain: [0, xMax] },
 			y: { label: heightConfig.yLabel, domain: data.map(d => d[labelKey]) },
-			marks: [Plot.barX(transformedData, {
-				y: labelKey,
-				x: 'duration',
-				fill: fillColor,
-				title: d => `${d.fullLabel}: ${d.duration.toFixed(2)} ${unit.label}`
-			})],
+			marks: [
+				Plot.barX(transformedData, {
+					y: labelKey,
+					x: 'duration',
+					fill: fillColor,
+					title: d => `${d.fullLabel}: ${d.duration.toFixed(2)} ${unit.label}`
+				}),
+				Plot.text(transformedData, {
+					y: labelKey,
+					x: 'duration',
+					text: d => d.duration.toFixed(1) + (unit.code === 's' ? 's' : unit.code),
+					dx: 5,
+					fill: '#000',
+					textAnchor: 'start'
+				})
+			],
 			width,
 			height: heightConfig.plotHeight,
 			marginLeft: heightConfig.marginLeft
@@ -552,7 +568,7 @@ function createDurationChart(containerEl, title, data, labelKey, valueKey, fillC
 		plotContainer.appendChild(plot);
 	}
 
-	renderDuration(TIME_UNITS.MINUTES.code);
+	renderDuration(TIME_UNITS.SECONDS.code);
 	select.addEventListener('change', () => renderDuration(select.value));
 }
 
@@ -569,18 +585,31 @@ function createDurationChart(containerEl, title, data, labelKey, valueKey, fillC
 function createCyclesChart(containerEl, title, data, labelKey, valueKey, fillColor, heightConfig) {
 	containerEl.innerHTML = '';
 	appendTitle(containerEl, title);
-	const { width } = containerSize(containerEl);
+	let { width } = containerSize(containerEl);
+	// Ensure minimum width for visibility
+	width = Math.max(width, 400);
+	console.log('createCyclesChart:', { title, data, width, heightConfig });
 	setContainerHeight(containerEl, heightConfig.containerHeight);
 	const plot = Plot.plot({
 		title: null,
-		x: { label: 'Average Cycles' },
+		x: { label: 'Average Cycles', grid: true, domain: [0, 10] },
 		y: { label: heightConfig.yLabel, domain: data.map(d => d[labelKey]) },
-		marks: [Plot.barX(data, {
-			y: labelKey,
-			x: valueKey,
-			fill: fillColor,
-			title: d => `${d.fullLabel || d[labelKey]}: ${d[valueKey]}`
-		})],
+		marks: [
+			Plot.barX(data, {
+				y: labelKey,
+				x: valueKey,
+				fill: fillColor,
+				title: d => `${d.fullLabel || d[labelKey]}: ${d[valueKey]}`
+			}),
+			Plot.text(data, {
+				y: labelKey,
+				x: valueKey,
+				text: d => d[valueKey].toFixed(1),
+				dx: 5,
+				fill: '#000',
+				textAnchor: 'start'
+			})
+		],
 		width,
 		height: heightConfig.plotHeight,
 		marginLeft: heightConfig.marginLeft
@@ -592,8 +621,13 @@ function createCyclesChart(containerEl, title, data, labelKey, valueKey, fillCol
  * Initializes all charts and visualizations on the page.
  */
 function initializeCharts() {
+	console.log('initializeCharts() called');
 	const BarY = getBarY();
-	if (!BarY) return;
+	if (!BarY) {
+		console.log('BarY not available, returning');
+		return;
+	}
+	console.log('BarY available:', BarY);
 
 	addProjectBuildRateColumn();
 
@@ -657,9 +691,16 @@ function initializeCharts() {
 
 			function renderCoveragePlot(normalized) {
 				plotContainer.innerHTML = '';
-				const { width, height } = containerSize(coverageEl);
+				let { width, height } = containerSize(coverageEl);
+				// Ensure minimum width for visibility
+				width = Math.max(width, 600);
 				const xLabel = normalized ? 'Percent of Covered Lines' : 'Lines of Code';
-				const xOptions = normalized ? { label: xLabel, domain: [0, 100] } : { label: xLabel };
+				// Calculate max value and add 15% padding for labels
+				const maxTotal = Math.max(...projectData.map(d => d.existing_lines + d.new_lines));
+				const xMax = Math.ceil(maxTotal * 1.15);
+				const xOptions = normalized
+					? { label: xLabel, domain: [0, 100], grid: true }
+					: { label: xLabel, domain: [0, xMax], grid: true };
 				const yDomain = projectData.map(d => d.projectLabel);
 				const longest = yDomain.reduce((m, l) => Math.max(m, (l || '').length), 0);
 				const marginLeft = Math.min(MARGIN_LEFT_MAX, Math.max(MARGIN_LEFT_MIN, Math.round(longest * MARGIN_LEFT_MULTIPLIER + MARGIN_LEFT_BASE)));
@@ -672,10 +713,57 @@ function initializeCharts() {
 					Plot.rectX(normalizedData, { y: 'projectLabel', x1: d => {
 						const covered = (d.existing_lines + d.new_lines) || 0;
 						return covered > 0 ? (d.existing_lines / covered) * 100 : 0;
-					}, x2: 100, fill: COLORS.NEW_COVERAGE, title: d => `${d.project}: New Coverage (share of covered)` })
+					}, x2: 100, fill: COLORS.NEW_COVERAGE, title: d => `${d.project}: New Coverage (share of covered)` }),
+					// Add text labels for normalized view
+					Plot.text(normalizedData, {
+						y: 'projectLabel',
+						x: d => {
+							const covered = (d.existing_lines + d.new_lines) || 0;
+							return covered > 0 ? (d.existing_lines / covered) * 50 : 0;
+						},
+						text: d => {
+							const covered = (d.existing_lines + d.new_lines) || 0;
+							const pct = covered > 0 ? (d.existing_lines / covered) * 100 : 0;
+							return `Existing: ${pct.toFixed(1)}%`;
+						},
+						fill: '#fff',
+						fontWeight: 'bold'
+					}),
+					Plot.text(normalizedData, {
+						y: 'projectLabel',
+						x: d => {
+							const covered = (d.existing_lines + d.new_lines) || 0;
+							const existPct = covered > 0 ? (d.existing_lines / covered) * 100 : 0;
+							return existPct + (100 - existPct) / 2;
+						},
+						text: d => {
+							const covered = (d.existing_lines + d.new_lines) || 0;
+							const newPct = covered > 0 ? (d.new_lines / covered) * 100 : 0;
+							return `New: ${newPct.toFixed(2)}%`;
+						},
+						fill: '#fff',
+						fontWeight: 'bold'
+					})
 				] : [
 					Plot.rectX(projectData, { y: 'projectLabel', x1: 0, x2: 'existing_lines', fill: COLORS.EXISTING_COVERAGE, title: d => `${d.project}: Existing Coverage` }),
-					Plot.rectX(projectData, { y: 'projectLabel', x1: 'existing_lines', x2: d => d.existing_lines + d.new_lines, fill: COLORS.NEW_COVERAGE, title: d => `${d.project}: New Coverage` })
+					Plot.rectX(projectData, { y: 'projectLabel', x1: 'existing_lines', x2: d => d.existing_lines + d.new_lines, fill: COLORS.NEW_COVERAGE, title: d => `${d.project}: New Coverage` }),
+					// Add text labels for absolute view
+					Plot.text(projectData, {
+						y: 'projectLabel',
+						x: d => d.existing_lines / 2,
+						text: d => `Existing: ${d.existing_lines.toLocaleString()}`,
+						fill: '#fff',
+						fontWeight: 'bold'
+					}),
+					Plot.text(projectData, {
+						y: 'projectLabel',
+						x: d => d.existing_lines + d.new_lines,
+						text: d => `+${d.new_lines.toLocaleString()} new`,
+						dx: 5,
+						fill: '#000',
+						textAnchor: 'start',
+						fontWeight: 'bold'
+					})
 				];
 
 				const plotHeight = Math.min(500, Math.max(260, projectData.length * 30 + 80));

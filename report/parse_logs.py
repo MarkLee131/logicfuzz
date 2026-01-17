@@ -8,6 +8,20 @@ from datetime import datetime
 
 from report.common import LogPart
 
+# Regular expressions for parsing logs
+_RE_AGENT_HEADER = re.compile(r'^🤖 Agent: (.+)$')
+_RE_CYCLE_NUM = re.compile(r'cycle[_-]?(\d+)', re.IGNORECASE)
+_RE_STEP_HEADER = re.compile(r'Step (\d+):')
+_RE_STEP_SIMPLE = re.compile(r'step\s*(\d+)', re.IGNORECASE)
+_RE_STDERR_BLOCK = re.compile(r'<stderr>(.*?)</stderr>', re.DOTALL)
+_RE_HTML_TAG = re.compile(r'&lt;[^&]+&gt;')
+_RE_SYSTEM_BLOCK = re.compile(r'&lt;system&gt;(.*?)&lt;/system&gt;', re.DOTALL)
+_RE_BASH_OR_STDOUT = re.compile(r'&lt;(bash|stdout)&gt;(.*?)&lt;/\1&gt;', re.DOTALL)
+_RE_CRASH_SYMPTOM = re.compile(r'CRASH_TYPE:\s*(.+)')
+_RE_STACK_LINE = re.compile(r'^\s*#\d+\s+0x[0-9a-fA-F]+\s+.*')
+_RE_STACK_IN = re.compile(r'in\s+(.+?)\s+\((.+?)\)')
+_RE_TRIAL_TIMESTAMP = re.compile(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})')
+
 def extract_project_from_coverage_path(file_path: str) -> str:
   """Extract the project name from coverage file paths."""
   if file_path.startswith('/src/'):
@@ -713,6 +727,77 @@ class LogsParser:
         cycles_dict[0][agent_name] = {'logs': agent_logs, 'steps': steps}
 
     return [cycles_dict[cycle] for cycle in sorted(cycles_dict.keys())]
+
+  def count_cycles(self) -> int:
+    """Return the number of cycles in the logs."""
+    return len(self.get_agent_cycles())
+
+  def compute_trial_durations_seconds(self) -> dict[str, float]:
+    """Compute trial durations in seconds from log timestamps.
+    
+    Returns a dictionary mapping trial IDs to their durations in seconds.
+    If no trial information is found, returns an empty dictionary.
+    """
+    trial_durations = {}
+    trial_start_times = {}
+    
+    # Pattern to match trial IDs and timestamps
+    trial_id_pattern = re.compile(r'Trial ID:\s*(\d+)', re.IGNORECASE)
+    
+    for log_part in self._logs:
+      content = log_part.content
+      lines = content.split('\n')
+      
+      current_trial = None
+      for i, line in enumerate(lines):
+        # Look for Trial ID
+        trial_match = trial_id_pattern.search(line)
+        if trial_match:
+          current_trial = trial_match.group(1)
+        
+        # Look for timestamps
+        timestamp_match = _RE_TRIAL_TIMESTAMP.search(line)
+        if timestamp_match and current_trial:
+          try:
+            timestamp_str = timestamp_match.group(1)
+            timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+            
+            if current_trial not in trial_start_times:
+              trial_start_times[current_trial] = timestamp
+            else:
+              # Calculate duration
+              duration = (timestamp - trial_start_times[current_trial]).total_seconds()
+              if current_trial not in trial_durations or duration > trial_durations[current_trial]:
+                trial_durations[current_trial] = duration
+          except ValueError:
+            # Skip invalid timestamps
+            continue
+    
+    # If we found start times but no durations, try to find the last timestamp
+    # for each trial and use it as end time
+    for trial_id, start_time in trial_start_times.items():
+      if trial_id not in trial_durations:
+        # Look for last timestamp for this trial
+        last_timestamp = None
+        for log_part in self._logs:
+          content = log_part.content
+          if f'Trial ID: {trial_id}' in content or f'Trial ID: {trial_id:02d}' in content:
+            for line in content.split('\n'):
+              timestamp_match = _RE_TRIAL_TIMESTAMP.search(line)
+              if timestamp_match:
+                try:
+                  timestamp_str = timestamp_match.group(1)
+                  timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                  if last_timestamp is None or timestamp > last_timestamp:
+                    last_timestamp = timestamp
+                except ValueError:
+                  continue
+        
+        if last_timestamp:
+          duration = (last_timestamp - start_time).total_seconds()
+          trial_durations[trial_id] = duration
+    
+    return trial_durations
 
 class RunLogsParser:
   """Parse the run log."""
