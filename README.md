@@ -15,6 +15,7 @@ LogicFuzz uses AI agents to automatically generate, compile, and validate fuzz t
 (1) Virtual environment set up (No need if you use the Docker version of LogicFuzz)
 ```
 python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
