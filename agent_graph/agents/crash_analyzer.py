@@ -189,13 +189,57 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
         from agent_graph.prompt_loader import get_prompt_manager
         prompt_manager = get_prompt_manager()
         
+        # ========== PGFilter: Parse stack trace and filter source code if enabled ==========
+        additional_context = f"Project: {benchmark.project}\nFunction: {benchmark.function_name}"
+        
+        if getattr(self.args, 'enable_source_filter', False) and stack_trace:
+            from agent_graph.source_code_filter import SourceCodeFilter
+            
+            # Parse stack trace to extract crash frames
+            crash_frames = self._parse_stack_trace(stack_trace)
+            
+            if crash_frames:
+                # Get project source directory if available
+                project_src_dir = getattr(benchmark, 'project_src_dir', None)
+                filter_tool = SourceCodeFilter(source_dir=project_src_dir)
+                
+                # Filter source code for first 3 key crash frames
+                filtered_contexts = []
+                for frame in crash_frames[:3]:
+                    filtered_context = filter_tool.filter_file_source(
+                        frame['file'],
+                        frame['line'],
+                        context_lines=10
+                    )
+                    if filtered_context:
+                        filtered_contexts.append(filtered_context)
+                
+                # Add filtered source code to additional context
+                if filtered_contexts:
+                    filtered_code_section = "\n## Filtered Source Code Context\n\n"
+                    for ctx in filtered_contexts:
+                        filtered_code_section += f"### {ctx['file']} (Line {ctx['target_line']})\n"
+                        filtered_code_section += "```c\n"
+                        for line_data in ctx['context']:
+                            marker = ">>> " if line_data['is_target_line'] else "    "
+                            filtered_code_section += f"{marker}{line_data['line_number']}: {line_data['content']}\n"
+                        filtered_code_section += "```\n\n"
+                    
+                    additional_context += filtered_code_section
+                    
+                    logger.info(
+                        f'📉 Filtered source code for {len(filtered_contexts)} crash frames',
+                        trial=self.trial
+                    )
+        # ========== PGFilter: End ==========
+        
         # Build user prompt with crash information
         user_prompt = prompt_manager.build_user_prompt(
             "crash_analyzer",
             CRASH_INFO=run_error,
             STACK_TRACE=stack_trace,
             FUZZ_TARGET_CODE=fuzz_target_source,
-            ADDITIONAL_CONTEXT=f"Project: {benchmark.project}\nFunction: {benchmark.function_name}"
+            ADDITIONAL_CONTEXT=additional_context
         )
         
         # Define tool specifications for function calling
@@ -385,6 +429,35 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                 }
             }
         ]
+    
+    def _parse_stack_trace(self, stack_trace: str) -> List[Dict[str, Any]]:
+        """
+        Parse stack trace to extract crash frames.
+        
+        Args:
+            stack_trace: Stack trace string from sanitizer log
+        
+        Returns:
+            List of frame dictionaries with keys: frame, function, file, line
+        """
+        import re
+        frames = []
+        
+        # Match stack frames, e.g.: #0 0x123456 in function_name file:line
+        stack_pattern = r'#(\d+)\s+(0x[0-9a-fA-F]+)\s+in\s+([^\s]+)\s+(.+?):(\d+)'
+        matches = re.findall(stack_pattern, stack_trace)
+        
+        for match in matches:
+            frame_num, address, function, file_path, line_num = match
+            frames.append({
+                'frame': int(frame_num),
+                'address': address,
+                'function': function,
+                'file': file_path.strip(),
+                'line': int(line_num)
+            })
+        
+        return frames[:10]  # Only take the first 10 stack frames
     
     def _execute_tool(self, tool_call: dict) -> str:
         """

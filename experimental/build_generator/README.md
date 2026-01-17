@@ -86,7 +86,7 @@ python3.11 -m virtualenv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
 
-git clone https://github.com/google/oss-fuzz
+git clone https://github.com/gejingquan/oss-fuzz
 
 echo "https://github.com/gregjesl/simpleson" > input.txt
 

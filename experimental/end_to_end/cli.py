@@ -39,12 +39,12 @@ def setup_workdirs(defined_dir):
 
   # Clone two OSS-Fuzz projects
   subprocess.check_call(
-      'git clone https://github.com/google/oss-fuzz oss-fuzz-1',
+      'git clone https://github.com/gejingquan/oss-fuzz oss-fuzz-1',
       shell=True,
       cwd=workdir)
 
   # Clone another OSS-Fuzz, for OFG core
-  subprocess.check_call('git clone https://github.com/google/oss-fuzz oss-fuzz',
+  subprocess.check_call('git clone https://github.com/gejingquan/oss-fuzz oss-fuzz',
                         shell=True,
                         cwd=workdir)
   os.mkdir(os.path.join(workdir, 'oss-fuzz', 'venv'))

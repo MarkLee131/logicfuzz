@@ -46,7 +46,7 @@ RUN if [ "$INSTALL_HOST_CLI" = "true" ]; then \
 
 WORKDIR /experiment
 
-COPY requirements-docker.txt .
+COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
 
