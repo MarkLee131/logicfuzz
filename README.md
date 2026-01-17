@@ -93,11 +93,11 @@ After running LogicFuzz experiments, you can generate interactive HTML reports t
 Generate a static HTML report from your experiment results:
 
 ```bash
-python3 -m report.web -r <results_directory>
+python3 -m report.web
 ```
 
 **Parameters:**
-- `-r, --results-dir`: **Required**. Directory containing LogicFuzz experiment results (typically `results/`)
+- `-r, --results-dir`: Directory containing LogicFuzz experiment results (default: `results`)
 - `-o, --output-dir`: Output directory for the generated HTML report (default: `results-report`)
 - `-b, --benchmark-set`: Benchmark set directory (optional, can be inferred from results)
 - `-m, --model`: Model name (optional, can be inferred from results)
@@ -106,7 +106,7 @@ python3 -m report.web -r <results_directory>
 
 **Example:**
 ```bash
-python3 -m report.web -r results
+python3 -m report.web
 ```
 
 The generated report can be viewed directly from the filesystem by opening `index.html` in your browser, or by hosting it with a web server.

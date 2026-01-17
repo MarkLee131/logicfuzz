@@ -672,7 +672,7 @@ def _parse_arguments() -> argparse.Namespace:
   parser.add_argument('--results-dir',
                       '-r',
                       help='Directory with results from LogicFuzz.',
-                      required=True)
+                      default='results')
   parser.add_argument(
       '--output-dir',
       '-o',
