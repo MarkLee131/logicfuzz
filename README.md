@@ -12,6 +12,14 @@ LogicFuzz uses AI agents to automatically generate, compile, and validate fuzz t
   - OpenAI (GPT‑4, GPT‑5)
   - Qwen via Alibaba Cloud DashScope (cost‑efficient)
 
+(1) Virtual environment set up (No need if you use the Docker version of LogicFuzz)
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+(2) LLM API key set up (No need if you use the Docker version of LogicFuzz)
 ```bash
 # OpenAI
 export OPENAI_API_KEY="sk-..."
@@ -81,6 +89,35 @@ List all available models with:
 ```bash
 python run_logicfuzz.py --list-models
 ```
+
+---
+
+## 📊 Viewing Results
+
+After running LogicFuzz experiments, you can generate interactive HTML reports to visualize the results.
+
+### Generate Static HTML Report
+
+Generate a static HTML report from your experiment results:
+
+```bash
+python3 -m report.web
+```
+
+**Parameters:**
+- `-r, --results-dir`: Directory containing LogicFuzz experiment results (default: `results`)
+- `-o, --output-dir`: Output directory for the generated HTML report (default: `results-report`)
+- `-b, --benchmark-set`: Benchmark set directory (optional, can be inferred from results)
+- `-m, --model`: Model name (optional, can be inferred from results)
+- `--with-csv, -csv`: Also generate a CSV file with the results (optional)
+- `--base-url`: Base URL for serving the generated report (optional)
+
+**Example:**
+```bash
+python3 -m report.web
+```
+
+The generated report can be viewed directly from the filesystem by opening `index.html` in your browser, or by hosting it with a web server.
 
 ---
 

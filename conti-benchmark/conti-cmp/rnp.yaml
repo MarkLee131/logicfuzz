@@ -1,5 +1,0 @@
-"functions":
-"language": "c++"
-"project": "rnp"
-"target_name": "fuzz_sigimport"
-"target_path": "/src/rnp/src/fuzzing/sigimport.c"
