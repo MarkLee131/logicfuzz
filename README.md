@@ -12,6 +12,13 @@ LogicFuzz uses AI agents to automatically generate, compile, and validate fuzz t
   - OpenAI (GPT‑4, GPT‑5)
   - Qwen via Alibaba Cloud DashScope (cost‑efficient)
 
+(1) Virtual environment set up (No need if you use the Docker version of LogicFuzz)
+```
+python -m venv .venv
+pip install -r requirements.txt
+```
+
+(2) LLM API key set up (No need if you use the Docker version of LogicFuzz)
 ```bash
 # OpenAI
 export OPENAI_API_KEY="sk-..."
