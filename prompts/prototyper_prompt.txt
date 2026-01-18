@@ -1,4 +1,4 @@
-Generate fuzz driver for project: {PROJECT_NAME}
+Generate fuzz driver for this project: {PROJECT_NAME}
 
 API SEQUENCES (from static analysis):
 The following API call sequences have been validated by lifecycle analysis.
