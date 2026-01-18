@@ -75,22 +75,137 @@ class FuzzingContext:
             raise ValueError("header_info cannot be empty")
     
     @classmethod
+    def load_from_cache(cls, project_name: str,
+                        logger_instance: logging.Logger = None) -> Optional['FuzzingContext']:
+        """
+        Try to load static analysis results from cache.
+
+        Checks if results/{project}/static_analysis/ contains all required files
+        and loads them to reconstruct a FuzzingContext.
+
+        Args:
+            project_name: Target project name
+            logger_instance: Optional logger for progress reporting
+
+        Returns:
+            FuzzingContext if cache is valid, None otherwise
+        """
+        log = logger_instance or logger
+        cache_dir = Path(f"./results/{project_name}/static_analysis")
+
+        required_files = [
+            'project_apis.json',
+            'filtered_sequences.json',
+            'dependency_graph.json',
+            'analysis_summary.json',
+            'pattern_analysis.json'
+        ]
+
+        # Check if cache directory and all required files exist
+        if not cache_dir.exists():
+            log.debug(f'Cache directory not found: {cache_dir}')
+            return None
+
+        missing_files = [f for f in required_files if not (cache_dir / f).exists()]
+        if missing_files:
+            log.debug(f'Cache incomplete, missing: {missing_files}')
+            return None
+
+        try:
+            log.info(f'📂 Loading cached static analysis from {cache_dir}')
+
+            # Load project APIs
+            with open(cache_dir / 'project_apis.json', 'r') as f:
+                apis_data = json.load(f)
+                project_apis = apis_data.get('apis', [])
+
+            # Load filtered sequences
+            with open(cache_dir / 'filtered_sequences.json', 'r') as f:
+                seq_data = json.load(f)
+                api_sequences = [s['apis'] for s in seq_data.get('sequences', [])]
+
+            # Load dependency graph
+            with open(cache_dir / 'dependency_graph.json', 'r') as f:
+                dependency_graph = json.load(f)
+
+            # Load analysis summary (contains grammar_info and condition_info)
+            with open(cache_dir / 'analysis_summary.json', 'r') as f:
+                summary = json.load(f)
+                grammar_info = summary.get('grammar_info', {})
+                condition_info = summary.get('condition_info', {})
+
+            # Load pattern analysis
+            with open(cache_dir / 'pattern_analysis.json', 'r') as f:
+                pattern_analysis = json.load(f)
+
+            # Header info - use minimal set (will be supplemented at runtime if needed)
+            header_info = {
+                'standard_headers': ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
+                'project_headers': []
+            }
+
+            # Existing fuzzer headers - try to load or use empty
+            existing_fuzzer_headers = {
+                'standard_headers': [],
+                'project_headers': []
+            }
+
+            # Skeleton drivers - optional, may not exist in older caches
+            skeleton_drivers = []
+            skeleton_path = cache_dir / 'skeleton_drivers.json'
+            if skeleton_path.exists():
+                try:
+                    with open(skeleton_path, 'r') as f:
+                        skeleton_drivers = json.load(f)
+                except Exception:
+                    pass
+
+            # Validate required data
+            if not project_apis:
+                log.warning('Cached project_apis is empty, cache invalid')
+                return None
+            if not api_sequences:
+                log.warning('Cached api_sequences is empty, cache invalid')
+                return None
+
+            log.info(f'   ✅ Loaded {len(project_apis)} APIs, {len(api_sequences)} sequences from cache')
+
+            return cls(
+                project_name=project_name,
+                project_apis=project_apis,
+                api_sequences=api_sequences,
+                dependency_graph=dependency_graph,
+                grammar_info=grammar_info,
+                header_info=header_info,
+                existing_fuzzer_headers=existing_fuzzer_headers,
+                condition_info=condition_info,
+                pattern_analysis=pattern_analysis,
+                skeleton_drivers=skeleton_drivers,
+                preparation_time=0.0  # Loaded from cache
+            )
+
+        except Exception as e:
+            log.warning(f'Failed to load cache: {e}')
+            return None
+
+    @classmethod
     def prepare(cls, project_name: str, benchmark: Any = None,
                 logger_instance: logging.Logger = None,
                 llm: Any = None,
                 num_sequences: int = 24,
                 driver_size: int = 5,
-                filter_top_k: int = 12) -> 'FuzzingContext':
+                filter_top_k: int = 12,
+                use_cache: bool = True) -> 'FuzzingContext':
         """
         Prepare all fuzzing data using Liberator project-level modeling.
-        
+
         Philosophy:
         - Uses Liberator to model the entire project
         - Extracts all APIs, generates dependency graph and grammar
         - Produces API sequences for driver generation
         - Either succeeds completely or raises ValueError
         - Fail fast - let caller decide how to handle failures
-        
+
         Args:
             project_name: Target project name
             benchmark: Benchmark object (required for Clang/LLVM extraction)
@@ -99,18 +214,28 @@ class FuzzingContext:
             num_sequences: Number of driver candidates to sample from grammar
             driver_size: Target length of each API sequence
             filter_top_k: Top-K sequences to keep after LLM filtering
-        
+            use_cache: Whether to try loading from cache first (default: True)
+
         Returns:
             Fully initialized FuzzingContext with project-level API data
-        
+
         Raises:
             ValueError: If any required data cannot be obtained
             RuntimeError: If underlying APIs fail
         """
         import time
         from liberator_adapter.project_driver_generator import ProjectDriverGenerator
-        
+
         log = logger_instance or logger
+
+        # Try to load from cache first
+        if use_cache:
+            cached = cls.load_from_cache(project_name, logger_instance=log)
+            if cached:
+                log.info(f'✅ Using cached static analysis for {project_name} (skipping ~60s analysis)')
+                return cached
+            log.info(f'📦 No valid cache found, running full static analysis for {project_name}')
+
         start_time = time.time()
         
         log.info(f'📦 Preparing project-level fuzzing context for {project_name}')
@@ -482,6 +607,7 @@ class FuzzingContext:
             project_apis=project_apis,
             grammar_info=grammar_info,
             condition_info=condition_info,
+            skeleton_drivers=skeleton_drivers,
             log=log
         )
 
@@ -958,6 +1084,7 @@ def save_intermediate_results(
     project_apis: List[Dict[str, Any]],
     grammar_info: Dict[str, Any],
     condition_info: Dict[str, Any],
+    skeleton_drivers: List[Dict[str, Any]] = None,
     log: logging.Logger = None
 ) -> None:
     """
@@ -1036,6 +1163,13 @@ def save_intermediate_results(
                 'apis': project_apis
             }, f, indent=2)
         log.info(f"   📄 Saved project APIs ({len(project_apis)}): {apis_path}")
+
+        # Save skeleton drivers (for cache loading)
+        if skeleton_drivers:
+            skeleton_path = results_path / "skeleton_drivers.json"
+            with open(skeleton_path, 'w') as f:
+                json.dump(skeleton_drivers, f, indent=2)
+            log.info(f"   📄 Saved skeleton drivers ({len(skeleton_drivers)}): {skeleton_path}")
 
         # Save combined summary
         summary_path = results_path / "analysis_summary.json"
