@@ -42,52 +42,6 @@ python3 scripts/view_llm_logs.py
 
 Benchmark YAML files in `comparison/` define "target projects" to fuzz.
 
-## Architecture
-
-### LangGraph Workflow (`agent_graph/`)
-The core fuzzing loop is a LangGraph state machine:
-- **State**: `FuzzingWorkflowState` in `state.py` - shared state across all nodes
-- **Workflow**: `FuzzingWorkflow` in `workflow.py` - orchestrates the agent graph
-- **Nodes** (`nodes/`):
-  - `function_analyzer_node.py` - Analyzes target function requirements
-  - `prototyper_node.py` - Generates initial fuzz target
-  - `execution_node.py` - Builds and runs the fuzzer
-  - `supervisor_node.py` - Routes between nodes based on results
-  - `crash_analyzer_node.py` - Analyzes crashes
-
-### Liberator Adapter (`liberator_adapter/`)
-Integrates Liberator's static analysis for API modeling:
-- `adapter.py` - Main adapter interface (`LiberatorAPIAdapter`)
-- `common/api.py` - `Api` and `Arg` data structures
-- `dependency/type/TypeDependencyGraphGenerator.py` - Builds API dependency graphs based on type matching
-- `constraints/` - Constraint management (`ConditionManager`, `RunningContext`)
-- `grammar/GrammarGenerator.py` - Generates API call sequences from dependency graph
-- `project_driver_generator.py` - End-to-end driver generation for a project
-
-### Prompts (`prompts/`)
-Agent prompts are file-based for easy modification:
-- `{agent_name}_system.txt` - System prompt defining agent role
-- `{agent_name}_prompt.txt` - User prompt template with `{PLACEHOLDER}` syntax
-
-Load prompts via `agent_graph/prompt_loader.py`:
-```python
-from agent_graph.prompt_loader import get_prompt_manager
-pm = get_prompt_manager()
-system = pm.get_system_prompt("prototyper")
-prompt = pm.build_user_prompt("prototyper", project_name="zlib", ...)
-```
-
----
-
-### 可丢弃的Corner Cases（论文中说明）
-
-1. **跨线程/全局状态协议** - 需要动态分析才可靠
-2. **复杂所有权转移** - 如borrowed pointer, refcount复杂协议
-3. **异步/重入回调** - event loop, reentrancy
-4. **宏展开导致的guard/field write** - 除非在编译后IR上做
-5. **Deep alias精确性** - 只做may-alias，不做must-alias
-
-
 ---
 
 ## Liberator静态分析瓶颈与解决策略
@@ -313,50 +267,11 @@ if (ctx->initialized) {
 
 ---
 
-2026/01/15 
-合方案：Path A + Path B 组件增强
-
-                      Path A 基础架构
-                            │
-      ┌─────────────────────┼─────────────────────┐
-      │                     │                     │
-      ▼                     ▼                     ▼
-  ┌─────────┐        ┌───────────┐        ┌───────────────┐
-  │ CBFactory│        │ Driver IR │        │ LFBackendDriver│
-  │ (约束求解)│        │ (11种语句) │        │ (代码生成)     │
-  └────┬────┘        └─────┬─────┘        └───────┬───────┘
-       │                   │                      │
-       │    Path B 组件增强  │                      │
-       ▼                   ▼                      ▼
-  ┌─────────────┐   ┌────────────┐        ┌─────────────┐
-  │DriverEnhancer│   │ Hole系统   │        │ Stub增强生成 │
-  │ (已完成)     │   │ (待集成)   │        │ (待增强)     │
-  └─────────────┘   └────────────┘        └─────────────┘
-
-  可以替换/增强的部分
-  ┌────────────────┬────────────────────────┬──────────────────────────┬────────┐
-  │      组件      │   当前状态 (Path A)    │   增强方案 (用 Path B)   │ 复杂度 │
-  ├────────────────┼────────────────────────┼──────────────────────────┼────────┤
-  │ Callback Stub  │ 简单 MD5 命名 + 空实现 │ ✅ 已集成 DriverEnhancer │ 已完成 │
-  ├────────────────┼────────────────────────┼──────────────────────────┼────────┤
-  │ 循环模式       │ 展平为多次调用         │ ✅ 已集成到序列生成      │ 已完成 │
-  ├────────────────┼────────────────────────┼──────────────────────────┼────────┤
-  │ Var-len 约束   │ 硬编码 len_depends_on  │ 可用 VarLenAnalyzer 增强 │ 低     │
-  ├────────────────┼────────────────────────┼──────────────────────────┼────────┤
-  │ 错误处理       │ 固定 AssertNull        │ 可用 LLM 生成智能检查    │ 中     │
-  ├────────────────┼────────────────────────┼──────────────────────────┼────────┤
-  │ 资源清理       │ 固定 CleanBuffer       │ 可用 LLM 优化顺序        │ 中     │
-  ├────────────────┼────────────────────────┼──────────────────────────┼────────┤
-  │ TLV/结构化数据 │ counter_size 硬编码    │ 可用 TLVAnalyzer 增强    │ 中     │
-  └────────────────┴────────────────────────┴──────────────────────────┴────────┘
-
-
-
-
 ### 待完成
 
-1. 查看results文件夹下，生成的driver是否存在问题。 同时，run.log有运行的终端输出。
+0: 最要紧的： 统一LLM 交互的格式：XML or Markdown任选一个最佳实践用的。记得要统一，包括prompt和response的parse和设置。
 
+1. 查看results文件夹下，生成的driver是否存在问题。 同时，run-*.log有运行的终端输出。
 
 2. [ ] **从OSS-Fuzz drivers提取状态机知识**
    - 分析现有fuzz drivers的API调用模式

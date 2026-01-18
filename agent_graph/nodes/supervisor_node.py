@@ -4,7 +4,7 @@ Supervisor node for LangGraph workflow routing.
 This module provides the routing logic for the fuzzing workflow,
 determining which agents to execute next based on the current state.
 """
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from langchain_core.runnables import RunnableConfig
 import logger
@@ -242,7 +242,7 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
         
         # Track consecutive iterations without coverage improvement
         no_improvement_count = state.get("no_coverage_improvement_count", 0)
-        NO_IMPROVEMENT_THRESHOLD = 3  # If coverage doesn't improve for 3 consecutive checks, consider it done
+        NO_IMPROVEMENT_THRESHOLD = 2  # If coverage doesn't improve for 3 consecutive checks, consider it done
         
         # Check if coverage improved significantly (using REAL project coverage diff)
         IMPROVEMENT_THRESHOLD = 0.01  # At least 1% improvement in real project code
@@ -263,12 +263,10 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
         # 🔧 FIXED: Use line_coverage_diff instead of PC coverage_percent for quality decisions
         # PC coverage can be misleading (e.g., 100% of stub code = useless)
         # Real project coverage diff is what matters
-        LINE_COVERAGE_THRESHOLD = 0.05  # At least 5% real project coverage increase
-        SIGNIFICANT_IMPROVEMENT = 0.05  # 5% is considered significant improvement
-        
-        # Only analyze if real coverage is low AND there's no significant improvement
-        # If there's significant improvement, continue the current strategy even if absolute coverage is low
-        if coverage_diff < LINE_COVERAGE_THRESHOLD and coverage_diff <= SIGNIFICANT_IMPROVEMENT:
+        LINE_COVERAGE_THRESHOLD = 0.1  # At least 10% real project coverage increase
+
+        # Try to improve if coverage is below threshold
+        if coverage_diff < LINE_COVERAGE_THRESHOLD:
             coverage_analysis = state.get("coverage_analysis")
             if not coverage_analysis and current_iteration < max_iterations:
                 logger.debug(f'Low real project coverage (line_diff={coverage_diff:.2%}) and '

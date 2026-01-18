@@ -50,6 +50,71 @@ std::string buf = fdp.ConsumeRandomLengthString(4096);
 api_func(buf.data(), buf.size());  // size matches buffer
 ```
 
+COVERAGE-OPTIMIZED INPUT STRATEGIES:
+
+1. STRUCTURED INPUT GENERATION (for parsers like JSON, XML, config files):
+   - DO NOT use raw random strings for structured input formats
+   - Generate valid structured input using fuzz-derived choices
+   - Example for JSON parsers:
+```cpp
+// BAD: Random string → mostly invalid → parse fails early → low coverage
+std::string json = fdp.ConsumeRandomLengthString(4096);  // DON'T DO THIS
+
+// GOOD: Structured generation → valid input → deep parsing → high coverage
+static std::string MakeJson(FuzzedDataProvider& fdp, int depth) {
+  if (depth <= 0) {
+    switch (fdp.ConsumeIntegralInRange<int>(0, 4)) {
+      case 0: return "null";
+      case 1: return fdp.ConsumeBool() ? "true" : "false";
+      case 2: return std::to_string(fdp.ConsumeIntegral<int>());
+      case 3: return "\"" + fdp.ConsumeRandomLengthString(16) + "\"";
+      default: return "\"\"";
+    }
+  }
+  if (fdp.ConsumeBool()) {  // object
+    std::string k = fdp.ConsumeRandomLengthString(8);
+    if (k.empty()) k = "key";
+    return "{\"" + k + "\":" + MakeJson(fdp, depth-1) + "}";
+  } else {  // array
+    return "[" + MakeJson(fdp, depth-1) + "]";
+  }
+}
+std::string json = MakeJson(fdp, fdp.ConsumeIntegralInRange<int>(1, 4));
+```
+
+2. BRANCH COVERAGE FOR DICT/OBJECT APIs:
+   - Pre-populate objects with items to exercise BOTH "found" and "not found" paths
+```cpp
+// BAD: Empty object → always "not found" → misses half the branches
+cJSON *obj = cJSON_CreateObject();
+cJSON_HasObjectItem(obj, key.c_str());  // always not-found
+
+// GOOD: Pre-seed known key → hit both found and not-found paths
+cJSON *obj = cJSON_CreateObject();
+cJSON_AddStringToObject(obj, "probe", "value");  // add known item
+cJSON_HasObjectItem(obj, "probe");    // FOUND path
+cJSON_HasObjectItem(obj, "missing");  // NOT-FOUND path
+```
+
+3. ESCAPE SEQUENCES AND SPECIAL CHARACTERS (for string processing):
+   - Include escape sequences to test string parsing edge cases
+```cpp
+// Include escapes: \\, \n, \t, \", unicode \uXXXX
+std::string s = "test\\n\\t\\\"\\u0041";
+```
+
+4. MIX VALID AND MALFORMED INPUT (for error path coverage):
+   - Sometimes generate intentionally malformed input to hit error handling code
+```cpp
+// Occasionally add malformed data to test error paths
+if (fdp.ConsumeBool()) {
+  int mut = fdp.ConsumeIntegralInRange<int>(0, 3);
+  if (mut == 0 && !input.empty()) input.pop_back();  // truncate
+  if (mut == 1) input += "trailing_garbage";         // extra data
+  if (mut == 2) input = "{incomplete";               // malformed
+}
+```
+
 CALLBACK HANDLING:
 - Use stub functions for callback parameters:
 ```cpp

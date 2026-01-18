@@ -280,6 +280,9 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
                     f'no_improvement_count={no_improvement_count}', 
                     trial=trial)
     
+    # Increment iteration counter (each execution in optimization phase counts as one iteration)
+    current_iteration = state.get("current_iteration", 0) + 1
+
     # Create state update
     state_update = {
         "run_success": run_result.succeeded if hasattr(run_result, 'succeeded') else True,
@@ -292,6 +295,7 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         "coverage_percent": coverage_percent,
         "line_coverage_diff": coverage_diff,
         "no_coverage_improvement_count": no_improvement_count,  # Track consecutive iterations without improvement
+        "current_iteration": current_iteration,  # Increment iteration counter
         "reproducer_path": run_result.reproducer_path if hasattr(run_result, 'reproducer_path') else "",
         "artifact_path": run_result.artifact_path if hasattr(run_result, 'artifact_path') else "",
         "coverage_report_path": run_result.coverage_report_path if hasattr(run_result, 'coverage_report_path') else "",
@@ -309,7 +313,8 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     }
     
     logger.info(f'Execution completed: success={state_update["run_success"]}, '
-               f'crashes={state_update["crashes"]}, coverage={coverage_percent:.2%}',
+               f'crashes={state_update["crashes"]}, coverage={coverage_percent:.2%}, '
+               f'iteration={current_iteration}',
                trial=trial)
     
     return state_update

@@ -10,6 +10,7 @@ from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
 from agent_graph.prompt_loader import get_prompt_manager
+from data_prep.api_classifier import classify_project_apis, APIRole
 
 
 class LangGraphPrototyper(LangGraphAgent):
@@ -65,6 +66,20 @@ class LangGraphPrototyper(LangGraphAgent):
         # NOTE: SRS has been removed; this now formats the raw analysis summary
         srs_specification = self._format_analysis_summary(function_analysis)
 
+        # === API Classification and Project Understanding ===
+        # Classify APIs by semantic role to guide generation strategy
+        project_name = benchmark.get('project', 'unknown')
+        api_classification = classify_project_apis(project_name, project_apis)
+        api_understanding_text = self._format_api_understanding(api_classification)
+
+        logger.info(
+            f'API Classification: {len(api_classification.parsers)} parsers, '
+            f'{len(api_classification.creators)} creators, '
+            f'{len(api_classification.accessors)} accessors, '
+            f'{len(api_classification.mutators)} mutators',
+            trial=self.trial
+        )
+
         api_sequences_text = self._format_api_sequences(api_sequences, limit=8)
         project_apis_text = self._format_project_apis(project_apis, limit=20)
         dep_graph_text = self._format_dependency_graph(dependency_graph, limit=12)
@@ -84,6 +99,18 @@ class LangGraphPrototyper(LangGraphAgent):
                 skeleton_code=skeleton_code
             )
             base_prompt += f"""
+
+**=== STEP 1: UNDERSTAND THE PROJECT (Think before coding!) ===**
+
+{api_understanding_text}
+
+Before writing any code, think about:
+1. What is this project's main purpose?
+2. Which APIs are PARSERS that consume external input? (These are fuzzing priority!)
+3. What input format do the parsers expect? (JSON? XML? Binary?)
+4. What is the typical data flow? (Parse → Query → Modify → Serialize?)
+
+**=== STEP 2: REFERENCE INFORMATION ===**
 
 **Include Path Context (IMPORTANT for correct #include statements):**
 {include_path_context}
@@ -106,14 +133,20 @@ class LangGraphPrototyper(LangGraphAgent):
 **Pre-generated Skeleton Drivers (reference):**
 {skeleton_text}
 
-**Instructions:**
-Generate a fuzz driver that uses one or more of the API sequences above.
-The driver should:
-1. Follow the dependency order in the sequences
-2. Initialize required resources
-3. Call APIs in the correct sequence
-4. Handle var-len relationships (buffer size matches length parameters)
-5. Use appropriate callback stubs if needed
+**=== STEP 3: GENERATE HIGH-COVERAGE DRIVER ===**
+
+Generate a fuzz driver following these CRITICAL rules:
+
+1. **PRIORITY: Focus on PARSER APIs** - They consume external input and have highest bug potential
+2. **For parsers**: Generate STRUCTURED input (not random strings!)
+   - JSON parsers need valid JSON structure with fuzz-derived values
+   - XML parsers need valid XML structure
+   - Binary parsers need valid headers/magic bytes
+3. **For accessor APIs (Has*, Get*, Is*)**: Hit BOTH branches
+   - Pre-populate objects with known keys to hit "found" path
+   - Query with missing keys to hit "not found" path
+4. **For type checks (IsArray, IsObject)**: Test multiple types
+5. Follow the dependency order in sequences
 6. Clean up resources properly
 7. **Use correct include paths** - the fuzz target will be placed at the location shown above
 """
@@ -197,6 +230,93 @@ Handle var-len relationships and use appropriate callback stubs if needed.
         return state_update
 
     # === Formatting helpers ===
+
+    def _format_api_understanding(self, classification) -> str:
+        """
+        Format API classification into project understanding guidance.
+
+        This helps the LLM understand the project's API structure and
+        guides it to generate better initial drivers.
+        """
+        from data_prep.api_classifier import APIClassificationResult
+
+        if not isinstance(classification, APIClassificationResult):
+            return "  (API classification not available)"
+
+        lines = []
+
+        # Summary
+        lines.append("**API Role Analysis** (automated classification):")
+        lines.append(f"  Total APIs analyzed: {len(classification.apis)}")
+        lines.append("")
+
+        # Parser APIs - HIGHEST PRIORITY
+        if classification.parsers:
+            lines.append("**🎯 PARSER APIs (PRIORITY - consume external input):**")
+            lines.append("  These APIs should be the PRIMARY fuzzing targets!")
+            for api in classification.parsers[:5]:
+                lines.append(f"  • {api.name} (confidence: {api.confidence:.0%})")
+                if api.signature:
+                    lines.append(f"    Signature: {api.signature}")
+            if len(classification.parsers) > 5:
+                lines.append(f"  ... and {len(classification.parsers) - 5} more")
+            lines.append("")
+            lines.append("  ⚠️ CRITICAL: For parser APIs, generate STRUCTURED input!")
+            lines.append("     DO NOT use fdp.ConsumeRandomLengthString() for parsers.")
+            lines.append("     Instead, generate valid structure with fuzz-derived values.")
+            lines.append("")
+
+        # Accessor APIs - Need branch coverage
+        if classification.accessors:
+            lines.append("**🔍 ACCESSOR APIs (need both found/not-found branches):**")
+            for api in classification.accessors[:5]:
+                lines.append(f"  • {api.name}")
+            if len(classification.accessors) > 5:
+                lines.append(f"  ... and {len(classification.accessors) - 5} more")
+            lines.append("")
+            lines.append("  ⚠️ TIP: Pre-populate objects with known keys,")
+            lines.append("     then query both existing and missing keys.")
+            lines.append("")
+
+        # Creator APIs
+        if classification.creators:
+            lines.append("**🏗️ CREATOR APIs (construct objects):**")
+            for api in classification.creators[:5]:
+                lines.append(f"  • {api.name}")
+            if len(classification.creators) > 5:
+                lines.append(f"  ... and {len(classification.creators) - 5} more")
+            lines.append("")
+
+        # Mutator APIs
+        if classification.mutators:
+            lines.append("**✏️ MUTATOR APIs (modify objects):**")
+            for api in classification.mutators[:5]:
+                lines.append(f"  • {api.name}")
+            if len(classification.mutators) > 5:
+                lines.append(f"  ... and {len(classification.mutators) - 5} more")
+            lines.append("")
+
+        # Serializer APIs
+        if classification.serializers:
+            lines.append("**📤 SERIALIZER APIs (output data):**")
+            for api in classification.serializers[:3]:
+                lines.append(f"  • {api.name}")
+            lines.append("")
+
+        # Destructor APIs
+        if classification.destructors:
+            lines.append("**🗑️ DESTRUCTOR APIs (cleanup - call last):**")
+            for api in classification.destructors[:3]:
+                lines.append(f"  • {api.name}")
+            lines.append("")
+
+        # Priority recommendation
+        lines.append("**📋 RECOMMENDED FUZZING PRIORITY:**")
+        priority_apis = classification.get_priority_apis()[:8]
+        for i, api in enumerate(priority_apis, 1):
+            lines.append(f"  {i}. {api.name} ({api.role.value})")
+
+        return "\n".join(lines)
 
     def _format_api_sequences(self, api_sequences: List[List[str]], limit: int = 10) -> str:
         if not api_sequences:
