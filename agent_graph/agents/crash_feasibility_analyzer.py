@@ -553,7 +553,9 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
         cur_round = 0
         max_round = self.args.max_round
         all_responses = []  # 收集所有响应，用于提取session_memory更新
-        
+        total_tool_calls = 0
+        MAX_TOOL_CALLS = 5  # Limit total tool calls to control token usage
+
         # Get tool definitions
         tools = self._get_tool_definitions()
         
@@ -607,8 +609,17 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 # Execute any tool calls
                 if tool_calls:
                     for tool_call in tool_calls:
+                        # Check tool call limit
+                        if total_tool_calls >= MAX_TOOL_CALLS:
+                            logger.warning(
+                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, skipping remaining",
+                                trial=self.trial
+                            )
+                            break
+
+                        total_tool_calls += 1
                         tool_result = self._execute_tool(tool_call)
-                        
+
                         # Add tool result to conversation (local only, not stored in state)
                         tool_message = {
                             "role": "tool",
@@ -616,9 +627,14 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                             "content": tool_result
                         }
                         messages.append(tool_message)
-                        # OPTIMIZATION: No longer store in state - local messages only
-                        # add_agent_message(state, self.name, tool_message)
-                    
+
+                    # Check if we hit the limit - request conclusion
+                    if total_tool_calls >= MAX_TOOL_CALLS:
+                        messages.append({
+                            "role": "user",
+                            "content": "Tool call limit reached. Please provide your conclusion now."
+                        })
+
                     # Continue to next round with tool results
                     cur_round += 1
                     continue

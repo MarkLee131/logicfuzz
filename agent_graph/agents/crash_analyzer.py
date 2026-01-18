@@ -218,7 +218,9 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
         
         cur_round = 0
         max_round = self.args.max_round
-        
+        total_tool_calls = 0
+        MAX_TOOL_CALLS = 5  # Limit total tool calls to control token usage
+
         try:
             while cur_round < max_round:
                 # Chat with LLM using tool calling
@@ -253,19 +255,35 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                 # Execute tool calls if any
                 if tool_calls:
                     for tool_call in tool_calls:
+                        # Check tool call limit
+                        if total_tool_calls >= MAX_TOOL_CALLS:
+                            logger.warning(
+                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, skipping remaining",
+                                trial=self.trial
+                            )
+                            break
+
+                        total_tool_calls += 1
                         result = self._execute_tool(tool_call)
-                        
+
                         # Add tool result to messages
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
                             "content": result
                         })
-                        
+
                         # Mark GDB as used if gdb_execute was called
                         if tool_call["name"] == "gdb_execute":
                             self.gdb_tool_used = True
-                    
+
+                    # Check if we hit the limit - request conclusion
+                    if total_tool_calls >= MAX_TOOL_CALLS:
+                        messages.append({
+                            "role": "user",
+                            "content": "Tool call limit reached. Please provide your conclusion now."
+                        })
+
                     # Continue to next round with tool results
                     cur_round += 1
                     continue
