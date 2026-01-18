@@ -41,7 +41,8 @@ class ProjectContainerTool(BaseTool):
     raise Exception(f'Failed to build image for {project_name}')
 
   def _execute_command_in_container(self,
-                                    command: list[str]) -> sp.CompletedProcess:
+                                    command: list[str],
+                                    timeout: int = 60) -> sp.CompletedProcess:
     """Executes the |command| in subprocess and log output."""
     try:
       result = sp.run(command,
@@ -50,13 +51,18 @@ class ProjectContainerTool(BaseTool):
                       check=False,
                       text=True,
                       encoding='utf-8',
-                      errors='ignore')
+                      errors='ignore',
+                      timeout=timeout)
 
       logger.debug(
           'Executing command (%s) in container %s: Return code %d. STDOUT: %s, '
           'STDERR: %s', command, self.container_id, result.returncode,
           result.stdout, result.stderr)
       return result
+    except sp.TimeoutExpired:
+      logger.warning('Command timed out after %ds: %s', timeout, command)
+      return sp.CompletedProcess(command, returncode=124, stdout='',
+                                  stderr=f'Command timed out after {timeout}s')
     except Exception as e:
       logger.error(
           'Executing command (%s) in container failed with Exception: %s',
@@ -113,20 +119,22 @@ class ProjectContainerTool(BaseTool):
     container_id = result.stdout.strip()
     return container_id
 
-  def execute(self, command: str) -> sp.CompletedProcess:
+  def execute(self, command: str, timeout: int = 60) -> sp.CompletedProcess:
     """Executes the |command| in the container and returns the output."""
     logger.debug('Executing command (%s) in %s: ', command, self.container_id)
     execute_command_in_container = [
         'docker', 'exec', self.container_id, '/bin/bash', '-c', command
     ]
-    process = self._execute_command_in_container(execute_command_in_container)
+    process = self._execute_command_in_container(execute_command_in_container,
+                                                  timeout=timeout)
     process.args = command
     return process
 
-  def compile(self, extra_commands: str = '') -> sp.CompletedProcess:
+  def compile(self, extra_commands: str = '',
+              timeout: int = 300) -> sp.CompletedProcess:
     """Compiles the fuzz target."""
     command = 'compile > /dev/null' + extra_commands
-    compile_process = self.execute(command)
+    compile_process = self.execute(command, timeout=timeout)
     # Hide Compilation command so that LLM won't reuse it in the inspection tool
     # and be distracted by irrelevant errors, e.g., `build/ already exits`.
     compile_process.args = '# Compiles the fuzz target.'

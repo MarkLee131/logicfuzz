@@ -1,6 +1,4 @@
 """
-Prompt loader for LangGraph agents.
-
 Unified interface for loading all agent prompts.
 """
 import os

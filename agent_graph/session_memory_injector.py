@@ -18,38 +18,44 @@ def build_prompt_with_session_memory(
 ) -> str:
     """
     Build complete prompt with session_memory included.
-    
+
     This allows each agent to see all consensus constraints for the current task
     without relying on the conversation history in agent_messages.
-    
+
     Args:
         state: Workflow state
         agent_specific_prompt: Agent-specific task prompt
         agent_name: Agent name (for logging)
-    
+
     Returns:
         Complete prompt with consensus constraints
     """
+    # Check if session memory is disabled
+    use_session_memory = state.get("use_session_memory", True)
+    if not use_session_memory:
+        # Session memory disabled - return only the agent-specific prompt
+        return agent_specific_prompt
+
     # Format session_memory
     consensus_context = format_session_memory_for_prompt(state)
-    
+
     # Load prompt templates using PromptManager
     pm = get_prompt_manager()
     try:
         header_template = pm.get_session_memory_header()
     except FileNotFoundError:
         header_template = ""
-    
+
     try:
         footer_template = pm.get_session_memory_footer()
     except FileNotFoundError:
         footer_template = ""
-    
+
     # Combine: header + consensus + agent prompt + footer
     header = header_template.replace('{CONSENSUS_CONTEXT}', consensus_context)
-    
+
     full_prompt = f"{header}{agent_specific_prompt}{footer_template}"
-    
+
     return full_prompt
 
 
@@ -140,14 +146,20 @@ def merge_session_memory_updates(
 ) -> Dict[str, Any]:
     """
     Merge extracted updates into session_memory.
-    
+
     Args:
         state: Workflow state
         updates: Updates extracted from agent response
-    
+
     Returns:
         Updated session_memory
     """
+    # Check if session memory is disabled
+    use_session_memory = state.get("use_session_memory", True)
+    if not use_session_memory:
+        # Session memory disabled - return empty dict without updating
+        return state.get("session_memory", {})
+
     from agent_graph.state import (
         add_api_constraint,
         add_known_fix,

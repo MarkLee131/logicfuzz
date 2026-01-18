@@ -1362,6 +1362,15 @@ def parse_args() -> argparse.Namespace:
                       type=int,
                       default=10,
                       help='Max trial round for agents.')
+  parser.add_argument('--use-session-memory',
+                      action='store_true',
+                      default=True,
+                      dest='use_session_memory',
+                      help='Enable session memory (short-memory) for cross-agent consensus sharing. (default: enabled)')
+  parser.add_argument('--no-session-memory',
+                      action='store_false',
+                      dest='use_session_memory',
+                      help='Disable session memory (short-memory) for cross-agent consensus sharing.')
 
   args = parser.parse_args()
   if args.num_samples:

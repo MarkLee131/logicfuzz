@@ -4,53 +4,6 @@ from typing_extensions import TypedDict, NotRequired, Annotated
 from typing import List, Dict, Any, Optional
 
 
-# === COMMENTED OUT: Agent message history reducer ===
-# OPTIMIZATION: Conversation history storage disabled to reduce token usage
-# See MEMORY_OPTIMIZATION_ANALYSIS.md for details
-# 
-# def add_agent_messages(
-#     left: Dict[str, List[Dict[str, Any]]], 
-#     right: Dict[str, List[Dict[str, Any]]]
-# ) -> Dict[str, List[Dict[str, Any]]]:
-#     """
-#     Message reducer for agent-specific messages.
-#     
-#     This reducer:
-#     1. Merges agent-specific message dictionaries
-#     2. Trims each agent's messages independently to 50k tokens
-#     3. Preserves system messages for each agent
-#     
-#     Args:
-#         left: Existing agent messages {agent_name: [messages]}
-#         right: New agent messages to merge
-#     
-#     Returns:
-#         Merged and trimmed agent messages
-#     """
-#     from agent_graph.memory import trim_messages_by_tokens
-#     
-#     # Start with a copy of left
-#     result = left.copy()
-#     
-#     # Merge each agent's messages from right
-#     for agent_name, messages in right.items():
-#         if agent_name in result:
-#             # Combine existing and new messages for this agent
-#             combined = result[agent_name] + messages
-#         else:
-#             # New agent, just use the messages from right
-#             combined = messages
-#         
-#         # Trim this agent's messages to 100k tokens
-#         result[agent_name] = trim_messages_by_tokens(
-#             combined,
-#             max_tokens=100000,  # Increase to 100k tokens per agent
-#             keep_system=True,
-#             system_max_tokens=10000  # Limit system message to 10k
-#         )
-#     
-#     return result
-
 class FuzzingWorkflowState(TypedDict):
     """
     LangGraph state schema for the fuzzing workflow.
@@ -69,17 +22,6 @@ class FuzzingWorkflowState(TypedDict):
     # Philosophy: Nodes read from context, never extract data themselves
     context: NotRequired[Dict[str, Any]]  # FuzzingContext.to_dict() - immutable data
     
-    # === Agent-Specific Messages ===
-    # OPTIMIZATION: Conversation history storage disabled to reduce token usage
-    # See MEMORY_OPTIMIZATION_ANALYSIS.md for details
-    # All context now comes from session_memory only
-    # 
-    # === COMMENTED OUT: Agent conversation history ===
-    # # Each agent maintains its own conversation history independently
-    # # Format: {agent_name: [messages]}
-    # # Example: {"function_analyzer": [...], "prototyper": [...]}
-    # agent_messages: NotRequired[Annotated[Dict[str, List[Dict[str, Any]]], add_agent_messages]]
-    
     # === Function Analysis (from FunctionAnalyzer) ===
     function_analysis: NotRequired[Dict[str, Any]]
     
@@ -95,8 +37,6 @@ class FuzzingWorkflowState(TypedDict):
     binary_exists: NotRequired[bool]
     is_function_referenced: NotRequired[bool]
     
-    # === Project-level mode: No target function validation ===
-    # Removed: target_function_name, target_function_called
     validation_error: NotRequired[str]  # Validation error message
     validation_failure_count: NotRequired[int]  # Number of validation failures
     
@@ -158,6 +98,11 @@ class FuzzingWorkflowState(TypedDict):
     # Supervisor should always inject this consensus to downstream agents instead of full message history
     session_memory: NotRequired[Dict[str, Any]]
 
+    # === Session Memory Toggle ===
+    # Controls whether session memory (short-memory) is enabled for cross-agent consensus sharing
+    # When disabled, agents won't see consensus constraints from previous iterations
+    use_session_memory: NotRequired[bool]
+
 class WorkerState(TypedDict):
     """State for worker nodes in parallel execution."""
     
@@ -182,6 +127,7 @@ def create_initial_state(
     additional_files_path: str = "",
     initial_prompt: str = "",
     model = None,
+    use_session_memory: bool = True,
     **kwargs
 ) -> FuzzingWorkflowState:
     """Create an initial state for the fuzzing workflow with full parameter support."""
@@ -189,10 +135,6 @@ def create_initial_state(
     # Serialize objects to dicts for msgpack compatibility
     benchmark_dict = benchmark.to_dict()
     work_dirs_dict = work_dirs.to_dict()
-    
-    # === COMMENTED OUT: Agent message history initialization ===
-    # # Initialize agent_messages dict (empty, agents will add their own system messages)
-    # agent_messages = {}
     
     return FuzzingWorkflowState(
         benchmark=benchmark_dict,
@@ -239,6 +181,8 @@ def create_initial_state(
         # Project-level mode: No validation fields needed
         validation_error="",
         validation_failure_count=0,
+        # Session memory toggle
+        use_session_memory=use_session_memory,
     )
 
 def is_terminal_state(state: FuzzingWorkflowState) -> bool:

@@ -12,7 +12,7 @@ import json
 import logger
 from llm_toolkit.models import LLM
 from agent_graph.state import FuzzingWorkflowState
-from agent_graph.memory import get_agent_messages, add_agent_message
+# NOTE: Agent message history removed (memory optimization)
 from agent_graph.logger import LangGraphLogger, NullLogger
 
 
@@ -515,15 +515,20 @@ class LangGraphAgent(ABC):
     ) -> tuple[Dict[str, Any], str, List[Dict[str, Any]]]:
         """
         Normalize tool responses from models.py format to OpenAI API format.
-        
+
         models.py returns: {"content": str, "tool_calls": [{"id": str, "name": str, "arguments": dict}]}
         OpenAI API needs: {"role": "assistant", "content": str, "tool_calls": [{"id": str, "type": "function", "function": {...}}]}
-        
+
         Returns:
             (assistant_message, text_content, tool_calls)
         """
         import json
-        
+
+        # Basic validation - response must be dict
+        if not isinstance(response, dict):
+            logger.error(f'Invalid LLM response type: {type(response)}', trial=self.trial)
+            return {"role": "assistant", "content": "Error: Invalid response format"}, "", []
+
         # models.py always returns dict with "content" and "tool_calls" keys
         content = response.get("content", "") or ""
         tool_calls_raw = response.get("tool_calls", [])
@@ -553,14 +558,32 @@ class LangGraphAgent(ABC):
             assistant["tool_calls"] = tool_calls
         return assistant, content, tool_calls
     
+    def truncate_tool_output(self, output: str, max_chars: int = 10000) -> str:
+        """
+        Truncate tool output to prevent context overflow.
+
+        Use this in _execute_tool() to limit output size sent back to LLM.
+        Default 10k chars is enough for most tool outputs while preventing OOM.
+
+        Args:
+            output: Raw tool output string
+            max_chars: Maximum characters to keep (default: 10000)
+
+        Returns:
+            Truncated output with indicator if truncated
+        """
+        if not output or len(output) <= max_chars:
+            return output
+        return output[:max_chars] + f"\n\n[... truncated {len(output) - max_chars} chars]"
+
     @abstractmethod
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         """
         Execute the agent's main logic.
-        
+
         Args:
             state: Current workflow state
-        
+
         Returns:
             Dictionary of state updates
         """

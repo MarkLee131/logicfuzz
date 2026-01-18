@@ -391,38 +391,40 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
     def _execute_tool(self, tool_call: dict) -> str:
         """
         Execute a tool call from the LLM.
-        
+
         Args:
             tool_call: Dictionary with 'name', 'arguments', and 'id' keys
-        
+
         Returns:
-            Tool execution result as string
+            Tool execution result as string (truncated to 10k chars)
         """
         tool_name = tool_call["name"]
         arguments = tool_call["arguments"]
-        
+
         try:
             if tool_name == "gdb_execute":
                 command = arguments.get("command", "")
                 if not command:
                     return "Error: No command provided"
-                
+
                 # Execute GDB command
                 process = self.gdb_tool.execute_in_screen(command)
-                return self._format_gdb_result(command, process)
-            
+                result = self._format_gdb_result(command, process)
+
             elif tool_name == "bash_execute":
                 command = arguments.get("command", "")
                 if not command:
                     return "Error: No command provided"
-                
+
                 # Execute bash command
                 process = self.bash_tool.execute(command)
-                return self._format_bash_result(command, process)
-            
+                result = self._format_bash_result(command, process)
+
             else:
                 return f"Error: Unknown tool '{tool_name}'"
-        
+
+            return self.truncate_tool_output(result)
+
         except Exception as e:
             logger.error(f'Tool execution error: {e}', trial=self.trial)
             return f"Error executing {tool_name}: {str(e)}"

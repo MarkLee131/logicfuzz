@@ -7,8 +7,6 @@ Pick ONE sequence and implement a complete fuzz driver for it.
 PROJECT ANALYSIS:
 {SRS_SPECIFICATION}
 
-REFERENCE SKELETON (use these headers):
-{SKELETON_CODE}
 
 {ADDITIONAL_CONTEXT}
 
@@ -64,7 +62,7 @@ api_register_callback(ctx, my_callback, NULL);
 IMPLEMENTATION STEPS:
 
 1. Headers:
-   - Use ONLY reference skeleton headers
+   - Use ONLY reference skeleton headers if exists
    - Filter out internal/*, detail/*, private/*
 
 2. Resource initialization:

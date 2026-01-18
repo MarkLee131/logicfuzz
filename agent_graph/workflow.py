@@ -8,7 +8,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from agent_graph.state import FuzzingWorkflowState, create_initial_state
 from agent_graph.adapters import ConfigAdapter
 from agent_graph.nodes import (
-    function_analyzer_node,
     prototyper_node,
     enhancer_node,
     crash_analyzer_node,
@@ -99,7 +98,8 @@ class FuzzingWorkflow:
         initial_state = create_initial_state(
             benchmark=benchmark,
             trial=trial,
-            work_dirs=self.args.work_dirs
+            work_dirs=self.args.work_dirs,
+            use_session_memory=getattr(self.args, 'use_session_memory', True)
         )
         
         # Inject fuzzing context into state
@@ -188,7 +188,6 @@ class FuzzingWorkflow:
         
         # Add all nodes
         workflow.add_node("supervisor", supervisor_node)
-        workflow.add_node("function_analyzer", function_analyzer_node)
         workflow.add_node("prototyper", prototyper_node)
         workflow.add_node("enhancer", enhancer_node)
         workflow.add_node("improver", improver_node)
@@ -206,7 +205,6 @@ class FuzzingWorkflow:
             "supervisor",
             route_condition,
             {
-                "function_analyzer": "function_analyzer",
                 "prototyper": "prototyper",
                 "enhancer": "enhancer",
                 "improver": "improver",
@@ -218,9 +216,8 @@ class FuzzingWorkflow:
                 "__end__": END
             }
         )
-        
+
         # Add edges back to supervisor from all nodes
-        workflow.add_edge("function_analyzer", "supervisor")
         workflow.add_edge("prototyper", "supervisor")
         workflow.add_edge("enhancer", "supervisor")
         workflow.add_edge("improver", "supervisor")
@@ -235,103 +232,96 @@ class FuzzingWorkflow:
     def _create_simple_workflow(self) -> StateGraph:
         """Create a simple linear workflow for basic testing."""
         workflow = StateGraph(FuzzingWorkflowState)
-        
+
         # Add nodes
-        workflow.add_node("function_analyzer", function_analyzer_node)
         workflow.add_node("prototyper", prototyper_node)
         workflow.add_node("build", build_node)
-        
+
         # Set entry point
-        workflow.set_entry_point("function_analyzer")
-        
+        workflow.set_entry_point("prototyper")
+
         # Add linear edges
-        workflow.add_edge("function_analyzer", "prototyper")
         workflow.add_edge("prototyper", "build")
         workflow.add_edge("build", END)
-        
+
         return workflow
     
     def _create_test_workflow(self) -> StateGraph:
         """Create a minimal workflow for unit testing."""
         workflow = StateGraph(FuzzingWorkflowState)
-        
-        # Add only function analyzer for testing
-        workflow.add_node("function_analyzer", function_analyzer_node)
-        
+
+        # Add only prototyper for testing
+        workflow.add_node("prototyper", prototyper_node)
+
         # Set entry and exit
-        workflow.set_entry_point("function_analyzer")
-        workflow.add_edge("function_analyzer", END)
-        
+        workflow.set_entry_point("prototyper")
+        workflow.add_edge("prototyper", END)
+
         return workflow
 
 def create_fuzzing_workflow() -> StateGraph:
     """
     Create the main fuzzing workflow graph.
-    
+
     This is a convenience function for backward compatibility.
-    
+
     Returns:
         Configured LangGraph StateGraph for fuzzing workflow
     """
     workflow = StateGraph(FuzzingWorkflowState)
-    
+
     # Add nodes
     workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("function_analyzer", function_analyzer_node)
     workflow.add_node("prototyper", prototyper_node)
     workflow.add_node("enhancer", enhancer_node)
     workflow.add_node("build", build_node)
     workflow.add_node("execution", execution_node)
     workflow.add_node("crash_analyzer", crash_analyzer_node)
-    
+
     # Set entry point
     workflow.set_entry_point("supervisor")
-    
+
     # Add conditional edges from supervisor
     workflow.add_conditional_edges(
         "supervisor",
         route_condition,
         {
-            "function_analyzer": "function_analyzer",
             "prototyper": "prototyper",
             "enhancer": "enhancer",
             "build": "build",
-            "execution": "execution", 
+            "execution": "execution",
             "crash_analyzer": "crash_analyzer",
             "__end__": END
         }
     )
-    
+
     # Add edges back to supervisor from all nodes
-    workflow.add_edge("function_analyzer", "supervisor")
     workflow.add_edge("prototyper", "supervisor")
     workflow.add_edge("enhancer", "supervisor")
     workflow.add_edge("build", "supervisor")
     workflow.add_edge("execution", "supervisor")
     workflow.add_edge("crash_analyzer", "supervisor")
-    
+
     return workflow
 
 def create_simple_workflow() -> StateGraph:
     """
     Create a simplified linear workflow for testing.
-    
+
     Returns:
-        Simple linear workflow: FunctionAnalyzer -> Prototyper -> Build
+        Simple linear workflow: Prototyper -> Build
     """
     workflow = StateGraph(FuzzingWorkflowState)
-    
+
     # Add nodes
-    workflow.add_node("function_analyzer", function_analyzer_node)
     workflow.add_node("prototyper", prototyper_node)
     workflow.add_node("build", build_node)
-    
+
     # Set entry point
-    workflow.set_entry_point("function_analyzer")
-    
+    workflow.set_entry_point("prototyper")
+
     # Add linear edges
-    workflow.add_edge("function_analyzer", "prototyper")
     workflow.add_edge("prototyper", "build")
     workflow.add_edge("build", END)
-    
+
     return workflow

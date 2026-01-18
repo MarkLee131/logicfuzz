@@ -13,7 +13,7 @@ from agent_graph.state import FuzzingWorkflowState, add_coverage_attempt
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
 from agent_graph.prompt_loader import get_prompt_manager
-from agent_graph.memory import get_agent_messages, add_agent_message
+# NOTE: Agent message history removed (memory optimization)
 
 
 class LangGraphCoverageAnalyzer(LangGraphAgent):

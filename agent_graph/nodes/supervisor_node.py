@@ -133,11 +133,7 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
     workflow_phase = state.get("workflow_phase", "compilation")
     trial = state.get("trial", 0)
     
-    # Step 1: Check if we need function analysis (required for both phases)
-    if not state.get("function_analysis"):
-        return "function_analyzer"
-    
-    # Step 2: Check if we need a fuzz target
+    # Step 1: Check if we need a fuzz target
     fuzz_target_source = state.get("fuzz_target_source")
     if not fuzz_target_source:
         logger.debug(f'No fuzz_target_source found, routing to prototyper', trial=trial)
@@ -320,8 +316,7 @@ def route_condition(state: FuzzingWorkflowState) -> str:
     
     # Map actions to node names
     action_to_node = {
-        "function_analyzer": "function_analyzer",
-        "prototyper": "prototyper", 
+        "prototyper": "prototyper",
         "enhancer": "enhancer",
         "improver": "improver",
         "build": "build",
