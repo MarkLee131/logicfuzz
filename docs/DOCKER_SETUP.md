@@ -202,7 +202,7 @@ For more details on setting up custom projects, see [`docs/NEW_PROJECT_SETUP.md`
 
 ## 5. Verifying outputs
 - Experiment artifacts: `results/output-*/` (on host because of the bind mount).
-- HTML reports: run `python -m report.web -r results -b <benchmark_set> -m <model> -o report/html-report/<label>/` when you need them.
+- HTML reports: run `python -m report.web -r results -s` to generate and serve reports (then open http://localhost:8012/), or `python -m report.web -r results -o report/html-report/<label>/` to generate static files only.
 - FI service health: curl `http://127.0.0.1:8080/api/healthz`.
 
 If the runner container exits with a non-zero status, inspect `results/logs-from-run.txt` (when `--redirect-outs true`) or the host terminal output. Since Docker uses your host Docker daemon through `/var/run/docker.sock`, make sure Docker Desktop/Engine is running before launching LogicFuzz.
