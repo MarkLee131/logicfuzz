@@ -9,7 +9,7 @@ import time
 from typing import Optional
 
 import logger
-from agent.base_agent import BaseAgent
+from experimental.agent_compat import BaseAgent
 from experimental.build_generator import constants, file_utils, templates
 from llm_toolkit.models import LLM
 from llm_toolkit.prompts import Prompt

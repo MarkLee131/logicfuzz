@@ -11,7 +11,7 @@ import uuid
 from typing import Any, Optional
 
 import logger
-from agent.base_agent import BaseAgent
+from experimental.agent_compat import BaseAgent
 from experiment import oss_fuzz_checkout
 from experiment.benchmark import Benchmark
 from experiment.workdir import WorkDirs
