@@ -5,7 +5,8 @@ This module provides the LangGraph-compatible node wrapper for the original
 ExecutionStage functionality.
 """
 import os
-from typing import Dict, Any
+import re
+from typing import Dict, Any, List
 
 from langchain_core.runnables import RunnableConfig
 import logger
@@ -17,6 +18,88 @@ from experiment import oss_fuzz_checkout
 from experiment.benchmark import Benchmark
 from experiment.evaluator import Evaluator
 from experiment.workdir import WorkDirs
+
+
+def extract_fuzzing_summary(raw_log: str) -> str:
+    """
+    Extract key information from fuzzing log to reduce token usage.
+
+    Extracts:
+    - Initialization info (first ~15 lines)
+    - NEW_FUNC discoveries (functions reached by fuzzer)
+    - Error/crash information
+    - Final statistics (last ~30 lines)
+
+    Args:
+        raw_log: The full fuzzing log content
+
+    Returns:
+        A condensed summary of the fuzzing log
+    """
+    if not raw_log:
+        return ""
+
+    lines = raw_log.split('\n')
+    summary_parts: List[str] = []
+
+    # 1. Initialization info (first 15 lines)
+    summary_parts.append("=== Fuzzer Initialization ===")
+    summary_parts.extend(lines[:15])
+
+    # 2. NEW_FUNC discoveries - functions the fuzzer reached
+    new_funcs = [line for line in lines if 'NEW_FUNC' in line]
+    if new_funcs:
+        summary_parts.append("\n=== Discovered Functions (NEW_FUNC) ===")
+        # Deduplicate and limit
+        seen_funcs = set()
+        for line in new_funcs:
+            # Extract function name for deduplication
+            match = re.search(r'in\s+(\S+)\s', line)
+            func_name = match.group(1) if match else line
+            if func_name not in seen_funcs:
+                seen_funcs.add(func_name)
+                summary_parts.append(line)
+        summary_parts.append(f"(Total: {len(new_funcs)} NEW_FUNC entries, {len(seen_funcs)} unique functions)")
+
+    # 3. Error/crash information
+    error_keywords = ['ERROR', 'SUMMARY:', 'AddressSanitizer', 'LeakSanitizer',
+                      'UndefinedBehaviorSanitizer', 'ABORTING', 'deadly signal']
+    error_lines = [line for line in lines
+                   if any(kw in line for kw in error_keywords)]
+    if error_lines:
+        summary_parts.append("\n=== Errors/Crashes ===")
+        summary_parts.extend(error_lines[:50])  # Limit error lines
+
+    # 4. Final statistics (last 30 lines, skip dictionary entries)
+    summary_parts.append("\n=== Final Statistics ===")
+    # Find where statistics start (after dictionary section ends)
+    stats_lines = []
+    in_dict_section = False
+    for line in lines[-100:]:  # Check last 100 lines
+        if '##### End of recommended dictionary' in line:
+            in_dict_section = False
+            continue
+        if '##### Recommended dictionary' in line or in_dict_section:
+            in_dict_section = True
+            continue
+        if line.startswith('Done ') or line.startswith('stat::') or 'runs in' in line:
+            stats_lines.append(line)
+
+    if stats_lines:
+        summary_parts.extend(stats_lines)
+    else:
+        # Fallback: just take last 20 lines
+        summary_parts.extend(lines[-20:])
+
+    summary = '\n'.join(summary_parts)
+
+    # Final size check - if still too large, truncate
+    MAX_SUMMARY_SIZE = 30000  # ~7500 tokens
+    if len(summary) > MAX_SUMMARY_SIZE:
+        summary = summary[:MAX_SUMMARY_SIZE] + '\n... (summary truncated)'
+
+    return summary
+
 
 def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str, Any]:
     """
@@ -154,13 +237,18 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
             coverage_diff = run_result.coverage.covered_lines / total_lines
             logger.info(f'Coverage diff: {coverage_diff:.2%}', trial=trial)
     
-    # Read run log from file (best-effort – log failure but don't hide it otherwise)
+    # Read run log from file and extract summary (best-effort)
     run_log = ""
     if hasattr(run_result, 'log_path') and run_result.log_path and os.path.exists(run_result.log_path):
         try:
             with open(run_result.log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                run_log = f.read()
-            logger.debug(f'Read run log from {run_result.log_path} ({len(run_log)} bytes)', trial=trial)
+                raw_log = f.read()
+            # Extract summary to reduce token usage for LLM
+            run_log = extract_fuzzing_summary(raw_log)
+            logger.debug(
+                f'Read run log from {run_result.log_path} ({len(raw_log)} bytes -> {len(run_log)} bytes summary)',
+                trial=trial
+            )
         except Exception as e:
             logger.warning(f'Failed to read run log from {run_result.log_path}: {e}', trial=trial)
     

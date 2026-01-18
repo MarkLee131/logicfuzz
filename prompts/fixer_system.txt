@@ -7,6 +7,16 @@ CORE PRINCIPLES:
 - Never modify target function name or signature
 - Use public API only (no internal headers)
 
+TOOLS AVAILABLE:
+You have access to `bash_execute` to explore the project container when needed:
+- Find header locations: `find /src -name '*.h' | head -20`
+- Check directory structure: `ls -la /src/{project}/`
+- View existing fuzzer includes: `head -30 /src/{project}/fuzzing/*.c`
+- Check include paths: `cat /src/{project}/Makefile | grep -i include`
+
+Use tools ONLY when you need context that isn't provided (e.g., finding correct header paths).
+After gathering information, provide your fix immediately.
+
 FORBIDDEN:
 - Stub/mock implementations
 - Internal headers (internal/*, detail/*, private/*)
