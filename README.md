@@ -1,76 +1,62 @@
-**LogicFuzz – Automated Fuzz Target Generation with Multi-Agent LLMs**
+# Part 1: How to run the logicfuzz project outside of Docker
 
-LogicFuzz uses AI agents to automatically generate, compile, and validate fuzz targets for C/C++ projects. The workflow is split into two phases: **Compilation** (make it build) and **Optimization** (run the fuzzer and validate crashes).
 
----
+## Step1: First, open terminal A and start the local Fuzz Introspector web server (in terminal A).
 
-## 🚀 Quick Start
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+bash report/launch_local_introspector.sh
+```
+After the command finishes running, you can access the Fuzz Introspector page by entering ```<server_ip>:8080``` in your browser.
 
-### 1. Prerequisites
-- **Docker** (installed and running)
-- **An LLM API key**, for example:
-  - OpenAI (GPT‑4, GPT‑5)
-  - Qwen via Alibaba Cloud DashScope (cost‑efficient)
 
-(1) Virtual environment set up (No need if you use the Docker version of LogicFuzz)
+You can stop the server by entering the following command in the terminal.
+```
+kill $(lsof -t -i :8080)
+```
+
+## Step 2, open terminal B and set up a virtual environment and install dependencies (in terminal B).
+
 ```
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-(2) LLM API key set up (No need if you use the Docker version of LogicFuzz)
-```bash
-# OpenAI
-export OPENAI_API_KEY="sk-..."
 
-# Qwen (Singapore region)
-export DASHSCOPE_API_KEY="sk-..."
-export QWEN_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+## Step 3, set the API key for LLM (using DeepSeek as an example) (in terminal B).
+```
+export DEEPSEEK_API_KEY="sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 ```
 
-You can obtain a Qwen API key from Alibaba Cloud Model Studio.
 
-### Fuzz Introspector (required for CLI runs without Docker)
 
-If you run LogicFuzz via the command-line (not using Docker), a local Fuzz Introspector web server must be available because some CLI workflows call its API (default port `8080`). You can either run Fuzz Introspector in Docker (no extra setup) or launch it locally using the helper scripts in `report/`:
-
-- Start a quick local server using your local checkout (Recommended):
-  ```bash
-  bash report/launch_local_introspector.sh
-  ```
-
-- Or, start the server and build the database:
-  ```bash
-  bash report/launch_introspector.sh --source benchmark
-  ```
-
-Both scripts default to port `8080`. If the port is already in use, the scripts will warn; use `sudo lsof -i :8080` or `ss -ltnp | grep ':8080'` to check and free the port.
-
-If you prefer Docker, run LogicFuzz inside the provided Docker setup — no local Fuzz Introspector process is required.
-
-### 2. Minimal example
-Generate fuzzers for the sample `cjson` benchmark:
-
-```bash
-python run_logicfuzz.py \
-  -y conti-benchmark/curl.yaml \
-  -n 1 \
-  --model gpt-5.1
+## Step 4: Run logicfuzz (using curl as an example) (in terminal B).
+```
+python run_logicfuzz.py -y conti-benchmark/curl.yaml --model deepseek-chat -n 1 \
+--enable-source-filter --source-filter-min-lines 10 \
+--run-timeout 60 \
+-e http://localhost:8080/api
 ```
 
-To use a different model:
+## Explanation of each parameter is as follows:
 
-```bash
-python run_logicfuzz.py \
-  -y conti-benchmark/curl.yaml \
-  -n 1 \
-  --model qwen-plus
-```
+| Short | Long | Argument | Description | Default |
+|------|------|----------|-------------|---------|
+| `-n` | `--num-samples` | `NUM_SAMPLES` | Number of samples to request from the LLM | — |
+| `-y` | `--benchmark-yaml` | `BENCHMARK_YAML` | Path to a benchmark YAML file | — |
+| `-to` | `--run-timeout` | `RUN_TIMEOUT` | Timeout (seconds) for each run | — |
+| `-l` | `--model` | `MODEL` | LLM model to use (see supported models below) | — |
+| `-e` | `--introspector-endpoint` | `INTROSPECTOR_ENDPOINT` | Endpoint for introspection service | — |
+| — | `--enable-source-filter` | — | Enable PGFilter-based source code filtering | `false` |
+| — | `--source-filter-min-lines` | `LINES` | Minimum function lines to trigger filtering | `50` |
+| — | `--list-models` | — | List all available models and exit | — |
 
-For more options (e.g., `--benchmarks-directory`, `--num-samples`, `--run-timeout`), see `docs/RUNNING.md`.
 
-### 3. Available Models
+
+## Available Models
 
 | Model | Provider | Notes |
 |-------|----------|-------|
@@ -86,42 +72,14 @@ For more options (e.g., `--benchmarks-directory`, `--num-samples`, `--run-timeou
 
 List all available models with:
 
-```bash
+```
 python run_logicfuzz.py --list-models
 ```
 
----
-
-## 📊 Viewing Results
-
-After running LogicFuzz experiments, you can generate interactive HTML reports to visualize the results.
-
-### Generate Static HTML Report
-
-Generate a static HTML report from your experiment results:
-
-```bash
-python3 -m report.web
-```
-
-**Parameters:**
-- `-r, --results-dir`: Directory containing LogicFuzz experiment results (default: `results`)
-- `-o, --output-dir`: Output directory for the generated HTML report (default: `results-report`)
-- `-b, --benchmark-set`: Benchmark set directory (optional, can be inferred from results)
-- `-m, --model`: Model name (optional, can be inferred from results)
-- `--with-csv, -csv`: Also generate a CSV file with the results (optional)
-- `--base-url`: Base URL for serving the generated report (optional)
-
-**Example:**
-```bash
-python3 -m report.web
-```
-
-The generated report can be viewed directly from the filesystem by opening `index.html` in your browser, or by hosting it with a web server.
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Guide | Description |
 |-------|-------------|
@@ -129,3 +87,42 @@ The generated report can be viewed directly from the filesystem by opening `inde
 | **`docs/NEW_PROJECT_SETUP.md`** | How to onboard new projects (OSS‑Fuzz, private repos, custom builds). |
 | **`docs/WORKFLOW_DIAGRAM.md`** | High‑level workflow and architecture diagrams. |
 | **`agent_graph/README.md`** | Implementation details of the LangGraph‑based agent workflow. |
+
+
+
+# Part 2: How to view the results
+
+## Step 1: open terminal C and generate static HTML report (in terminal C)
+
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 -m report.web -r results -s
+```
+
+After the command finishes running, you can access the results page by entering ```<server_ip>:8012``` in your browser.
+
+You can press ```Ctrl+C``` to stop it.
+
+# Part 3: How to run the logicfuzz project in Docker
+
+This part is still under debugging...
+
+
+
+```bash
+cp logicfuzz.env.example logicfuzz.env
+# Then edit logicfuzz.env and fill in DEEPSEEK_API_KEYY, LOGICFUZZ_MODEL, ENABLE_SOURCE_FILTER, SOURCE_FILTER_MIN_LINES, BENCHMARK_YAML etc.
+```
+
+
+```
+docker run --rm   --network host   --env-file logicfuzz.env   -v /var/run/docker.sock:/var/run/docker.sock   -v "$PWD":/experiment   -w /experiment   logicfuzz   bash scripts/docker_run_experiment.sh
+```
+
+
+
+
+
+
