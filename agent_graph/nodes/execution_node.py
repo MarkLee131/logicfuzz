@@ -187,8 +187,29 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         trial=trial
     )
     
+    # Handle build failures gracefully - return to compilation phase for fixing
     if not run_result:
-        raise RuntimeError('No RunResult received from build_and_run')
+        # Build failed - return state that triggers enhancer/fixer
+        build_error_msg = "Build failed during execution phase"
+        if build_result:
+            # Try to extract build error details
+            if hasattr(build_result, 'errors') and build_result.errors:
+                build_error_msg = f"Build failed: {build_result.errors[:500]}"
+            elif hasattr(build_result, 'succeeded') and not build_result.succeeded:
+                build_error_msg = "Build failed (no detailed error available)"
+
+        logger.warning(f'Build failed in execution phase: {build_error_msg}', trial=trial)
+
+        return {
+            "compile_success": False,
+            "build_errors": [build_error_msg],
+            "run_success": False,
+            "workflow_phase": "compilation",  # Go back to compilation phase
+            "messages": [{
+                "role": "assistant",
+                "content": f"Build failed during execution: {build_error_msg}"
+            }]
+        }
     
     # Process coverage information
     coverage_percent = 0.0

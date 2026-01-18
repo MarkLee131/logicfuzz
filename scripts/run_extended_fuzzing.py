@@ -139,7 +139,9 @@ class ExtendedFuzzer:
         duration: int = 3600,
         snapshot_interval: int = 300,
         sanitizer: str = "address",
-        fuzzer_name: Optional[str] = None
+        fuzzer_name: Optional[str] = None,
+        skip_build: bool = False,
+        use_existing_build_dir: Optional[str] = None
     ):
         self.project = project
         self.fuzz_target_path = Path(fuzz_target_path)
@@ -148,6 +150,8 @@ class ExtendedFuzzer:
         self.snapshot_interval = snapshot_interval
         self.sanitizer = sanitizer
         self.fuzzer_name = fuzzer_name
+        self.skip_build = skip_build
+        self.use_existing_build_dir = use_existing_build_dir
 
         # Create output directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -230,11 +234,39 @@ class ExtendedFuzzer:
             with open(dockerfile, 'a') as f:
                 f.write(f'\nCOPY {target_basename} /src/{target_basename}\n')
 
+            # Modify build.sh to include our target
+            # This ensures our fuzz target gets compiled
+            build_sh = dst_project / "build.sh"
+            if build_sh.exists():
+                with open(build_sh, 'r') as f:
+                    build_content = f.read()
+
+                # Add compilation for our target at the end
+                target_ext = self.fuzz_target_path.suffix
+                if target_ext in ['.c', '.cc', '.cpp', '.cxx']:
+                    compile_cmd = f'''
+# Compile extended fuzzing target
+$CXX $CXXFLAGS -c /src/{target_basename} -o /tmp/ext_fuzzer.o
+$CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} ${{LDFLAGS:-}}
+'''
+                    # Try to find library link flags from existing build.sh
+                    # Look for patterns like -lcjson, -lz, etc.
+                    import re
+                    lib_matches = re.findall(r'-l\w+', build_content)
+                    if lib_matches:
+                        libs = ' '.join(set(lib_matches))
+                        compile_cmd = compile_cmd.replace('${LDFLAGS:-}', f'${{LDFLAGS:-}} {libs}')
+
+                    with open(build_sh, 'a') as f:
+                        f.write(compile_cmd)
+
             logger.info(f"Created project {self.generated_project_name}")
             return True
 
         except Exception as e:
             logger.error(f"Failed to setup project: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
     def _build_docker_image(self) -> bool:
@@ -245,16 +277,34 @@ class ExtendedFuzzer:
             oss_fuzz_dir = self._get_oss_fuzz_dir()
             helper_py = oss_fuzz_dir / "infra" / "helper.py"
 
-            # Build the project image
-            build_cmd = [
-                "python3", str(helper_py),
-                "build_image", self.generated_project_name
-            ]
-            logger.info(f"Running: {' '.join(build_cmd)}")
-            result = subprocess.run(build_cmd, capture_output=True, text=True, timeout=600)
-            if result.returncode != 0:
-                logger.error(f"Failed to build image: {result.stderr}")
-                return False
+            # Check if base image already exists (from previous logicfuzz runs)
+            # This can save significant build time
+            base_image_name = f"gcr.io/oss-fuzz/{self.project}"
+            check_cmd = ["docker", "images", "-q", base_image_name]
+            check_result = subprocess.run(check_cmd, capture_output=True, text=True)
+            has_cached_image = bool(check_result.stdout.strip())
+
+            if has_cached_image:
+                logger.info(f"Found cached base image for {self.project}, using it...")
+                # Tag the cached image for our project
+                tag_cmd = [
+                    "docker", "tag", base_image_name,
+                    f"gcr.io/oss-fuzz/{self.generated_project_name}"
+                ]
+                subprocess.run(tag_cmd, capture_output=True, text=True)
+            else:
+                logger.info(f"No cached image found, building from scratch (this may take 15-30 minutes)...")
+                # Build the project image
+                build_cmd = [
+                    "python3", str(helper_py),
+                    "build_image", self.generated_project_name
+                ]
+                logger.info(f"Running: {' '.join(build_cmd)}")
+                # Increase timeout for full image build (30 minutes)
+                result = subprocess.run(build_cmd, capture_output=True, text=True, timeout=1800)
+                if result.returncode != 0:
+                    logger.error(f"Failed to build image: {result.stderr[:1000]}")
+                    return False
 
             # Build fuzzers with the specified sanitizer
             build_fuzzers_cmd = [
@@ -263,15 +313,16 @@ class ExtendedFuzzer:
                 self.generated_project_name
             ]
             logger.info(f"Running: {' '.join(build_fuzzers_cmd)}")
-            result = subprocess.run(build_fuzzers_cmd, capture_output=True, text=True, timeout=600)
+            # Increase timeout for fuzzer build (20 minutes)
+            result = subprocess.run(build_fuzzers_cmd, capture_output=True, text=True, timeout=1200)
             if result.returncode != 0:
-                logger.error(f"Failed to build fuzzers: {result.stderr}")
+                logger.error(f"Failed to build fuzzers: {result.stderr[:1000]}")
                 return False
 
             return True
 
         except subprocess.TimeoutExpired:
-            logger.error("Build timed out")
+            logger.error("Build timed out (try running with cached images or increase timeout)")
             return False
         except Exception as e:
             logger.error(f"Build failed: {e}")
@@ -290,12 +341,16 @@ class ExtendedFuzzer:
                 "build_fuzzers", "--sanitizer", "coverage",
                 self.generated_project_name
             ]
-            result = subprocess.run(build_fuzzers_cmd, capture_output=True, text=True, timeout=600)
+            # Increase timeout for coverage build (20 minutes)
+            result = subprocess.run(build_fuzzers_cmd, capture_output=True, text=True, timeout=1200)
             if result.returncode != 0:
-                logger.warning(f"Failed to build coverage image: {result.stderr}")
+                logger.warning(f"Failed to build coverage image: {result.stderr[:500]}")
                 return False
 
             return True
+        except subprocess.TimeoutExpired:
+            logger.warning("Coverage build timed out")
+            return False
         except Exception as e:
             logger.warning(f"Coverage build failed: {e}")
             return False
@@ -651,17 +706,31 @@ class ExtendedFuzzer:
         )
 
         try:
-            # Setup and build
-            if not self._setup_oss_fuzz_project():
-                result.error = "Failed to setup OSS-Fuzz project"
-                return result
+            # Check for existing build directory (fastest path)
+            has_coverage_build = False
+            if self.use_existing_build_dir:
+                logger.info(f"Using existing build directory: {self.use_existing_build_dir}")
+                self.build_out_dir = Path(self.use_existing_build_dir)
+                if not self.build_out_dir.exists():
+                    result.error = f"Build directory not found: {self.use_existing_build_dir}"
+                    return result
+                # Set target name from existing fuzzers
+                fuzzers = list(self.build_out_dir.glob("*_fuzzer")) + list(self.build_out_dir.glob("*_fuzz"))
+                if fuzzers and not self.fuzzer_name:
+                    self.target_name = fuzzers[0].name
+                    logger.info(f"Using existing fuzzer: {self.target_name}")
+            else:
+                # Setup and build
+                if not self._setup_oss_fuzz_project():
+                    result.error = "Failed to setup OSS-Fuzz project"
+                    return result
 
-            if not self._build_docker_image():
-                result.error = "Failed to build Docker image"
-                return result
+                if not self._build_docker_image():
+                    result.error = "Failed to build Docker image"
+                    return result
 
-            # Build coverage image for coverage measurement
-            has_coverage_build = self._build_coverage_image()
+                # Build coverage image for coverage measurement
+                has_coverage_build = self._build_coverage_image()
             if not has_coverage_build:
                 logger.warning("Coverage build failed, will use edge coverage only")
 
@@ -821,6 +890,16 @@ def main():
         default=None,
         help="Name of the fuzzer binary (default: inferred from target file)"
     )
+    parser.add_argument(
+        "--use-existing-build",
+        default=None,
+        help="Path to existing OSS-Fuzz build output directory (skips Docker build)"
+    )
+    parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Skip Docker build and use pre-existing images (faster if images exist)"
+    )
 
     args = parser.parse_args()
 
@@ -842,7 +921,9 @@ def main():
         duration=args.duration,
         snapshot_interval=args.snapshot_interval,
         sanitizer=args.sanitizer,
-        fuzzer_name=args.fuzzer_name
+        fuzzer_name=args.fuzzer_name,
+        skip_build=args.skip_build,
+        use_existing_build_dir=args.use_existing_build
     )
 
     result = fuzzer.run()
