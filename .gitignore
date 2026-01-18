@@ -12,4 +12,3 @@ __pycache__/
 .vscode/
 .DS_Store
 logicfuzz.env
-CLAUDE.md
