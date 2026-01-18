@@ -1,14 +1,39 @@
 # Part 1: How to run the logicfuzz project outside of Docker
 
 
-## Step 1, set the API key for LLM (using DeepSeek as an example).
+## Step1: First, open terminal A and start the local Fuzz Introspector web server (in terminal A).
+
 ```
-export DEEPSEEK_API_KEY="sk-e6d91a6015c54dadb13f1f056113ef48"
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+bash report/launch_local_introspector.sh
+```
+After the command finishes running, you can access the Fuzz Introspector page by entering ```<server_ip>:8080``` in your browser.
+
+
+You can stop the server by entering the following command in the terminal.
+```
+kill $(lsof -t -i :8080)
+```
+
+## Step 2, open terminal B and set up a virtual environment and install dependencies (in terminal B).
+
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+
+## Step 3, set the API key for LLM (using DeepSeek as an example) (in terminal B).
+```
+export DEEPSEEK_API_KEY="sk-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 ```
 
 
 
-## Step 2: Run logicfuzz (using curl as an example).
+## Step 4: Run logicfuzz (using curl as an example) (in terminal B).
 ```
 python run_logicfuzz.py -y conti-benchmark/curl.yaml --model deepseek-chat -n 1 \
 --enable-source-filter --source-filter-min-lines 10 \
@@ -51,6 +76,7 @@ List all available models with:
 python run_logicfuzz.py --list-models
 ```
 
+
 ---
 
 ## Documentation
@@ -64,9 +90,25 @@ python run_logicfuzz.py --list-models
 
 
 
+# Part 2: How to view the results
 
+## Step 1: open terminal C and generate static HTML report (in terminal C)
 
-# Part 2: How to run the logicfuzz project in Docker
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 -m report.web -r results -s
+```
+
+After the command finishes running, you can access the results page by entering ```<server_ip>:8012``` in your browser.
+
+You can press ```Ctrl+C``` to stop it.
+
+# Part 3: How to run the logicfuzz project in Docker
+
+This part is still under debugging...
+
 
 
 ```bash
