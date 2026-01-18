@@ -28,7 +28,7 @@ class FuzzingWorkflowState(TypedDict):
     # === Context Analysis (from ContextAnalyzer) ===
     context_analysis: NotRequired[Dict[str, Any]]
     
-    # === Build Results (from Prototyper/Enhancer) ===
+    # === Build Results (from Prototyper/Fixer) ===
     fuzz_target_source: NotRequired[str]
     build_script_source: NotRequired[str]
     compile_success: NotRequired[bool]

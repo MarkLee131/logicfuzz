@@ -17,7 +17,7 @@ class LangGraphImprover(LangGraphAgent):
     Improver agent for LangGraph.
     
     This agent is responsible for improving fuzz driver quality based on
-    coverage analysis recommendations. Unlike enhancer (which fixes compilation errors),
+    coverage analysis recommendations. Unlike fixer (which fixes compilation errors),
     improver rewrites the driver to increase code coverage.
     """
     

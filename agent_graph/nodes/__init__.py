@@ -6,7 +6,7 @@ This module provides LangGraph-compatible node functions using agent-specific me
 
 # LLM-based nodes with agent-specific messages
 from .prototyper_node import prototyper_node
-from .fixer_node import enhancer_node  # Note: file is fixer_node.py, function is enhancer_node
+from .fixer_node import fixer_node
 from .improver_node import improver_node
 from .crash_analyzer_node import crash_analyzer_node
 from .coverage_analyzer_node import coverage_analyzer_node
@@ -20,7 +20,7 @@ from .supervisor_node import supervisor_node, route_condition
 
 __all__ = [
     'prototyper_node',
-    'enhancer_node',
+    'fixer_node',
     'improver_node',
     'crash_analyzer_node',
     'coverage_analyzer_node',

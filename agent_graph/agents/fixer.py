@@ -412,7 +412,3 @@ class LangGraphFixer(LangGraphAgent):
             hint_lines.append("")
 
         return "\n".join(hint_lines)
-
-
-# Keep old name for backward compatibility
-LangGraphEnhancer = LangGraphFixer

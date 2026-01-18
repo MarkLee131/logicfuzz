@@ -2,7 +2,7 @@ Generate fuzz driver for this project: {PROJECT_NAME}
 
 API SEQUENCES (from static analysis):
 The following API call sequences have been validated by lifecycle analysis.
-Pick ONE sequence and implement a complete fuzz driver for it.
+Use these as reference, but PRIORITIZE Parser APIs for maximum fuzzing value.
 
 PROJECT ANALYSIS:
 {SRS_SPECIFICATION}
@@ -11,11 +11,12 @@ PROJECT ANALYSIS:
 {ADDITIONAL_CONTEXT}
 
 REQUIREMENTS:
-1. Pick ONE API sequence from the provided list
-2. Implement the COMPLETE sequence (all APIs in order)
-3. Use skeleton headers only (filtered, safe)
-4. Handle resource lifecycle: init -> use -> cleanup
-5. Match buffer sizes with length parameters (var-len relationships)
+1. **PRIORITY: Use PARSER APIs** (Parse, Read, Load, Decode) - they consume external input and have highest bug potential
+2. If Parser APIs exist, build your driver around them (even if not in provided sequences)
+3. If no Parser APIs, pick ONE sequence from the provided list
+4. Use skeleton headers only (filtered, safe)
+5. Handle resource lifecycle: init -> use -> cleanup
+6. Match buffer sizes with length parameters (var-len relationships)
 
 PARAMETER STRATEGY:
 

@@ -113,7 +113,7 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
     PHASE 1: COMPILATION (focus on getting code to compile)
     1. Function analysis -> Prototyper
     2. Prototyper -> Build
-    3. Build failed -> Enhancer (max 3 retries)
+    3. Build failed -> Fixer (max 3 retries)
     4. Still failing after 3 retries -> Regenerate with Prototyper (once)
     5. Compilation succeeds -> Switch to OPTIMIZATION phase
     
@@ -121,7 +121,7 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
     1. Execution -> Analyze results
     2. Crashes -> CrashAnalyzer -> ContextAnalyzer
     3. Low coverage -> CoverageAnalyzer
-    4. Based on analysis -> Enhancer for improvement
+    4. Based on analysis -> Fixer for improvement
     5. Multiple cycles until good coverage or max iterations
     
     Args:
@@ -159,17 +159,17 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
             
             logger.debug(f'Build failed, compilation_retry_count={compilation_retry_count}', trial=trial)
             
-            # Strategy: Try enhancer up to 3 times, then end
+            # Strategy: Try fixer up to 3 times, then end
             MAX_COMPILATION_RETRIES = 3
-            
+
             if compilation_retry_count < MAX_COMPILATION_RETRIES:
-                # Try to fix with enhancer
+                # Try to fix with fixer
                 logger.info(f'Compilation failed (attempt {compilation_retry_count + 1}/{MAX_COMPILATION_RETRIES}), '
-                           f'routing to enhancer', trial=trial)
-                return "enhancer"
+                           f'routing to fixer', trial=trial)
+                return "fixer"
             else:
-                # Enhancer retries exhausted - give up
-                logger.error(f'Compilation failed after {MAX_COMPILATION_RETRIES} enhancer retries. Ending workflow.', 
+                # Fixer retries exhausted - give up
+                logger.error(f'Compilation failed after {MAX_COMPILATION_RETRIES} fixer retries. Ending workflow.',
                             trial=trial)
                 return "END"
         
@@ -216,13 +216,13 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
                     logger.info('Found a feasible crash (true bug)!', trial=trial)
                     return "END"
                 else:
-                    # False positive, try to enhance the target based on recommendations
-                    logger.info('Crash is not feasible, enhancing target', trial=trial)
-                    return "enhancer"
-            
-            # Execution failed but not a crash, enhance the target
-            logger.debug('Execution failed (not a crash), enhancing target', trial=trial)
-            return "enhancer"
+                    # False positive, try to fix the target based on recommendations
+                    logger.info('Crash is not feasible, fixing target', trial=trial)
+                    return "fixer"
+
+            # Execution failed but not a crash, fix the target
+            logger.debug('Execution failed (not a crash), fixing target', trial=trial)
+            return "fixer"
         
         # Execution succeeded, check coverage results
         # 🔧 FIXED: Use line_coverage_diff as primary quality metric, not PC coverage_percent
@@ -315,7 +315,7 @@ def route_condition(state: FuzzingWorkflowState) -> str:
     # Map actions to node names
     action_to_node = {
         "prototyper": "prototyper",
-        "enhancer": "enhancer",
+        "fixer": "fixer",
         "improver": "improver",
         "build": "build",
         "execution": "execution",

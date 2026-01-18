@@ -761,6 +761,8 @@ def _heuristic_filter_sequences(
     # Common init/cleanup patterns
     init_patterns = {'create', 'new', 'init', 'open', 'alloc', 'start', 'begin'}
     cleanup_patterns = {'free', 'delete', 'destroy', 'close', 'cleanup', 'end', 'finish', 'release'}
+    # Parser patterns - these consume external input and have highest fuzzing value
+    parser_patterns = {'parse', 'read', 'load', 'decode', 'deserialize', 'unmarshal', 'from'}
 
     def score_sequence(seq: List[str]) -> float:
         """Score a sequence based on heuristics."""
@@ -771,6 +773,12 @@ def _heuristic_filter_sequences(
 
         first_api = seq[0].lower()
         last_api = seq[-1].lower()
+
+        # HIGH PRIORITY: Parser APIs - consume external input, highest fuzzing value
+        for api in seq:
+            api_lower = api.lower()
+            if any(p in api_lower for p in parser_patterns):
+                score += 20  # Significant bonus for parser APIs
 
         # Bonus for init-like start
         if seq[0] in inits:

@@ -189,7 +189,7 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     
     # Handle build failures gracefully - return to compilation phase for fixing
     if not run_result:
-        # Build failed - return state that triggers enhancer/fixer
+        # Build failed - return state that triggers fixer
         build_error_msg = "Build failed during execution phase"
         if build_result:
             # Try to extract build error details
