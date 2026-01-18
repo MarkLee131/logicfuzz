@@ -17,7 +17,7 @@ class LangGraphEnhancer(LangGraphAgent):
     
     def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
-        system_message = prompt_manager.get_system_prompt("enhancer")
+        system_message = prompt_manager.get_system_prompt("fixer")
         super().__init__(
             name="enhancer",
             llm=llm,
@@ -58,7 +58,7 @@ class LangGraphEnhancer(LangGraphAgent):
 
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
-            "enhancer",
+            "fixer",
             project_name=benchmark.get('project', 'unknown'),
             language=language,
             current_code=code_context,

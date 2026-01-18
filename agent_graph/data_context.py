@@ -521,31 +521,31 @@ class FuzzingContext:
         return cls(**data)
 
 
-def _extract_existing_fuzzer_headers(project_name: str, 
+def _extract_existing_fuzzer_headers(project_name: str,
                                      log: logging.Logger) -> Dict[str, List[str]]:
     """
     Extract headers from existing fuzzers for reference.
-    
+
     This is not critical data - if it fails, we just return empty.
     """
     from data_prep import introspector
     import re
-    
+
     result = {
         'standard_headers': [],
         'project_headers': []
     }
-    
+
     try:
         # Get all fuzzer files
         harness_data = introspector.query_introspector_for_harness_intrinsics(project_name)
         fuzzers = [item['source'] for item in harness_data if 'source' in item]
         if not fuzzers:
             return result
-        
+
         standard_headers = set()
         project_headers = set()
-        
+
         # Extract headers from first few fuzzers
         for fuzzer_path in fuzzers[:5]:
             try:
@@ -554,7 +554,7 @@ def _extract_existing_fuzzer_headers(project_name: str,
                 )
                 if not fuzzer_source:
                     continue
-                
+
                 # Extract #include statements from top of file
                 for line in fuzzer_source.split('\n')[:50]:
                     include_match = re.match(r'^\s*#include\s+[<"]([^>"]+)[>"]', line)
@@ -566,13 +566,13 @@ def _extract_existing_fuzzer_headers(project_name: str,
                             standard_headers.add(header)
             except Exception:
                 continue  # Skip this fuzzer if extraction fails
-        
+
         result['standard_headers'] = sorted(standard_headers)
         result['project_headers'] = sorted(project_headers)
-        
+
     except Exception as e:
         log.warning(f"Failed to extract existing fuzzer headers: {e}")
-    
+
     return result
 
 

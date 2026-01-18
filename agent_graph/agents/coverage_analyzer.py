@@ -1,11 +1,8 @@
 """
 LangGraphCoverageAnalyzer agent for LangGraph workflow.
 """
-from typing import Any, Dict, List, Optional, Tuple
 import argparse
-import os
-import re
-import json
+from typing import Any, Dict
 
 import logger
 from llm_toolkit.models import LLM
@@ -13,7 +10,7 @@ from agent_graph.state import FuzzingWorkflowState, add_coverage_attempt
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
 from agent_graph.prompt_loader import get_prompt_manager
-# NOTE: Agent message history removed (memory optimization)
+from agent_graph.tools import get_bash_tool
 
 
 class LangGraphCoverageAnalyzer(LangGraphAgent):
@@ -39,44 +36,7 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
     
     def _get_tool_definitions(self) -> list[dict]:
         """Define tools available to CoverageAnalyzer."""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "bash_execute",
-                    "description": (
-                        "Inspect coverage artifacts or source files by running a single bash command "
-                        "inside the benchmark container. Use it whenever you need ground-truth data "
-                        "from the filesystem (e.g., llvm-cov reports, compile logs, targeted greps). "
-                        "Avoid long-running pipelines and never chain commands with semicolons."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": (
-                                    "A single, self-contained bash command (<= 400 chars). Examples: "
-                                    "'llvm-cov show /out/fuzz -instr-profile=/out/default.profdata', "
-                                    "'grep -Rn \"TODO\" src/', "
-                                    "'cat /out/coverage.json'. Output is returned as "
-                                    "\"Command\", \"Return code\", \"STDOUT\", \"STDERR\" blocks."
-                                ),
-                                "minLength": 1,
-                                "maxLength": 400,
-                                "examples": [
-                                    "llvm-cov report /out/fuzz -instr-profile=/out/default.profdata",
-                                    "grep -Rn \"Foo::Parse\" src/",
-                                    "cat /out/build.log"
-                                ]
-                            }
-                        },
-                        "required": ["command"],
-                        "additionalProperties": False
-                    }
-                }
-            }
-        ]
+        return [get_bash_tool()]
     
     def _execute_tool(self, tool_call: dict) -> str:
         """Execute a tool call and return the result."""

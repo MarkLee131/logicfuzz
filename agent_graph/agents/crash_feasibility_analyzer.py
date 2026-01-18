@@ -15,6 +15,7 @@ from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
 from agent_graph.prompt_loader import get_prompt_manager
+from agent_graph.tools import get_all_crash_feasibility_tools
 
 
 class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
@@ -39,218 +40,24 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
         )
         self.inspect_tool = None
         self.fi_tool = None  # FuzzIntrospector tool
+        self.benchmark = None  # Store benchmark for FI tool initialization
         self.project_name = None
     
     def _get_tool_definitions(self) -> list[dict]:
         """
-        Define comprehensive FuzzIntrospector API tools for ContextAnalyzer.
-        
+        Define comprehensive FuzzIntrospector API tools for CrashFeasibilityAnalyzer.
+
         Provides 9 tools covering function analysis, types, headers, tests, and bash execution.
         """
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "bash_execute",
-                    "description": (
-                        "Read on-disk evidence from the project container with a single bash command. "
-                        "Use it for grepping call sites, viewing headers, or reading BUILD.gn. "
-                        "Avoid multi-command shells or long-running processes."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": (
-                                    "Single bash command (<= 400 chars). Include absolute paths when possible. "
-                                    "Examples: 'grep -Rn \"TargetFunc\" /src', 'cat /src/foo/api.h'. "
-                                    "The response echoes the command, return code, stdout, stderr."
-                                ),
-                                "minLength": 1,
-                                "maxLength": 400
-                            }
-                        },
-                        "required": ["command"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_function_implementation",
-                    "description": (
-                        "Retrieve the full source implementation of a function by name. "
-                        "Call this after you know the exact function identifier. "
-                        "Returns a C/C++ snippet bounded by ```c fences."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "function_name": {
-                                "type": "string",
-                                "description": "Exact function symbol (case-sensitive), e.g., 'sam_hrecs_remove_ref_altnames'"
-                            }
-                        },
-                        "required": ["function_name"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_function_signature",
-                    "description": (
-                        "Get the canonical signature (return type + name + parameters) for a function. "
-                        "Use this first when you only know the symbol name."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "function_name": {
-                                "type": "string",
-                                "description": "Function symbol to resolve (e.g., 'archive_read_new')"
-                            }
-                        },
-                        "required": ["function_name"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_sample_cross_references",
-                    "description": (
-                        "Return representative call sites for a function so you can trace callers. "
-                        "Best used after you already have the full signature to avoid collisions."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "function_signature": {
-                                "type": "string",
-                                "description": "Full signature from get_function_signature (e.g., 'void foo(int x)')"
-                            }
-                        },
-                        "required": ["function_signature"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_type_definitions",
-                    "description": (
-                        "List structs/enums/typedefs present in the project. "
-                        "Call sparingly—results are truncated to the first 20 definitions."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {},
-                        "required": [],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_headers_for_function",
-                    "description": (
-                        "Report which headers must be included to call a function. "
-                        "Useful for confirming whether the crash path could be exercised from public APIs."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "function_signature": {
-                                "type": "string",
-                                "description": "Full signature text for the target function"
-                            }
-                        },
-                        "required": ["function_signature"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_tests_for_functions",
-                    "description": (
-                        "Provide example test bodies that invoke the given functions. "
-                        "Use when you need real entry-point usage. Accepts 1-5 function names."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "function_names": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "minItems": 1,
-                                "maxItems": 5,
-                                "description": "List of symbols to search in tests (e.g., ['archive_read_new'])"
-                            }
-                        },
-                        "required": ["function_names"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_function_debug_types",
-                    "description": (
-                        "Return DWARF-derived parameter/return type info for a function. "
-                        "Call after gathering the signature when you need struct field-level detail."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "function_signature": {
-                                "type": "string",
-                                "description": "Full signature text, identical to what the debug DB stores"
-                            }
-                        },
-                        "required": ["function_signature"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_functions_by_return_type",
-                    "description": (
-                        "Enumerate functions that return the supplied type so you can find factories or builders."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "return_type": {
-                                "type": "string",
-                                "description": "Type string to search for (e.g., 'sam_hrecs_t *', 'int')"
-                            }
-                        },
-                        "required": ["return_type"],
-                        "additionalProperties": False
-                    }
-                }
-            }
-        ]
+        return get_all_crash_feasibility_tools()
     
-    def _init_fi_tool(self, project_name: str):
+    def _init_fi_tool(self):
         """Initialize FuzzIntrospector tool for the project."""
-        if self.fi_tool is None or self.project_name != project_name:
-            from data_prep.introspector import FuzzIntrospectorTool
-            logger.info(f"Initializing FuzzIntrospector for project: {project_name}", trial=self.trial)
-            self.fi_tool = FuzzIntrospectorTool(project_name)
-            self.project_name = project_name
+        if self.fi_tool is None and self.benchmark is not None:
+            from tool.fuzz_introspector_tool import FuzzIntrospectorTool
+            logger.info(f"Initializing FuzzIntrospector for project: {self.benchmark.project}", trial=self.trial)
+            self.fi_tool = FuzzIntrospectorTool(self.benchmark)
+            self.project_name = self.benchmark.project
     
     def _execute_tool(self, tool_call: dict) -> str:
         """Execute a tool call and return the result."""
@@ -511,12 +318,16 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
             logger.error('No crash_analysis in state', trial=self.trial)
             return {"errors": [{"message": "No crash analysis found"}]}
         
+        # Store benchmark for FI tool initialization
+        self.benchmark = benchmark
+        self.project_name = benchmark.project
+
         # Initialize inspect_tool for bash command execution
         self.inspect_tool = ProjectContainerTool(benchmark)
         self.inspect_tool.compile(extra_commands=' && rm -rf /out/* > /dev/null')
-        
+
         # Initialize FuzzIntrospector tool for API calls
-        self._init_fi_tool(benchmark.project)
+        self._init_fi_tool()
         
         # Get function requirements
         function_requirements = self._get_function_requirements(state)

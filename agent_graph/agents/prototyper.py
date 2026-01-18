@@ -44,6 +44,10 @@ class LangGraphPrototyper(LangGraphAgent):
         condition_info = context.get('condition_info', {})
         pattern_analysis = context.get('pattern_analysis', {})
         skeleton_drivers = context.get('skeleton_drivers', [])
+        existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
+
+        # Get target path info for include path calculation
+        target_path = benchmark.get('target_path', '')
 
         language = benchmark.get('language', 'C++')
         is_regeneration = state.get("compile_success") == False and state.get("fuzz_target_source", "") != ""
@@ -67,6 +71,7 @@ class LangGraphPrototyper(LangGraphAgent):
         condition_text = self._format_condition_info(condition_info)
         pattern_text = self._format_pattern_analysis(pattern_analysis)
         skeleton_text = self._format_skeleton_drivers(skeleton_drivers, limit=2)
+        include_path_context = self._format_include_path_context(target_path, existing_fuzzer_headers)
 
         try:
             base_prompt = prompt_manager.build_user_prompt(
@@ -79,6 +84,9 @@ class LangGraphPrototyper(LangGraphAgent):
                 skeleton_code=skeleton_code
             )
             base_prompt += f"""
+
+**Include Path Context (IMPORTANT for correct #include statements):**
+{include_path_context}
 
 **API Sequences (from Liberator grammar):**
 {api_sequences_text}
@@ -107,11 +115,15 @@ The driver should:
 4. Handle var-len relationships (buffer size matches length parameters)
 5. Use appropriate callback stubs if needed
 6. Clean up resources properly
+7. **Use correct include paths** - the fuzz target will be placed at the location shown above
 """
         except Exception as e:
             # Fallback: build prompt manually if template doesn't support project-level
             logger.warning(f"Prompt template may not support project-level mode: {e}", trial=self.trial)
             base_prompt = f"""Generate a fuzz target for project {benchmark.get('project', 'unknown')}.
+
+**Include Path Context (IMPORTANT for correct #include statements):**
+{include_path_context}
 
 **API Sequences (from Liberator grammar):**
 {api_sequences_text}
@@ -140,7 +152,8 @@ The driver should:
 {additional_context}
 
 Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above.
-Handle var-len relationships and use appropriate callback stubs if needed."""
+Handle var-len relationships and use appropriate callback stubs if needed.
+**Use correct include paths** - the fuzz target will be placed at the location shown above."""
 
         prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
         response = self.chat_llm(state, prompt)
@@ -331,7 +344,51 @@ Handle var-len relationships and use appropriate callback stubs if needed."""
             lines.append(f"\n  ... and {len(skeleton_drivers) - limit} more skeleton drivers")
 
         return "\n".join(lines)
-    
+
+    def _format_include_path_context(self, target_path: str, existing_fuzzer_headers: Dict[str, Any]) -> str:
+        """
+        Format include path context to help LLM generate correct #include statements.
+
+        Args:
+            target_path: Where the fuzz target will be placed (e.g., /src/cjson/fuzzing/cjson_read_fuzzer.c)
+            existing_fuzzer_headers: Headers extracted from existing fuzzers
+
+        Returns:
+            Formatted context string with target location and example includes
+        """
+        import os
+
+        lines = []
+
+        # 1. Show where the target will be placed
+        if target_path:
+            lines.append(f"  **Fuzz target location**: `{target_path}`")
+            target_dir = os.path.dirname(target_path)
+            lines.append(f"  **Target directory**: `{target_dir}`")
+            lines.append("")
+            lines.append("  When writing #include statements, remember:")
+            lines.append(f"  - Your code will be saved to `{target_path}`")
+            lines.append("  - Use relative paths from this location to reach header files")
+            lines.append("  - Example: if header is at `/src/project/header.h` and target is at `/src/project/fuzzing/fuzz.c`,")
+            lines.append("    use `#include \"../header.h\"` (go up one directory)")
+        else:
+            lines.append("  (target path not specified)")
+
+        # 2. Show existing fuzzer includes as reference
+        project_headers = existing_fuzzer_headers.get('project_headers', [])
+        if project_headers:
+            lines.append("")
+            lines.append("  **Reference includes from existing fuzzers** (COPY THESE EXACTLY):")
+            for header in project_headers[:5]:
+                lines.append(f"    #include \"{header}\"")
+            if len(project_headers) > 5:
+                lines.append(f"    ... and {len(project_headers) - 5} more")
+
+        if not lines:
+            return "  (no include path context available)"
+
+        return "\n".join(lines)
+
     def _validate_api_usage(self, code: str, project_name: str) -> str:
         """
         Validate generated code for internal/private API usage.

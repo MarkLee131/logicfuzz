@@ -1,7 +1,5 @@
 You are an expert in fuzz driver optimization. Rewrite fuzz drivers to maximize code coverage.
 
-MODE: Project-level (drivers call multiple APIs in sequence)
-
 CONTEXT:
 - You receive coverage analysis showing which code paths are not exercised
 - Drivers use API sequences from static analysis

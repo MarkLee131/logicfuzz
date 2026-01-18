@@ -13,6 +13,7 @@ from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
 from agent_graph.prompt_loader import get_prompt_manager
+from agent_graph.tools import get_all_crash_analyzer_tools
 
 
 class LangGraphCrashAnalyzer(LangGraphAgent):
@@ -324,87 +325,11 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
     def _get_tool_definitions(self) -> list[dict]:
         """
         Get tool definitions for OpenAI function calling.
-        
+
         Returns:
-            List of tool definitions in OpenAI format
+            List of tool definitions in OpenAI format (gdb_execute + bash_execute)
         """
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": "gdb_execute",
-                    "description": (
-                        "Run a single GDB command inside the already-launched screen session. "
-                        "Use it whenever you need runtime evidence: reproducing the crash, "
-                        "capturing a backtrace, switching frames, inspecting locals, or printing memory. "
-                        "Do not use it for file I/O or shell operations."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": (
-                                    "Exact GDB command (<= 200 chars). Typical calls: "
-                                    "'run -runs=1 {artifact}' to rerun the crash, "
-                                    "'bt' to dump stack, "
-                                    "'frame 4' and 'info locals', "
-                                    "'x/16gx $rsp', "
-                                    "'print *(foo*)bar'. "
-                                    "Response includes '(gdb) <command>' followed by stdout/stderr blocks."
-                                ),
-                                "minLength": 1,
-                                "maxLength": 200,
-                                "examples": [
-                                    "run -runs=1 /tmp/crash-42",
-                                    "bt",
-                                    "frame 3",
-                                    "info locals",
-                                    "x/32bx $rsp"
-                                ]
-                            }
-                        },
-                        "required": ["command"],
-                        "additionalProperties": False
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "bash_execute",
-                    "description": (
-                        "Run a single bash command inside the project container to read files, "
-                        "grep for patterns, or inspect build artifacts. Use this instead of GDB "
-                        "when you only need static context from disk."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "command": {
-                                "type": "string",
-                                "description": (
-                                    "Single command without pipes/semicolons if possible (<= 400 chars). "
-                                    "Examples: 'cat /src/foo.c', "
-                                    "'grep -Rn \"fuzz\" /src', "
-                                    "'readelf -s /out/target'. Output mirrors the format "
-                                    "returned by ProjectContainerTool (command, return code, stdout, stderr)."
-                                ),
-                                "minLength": 1,
-                                "maxLength": 400,
-                                "examples": [
-                                    "cat /src/foo.c",
-                                    "grep -Rn \"parse\" src/",
-                                    "readelf -s /out/target"
-                                ]
-                            }
-                        },
-                        "required": ["command"],
-                        "additionalProperties": False
-                    }
-                }
-            }
-        ]
+        return get_all_crash_analyzer_tools()
     
     def _execute_tool(self, tool_call: dict) -> str:
         """
