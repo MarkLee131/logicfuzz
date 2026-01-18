@@ -1,4 +1,4 @@
-logicfuzz
+# Build generator module
 """LLM Build Script Agent"""
 
 import argparse

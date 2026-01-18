@@ -1,4 +1,4 @@
-logicfuzz
+# Build generator module
 """File utils for target repository"""
 
 import os
