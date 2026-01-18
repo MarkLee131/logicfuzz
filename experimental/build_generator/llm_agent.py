@@ -13,6 +13,7 @@ from experimental.agent_compat import BaseAgent
 from experimental.build_generator import constants, file_utils, templates
 from llm_toolkit.models import LLM
 from llm_toolkit.prompts import Prompt
+import logger
 from results import BuildResult, Result
 from tool.base_tool import BaseTool
 from tool.container_tool import ProjectContainerTool
@@ -49,9 +50,13 @@ class BuildScriptAgent(BaseAgent):
 
   def _parse_tag(self, response: str, tag: str) -> str:
     """Parses the tag from LLM response."""
-    patterns = [rf'<{tag}>(.*?)</{tag}>', rf'```{tag}(.*?)```']
+    # Support: <tag>content</tag>, <tag><![CDATA[content]]></tag>, ```tag content```
+    patterns = [
+        rf'<{tag}><!\[CDATA\[(.*?)\]\]></{tag}>',  # CDATA format
+        rf'<{tag}>(.*?)</{tag}>',                   # Simple XML format
+        rf'```{tag}(.*?)```'                        # Markdown code block
+    ]
 
-    # Matches both xml and code style tags
     for pattern in patterns:
       match = re.search(pattern, response, re.DOTALL)
       if match:
@@ -61,10 +66,14 @@ class BuildScriptAgent(BaseAgent):
 
   def _parse_tags(self, response: str, tag: str) -> list[str]:
     """Parses the tags from LLM response."""
-    patterns = [rf'<{tag}>(.*?)</{tag}>', rf'```{tag}(.*?)```']
+    # Support: <tag>content</tag>, <tag><![CDATA[content]]></tag>, ```tag content```
+    patterns = [
+        rf'<{tag}><!\[CDATA\[(.*?)\]\]></{tag}>',  # CDATA format
+        rf'<{tag}>(.*?)</{tag}>',                   # Simple XML format
+        rf'```{tag}(.*?)```'                        # Markdown code block
+    ]
     found_matches = []
 
-    # Matches both xml and code style tags
     for pattern in patterns:
       matches = re.findall(pattern, response, re.DOTALL)
       found_matches.extend([content.strip() for content in matches])
@@ -196,7 +205,7 @@ class BuildScriptAgent(BaseAgent):
         retry = retry.replace('{FUZZER_NAME}', self.harness_name)
       else:
         retry = templates.LLM_RETRY.replace('{BASH_RESULT}', self.last_result)
-      prompt.add_problem(retry)
+      prompt.messages.append({"role": "user", "content": retry})
 
       # Store build result
       build_result.compiles = False
@@ -214,10 +223,28 @@ class BuildScriptAgent(BaseAgent):
 
     return None
 
+  def _container_handle_invalid_tool_usage(self,
+                                           tools: list[BaseTool],
+                                           cur_round: int,
+                                           response: str,
+                                           prompt: Prompt,
+                                           extra: str = '') -> Prompt:
+    """Formats a prompt to re-teach LLM how to use the |tools|."""
+    # pylint: disable=unused-argument
+    logger.warning('ROUND %02d Invalid response from LLM: %s',
+                   cur_round,
+                   response,
+                   trial=self.trial)
+    if not prompt.messages:
+      prompt.messages = [{"role": "user", "content": ""}]
+    prompt.messages.append({"role": "user", "content": templates.LLM_NO_VALID_TAG})
+    prompt.content = prompt.content + "\n" + templates.LLM_NO_VALID_TAG if prompt.content else templates.LLM_NO_VALID_TAG
+    return prompt
+
   def _container_tool_reaction(self, cur_round: int, response: str,
                                build_result: BuildResult) -> Optional[Prompt]:
     """Validates LLM conclusion or executes its command."""
-    prompt = self.llm.prompt_type()(None)
+    prompt = Prompt("")
 
     if response:
       prompt = self._container_handle_bash_commands(response, self.inspect_tool,
@@ -230,7 +257,7 @@ class BuildScriptAgent(BaseAgent):
       if prompt is None:
         return None
 
-    if not response or not prompt or not prompt.get():
+    if not response or self.invalid:
       prompt = self._container_handle_invalid_tool_usage([self.inspect_tool],
                                                          cur_round, response,
                                                          prompt)
@@ -355,7 +382,7 @@ class BuildSystemBuildScriptAgent(BuildScriptAgent):
     """Constructs initial prompt of the agent."""
     # pylint: disable=unused-argument
 
-    prompt = self.llm.prompt_type()(None)
+    prompt = Prompt("")
 
     # Extract build configuration files content
     build_files_str = []
@@ -385,8 +412,12 @@ class BuildSystemBuildScriptAgent(BuildScriptAgent):
     problem = problem.replace('{HEADERS}',
                               ','.join(headers[:SAMPLE_HEADERS_COUNT]))
 
-    prompt.add_priming(templates.LLM_PRIMING)
-    prompt.add_problem(problem)
+    # Build messages list directly (old add_priming/add_problem methods removed)
+    prompt.messages = [
+      {"role": "system", "content": templates.LLM_PRIMING},
+      {"role": "user", "content": problem}
+    ]
+    prompt.content = problem  # Keep for backward compatibility
 
     return prompt
 
@@ -422,7 +453,7 @@ class AutoDiscoveryBuildScriptAgent(BuildScriptAgent):
     """Constructs initial prompt of the agent."""
     # pylint: disable=unused-argument
 
-    prompt = self.llm.prompt_type()(None)
+    prompt = Prompt("")
 
     # Extract template Dockerfile content
     dockerfile_str = templates.CLEAN_OSS_FUZZ_DOCKER
@@ -441,32 +472,19 @@ class AutoDiscoveryBuildScriptAgent(BuildScriptAgent):
     problem = problem.replace('{FUZZING_FILE}',
                               self.harness_path.split('/')[-1])
 
-    prompt.add_priming(templates.LLM_PRIMING)
-    prompt.add_problem(problem)
-
-    return prompt
-
-  def _container_handle_invalid_tool_usage(self,
-                                           tools: list[BaseTool],
-                                           cur_round: int,
-                                           response: str,
-                                           prompt: Prompt,
-                                           extra: str = '') -> Prompt:
-    """Formats a prompt to re-teach LLM how to use the |tools|, appended with |extra| information"""
-    # pylint: disable=unused-argument
-
-    logger.warning('ROUND %02d Invalid response from LLM: %s',
-                   cur_round,
-                   response,
-                   trial=self.trial)
-    prompt.add_problem(templates.LLM_NO_VALID_TAG)
+    # Build messages list directly (old add_priming/add_problem methods removed)
+    prompt.messages = [
+      {"role": "system", "content": templates.LLM_PRIMING},
+      {"role": "user", "content": problem}
+    ]
+    prompt.content = problem  # Keep for backward compatibility
 
     return prompt
 
   def _container_tool_reaction(self, cur_round: int, response: str,
                                build_result: BuildResult) -> Optional[Prompt]:
     """Validates LLM conclusion or executes its command."""
-    prompt = self.llm.prompt_type()(None)
+    prompt = Prompt("")
 
     if response:
       prompt = self._container_handle_bash_commands(response, self.inspect_tool,
@@ -476,7 +494,7 @@ class AutoDiscoveryBuildScriptAgent(BuildScriptAgent):
         # Relay the command output back to LLM
         feedback = templates.LLM_DOCKER_FEEDBACK
         feedback = feedback.replace('{RESULT}', self.last_result)
-        prompt.add_problem(feedback)
+        prompt.messages.append({"role": "user", "content": feedback})
       else:
         # Check result and try building with the new builds script
         prompt = self._container_handle_conclusion(cur_round, response,
@@ -485,7 +503,7 @@ class AutoDiscoveryBuildScriptAgent(BuildScriptAgent):
         if prompt is None:
           return None
 
-    if not response or not prompt.get() or self.invalid:
+    if not response or self.invalid:
       prompt = self._container_handle_invalid_tool_usage([self.inspect_tool],
                                                          cur_round, response,
                                                          prompt)

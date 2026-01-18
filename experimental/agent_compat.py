@@ -1,9 +1,10 @@
 """Compatibility layer for BaseAgent used by build_generator and build_fixer."""
 import argparse
+import subprocess as sp
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-import logger
+import logging
 from llm_toolkit.models import LLM
 from tool.base_tool import BaseTool
 
@@ -35,7 +36,7 @@ class BaseAgent(ABC):
     self.args = args
     self.tools = tools or []
     self.name = name or self.__class__.__name__
-    self.logger = logger.get_logger()
+    self.logger = logging.getLogger(self.name)
     self.max_round = getattr(args, 'max_round', 10)
 
   def chat_llm(self, round_num: int, client: Any, prompt: Any, trial: int) -> str:
@@ -60,6 +61,24 @@ class BaseAgent(ABC):
     
     # Use LLM's chat_llm method
     return self.llm.chat_llm(client, messages)
+
+  def _format_bash_execution_result(
+      self,
+      process: sp.CompletedProcess,
+      previous_prompt: Optional[Any] = None) -> str:
+    """Formats a prompt based on bash execution result."""
+    if previous_prompt:
+      previous_prompt_text = str(previous_prompt)
+    else:
+      previous_prompt_text = ''
+    stdout = self.llm.truncate_prompt(process.stdout,
+                                      previous_prompt_text).strip()
+    stderr = self.llm.truncate_prompt(process.stderr,
+                                      stdout + previous_prompt_text).strip()
+    return (f'<bash>\n{process.args}\n</bash>\n'
+            f'<return code>\n{process.returncode}\n</return code>\n'
+            f'<stdout>\n{stdout}\n</stdout>\n'
+            f'<stderr>\n{stderr}\n</stderr>\n')
 
   @abstractmethod
   def execute(self, *args, **kwargs):
