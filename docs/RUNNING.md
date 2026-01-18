@@ -36,7 +36,7 @@ Run LogicFuzz on all functions defined in a benchmark YAML:
 
 ```bash
 python run_logicfuzz.py \
-  -y conti-benchmark/conti-cmp/libxml2.yaml \
+  -y conti-benchmark/curl.yaml \
   --model gpt-5
 ```
 
@@ -111,7 +111,7 @@ services:
       [
         "python3", "report/docker_run.py",
         "--local-introspector", "false",
-        "-y", "conti-benchmark/conti-cmp/cjson.yaml",
+        "-y", "conti-benchmark/curl.yaml",
         "--introspector-endpoint", "http://fuzz-introspector:8080/api",
         "--model", "gpt-5"
       ]
@@ -153,7 +153,7 @@ export DASHSCOPE_API_KEY="sk-..."
 export QWEN_BASE_URL="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"  # Singapore (default)
 
 python run_logicfuzz.py \
-  -y conti-benchmark/conti-cmp/libxml2.yaml \
+  -y conti-benchmark/curl.yaml \
   --model qwen3 \
   --num-samples 5
 ```

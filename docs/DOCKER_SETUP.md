@@ -69,17 +69,136 @@ Key facts:
 - Always point `--introspector-endpoint` (`-e`) to the external FI service started from a separate container (using the same `logicfuzz` image).
 - Add `--redirect-outs true` to tee stdout/stderr into `results/logs-from-run.txt`.
 
-## 4. Using the “data-dir” workflow (non OSS-Fuzz projects)
-When `/experiment/data-dir` exists (or `/experiment/data-dir.zip` is mounted), the container switches to `run_on_data_from_scratch()`:
+## 4. Using the "data-dir" workflow (non OSS-Fuzz projects)
 
-1. Mount your prepared directory (or drop a zipped archive) that contains:
-   - `oss-fuzz2/` &rarr; custom OSS-Fuzz clone with your projects.
-   - `fuzz_introspector_db/` &rarr; prebuilt FI database.
-2. Start a dedicated FI container using the same `data-dir` (see examples in section 5), so that the FI service exposes `http://127.0.0.1:8080/api`.
-3. The wrapper calls `run_logicfuzz.py -g ...` against that endpoint with the heuristics configured in `docker_run.py` (`far-reach-low-coverage, low-cov-with-fuzz-keyword, easy-params-far-reach`).
-4. Reports are labeled `<date>-<benchmark_label>` so you can host them from the generated HTML output if you choose to run `python -m report.web`.
+When `/experiment/data-dir` exists (or `/experiment/data-dir.zip` is mounted), the container automatically switches to `run_on_data_from_scratch()` mode. This is the recommended way to test custom projects that are **not in the upstream OSS-Fuzz repository**.
 
-Use this mode when onboarding internal/private projects that are not part of upstream OSS-Fuzz but already have collected coverage + build artifacts.
+### When to Use data-dir Workflow
+
+✅ Use this mode when:
+- Your project is not in the upstream OSS-Fuzz repository
+- You want to maintain your own OSS-Fuzz clone with custom projects
+- You need to use pre-built Fuzz Introspector databases
+- You're working with private/internal projects
+
+### Step 1: Prepare data-dir Structure
+
+Create a `data-dir` directory with the following structure:
+
+```bash
+mkdir -p data-dir/oss-fuzz2/projects
+mkdir -p data-dir/fuzz_introspector_db  # Optional but recommended
+```
+
+### Step 2: Set Up Your Custom OSS-Fuzz Clone
+
+```bash
+# Option A: Clone a fresh OSS-Fuzz and add your project
+git clone --depth 1 https://github.com/gejingquan/oss-fuzz data-dir/oss-fuzz2
+cp -r oss-fuzz/projects/my-project data-dir/oss-fuzz2/projects/
+
+# Option B: Use your existing OSS-Fuzz clone
+cp -r /path/to/your/oss-fuzz data-dir/oss-fuzz2
+```
+
+Your `data-dir` should contain:
+- `oss-fuzz2/` &rarr; custom OSS-Fuzz clone with your projects
+- `fuzz_introspector_db/` &rarr; prebuilt FI database (optional)
+
+### Step 3: Mount data-dir and Run
+
+```bash
+# Mount data-dir when running LogicFuzz container
+docker run --rm \
+  --privileged \
+  --network host \
+  --env-file logicfuzz.env \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":/experiment \
+  -v "$PWD/data-dir":/experiment/data-dir \
+  -w /experiment \
+  logicfuzz \
+  python run_logicfuzz.py \
+    -y conti-benchmark/my-project.yaml \
+    --model gpt-5 \
+    -e http://127.0.0.1:8080/api
+```
+
+### Step 4: Start Fuzz Introspector with data-dir
+
+Start a dedicated FI container using the same `data-dir`:
+
+```bash
+docker run --rm -p 8080:8080 \
+  -v "$PWD/data-dir":/opt/logicfuzz/data-dir \
+  logicfuzz-introspector \
+    --source data-dir \
+    --data-dir data-dir
+```
+
+The FI service will expose `http://127.0.0.1:8080/api`.
+
+### How It Works
+
+1. When `/experiment/data-dir` is detected, LogicFuzz automatically:
+   - Sets `OSS_FUZZ_DATA_DIR` environment variable to `/experiment/data-dir/oss-fuzz2`
+   - Switches to `run_on_data_from_scratch()` mode
+   - Discovers all projects in `data-dir/oss-fuzz2/projects/`
+
+2. The wrapper calls `run_logicfuzz.py -g ...` against the FI endpoint with heuristics:
+   - `far-reach-low-coverage`
+   - `low-cov-with-fuzz-keyword`
+   - `easy-params-far-reach`
+
+3. Reports are labeled `<date>-<benchmark_label>` and can be visualized with `python -m report.web`
+
+### Alternative: Using CLI with Environment Variable
+
+You can also use the data-dir workflow without Docker:
+
+```bash
+# Set environment variable
+export OSS_FUZZ_DATA_DIR=/path/to/logic-fuzz/data-dir/oss-fuzz2
+
+# Run LogicFuzz normally
+python run_logicfuzz.py \
+  -y conti-benchmark/my-project.yaml \
+  --model gpt-5 \
+  -e http://127.0.0.1:8080/api
+```
+
+### Complete Example
+
+```bash
+# 1. Prepare data-dir
+mkdir -p data-dir/oss-fuzz2/projects
+git clone --depth 1 https://github.com/gejingquan/oss-fuzz data-dir/oss-fuzz2
+cp -r oss-fuzz/projects/my-project data-dir/oss-fuzz2/projects/
+
+# 2. Start FI server
+docker run -d --name fi-server -p 8080:8080 \
+  -v "$PWD/data-dir":/opt/logicfuzz/data-dir \
+  logicfuzz-introspector \
+    --source data-dir --data-dir data-dir
+
+# 3. Run LogicFuzz
+docker run --rm --privileged --network host \
+  --env-file logicfuzz.env \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":/experiment \
+  -v "$PWD/data-dir":/experiment/data-dir \
+  -w /experiment \
+  logicfuzz \
+  python run_logicfuzz.py \
+    -y conti-benchmark/my-project.yaml \
+    --model gpt-5 \
+    -e http://127.0.0.1:8080/api
+
+# 4. Cleanup
+docker stop fi-server && docker rm fi-server
+```
+
+For more details on setting up custom projects, see [`docs/NEW_PROJECT_SETUP.md`](NEW_PROJECT_SETUP.md#method-4-using-data-dir-workflow-recommended-for-custom-projects).
 
 ## 5. Verifying outputs
 - Experiment artifacts: `results/output-*/` (on host because of the bind mount).
