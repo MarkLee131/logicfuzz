@@ -182,7 +182,7 @@ class LangGraphFixer(LangGraphAgent):
         cur_round = 0
         max_round = 3  # Fixer should be quick - max 3 rounds
         total_tool_calls = 0
-        MAX_TOOL_CALLS = 3  # Limit tool calls for fixer
+        MAX_TOOL_CALLS = 10  # Limit tool calls for fixer
         all_responses = []
 
         try:
@@ -220,10 +220,21 @@ class LangGraphFixer(LangGraphAgent):
 
                 # Execute tool calls if any
                 if tool_calls:
-                    for tool_call in tool_calls:
+                    for i, tool_call in enumerate(tool_calls):
                         if total_tool_calls >= MAX_TOOL_CALLS:
+                            # Add placeholder responses for skipped tool calls
+                            # OpenAI API requires every tool_call_id to have a response
+                            for skipped_call in tool_calls[i:]:
+                                skipped_id = skipped_call.get("id", "")
+                                if not skipped_id and "function" in skipped_call:
+                                    skipped_id = skipped_call.get("id", "")
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": skipped_id,
+                                    "content": "[Skipped: tool call limit reached]"
+                                })
                             logger.warning(
-                                f"Max tool calls ({MAX_TOOL_CALLS}) reached",
+                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, {len(tool_calls) - i} calls skipped",
                                 trial=self.trial
                             )
                             break

@@ -27,6 +27,29 @@ class FuzzIntrospectorTool(base_tool.BaseTool):
     self.project_name = benchmark.project
     self.project_functions = None
 
+  def tutorial(self) -> str:
+    """Returns a tutorial/guide for using the FuzzIntrospector tool."""
+    return """FuzzIntrospector Tool Tutorial
+==============================
+This tool provides access to Fuzz Introspector APIs for analyzing project functions.
+
+Available Commands (via execute method):
+- get_function_signature <function_name>: Get the full signature of a function
+- get_function_source <function_signature>: Get source code of a function
+- get_sample_xrefs <function_signature>: Get sample cross-references showing usage
+- get_all_functions: Get all functions in the project
+- get_optimal_targets: Get recommended fuzzing targets
+- get_headers: Get all header files in the project
+- summarize <function_name>: Get comprehensive function summary
+
+Direct Method Access:
+- get_function_implementation(project_name, function_name): Get function source by name
+- get_sample_cross_references(function_signature): Get usage examples
+- get_type_definitions(): Get struct/enum/typedef definitions
+- get_headers_for_function(function_signature): Get required headers
+- get_tests_for_functions([function_names]): Find tests that use functions
+"""
+
   # ==================== Function Information APIs ====================
   
   def get_target_function(self, function_name: str) -> Dict[str, Any]:

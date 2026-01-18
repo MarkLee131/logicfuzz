@@ -165,6 +165,9 @@ class ExtendedFuzzer:
                   self.snapshots_dir, self.coverage_dir]:
             d.mkdir(exist_ok=True)
 
+        # Create seed corpus if empty (LibFuzzer needs at least one input)
+        self._ensure_seed_corpus()
+
         self.snapshots: List[FuzzingSnapshot] = []
         self.crash_infos: List[CrashInfo] = []
         self.seen_crash_hashes: set = set()
@@ -172,6 +175,28 @@ class ExtendedFuzzer:
         self.generated_project_name = None
         self.initial_coverage: Optional[CoverageData] = None
         self.prev_coverage: Optional[CoverageData] = None
+        self._fuzzer_log_handle = None
+
+    def _ensure_seed_corpus(self):
+        """Ensure corpus has at least one seed file for LibFuzzer to start."""
+        corpus_files = list(self.corpus_dir.glob("*"))
+        if not corpus_files:
+            # Create minimal seed inputs for common fuzzing scenarios
+            seeds = [
+                b"",                    # Empty input
+                b"{}",                  # Empty JSON object
+                b"[]",                  # Empty JSON array
+                b'{"a":1}',             # Simple JSON
+                b"null",                # JSON null
+                b'"test"',              # JSON string
+                b"123",                 # JSON number
+                b"true",                # JSON boolean
+            ]
+            for i, seed in enumerate(seeds):
+                seed_file = self.corpus_dir / f"seed_{i:03d}"
+                with open(seed_file, 'wb') as f:
+                    f.write(seed)
+            logger.info(f"Created {len(seeds)} seed corpus files in {self.corpus_dir}")
 
     def _read_fuzz_target(self) -> str:
         """Read fuzz target source code."""
@@ -224,10 +249,15 @@ class ExtendedFuzzer:
             else:
                 # Try to infer from the file
                 target_name = self.fuzz_target_path.stem
-                if target_name.startswith(('01.', '02.')):
+                # Handle files like "01.fuzz_target" or "02.fuzz_target"
+                # stem gives "01" or "02", which are not good fuzzer names
+                if target_name.isdigit() or target_name in ('01', '02', '03', '04', '05'):
+                    target_name = f"{self.project}_fuzzer"
+                elif target_name.startswith(('01.', '02.', '03.')):
                     target_name = f"{self.project}_fuzzer"
 
             self.target_name = target_name
+            logger.info(f"Using target name: {self.target_name}")
 
             # Update Dockerfile to copy our target
             dockerfile = dst_project / "Dockerfile"
@@ -284,27 +314,25 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
             check_result = subprocess.run(check_cmd, capture_output=True, text=True)
             has_cached_image = bool(check_result.stdout.strip())
 
+            # Always build the project image to include our custom Dockerfile changes
+            # (COPY of our fuzz target). Even with a cached base image, we need to rebuild
+            # to pick up the modified Dockerfile.
             if has_cached_image:
-                logger.info(f"Found cached base image for {self.project}, using it...")
-                # Tag the cached image for our project
-                tag_cmd = [
-                    "docker", "tag", base_image_name,
-                    f"gcr.io/oss-fuzz/{self.generated_project_name}"
-                ]
-                subprocess.run(tag_cmd, capture_output=True, text=True)
+                logger.info(f"Found cached base image for {self.project}, rebuilding with custom fuzz target...")
             else:
                 logger.info(f"No cached image found, building from scratch (this may take 15-30 minutes)...")
-                # Build the project image
-                build_cmd = [
-                    "python3", str(helper_py),
-                    "build_image", self.generated_project_name
-                ]
-                logger.info(f"Running: {' '.join(build_cmd)}")
-                # Increase timeout for full image build (30 minutes)
-                result = subprocess.run(build_cmd, capture_output=True, text=True, timeout=1800)
-                if result.returncode != 0:
-                    logger.error(f"Failed to build image: {result.stderr[:1000]}")
-                    return False
+
+            # Build the project image (required to pick up Dockerfile changes with our fuzz target)
+            build_cmd = [
+                "python3", str(helper_py),
+                "build_image", self.generated_project_name
+            ]
+            logger.info(f"Running: {' '.join(build_cmd)}")
+            # Increase timeout for full image build (30 minutes)
+            result = subprocess.run(build_cmd, capture_output=True, text=True, timeout=1800)
+            if result.returncode != 0:
+                logger.error(f"Failed to build image: {result.stderr[:1000]}")
+                return False
 
             # Build fuzzers with the specified sanitizer
             build_fuzzers_cmd = [
@@ -360,30 +388,52 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
         oss_fuzz_dir = self._get_oss_fuzz_dir()
         helper_py = oss_fuzz_dir / "infra" / "helper.py"
 
+        # Use absolute paths for corpus and crash dirs
+        corpus_dir_abs = str(self.corpus_dir.resolve())
+        crashes_dir_abs = str(self.crashes_dir.resolve())
+
         run_cmd = [
             "python3", str(helper_py),
             "run_fuzzer",
-            "--corpus-dir", str(self.corpus_dir),
+            "--corpus-dir", corpus_dir_abs,
             self.generated_project_name,
             self.target_name,
             "--",
             f"-max_total_time={self.duration}",
             "-print_final_stats=1",
             "-detect_leaks=0",
-            f"-artifact_prefix={self.crashes_dir}/",
+            f"-artifact_prefix={crashes_dir_abs}/",
         ]
 
         logger.info(f"Starting fuzzer: {' '.join(run_cmd)}")
+        logger.info(f"Corpus directory: {corpus_dir_abs} (files: {len(list(self.corpus_dir.glob('*')))})")
 
         log_file = self.logs_dir / "fuzzer.log"
-        with open(log_file, 'w') as f:
-            proc = subprocess.Popen(
-                run_cmd,
-                stdout=f,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=str(oss_fuzz_dir)
-            )
+        log_file_handle = open(log_file, 'w')
+
+        proc = subprocess.Popen(
+            run_cmd,
+            stdout=log_file_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=str(oss_fuzz_dir)
+        )
+
+        # Store file handle for cleanup
+        self._fuzzer_log_handle = log_file_handle
+
+        # Give fuzzer time to start and check for immediate failure
+        time.sleep(2)
+        if proc.poll() is not None:
+            # Fuzzer exited immediately, read log for error
+            log_file_handle.flush()
+            try:
+                with open(log_file, 'r') as f:
+                    error_log = f.read()
+                logger.error(f"Fuzzer exited immediately with code {proc.returncode}")
+                logger.error(f"Fuzzer log:\n{error_log[:2000]}")
+            except Exception as e:
+                logger.error(f"Could not read fuzzer log: {e}")
 
         return proc
 
@@ -433,11 +483,20 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
             oss_fuzz_dir = self._get_oss_fuzz_dir()
             helper_py = oss_fuzz_dir / "infra" / "helper.py"
 
+            # Use absolute path for corpus dir
+            corpus_dir_abs = str(self.corpus_dir.resolve())
+
+            # Check if corpus directory has files
+            corpus_files = list(self.corpus_dir.glob("*"))
+            if not corpus_files:
+                logger.warning("Corpus directory is empty, skipping coverage measurement")
+                return None
+
             # Run coverage measurement
             coverage_cmd = [
                 "python3", str(helper_py),
                 "coverage",
-                "--corpus-dir", str(self.corpus_dir),
+                "--corpus-dir", corpus_dir_abs,
                 "--fuzz-target", self.target_name,
                 "--no-serve",
                 "--port", "",
@@ -677,7 +736,14 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
         return snapshot
 
     def _cleanup(self):
-        """Cleanup generated project."""
+        """Cleanup generated project and resources."""
+        # Close fuzzer log file handle if open
+        if hasattr(self, '_fuzzer_log_handle') and self._fuzzer_log_handle:
+            try:
+                self._fuzzer_log_handle.close()
+            except Exception:
+                pass
+
         if self.generated_project_name:
             try:
                 oss_fuzz_dir = self._get_oss_fuzz_dir()

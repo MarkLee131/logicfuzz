@@ -382,7 +382,7 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
         max_round = self.args.max_round
         all_responses = []  # 收集所有响应，用于提取session_memory更新
         total_tool_calls = 0
-        MAX_TOOL_CALLS = 5  # Limit total tool calls to control token usage
+        MAX_TOOL_CALLS = 10  # Limit total tool calls to control token usage
 
         # Get tool definitions
         tools = self._get_tool_definitions()
@@ -436,11 +436,19 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent):
                 
                 # Execute any tool calls
                 if tool_calls:
-                    for tool_call in tool_calls:
+                    for i, tool_call in enumerate(tool_calls):
                         # Check tool call limit
                         if total_tool_calls >= MAX_TOOL_CALLS:
+                            # Add placeholder responses for skipped tool calls
+                            # OpenAI API requires every tool_call_id to have a response
+                            for skipped_call in tool_calls[i:]:
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": skipped_call.get("id", ""),
+                                    "content": "[Skipped: tool call limit reached]"
+                                })
                             logger.warning(
-                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, skipping remaining",
+                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, {len(tool_calls) - i} calls skipped",
                                 trial=self.trial
                             )
                             break

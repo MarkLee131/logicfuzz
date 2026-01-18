@@ -221,7 +221,7 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
         cur_round = 0
         max_round = self.args.max_round
         total_tool_calls = 0
-        MAX_TOOL_CALLS = 5  # Limit total tool calls to control token usage
+        MAX_TOOL_CALLS = 10  # Limit total tool calls to control token usage
 
         try:
             while cur_round < max_round:
@@ -256,11 +256,19 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                 
                 # Execute tool calls if any
                 if tool_calls:
-                    for tool_call in tool_calls:
+                    for i, tool_call in enumerate(tool_calls):
                         # Check tool call limit
                         if total_tool_calls >= MAX_TOOL_CALLS:
+                            # Add placeholder responses for skipped tool calls
+                            # OpenAI API requires every tool_call_id to have a response
+                            for skipped_call in tool_calls[i:]:
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": skipped_call.get("id", ""),
+                                    "content": "[Skipped: tool call limit reached]"
+                                })
                             logger.warning(
-                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, skipping remaining",
+                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, {len(tool_calls) - i} calls skipped",
                                 trial=self.trial
                             )
                             break
@@ -271,12 +279,12 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
                         # Add tool result to messages
                         messages.append({
                             "role": "tool",
-                            "tool_call_id": tool_call["id"],
+                            "tool_call_id": tool_call.get("id", ""),
                             "content": result
                         })
 
                         # Mark GDB as used if gdb_execute was called
-                        if tool_call["name"] == "gdb_execute":
+                        if tool_call.get("name") == "gdb_execute":
                             self.gdb_tool_used = True
 
                     # Check if we hit the limit - request conclusion
