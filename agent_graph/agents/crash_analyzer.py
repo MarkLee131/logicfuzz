@@ -338,12 +338,32 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
 
         Args:
             tool_call: Dictionary with 'name', 'arguments', and 'id' keys
+                       OR OpenAI format with 'function' nested structure
 
         Returns:
             Tool execution result as string (truncated to 10k chars)
         """
-        tool_name = tool_call["name"]
-        arguments = tool_call["arguments"]
+        import json
+
+        # Handle both direct and nested function structure
+        # OpenAI format: {"function": {"name": "...", "arguments": "..."}}
+        # Some formats: {"name": "...", "arguments": {...}}
+        if "function" in tool_call:
+            func_info = tool_call["function"]
+            tool_name = func_info.get("name", "")
+            arguments_raw = func_info.get("arguments", {})
+        else:
+            tool_name = tool_call.get("name", "")
+            arguments_raw = tool_call.get("arguments", {})
+
+        # Arguments may be a JSON string or a dict
+        if isinstance(arguments_raw, str):
+            try:
+                arguments = json.loads(arguments_raw)
+            except json.JSONDecodeError:
+                arguments = {}
+        else:
+            arguments = arguments_raw
 
         try:
             if tool_name == "gdb_execute":

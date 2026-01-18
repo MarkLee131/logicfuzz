@@ -40,18 +40,37 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
     
     def _execute_tool(self, tool_call: dict) -> str:
         """Execute a tool call and return the result."""
-        tool_name = tool_call.get("name", "")
-        arguments = tool_call.get("arguments", {})
-        
+        import json
+
+        # Handle both direct and nested function structure
+        # OpenAI format: {"function": {"name": "...", "arguments": "..."}}
+        # Some formats: {"name": "...", "arguments": {...}}
+        if "function" in tool_call:
+            func_info = tool_call["function"]
+            tool_name = func_info.get("name", "")
+            arguments_raw = func_info.get("arguments", {})
+        else:
+            tool_name = tool_call.get("name", "")
+            arguments_raw = tool_call.get("arguments", {})
+
+        # Arguments may be a JSON string or a dict
+        if isinstance(arguments_raw, str):
+            try:
+                arguments = json.loads(arguments_raw)
+            except json.JSONDecodeError:
+                arguments = {}
+        else:
+            arguments = arguments_raw
+
         if tool_name == "bash_execute":
             command = arguments.get("command", "")
             if not command:
                 return "Error: bash_execute requires 'command' argument"
-            
+
             # Execute via ProjectContainerTool
             result = self.inspect_tool.execute(command)
             return self._format_bash_result(result)
-        
+
         return f"Error: Unknown tool '{tool_name}'"
     
     def _format_bash_result(self, process) -> str:
