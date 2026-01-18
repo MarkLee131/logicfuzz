@@ -78,7 +78,15 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
     
     def _has_conclusion(self, text: str) -> bool:
         """Check if the response contains a conclusion."""
-        # Look for conclusion markers in the text
+        import re
+        text_lower = text.lower()
+
+        # Check for XML format: <conclusion>true/false</conclusion>
+        xml_pattern = r'<conclusion>\s*(true|false)\s*</conclusion>'
+        if re.search(xml_pattern, text_lower):
+            return True
+
+        # Check for text format markers
         conclusion_markers = [
             "CONCLUSION:",
             "Final conclusion:",
@@ -87,65 +95,90 @@ class LangGraphCoverageAnalyzer(LangGraphAgent):
             "improve_required:",
             "Coverage improvement required:",
         ]
-        text_lower = text.lower()
         return any(marker.lower() in text_lower for marker in conclusion_markers)
     
     def _parse_conclusion(self, text: str) -> dict:
         """
         Parse conclusion from LLM text response.
-        
-        Expected format (flexible):
-        CONCLUSION: true/false
-        INSIGHTS: ...
-        SUGGESTIONS: ...
+
+        Supports both formats:
+        1. XML: <conclusion>true/false</conclusion>, <insights>...</insights>, <suggestions>...</suggestions>
+        2. Text: CONCLUSION: true/false, INSIGHTS: ..., SUGGESTIONS: ...
         """
+        import re
+
         result = {
             'improve_required': False,
             'insights': '',
             'suggestions': '',
             'analyzed': True
         }
-        
-        # Simple parsing - look for key sections
+
+        text_lower = text.lower()
+
+        # Try XML format first: <conclusion>true/false</conclusion>
+        conclusion_match = re.search(r'<conclusion>\s*(true|false)\s*</conclusion>', text_lower)
+        if conclusion_match:
+            result['improve_required'] = conclusion_match.group(1) == 'true'
+
+            # Extract insights from XML (case-insensitive)
+            insights_match = re.search(r'<insights?>(.*?)</insights?>', text, re.DOTALL | re.IGNORECASE)
+            if insights_match:
+                result['insights'] = insights_match.group(1).strip()
+
+            # Extract suggestions from XML (case-insensitive)
+            suggestions_match = re.search(r'<suggestions?>(.*?)</suggestions?>', text, re.DOTALL | re.IGNORECASE)
+            if suggestions_match:
+                result['suggestions'] = suggestions_match.group(1).strip()
+
+            # If no XML insights/suggestions, try to extract from text
+            if not result['insights'] and not result['suggestions']:
+                # Fall through to text parsing for insights/suggestions
+                pass
+            else:
+                return result
+
+        # Text format parsing
         lines = text.split('\n')
         current_section = None
         content_buffer = []
-        
+
         for line in lines:
             line_lower = line.lower().strip()
-            
+
             # Check for section headers
             if 'conclusion:' in line_lower or 'improve_required:' in line_lower:
                 if content_buffer and current_section:
                     result[current_section] = '\n'.join(content_buffer).strip()
                     content_buffer = []
-                
-                # Extract true/false value
-                if 'true' in line_lower:
-                    result['improve_required'] = True
-                elif 'false' in line_lower:
-                    result['improve_required'] = False
+
+                # Extract true/false value (only if not already set by XML)
+                if not conclusion_match:
+                    if 'true' in line_lower:
+                        result['improve_required'] = True
+                    elif 'false' in line_lower:
+                        result['improve_required'] = False
                 current_section = None
-                
-            elif 'insights:' in line_lower:
+
+            elif 'insights:' in line_lower or '## insights' in line_lower:
                 if content_buffer and current_section:
                     result[current_section] = '\n'.join(content_buffer).strip()
                     content_buffer = []
                 current_section = 'insights'
-                
-            elif 'suggestions:' in line_lower or 'recommendations:' in line_lower:
+
+            elif 'suggestions:' in line_lower or 'recommendations:' in line_lower or '## suggestions' in line_lower or '## improvement' in line_lower:
                 if content_buffer and current_section:
                     result[current_section] = '\n'.join(content_buffer).strip()
                     content_buffer = []
                 current_section = 'suggestions'
-                
+
             elif current_section:
                 content_buffer.append(line)
-        
+
         # Save last section
         if content_buffer and current_section:
             result[current_section] = '\n'.join(content_buffer).strip()
-        
+
         return result
     
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
