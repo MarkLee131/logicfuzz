@@ -63,20 +63,22 @@ TOOLS AVAILABLE:
 
 Must use gdb_execute before conclusion.
 
-OUTPUT FORMAT:
+OUTPUT FORMAT (MUST follow exactly):
 
-True/False
+Conclusion: True/False
 
 Root Cause: [what, where, why, evidence]
 
-Determination: [driver/project bug, why, evidence]
+Determination: [driver bug / project bug, why, evidence]
 
-Severity: [Critical/High/Medium/Low/Info - if project bug]
+Severity: [Critical/High/Medium/Low/Info - if project bug, N/A if driver bug]
 
 Recommendations: [how to fix]
 
 CRITICAL REQUIREMENTS:
-First word MUST be "True" or "False"
-Keep each section brief (2-3 sentences max)
-Provide specific evidence (file:line, code quotes)
-Use gdb_execute before final output
+- First line MUST be exactly "Conclusion: True" or "Conclusion: False"
+  - True = project bug (true positive)
+  - False = driver bug (false positive)
+- Keep each section brief (2-3 sentences max)
+- Provide specific evidence (file:line, code quotes)
+- Use gdb_execute before final output

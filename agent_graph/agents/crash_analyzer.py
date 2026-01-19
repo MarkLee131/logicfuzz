@@ -477,20 +477,36 @@ class LangGraphCrashAnalyzer(LangGraphAgent):
         import re
         
         # Try to extract True/False determination
+        # Normalize content for matching
+        content_lower = content.lower()
+
+        # Pattern 1: "Conclusion: True/False" (preferred format)
         conclusion_match = re.search(
             r'conclusion:\s*(true|false)',
-            content,
-            re.IGNORECASE
+            content_lower
         )
-        
+        # Pattern 2: "Content: True/False" (legacy format)
+        content_match = re.search(
+            r'content:\s*(true|false)',
+            content_lower
+        )
+        # Pattern 3: First word is True/False
+        first_word_match = re.match(
+            r'^\s*(true|false)\b',
+            content_lower
+        )
+
         if conclusion_match:
-            conclusion = conclusion_match.group(1).lower()
-            crash_result['true_bug'] = (conclusion == 'true')
+            crash_result['true_bug'] = (conclusion_match.group(1) == 'true')
+        elif content_match:
+            crash_result['true_bug'] = (content_match.group(1) == 'true')
+        elif first_word_match:
+            crash_result['true_bug'] = (first_word_match.group(1) == 'true')
         else:
-            # Try alternative patterns
-            if re.search(r'true bug', content, re.IGNORECASE):
+            # Try alternative patterns in text
+            if re.search(r'true bug|project bug', content_lower):
                 crash_result['true_bug'] = True
-            elif re.search(r'false positive', content, re.IGNORECASE):
+            elif re.search(r'false positive|driver bug', content_lower):
                 crash_result['true_bug'] = False
             else:
                 logger.warning(
