@@ -27,12 +27,12 @@ def prototyper_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
     
     # Extract config – rely on agreed contract instead of swallowing KeyError
     configurable = config.get("configurable", {})
-    llm = configurable["llm"]
+    model_name = configurable["model_name"]
     args = configurable["args"]
-    
+
     # Create agent
     agent = LangGraphPrototyper(
-        llm=llm,
+        model_name=model_name,
         trial=trial,
         args=args
     )

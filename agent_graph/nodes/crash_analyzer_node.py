@@ -27,12 +27,12 @@ def crash_analyzer_node(state: FuzzingWorkflowState, config: RunnableConfig) -> 
     
     # Extract config
     configurable = config.get("configurable", {})
-    llm = configurable["llm"]
+    model_name = configurable["model_name"]
     args = configurable["args"]
-    
+
     # Create agent
     agent = LangGraphCrashAnalyzer(
-        llm=llm,
+        model_name=model_name,
         trial=trial,
         args=args
     )

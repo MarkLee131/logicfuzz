@@ -34,12 +34,12 @@ def improver_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[s
     
     # Extract config according to agreed contract
     configurable = config.get("configurable", {})
-    llm = configurable["llm"]
+    model_name = configurable["model_name"]
     args = configurable["args"]
-    
+
     # Create agent
     agent = LangGraphImprover(
-        llm=llm,
+        model_name=model_name,
         trial=trial,
         args=args
     )

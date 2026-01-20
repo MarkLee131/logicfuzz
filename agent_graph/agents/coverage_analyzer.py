@@ -7,7 +7,6 @@ from typing import Any, Dict, List
 
 import logger
 from langchain_core.tools import BaseTool
-from llm_toolkit.models import LLM
 from agent_graph.state import FuzzingWorkflowState, add_coverage_attempt
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.tool_calling_mixin import ToolCallingMixin
@@ -18,18 +17,18 @@ from agent_graph.tools.langchain_adapters import BashExecuteTool
 class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
     """Coverage analyzer using ReAct-style tool calling."""
 
-    def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
+    def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
         super().__init__(
             name="coverage_analyzer",
-            llm=llm,
+            model_name=model_name,
             trial=trial,
             args=args,
             system_message=prompt_manager.get_system_prompt("coverage_analyzer")
         )
         self.inspect_tool = None
 
-    def get_langchain_tools(self) -> List[BaseTool]:
+    def get_tools(self) -> List[BaseTool]:
         return [BashExecuteTool(executor=self._execute_bash)]
 
     def parse_response(self, content: str) -> Dict[str, Any]:

@@ -10,7 +10,6 @@ from typing import Any, Dict, List
 
 import logger
 from langchain_core.tools import BaseTool
-from llm_toolkit.models import LLM
 from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.tool_calling_mixin import ToolCallingMixin
@@ -36,14 +35,14 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
     Provides 9 tools for deep project analysis: functions, types, headers, tests, etc.
     """
 
-    def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
+    def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         # Load system prompt from file
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt("crash_feasibility_analyzer")
 
         super().__init__(
             name="crash_feasibility_analyzer",
-            llm=llm,
+            model_name=model_name,
             trial=trial,
             args=args,
             system_message=system_message
@@ -57,7 +56,7 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
     # ToolCallingMixin Implementation
     # =========================================================================
 
-    def get_langchain_tools(self) -> List[BaseTool]:
+    def get_tools(self) -> List[BaseTool]:
         """Return LangChain tools for crash feasibility analysis."""
         return [
             BashExecuteTool(executor=self._execute_bash),

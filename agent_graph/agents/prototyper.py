@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional
 import argparse
 
 import logger
-from llm_toolkit.models import LLM
 from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
@@ -15,13 +14,13 @@ from data_prep.api_classifier import classify_project_apis, APIRole
 
 class LangGraphPrototyper(LangGraphAgent):
     """Prototyper agent for LangGraph."""
-    
-    def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
+
+    def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt("prototyper")
         super().__init__(
             name="prototyper",
-            llm=llm,
+            model_name=model_name,
             trial=trial,
             args=args,
             system_message=system_message

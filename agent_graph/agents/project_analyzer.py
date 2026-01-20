@@ -14,7 +14,6 @@ import argparse
 import json
 
 import logger
-from llm_toolkit.models import LLM
 from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
 from agent_graph.agents.utils import parse_tag
@@ -39,10 +38,10 @@ Your job is to analyze a project's APIs and determine:
 You think step-by-step and provide clear, actionable insights.
 """
 
-    def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
+    def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         super().__init__(
             name="project_analyzer",
-            llm=llm,
+            model_name=model_name,
             trial=trial,
             args=args,
             system_message=self.SYSTEM_MESSAGE

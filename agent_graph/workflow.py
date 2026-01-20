@@ -18,35 +18,34 @@ from agent_graph.nodes import (
 )
 from experiment.benchmark import Benchmark
 from experiment.workdir import WorkDirs
-from llm_toolkit.models import LLM
 from agent_graph.memory import create_memory_checkpointer
 
 class FuzzingWorkflow:
     """
     Main fuzzing workflow class that manages the LangGraph execution.
-    
+
     This class provides a high-level interface for running the fuzzing workflow
     with proper configuration and state management.
     """
-    
-    def __init__(self, llm: LLM, args: argparse.Namespace, 
+
+    def __init__(self, model_name: str, args: argparse.Namespace,
                  use_checkpointer: bool = True, shared_data: dict = None):
         """
         Initialize the fuzzing workflow.
-        
+
         Args:
-            llm: LLM instance for agents
+            model_name: Name of the LLM model (e.g., "gpt-4o", "deepseek-chat")
             args: Command line arguments
             use_checkpointer: Whether to use memory checkpointer for persistence
             shared_data: Pre-fetched shared data (optional, for optimization)
                         Contains: source_code, api_context, header_info, existing_fuzzer_headers
         """
-        self.llm = llm
+        self.model_name = model_name
         self.args = args
         self.workflow_graph = None
-        self.config = ConfigAdapter.create_config(llm, args)
+        self.config = ConfigAdapter.create_config(model_name, args)
         self.shared_data = shared_data  # Store for agents to access
-        
+
         # Create memory checkpointer for conversation persistence
         self.checkpointer = create_memory_checkpointer() if use_checkpointer else None
     
@@ -127,7 +126,7 @@ class FuzzingWorkflow:
         # Use thread_id for conversation persistence
         config = {
             "configurable": {
-                "llm": self.llm,
+                "model_name": self.model_name,
                 "args": self.args,
                 "thread_id": f"{benchmark.id}_trial_{trial}",
                 "shared_data": self.shared_data  # Pass shared data to agents

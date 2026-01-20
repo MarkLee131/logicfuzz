@@ -27,12 +27,12 @@ def fixer_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
 
     # Extract config
     configurable = config.get("configurable", {})
-    llm = configurable["llm"]
+    model_name = configurable["model_name"]
     args = configurable["args"]
 
     # Create agent
     agent = LangGraphFixer(
-        llm=llm,
+        model_name=model_name,
         trial=trial,
         args=args
     )

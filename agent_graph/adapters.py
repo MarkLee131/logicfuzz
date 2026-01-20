@@ -9,7 +9,6 @@ from typing import Dict, Any, List, Optional
 
 from experiment.workdir import WorkDirs
 from experiment.benchmark import Benchmark
-from llm_toolkit.models import LLM
 from results import (
     Result, BuildResult, RunResult, AnalysisResult, 
     FunctionAnalysisResult, CrashResult, CoverageResult
@@ -375,26 +374,26 @@ class AgentNodeWrapper:
 class ConfigAdapter:
     """
     Adapter for managing configuration objects needed by original agents.
-    
-    This handles the conversion between LangGraph's config system and 
+
+    This handles the conversion between LangGraph's config system and
     the original agents' parameter expectations.
     """
-    
+
     @staticmethod
-    def create_config(llm: LLM, args: argparse.Namespace, **kwargs) -> Dict[str, Any]:
+    def create_config(model_name: str, args: argparse.Namespace, **kwargs) -> Dict[str, Any]:
         """
         Create a configuration dictionary for LangGraph nodes.
-        
+
         Args:
-            llm: The LLM instance
+            model_name: Name of the LLM model (e.g., "gpt-4o", "deepseek-chat")
             args: Command line arguments
             **kwargs: Additional configuration parameters
-            
+
         Returns:
             Configuration dictionary for LangGraph
         """
         config = {
-            "llm": llm,
+            "model_name": model_name,
             "args": args,
             **kwargs
         }

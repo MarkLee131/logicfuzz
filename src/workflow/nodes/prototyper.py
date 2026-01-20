@@ -1,0 +1,53 @@
+"""
+Prototyper node for LangGraph workflow.
+
+Uses agent-specific messages for clean context management.
+"""
+from typing import Dict, Any
+
+from langchain_core.runnables import RunnableConfig
+import logger
+from src.workflow.state import FuzzingWorkflowState
+from src.agents import LangGraphPrototyper
+
+
+def prototyper_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str, Any]:
+    """
+    Generate fuzz target code.
+    
+    Args:
+        state: Current workflow state
+        config: Configuration containing LLM, args, etc.
+    
+    Returns:
+        State updates
+    """
+    trial = state["trial"]
+    logger.info('Starting Prototyper node', trial=trial)
+    
+    # Extract config – rely on agreed contract instead of swallowing KeyError
+    configurable = config.get("configurable", {})
+    model_name = configurable["model_name"]
+    args = configurable["args"]
+
+    # Create agent
+    agent = LangGraphPrototyper(
+        model_name=model_name,
+        trial=trial,
+        args=args
+    )
+    
+    # Execute agent
+    result = agent.execute(state)
+    
+    # Debug: log what we're returning
+    if "fuzz_target_source" in result:
+        code_length = len(result["fuzz_target_source"])
+        logger.info(
+            f'Prototyper node completed, returning fuzz_target_source (length={code_length})',
+            trial=trial
+        )
+    else:
+        logger.warning('Prototyper node completed but no fuzz_target_source in result', trial=trial)
+    
+    return result

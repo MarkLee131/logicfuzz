@@ -21,7 +21,7 @@ from experiment import oss_fuzz_checkout, textcov
 from experiment.benchmark import Benchmark
 from experiment.fuzz_target_error import SemanticCheckResult
 from experiment.workdir import WorkDirs
-from llm_toolkit.models import DefaultModel
+from llm_toolkit.models import DEFAULT_MODEL
 
 # Simplified TriageResult constants (replacing removed llm_toolkit.crash_triager)
 class TriageResult:
@@ -162,7 +162,7 @@ class BuilderRunner:
                benchmark: Benchmark,
                work_dirs: WorkDirs,
                run_timeout: int = RUN_TIMEOUT,
-               fixer_model_name: str = DefaultModel.name):
+               fixer_model_name: str = DEFAULT_MODEL):
     self.benchmark = benchmark
     self.work_dirs = work_dirs
     self.run_timeout = run_timeout
