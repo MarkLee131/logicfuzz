@@ -1,0 +1,4 @@
+"language": "c++"
+"project": "c-ares"
+"target_name": "ares_parse_reply_fuzzer"
+"target_path": "/src/c-ares/test/ares-test-fuzz.c"

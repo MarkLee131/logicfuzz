@@ -1,4 +1,0 @@
-"language": "c"
-"project": "igraph"
-"target_name": "read_graphdb"
-"target_path": "/src/igraph/fuzzing/read_graphdb.cpp"

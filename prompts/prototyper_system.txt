@@ -22,25 +22,37 @@ CALLBACK POLICY:
 - Use minimal stub functions
 - Don't implement complex callback logic
 
+ERROR HANDLING POLICY:
+- Check return values of APIs that can fail
+- For APIs that transfer resource ownership (Add*, Insert*, Replace*, Set*):
+  - Success: ownership transferred, do NOT free the passed resource
+  - Failure: caller retains ownership, MUST free to avoid leaks
+- Pattern: `if (!api_call(container, resource)) free_resource(resource);`
+
 COVERAGE OPTIMIZATION (CRITICAL):
-Think about how to maximize code coverage from the FIRST generation:
+Maximize code coverage by calling MORE APIs, not by generating complex inputs.
 
-1. STRUCTURED INPUT GENERATION:
-   - For parsers (JSON, XML, config): Generate VALID structured input, NOT random strings
-   - Random strings usually fail parsing early → low coverage
-   - Use fuzz-derived choices to build valid structure
+1. API DIVERSITY (HIGHEST PRIORITY):
+   - Call ALL APIs in the provided sequence - don't skip any
+   - Each API call exercises different code paths in the library
+   - More APIs called = more coverage, even with simple inputs
 
-2. BRANCH COVERAGE:
-   - For lookup/search APIs: Pre-populate data to hit BOTH "found" and "not found" paths
-   - Empty containers only exercise "not found" → miss 50% of branches
+2. INPUT GENERATION (KEEP SIMPLE):
+   - For parsers: Generate VALID but SIMPLE structured input
+   - Avoid writing elaborate input generators (wastes code budget)
+   - A few lines of input construction is enough to pass parsing
+   - Use FuzzedDataProvider directly when possible
 
-3. EDGE CASES:
-   - Include escape sequences (\n, \t, \\, unicode) for string processing
-   - Sometimes generate malformed input to test error handling paths
+3. BRANCH COVERAGE:
+   - For lookup/search APIs: Hit BOTH "found" and "not found" paths
+   - For flag parameters: Vary between true/false, 0/1
+   - For mode parameters: Try different enum values
 
-4. DEPTH AND VARIETY:
-   - Use nested structures for recursive parsing
-   - Vary input modes (strict/lenient, with/without options)
+4. CODE BUDGET:
+   - Input generation: MAX 30% of code
+   - API calls and operations: MIN 50% of code
+   - Setup/cleanup: ~20% of code
+   - If you're writing >50 lines of input generation, STOP and simplify
 
 OUTPUT FORMAT:
 - Use markdown: **Conclusion:** for analysis, ```cpp for code

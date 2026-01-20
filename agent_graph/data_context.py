@@ -59,9 +59,13 @@ class FuzzingContext:
 
     # === Skeleton drivers (P0: SkeletonGenerator integration) ===
     skeleton_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Pre-generated skeletons
-    
+
+    # === Synthesized drivers (CBFactory program synthesis) ===
+    synthesized_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Full drivers from CBFactory
+
     # === Metadata ===
     preparation_time: float = 0.0
+    use_synthesis: bool = False  # Whether synthesis mode is enabled
     
     def __post_init__(self):
         """Validate required data is not empty."""
@@ -195,7 +199,9 @@ class FuzzingContext:
                 num_sequences: int = 24,
                 driver_size: int = 5,
                 filter_top_k: int = 12,
-                use_cache: bool = True) -> 'FuzzingContext':
+                use_cache: bool = True,
+                use_synthesis: bool = False,
+                num_synthesis_drivers: int = 5) -> 'FuzzingContext':
         """
         Prepare all fuzzing data using Liberator project-level modeling.
 
@@ -215,6 +221,8 @@ class FuzzingContext:
             driver_size: Target length of each API sequence
             filter_top_k: Top-K sequences to keep after LLM filtering
             use_cache: Whether to try loading from cache first (default: True)
+            use_synthesis: Whether to use CBFactory for program synthesis (default: False)
+            num_synthesis_drivers: Number of drivers to synthesize with CBFactory (default: 5)
 
         Returns:
             Fully initialized FuzzingContext with project-level API data
@@ -320,20 +328,28 @@ class FuzzingContext:
         log.debug('  4/10 Generating grammar and API sequences...')
         try:
             grammar = generator.build_grammar()
-            
-            # Use driver generation to obtain grammar-respecting API sequences
-            # NOTE: driver generation already leverages Grammar + Factory
-            raw_drivers = generator.generate_drivers(
-                num_drivers=max(num_sequences, 1),
-                driver_size=max(driver_size, 1),
-                policy="only_type"
-            )
-            api_sequences = _extract_sequences_from_drivers(
-                raw_drivers,
-                max_len=driver_size
+
+            # OLD: Use OTFactory driver generation to obtain grammar-respecting API sequences
+            # This has been replaced by direct grammar expansion to avoid OTFactory overhead
+            # raw_drivers = generator.generate_drivers(
+            #     num_drivers=max(num_sequences, 1),
+            #     driver_size=max(driver_size, 1),
+            #     policy="only_type"
+            # )
+            # api_sequences = _extract_sequences_from_drivers(
+            #     raw_drivers,
+            #     max_len=driver_size
+            # )
+
+            # NEW: Generate API sequences directly from grammar expansion
+            api_sequences = _generate_sequences_from_grammar(
+                grammar=grammar,
+                num_sequences=num_sequences,
+                max_len=driver_size,
+                log=log
             )
             api_sequences = _dedup_sequences(api_sequences)
-            
+
             grammar_info = {
                 'num_symbols': grammar.num_symbols(),
                 'start_symbol': str(grammar.get_start_symbol()),
@@ -584,6 +600,28 @@ class FuzzingContext:
             log.warning(f"Skeleton generation failed (non-critical): {e}")
             skeleton_drivers = []
 
+        # === Step 11: Generate synthesized drivers with CBFactory (if use_synthesis=True) ===
+        synthesized_drivers = []
+        if use_synthesis:
+            log.info(f'  11/11 Generating synthesized drivers with CBFactory (use_synthesis=True)...')
+            try:
+                synthesized_drivers = _generate_cbfactory_drivers(
+                    generator=generator,
+                    num_drivers=num_synthesis_drivers,
+                    driver_size=driver_size,
+                    project_name=project_name,
+                    log=log
+                )
+                if synthesized_drivers:
+                    log.info(f'   ✅ Generated {len(synthesized_drivers)} synthesized drivers with CBFactory')
+                else:
+                    log.warning('   ⚠️ No drivers synthesized (CBFactory returned empty)')
+            except Exception as e:
+                log.warning(f"CBFactory synthesis failed: {e}")
+                import traceback
+                log.debug(traceback.format_exc())
+                synthesized_drivers = []
+
         # === Create context ===
         elapsed = time.time() - start_time
         log.info(f'✅ Project-level fuzzing context prepared in {elapsed:.2f}s')
@@ -622,7 +660,9 @@ class FuzzingContext:
             condition_info=condition_info,
             pattern_analysis=pattern_analysis,
             skeleton_drivers=skeleton_drivers,
-            preparation_time=elapsed
+            synthesized_drivers=synthesized_drivers,
+            preparation_time=elapsed,
+            use_synthesis=use_synthesis
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -638,7 +678,9 @@ class FuzzingContext:
             'condition_info': self.condition_info,
             'pattern_analysis': self.pattern_analysis,
             'skeleton_drivers': self.skeleton_drivers,
+            'synthesized_drivers': self.synthesized_drivers,
             'preparation_time': self.preparation_time,
+            'use_synthesis': self.use_synthesis,
         }
     
     @classmethod
@@ -1080,6 +1122,211 @@ def _parse_selected_indices(response_text: str, max_len: int) -> List[int]:
     # Fallback: regex search
     match = re.findall(r'\d+', response_text)
     return [int(i) for i in match if 0 <= int(i) < max_len][:max_len]
+
+
+def _generate_cbfactory_drivers(
+    generator,
+    num_drivers: int,
+    driver_size: int,
+    project_name: str,
+    log: logging.Logger
+) -> List[Dict[str, Any]]:
+    """
+    Generate full fuzz drivers using CBFactory (traditional program synthesis).
+
+    This uses Liberator's constraint-based synthesis to generate complete,
+    compilable fuzz driver code without LLM involvement.
+
+    Args:
+        generator: ProjectDriverGenerator instance (must have condition_manager initialized)
+        num_drivers: Number of drivers to generate
+        driver_size: Number of API calls per driver
+        project_name: Project name (for logging)
+        log: Logger instance
+
+    Returns:
+        List of synthesized driver dictionaries containing:
+        - name: Driver name
+        - code: Complete C/C++ driver source code
+        - api_sequence: List of API names called
+        - synthesis_info: Metadata about the synthesis process
+    """
+    from liberator_adapter.driver.factory.constraint_based import CBFactory
+    from liberator_adapter.backend.libfuzz import LFBackendDriver
+    from liberator_adapter.bias import Bias
+    import tempfile
+    import os
+
+    synthesized_drivers = []
+
+    # Check prerequisites
+    if not generator.condition_manager:
+        log.warning("ConditionManager not available - CBFactory requires LLVM extraction")
+        log.warning("Ensure LLVM extraction is enabled (not --disable-llvm-extraction)")
+        return []
+
+    if not generator.function_conditions:
+        log.warning("FunctionConditions not available - CBFactory requires conditions.json")
+        return []
+
+    if not generator.all_apis:
+        log.warning("No APIs available for synthesis")
+        return []
+
+    if not generator.dependency_graph:
+        log.warning("Dependency graph not available")
+        return []
+
+    log.info(f"   🔧 CBFactory synthesis: {num_drivers} drivers, {driver_size} API calls each")
+
+    try:
+        # Filter APIs to those with conditions
+        available_conditions = set(generator.function_conditions.fun_cond_set.keys())
+        filtered_apis = {api for api in generator.all_apis if api.function_name in available_conditions}
+
+        if not filtered_apis:
+            log.warning("No APIs have conditions available")
+            return []
+
+        log.debug(f"   Using {len(filtered_apis)}/{len(generator.all_apis)} APIs with conditions")
+
+        # Create CBFactory
+        bias = Bias()
+        factory = CBFactory(
+            api_list=filtered_apis,
+            driver_size=driver_size,
+            dgraph=generator.dependency_graph,
+            conditions=generator.function_conditions,
+            bias=bias,
+            enable_z3_validation=False
+        )
+
+        # Create temporary directory for rendering drivers
+        with tempfile.TemporaryDirectory() as tmpdir:
+            seeds_dir = os.path.join(tmpdir, 'seeds')
+            os.makedirs(seeds_dir, exist_ok=True)
+
+            # Setup backend for rendering (if headers available)
+            backend = None
+            if hasattr(generator, 'headers_dir') and generator.headers_dir:
+                try:
+                    backend = LFBackendDriver(
+                        working_dir=tmpdir,
+                        seeds_dir=seeds_dir,
+                        num_seeds=1,
+                        headers_dir=generator.headers_dir,
+                        public_headers=getattr(generator, 'public_headers_path', None)
+                    )
+                except Exception as e:
+                    log.debug(f"Backend setup failed (will use fallback): {e}")
+
+            # Generate drivers
+            for i in range(num_drivers):
+                try:
+                    driver_ir = factory.create_random_driver()
+
+                    # Extract API sequence
+                    api_sequence = []
+                    for stmt in driver_ir.statements:
+                        if hasattr(stmt, 'function_name'):
+                            api_sequence.append(stmt.function_name)
+
+                    # Render to C code
+                    if backend:
+                        driver_name = f"fuzz_driver_{i}"
+                        try:
+                            backend.emit_driver(driver_ir, driver_name)
+                            driver_path = os.path.join(tmpdir, f"{driver_name}.cc")
+                            if os.path.exists(driver_path):
+                                with open(driver_path, 'r') as f:
+                                    driver_code = f.read()
+                            else:
+                                driver_code = _render_driver_fallback(driver_ir, project_name)
+                        except Exception as e:
+                            log.debug(f"Backend render failed: {e}, using fallback")
+                            driver_code = _render_driver_fallback(driver_ir, project_name)
+                    else:
+                        driver_code = _render_driver_fallback(driver_ir, project_name)
+
+                    synthesized_drivers.append({
+                        'name': f'cbfactory_driver_{i}',
+                        'code': driver_code,
+                        'api_sequence': api_sequence,
+                        'synthesis_info': {
+                            'method': 'CBFactory',
+                            'driver_size': driver_size,
+                            'num_apis_used': len(api_sequence),
+                            'has_cleanup': hasattr(driver_ir, 'clean_up') and bool(driver_ir.clean_up),
+                        }
+                    })
+                    log.debug(f"   Generated driver {i+1}/{num_drivers}: {len(api_sequence)} API calls")
+
+                except Exception as e:
+                    log.warning(f"   Failed to generate driver {i+1}: {e}")
+                    continue
+
+    except Exception as e:
+        log.error(f"CBFactory synthesis failed: {e}")
+        import traceback
+        log.debug(traceback.format_exc())
+
+    return synthesized_drivers
+
+
+def _render_driver_fallback(driver_ir, project_name: str) -> str:
+    """
+    Fallback driver rendering when LFBackendDriver is not available.
+
+    Generates a basic LibFuzzer harness from the Driver IR.
+    """
+    lines = []
+
+    # Standard includes
+    lines.append("#include <stdint.h>")
+    lines.append("#include <stddef.h>")
+    lines.append("#include <string.h>")
+    lines.append("#include <stdlib.h>")
+    lines.append("")
+
+    # Try to add project headers (simplified)
+    lines.append(f"// TODO: Add {project_name} headers")
+    lines.append("")
+
+    # Stub functions (if any)
+    if hasattr(driver_ir, 'stub_functions') and driver_ir.stub_functions:
+        lines.append("// === Stub Functions ===")
+        for func in driver_ir.stub_functions:
+            if hasattr(func, 'stub_code') and func.stub_code:
+                lines.append(func.stub_code)
+            else:
+                lines.append(f"// Stub for {func}")
+        lines.append("")
+
+    # Main fuzzer function
+    lines.append("extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
+    lines.append("    if (size == 0) return 0;")
+    lines.append("")
+
+    # Render statements
+    for stmt in driver_ir.statements:
+        stmt_str = str(stmt)
+        # Indent and add
+        for line in stmt_str.split('\n'):
+            if line.strip():
+                lines.append(f"    {line}")
+
+    lines.append("")
+
+    # Cleanup section
+    if hasattr(driver_ir, 'clean_up') and driver_ir.clean_up:
+        lines.append("    // Cleanup")
+        for cleanup_stmt in driver_ir.clean_up:
+            lines.append(f"    {cleanup_stmt}")
+
+    lines.append("    return 0;")
+    lines.append("}")
+
+    return "\n".join(lines)
 
 
 def save_intermediate_results(

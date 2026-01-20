@@ -1,0 +1,4 @@
+"language": "c++"
+"project": "libvpx"
+"target_name": "vpx_dec_fuzzer_vp8"
+"target_path": "/src/libvpx/examples/vpx_dec_fuzzer.cc"

@@ -1,5 +1,0 @@
-"functions":
-"language": "c++"
-"project": "resiprocate"
-"target_name": "fuzzUtil"
-"target_path": "/src/resiprocate/rutil/test/fuzzUtil.cxx"

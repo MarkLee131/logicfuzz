@@ -1,0 +1,4 @@
+"language": "c++"
+"project": "zlib"
+"target_name": "checksum_fuzzer"
+"target_path": "/src/checksum_fuzzer.c"

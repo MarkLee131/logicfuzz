@@ -1,0 +1,4 @@
+"language": "c"
+"project": "libucl"
+"target_name": "ucl_add_string_fuzzer"
+"target_path": "/src/libucl/tests/fuzzers/ucl_add_string_fuzzer.c"

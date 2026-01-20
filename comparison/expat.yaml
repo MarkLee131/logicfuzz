@@ -1,4 +1,0 @@
-"language": "c++"
-"project": "expat"
-"target_name": "xml_parsebuffer_fuzzer_UTF-8"
-"target_path": "/src/expat/expat/fuzz/xml_parsebuffer_fuzzer.c"

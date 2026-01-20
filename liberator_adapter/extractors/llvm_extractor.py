@@ -70,7 +70,9 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         # This way generated bitcode doesn't use opaque pointers, compatible with host extractor
         # Note: Disable sanitizers, as clang-14 doesn't have corresponding runtime libraries
         # We only need bitcode for static analysis, don't need sanitizers
+        # Note: libc++-14-dev is pre-installed in logicfuzz/base-builder-llvm14 image
         logger.info("Compiling project with wllvm using clang-14...")
+
         compile_cmd = (
             'export LLVM_COMPILER=clang && '
             'export LLVM_COMPILER_PATH=/usr/lib/llvm-14/bin && '
@@ -81,35 +83,80 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             'export FUZZING_ENGINE=none && '
             'compile 2>&1'
         )
-        compile_result = self.container.execute(compile_cmd)
+        # Use longer timeout for compile (10 minutes) - complex projects like curl need more time
+        compile_result = self.container.execute(compile_cmd, timeout=600)
         # Note: compile script may fail when building fuzz targets (libc++ issues)
         # but the library itself might have been built successfully
         if compile_result.returncode != 0:
             logger.warning(f"Compile script returned error, but library may still exist")
-            logger.debug(f"Compile output: {compile_result.stdout}")
+            # Show last 50 lines of compile output for debugging
+            output_lines = compile_result.stdout.strip().split('\n')
+            last_lines = '\n'.join(output_lines[-50:]) if len(output_lines) > 50 else compile_result.stdout
+            logger.info(f"Compile output (last 50 lines):\n{last_lines}")
 
         # Find library file and extract bitcode
         if not output_bc:
-            find_result = self.container.execute(
-                f'find {source_dir} -name "*.a" -type f | head -1'
-            )
-            if find_result.returncode == 0 and find_result.stdout.strip():
-                lib_file = find_result.stdout.strip()
+            lib_file = None
+            project_name = self.benchmark.project
+
+            # Strategy 1: Search for project-named library (e.g., libcurl.a, libcjson.a)
+            # This is the most reliable approach
+            project_lib_patterns = [
+                f'lib{project_name}*.a',
+                f'lib{project_name}*.so',
+                f'{project_name}*.a',
+                f'{project_name}*.so',
+            ]
+            search_dirs = [f'/src/{project_name}', source_dir, '/src', '/out', '/work']
+
+            for search_dir in search_dirs:
+                for pattern in project_lib_patterns:
+                    find_result = self.container.execute(
+                        f'find {search_dir} -name "{pattern}" -type f 2>/dev/null | head -1'
+                    )
+                    if find_result.returncode == 0 and find_result.stdout.strip():
+                        lib_file = find_result.stdout.strip()
+                        logger.info(f"Found project library: {lib_file}")
+                        break
+                if lib_file:
+                    break
+
+            # Strategy 2: Fall back to any .a file in project-specific directory only
+            if not lib_file:
+                project_dir = f'/src/{project_name}'
+                find_result = self.container.execute(
+                    f'find {project_dir} -name "*.a" -type f 2>/dev/null | head -1'
+                )
+                if find_result.returncode == 0 and find_result.stdout.strip():
+                    lib_file = find_result.stdout.strip()
+                    logger.info(f"Found library in project dir: {lib_file}")
+
+            if lib_file:
                 output_bc = f'{lib_file}.bc'
             else:
-                raise RuntimeError("Could not find library file to extract bitcode from")
+                raise RuntimeError(
+                    f"Could not find library file for project '{project_name}'. "
+                    f"Searched for lib{project_name}*.a/.so in {search_dirs}"
+                )
 
         # Use extract-bc to extract bitcode (using clang-14)
+        logger.info(f"Extracting bitcode from: {output_bc.replace('.bc', '')}")
         extract_cmd = (
             'export LLVM_COMPILER=clang && '
             'export LLVM_COMPILER_PATH=/usr/lib/llvm-14/bin && '
-            f'extract-bc -b "{output_bc.replace(".bc", "")}"'
+            f'extract-bc -b "{output_bc.replace(".bc", "")}" 2>&1'
         )
         result = self.container.execute(extract_cmd)
         if result.returncode != 0:
-            raise RuntimeError(f"Failed to extract bitcode: {result.stderr}")
+            logger.error(f"extract-bc failed. Output: {result.stdout}")
+            raise RuntimeError(f"Failed to extract bitcode: {result.stdout or result.stderr}")
 
         if not self._file_exists_in_container(output_bc):
+            logger.error(f"Expected bitcode file not created: {output_bc}")
+            # List what files exist in the directory
+            dir_path = os.path.dirname(output_bc)
+            ls_result = self.container.execute(f'ls -la {dir_path}/*.bc 2>/dev/null || echo "No .bc files found"')
+            logger.info(f"BC files in directory: {ls_result.stdout}")
             raise RuntimeError(f"Output file {output_bc} was not created")
 
         logger.info(f"Successfully created bitcode file: {output_bc}")
@@ -128,7 +175,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             "Run 'docker/build_custom_image.sh' to build the custom image, "
             "and use --enable-llvm-extraction flag to use it."
         )
-    
+
     def _ensure_wllvm_installed(self):
         """Ensure wllvm is installed"""
         result = self.container.execute('which wllvm extract-bc')

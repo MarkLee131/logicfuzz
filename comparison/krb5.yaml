@@ -1,4 +1,0 @@
-"language": "c"
-"project": "krb5"
-"target_name": "fuzz_ndr"
-"target_path": "/src/krb5/src/tests/fuzzing/fuzz_ndr.c"

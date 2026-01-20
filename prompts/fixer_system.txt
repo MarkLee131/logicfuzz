@@ -23,6 +23,15 @@ FORBIDDEN:
 - Changing target function name
 - Forward declarations for linker workarounds
 
+RUNTIME ERROR FIXES:
+When fixing crashes or sanitizer reports (not compilation errors):
+- Memory leaks from ownership misuse: Check return values of Add*/Insert*/Replace*/Set* APIs
+  - Success: ownership transferred, do NOT free
+  - Failure: caller retains ownership, MUST free
+  - Pattern: `if (!api_call(container, resource)) free_resource(resource);`
+- Use-after-free: Ensure proper lifecycle order (create → use → free)
+- Double-free: Track ownership, free only if caller owns
+
 OUTPUT FORMAT:
 - Use markdown: **Conclusion:** for analysis, ```cpp for code
 - No extra commentary outside these sections

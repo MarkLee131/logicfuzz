@@ -1,4 +1,0 @@
-"language": "c"
-"project": "liblouis"
-"target_name": "table_fuzzer"
-"target_path": "/src/liblouis/tests/fuzzing/table_fuzzer.cc"

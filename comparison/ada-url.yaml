@@ -1,4 +1,0 @@
-"language": "c++"
-"project": "ada-url"
-"target_name": "url_search_params"
-"target_path": "/src/ada-url/fuzz/url_search_params.cc"

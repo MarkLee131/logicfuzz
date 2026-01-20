@@ -1,4 +1,0 @@
-"language": "c++"
-"project": "curl"
-"target_name": "fuzz_url"
-"target_path": "/src/curl_fuzzer/fuzz_url.cc"

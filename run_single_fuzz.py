@@ -198,11 +198,17 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
   project_name = benchmark.project
   
   try:
+    # Get synthesis settings from args if available
+    use_synthesis = getattr(args, 'use_synthesis', False) if args else False
+    num_synthesis_drivers = getattr(args, 'num_synthesis_drivers', 5) if args else 5
+
     context = FuzzingContext.prepare(
       project_name=project_name,
       benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
       logger_instance=None,  # Use standard logging - no trial concept here
-      llm=llm_model
+      llm=llm_model,
+      use_synthesis=use_synthesis,
+      num_synthesis_drivers=num_synthesis_drivers
     )
     return context.to_dict()
   except (ValueError, RuntimeError) as e:

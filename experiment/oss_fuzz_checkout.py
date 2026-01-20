@@ -28,8 +28,44 @@ CLEAN_UP_OSS_FUZZ = bool(int(os.getenv('OFG_CLEAN_UP_OSS_FUZZ', '1')))
 
 # Custom base-builder with LLVM 14 for bitcode extraction
 CUSTOM_BASE_BUILDER = 'logicfuzz/base-builder-llvm14'
+# Path to Dockerfile for building the custom base image
+CUSTOM_BASE_DOCKERFILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+    'docker', 'Dockerfile.base-builder-llvm14')
 
 VENV_DIR: str = 'venv'
+
+
+def ensure_custom_base_image_exists():
+  """Ensures the custom base-builder-llvm14 image exists, building it if necessary."""
+  # Check if image exists
+  result = sp.run(
+      ['docker', 'images', '-q', CUSTOM_BASE_BUILDER],
+      capture_output=True, text=True)
+  if result.stdout.strip():
+    logger.debug('Custom base image %s already exists', CUSTOM_BASE_BUILDER)
+    return True
+
+  # Image doesn't exist, try to build it
+  if not os.path.exists(CUSTOM_BASE_DOCKERFILE):
+    logger.error('Custom base image %s not found and Dockerfile missing: %s',
+                 CUSTOM_BASE_BUILDER, CUSTOM_BASE_DOCKERFILE)
+    return False
+
+  logger.info('Building custom base image %s (this may take a few minutes)...',
+              CUSTOM_BASE_BUILDER)
+  docker_dir = os.path.dirname(CUSTOM_BASE_DOCKERFILE)
+  result = sp.run(
+      ['docker', 'build', '-f', CUSTOM_BASE_DOCKERFILE,
+       '-t', CUSTOM_BASE_BUILDER, docker_dir],
+      capture_output=True, text=True)
+
+  if result.returncode != 0:
+    logger.error('Failed to build custom base image: %s', result.stderr)
+    return False
+
+  logger.info('Successfully built custom base image %s', CUSTOM_BASE_BUILDER)
+  return True
 
 def _remove_temp_oss_fuzz_repo():
   """Deletes the temporary OSS-Fuzz directory."""
@@ -485,6 +521,11 @@ def prepare_project_image(benchmark: benchmarklib.Benchmark,
   # NOTE: Must be done AFTER caching logic, because caching rewrites Dockerfile
   # from original_dockerfile which would undo the patch
   if use_llvm14_builder:
+    # Ensure the custom base image exists (build if necessary)
+    if not ensure_custom_base_image_exists():
+      raise RuntimeError(
+          f'Custom base image {CUSTOM_BASE_BUILDER} not available. '
+          f'Please check docker/Dockerfile.base-builder-llvm14 exists.')
     patch_dockerfile_for_llvm14(generated_oss_fuzz_project)
 
   return _build_image(generated_oss_fuzz_project)
