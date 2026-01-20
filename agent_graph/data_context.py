@@ -1109,6 +1109,115 @@ def _semantic_filter_sequences(api_sequences: List[List[str]],
         return api_sequences[:top_k], {'mode': 'fallback', 'reason': str(e)}
 
 
+def _generate_sequences_from_grammar(
+    grammar,
+    num_sequences: int,
+    max_len: int,
+    log: logging.Logger
+) -> List[List[str]]:
+    """
+    Generate API sequences directly from grammar expansion.
+
+    This replaces OTFactory-based sequence generation with direct grammar expansion,
+    which is simpler and doesn't require the full driver generation machinery.
+
+    Args:
+        grammar: Grammar object from GrammarGenerator
+        num_sequences: Number of sequences to generate
+        max_len: Maximum length of each sequence
+        log: Logger instance
+
+    Returns:
+        List of API name sequences
+    """
+    import random
+    from liberator_adapter.grammar import Terminal, NonTerminal
+
+    sequences = []
+    max_attempts = num_sequences * 3  # Allow some failures
+    attempts = 0
+
+    while len(sequences) < num_sequences and attempts < max_attempts:
+        attempts += 1
+        try:
+            # Start with the grammar's start symbol
+            symbols = [grammar.get_start_symbol()]
+            expansion_trials = 0
+            max_expansion_trials = 50
+
+            # Expand non-terminals until we have only terminals or reach max_len
+            while any(isinstance(s, NonTerminal) for s in symbols) and len(symbols) <= max_len:
+                # Find non-terminals to expand
+                nonterminals = [s for s in symbols if isinstance(s, NonTerminal)]
+                if not nonterminals:
+                    break
+
+                # Pick a random non-terminal to expand
+                symbol_to_expand = random.choice(nonterminals)
+
+                # Get possible expansions
+                expansions = grammar[symbol_to_expand]
+                if not expansions:
+                    # No expansions available, convert to terminal
+                    idx = symbols.index(symbol_to_expand)
+                    symbols[idx] = Terminal(symbol_to_expand.name)
+                    continue
+
+                # Pick a random expansion
+                expansion = random.choice(tuple(expansions))
+
+                # Replace the non-terminal with its expansion
+                idx = symbols.index(symbol_to_expand)
+                del symbols[idx]
+                for i, e in enumerate(expansion):
+                    symbols.insert(idx + i, e)
+
+                expansion_trials += 1
+                if expansion_trials >= max_expansion_trials:
+                    break
+
+            # Extract terminal names as the API sequence
+            sequence = []
+            for s in symbols:
+                if isinstance(s, Terminal):
+                    name = s.name
+                    if name not in ('start', 'end', ''):
+                        sequence.append(name)
+                elif isinstance(s, NonTerminal):
+                    # Convert remaining non-terminals to terminals
+                    name = s.name
+                    if name not in ('start', 'end', ''):
+                        sequence.append(name)
+
+            # Only keep sequences with at least 2 API calls
+            if len(sequence) >= 2:
+                sequences.append(sequence[:max_len])
+
+        except Exception as e:
+            log.debug(f"Grammar expansion failed (attempt {attempts}): {e}")
+            continue
+
+    if not sequences:
+        log.warning("No sequences generated from grammar, falling back to simple API list")
+        # Fallback: just list all APIs from grammar terminals
+        all_apis = []
+        try:
+            for symbol in grammar.symbols():
+                if isinstance(symbol, Terminal) and symbol.name not in ('start', 'end', ''):
+                    all_apis.append(symbol.name)
+            if all_apis:
+                # Create simple sequences of random API combinations
+                for _ in range(min(num_sequences, 10)):
+                    if len(all_apis) >= 2:
+                        seq = random.sample(all_apis, min(max_len, len(all_apis)))
+                        sequences.append(seq)
+        except Exception as e:
+            log.warning(f"Fallback sequence generation failed: {e}")
+
+    log.debug(f"Generated {len(sequences)} sequences from grammar (requested {num_sequences})")
+    return sequences
+
+
 def _parse_selected_indices(response_text: str, max_len: int) -> List[int]:
     """Parse selected indices from LLM response JSON or fallback patterns."""
     try:
@@ -1118,7 +1227,7 @@ def _parse_selected_indices(response_text: str, max_len: int) -> List[int]:
             return [int(i) for i in indices if isinstance(i, (int, float)) and 0 <= int(i) < max_len]
     except Exception:
         pass
-    
+
     # Fallback: regex search
     match = re.findall(r'\d+', response_text)
     return [int(i) for i in match if 0 <= int(i) < max_len][:max_len]
