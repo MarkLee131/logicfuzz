@@ -2,26 +2,36 @@
 LangGraphFixer agent for LangGraph workflow.
 
 Fixes compilation errors with optional tool calling for context exploration.
+Refactored to use ToolCallingMixin for reduced code duplication.
 """
-from typing import Any, Dict
 import argparse
+import os
+from typing import Any, Dict, List
 
 import logger
+from langchain_core.tools import BaseTool
 from llm_toolkit.models import LLM
 from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
-from agent_graph.agents.utils import parse_tag
+from agent_graph.agents.tool_calling_mixin import ToolCallingMixin
+from agent_graph.agents.utils import parse_tag, strip_cdata
 from agent_graph.prompt_loader import get_prompt_manager
-from agent_graph.tools import get_bash_tool
+from agent_graph.tools.langchain_adapters import BashExecuteTool
 
 
-class LangGraphFixer(LangGraphAgent):
+class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
     """
     Fixer agent for LangGraph.
 
+    Uses ToolCallingMixin for standardized multi-round tool interaction.
     Uses tool calling to explore project structure when needed for fixing
     header paths, finding correct include locations, etc.
     """
+
+    # Mixin configuration - Fixer should be quick
+    MAX_TOOL_CALLS: int = 10
+    PROMPT_FOR_CONCLUSION_MESSAGE: str = "Tool call limit reached. Please provide your fix now."
+    PROMPT_WHEN_NO_TOOLS_MESSAGE: str = "Please provide the fixed code in a ```cpp code block."
 
     def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
@@ -35,44 +45,57 @@ class LangGraphFixer(LangGraphAgent):
         )
         self.inspect_tool = None
 
-    def _get_tool_definitions(self) -> list[dict]:
-        """Define tools available to Fixer."""
-        return [get_bash_tool()]
+    # =========================================================================
+    # ToolCallingMixin Implementation
+    # =========================================================================
 
-    def _execute_tool(self, tool_call: dict) -> str:
-        """Execute a tool call and return the result."""
-        import json
+    def get_langchain_tools(self) -> List[BaseTool]:
+        """Return LangChain tools for fixer."""
+        return [
+            BashExecuteTool(executor=self._execute_bash)
+        ]
 
-        # Handle both direct and nested function structure
-        # OpenAI format: {"function": {"name": "...", "arguments": "..."}}
-        # Some formats: {"name": "...", "arguments": {...}}
-        if "function" in tool_call:
-            func_info = tool_call["function"]
-            tool_name = func_info.get("name", "")
-            arguments_raw = func_info.get("arguments", {})
-        else:
-            tool_name = tool_call.get("name", "")
-            arguments_raw = tool_call.get("arguments", {})
+    def has_conclusion(self, content: str) -> bool:
+        """Check if the response contains a conclusion with fixed code."""
+        if not content:
+            return False
+        # Look for code block which indicates the fix is ready
+        return "```cpp" in content or "```c" in content or "**Conclusion:**" in content
 
-        # Arguments may be a JSON string or a dict
-        if isinstance(arguments_raw, str):
-            try:
-                arguments = json.loads(arguments_raw)
-            except json.JSONDecodeError:
-                arguments = {}
-        else:
-            arguments = arguments_raw
+    def parse_conclusion(self, content: str) -> Dict[str, Any]:
+        """
+        Parse conclusion from fixer response.
 
-        if tool_name == "bash_execute":
-            command = arguments.get("command", "")
-            if not command:
-                return "Error: bash_execute requires 'command' argument"
+        The fixer's conclusion is the fixed code, which we extract from code blocks.
+        """
+        # Try to extract fuzz_target from XML tag first
+        fuzz_target_code = parse_tag(content, 'fuzz_target')
+        if not fuzz_target_code:
+            # Fall back to stripping code blocks
+            fuzz_target_code = strip_cdata(content)
 
-            # Execute via ProjectContainerTool
-            result = self.inspect_tool.execute(command)
-            return self._format_bash_result(result)
+        return {
+            'fuzz_target_code': fuzz_target_code,
+            'raw_response': content,
+            'fixed': bool(fuzz_target_code)
+        }
 
-        return f"Error: Unknown tool '{tool_name}'"
+    def get_default_result(self) -> Dict[str, Any]:
+        """Return default result when no conclusion reached."""
+        return {
+            'fuzz_target_code': None,
+            'raw_response': '',
+            'fixed': False
+        }
+
+    # =========================================================================
+    # Tool Executors
+    # =========================================================================
+
+    def _execute_bash(self, command: str) -> str:
+        """Execute bash command and return formatted result."""
+        result = self.inspect_tool.execute(command)
+        return self._format_bash_result(result)
 
     def _format_bash_result(self, process) -> str:
         """Format bash execution result."""
@@ -96,12 +119,9 @@ class LangGraphFixer(LangGraphAgent):
 
         return "\n".join(result_parts)
 
-    def _has_conclusion(self, text: str) -> bool:
-        """Check if the response contains a conclusion with fixed code."""
-        if not text:
-            return False
-        # Look for code block which indicates the fix is ready
-        return "```cpp" in text or "```c" in text or "**Conclusion:**" in text
+    # =========================================================================
+    # Main Execution
+    # =========================================================================
 
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         """Fix compilation errors with optional tool calling."""
@@ -136,7 +156,6 @@ class LangGraphFixer(LangGraphAgent):
         target_path = benchmark.target_path
         if target_path:
             additional_context_parts.append(f"**Fuzz target location**: `{target_path}`")
-            import os
             target_dir = os.path.dirname(target_path)
             additional_context_parts.append(f"**Target directory**: `{target_dir}`")
             additional_context_parts.append("")
@@ -171,111 +190,26 @@ class LangGraphFixer(LangGraphAgent):
 
         user_prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
 
-        # Multi-round interaction with tool calling
-        tools = self._get_tool_definitions()
-        messages = [
-            {"role": "system", "content": self.system_message},
-            {"role": "user", "content": user_prompt}
-        ]
-
-        fuzz_target_code = None
-        cur_round = 0
-        max_round = 3  # Fixer should be quick - max 3 rounds
-        total_tool_calls = 0
-        MAX_TOOL_CALLS = 10  # Limit tool calls for fixer
-        all_responses = []
-
         try:
-            while cur_round < max_round:
-                # Call LLM with tools
-                response_data = self.call_llm_with_tools(
-                    messages=messages,
-                    tools=tools,
-                    state=state,
-                    log_prefix=f"FIXER_ROUND_{cur_round:02d}"
-                )
-
-                assistant_message = response_data["message"]
-                text_response = assistant_message.get("content", "") or ""
-                tool_calls = assistant_message.get("tool_calls", []) or []
-
-                messages.append(assistant_message)
-
-                if text_response:
-                    all_responses.append(text_response)
-
-                logger.info(
-                    f'<FIXER ROUND {cur_round}>\n{text_response[:500]}...\n</FIXER ROUND {cur_round}>',
-                    trial=self.trial
-                )
-
-                # Check if we have a conclusion with fixed code
-                if text_response and self._has_conclusion(text_response):
-                    logger.info(f'Fixer provided fix at round {cur_round}', trial=self.trial)
-                    fuzz_target_code = parse_tag(text_response, 'fuzz_target')
-                    if not fuzz_target_code:
-                        from agent_graph.agents.utils import strip_cdata
-                        fuzz_target_code = strip_cdata(text_response)
-                    break
-
-                # Execute tool calls if any
-                if tool_calls:
-                    for i, tool_call in enumerate(tool_calls):
-                        if total_tool_calls >= MAX_TOOL_CALLS:
-                            # Add placeholder responses for skipped tool calls
-                            # OpenAI API requires every tool_call_id to have a response
-                            for skipped_call in tool_calls[i:]:
-                                skipped_id = skipped_call.get("id", "")
-                                if not skipped_id and "function" in skipped_call:
-                                    skipped_id = skipped_call.get("id", "")
-                                messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": skipped_id,
-                                    "content": "[Skipped: tool call limit reached]"
-                                })
-                            logger.warning(
-                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, {len(tool_calls) - i} calls skipped",
-                                trial=self.trial
-                            )
-                            break
-
-                        total_tool_calls += 1
-                        tool_result = self._execute_tool(tool_call)
-
-                        tool_message = {
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id", ""),
-                            "content": tool_result
-                        }
-                        messages.append(tool_message)
-
-                    if total_tool_calls >= MAX_TOOL_CALLS:
-                        messages.append({
-                            "role": "user",
-                            "content": "Tool call limit reached. Please provide your fix now."
-                        })
-
-                    cur_round += 1
-                    continue
-
-                # If no tool calls and no conclusion, prompt for fix
-                if not tool_calls and text_response:
-                    messages.append({
-                        "role": "user",
-                        "content": "Please provide the fixed code in a ```cpp code block."
-                    })
-
-                cur_round += 1
-
+            # Use the mixin's tool calling loop
+            # Fixer should be quick - max 3 rounds
+            fixer_result, all_responses = self.run_tool_calling_loop(
+                initial_prompt=user_prompt,
+                state=state,
+                max_rounds=3,
+                log_prefix="FIXER"
+            )
         finally:
             # Cleanup container
             if self.inspect_tool:
                 logger.debug('Stopping fixer inspect container', trial=self.trial)
                 self.inspect_tool.terminate()
 
+        # Extract the fixed code
+        fuzz_target_code = fixer_result.get('fuzz_target_code')
+
         # If no code was extracted, use the last response
         if not fuzz_target_code and all_responses:
-            from agent_graph.agents.utils import strip_cdata
             fuzz_target_code = strip_cdata(all_responses[-1])
 
         # Extract session memory updates
@@ -307,19 +241,24 @@ class LangGraphFixer(LangGraphAgent):
 
         return state_update
 
+    # =========================================================================
+    # Helper Methods
+    # =========================================================================
+
     def _generate_code_context(self, current_code: str, build_errors: list) -> str:
         """
         Generate code context for fixer based on diff strategy.
 
         Strategy: Extract only the error-relevant parts of code to reduce token usage.
         """
+        import re as re_module
+
         if not current_code:
             return ""
 
         error_lines = set()
         for error in build_errors:
-            import re
-            matches = re.findall(r':(\d+):', error) or re.findall(r'line (\d+)', error)
+            matches = re_module.findall(r':(\d+):', error) or re_module.findall(r'line (\d+)', error)
             for match in matches:
                 try:
                     line_num = int(match)
@@ -376,9 +315,9 @@ class LangGraphFixer(LangGraphAgent):
 
         hint_lines = [
             "",
-            "# ⚡ Known Header Information",
+            "# Known Header Information",
             "",
-            "⚠️  If you need to find the correct header path, use `bash_execute` to explore:",
+            "If you need to find the correct header path, use `bash_execute` to explore:",
             "  - `find /src -name '*.h' | head -20` - List header files",
             "  - `ls -la /src/{project}/` - Check project structure",
             "  - `cat /src/{project}/fuzzing/*.c | head -30` - See existing fuzzer includes",
@@ -391,7 +330,7 @@ class LangGraphFixer(LangGraphAgent):
 
         if existing_proj:
             hint_lines.extend([
-                "## 🥇 Reference includes from existing fuzzers (COPY THESE):",
+                "## Reference includes from existing fuzzers (COPY THESE):",
                 ""
             ])
             for h in sorted(set(existing_proj))[:8]:
@@ -404,7 +343,7 @@ class LangGraphFixer(LangGraphAgent):
 
         if proj_headers:
             hint_lines.extend([
-                "## 🥈 Public API headers:",
+                "## Public API headers:",
                 ""
             ])
             for h in sorted(set(proj_headers))[:8]:

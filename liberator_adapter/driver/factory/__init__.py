@@ -1,5 +1,6 @@
 from .Factory import Factory
-from .only_type import OTFactory
+# OTFactory has been removed - use CBFactory for driver generation
+# from .only_type import OTFactory
 
-__all__ = ["Factory", "OTFactory"]
+__all__ = ["Factory"]
 

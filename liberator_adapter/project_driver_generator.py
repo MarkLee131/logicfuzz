@@ -26,7 +26,8 @@ from liberator_adapter.common import Api, FunctionConditionsSet, DataLayout
 from liberator_adapter.common.utils import Utils
 from liberator_adapter.driver import Driver
 from liberator_adapter.driver.factory import Factory
-from liberator_adapter.driver.factory.only_type import OTFactory
+# OTFactory has been removed - only CBFactory is supported now
+# from liberator_adapter.driver.factory.only_type import OTFactory
 from liberator_adapter.driver.factory.constraint_based import CBFactory
 from liberator_adapter.bias import Bias
 from liberator_adapter.backend.libfuzz import LFBackendDriver
@@ -704,17 +705,17 @@ class ProjectDriverGenerator:
         self,
         num_drivers: int = 10,
         driver_size: int = 5,
-        policy: str = "only_type",
         enable_z3_validation: bool = False
     ) -> List[Driver]:
         """
-        Generate driver list
+        Generate driver list using CBFactory (constraint-based synthesis).
+
+        Note: OTFactory (only_type) has been removed. Only CBFactory is supported.
 
         Args:
             num_drivers: Number of drivers to generate
             driver_size: Number of API calls in each driver
-            policy: Generation policy ("only_type" or "constraint_based")
-            enable_z3_validation: Whether to enable Z3 sequence validation (constraint_based policy only)
+            enable_z3_validation: Whether to enable Z3 sequence validation
 
         Returns:
             List of Drivers
@@ -722,20 +723,15 @@ class ProjectDriverGenerator:
         if not self.grammar:
             raise RuntimeError("No grammar. Call build_grammar() first.")
 
-        logger.info(f"🚀 Generating {num_drivers} drivers (size={driver_size}, policy={policy})...")
-        if enable_z3_validation and policy == "constraint_based":
+        logger.info(f"🚀 Generating {num_drivers} drivers (size={driver_size}, policy=constraint_based)...")
+        if enable_z3_validation:
             logger.info("   Z3 sequence validation: enabled")
 
         drivers = []
 
-        # Select Factory based on policy
-        if policy == "only_type":
-            factory = self._create_ot_factory(driver_size)
-        elif policy == "constraint_based":
-            factory = self._create_cb_factory(driver_size, enable_z3_validation)
-        else:
-            raise ValueError(f"Unknown policy: {policy}. Supported: 'only_type', 'constraint_based'")
-        
+        # Use CBFactory (constraint-based) - OTFactory has been removed
+        factory = self._create_cb_factory(driver_size, enable_z3_validation)
+
         # Generate drivers
         for i in range(num_drivers):
             try:
@@ -744,31 +740,33 @@ class ProjectDriverGenerator:
                 logger.debug(f"Generated driver {i+1}/{num_drivers}")
             except Exception as e:
                 logger.warning(f"Failed to generate driver {i+1}: {e}")
-        
+
         logger.info(f"✅ Generated {len(drivers)} drivers")
-        
+
         return drivers
     
     def generate_all(
         self,
         num_drivers: int = 10,
         driver_size: int = 5,
-        policy: str = "only_type",
         function_conditions: Optional[FunctionConditionsSet] = None,
         analyze_patterns: bool = True,
         llm_client=None,
+        enable_z3_validation: bool = False,
         **extract_kwargs
     ) -> List[Driver]:
         """
         Complete generation pipeline: Extract API -> Build dependency graph -> Generate grammar -> Manage constraints -> Analyze patterns -> Generate drivers
 
+        Note: Uses CBFactory (constraint-based) for driver generation. OTFactory has been removed.
+
         Args:
             num_drivers: Number of drivers to generate
             driver_size: Number of API calls in each driver
-            policy: Generation policy
             function_conditions: Function constraint conditions (optional)
             analyze_patterns: Whether to analyze special patterns (VarLen/Loop/Callback/TLV)
             llm_client: LLM client (for Phase 2 analysis of special patterns)
+            enable_z3_validation: Whether to enable Z3 sequence validation
             **extract_kwargs: Arguments passed to extract_all_apis
 
         Returns:
@@ -792,11 +790,11 @@ class ProjectDriverGenerator:
         if analyze_patterns:
             self.analyze_special_patterns(llm_client)
 
-        # 6. Generate drivers
+        # 6. Generate drivers using CBFactory
         drivers = self.generate_drivers(
             num_drivers=num_drivers,
             driver_size=driver_size,
-            policy=policy
+            enable_z3_validation=enable_z3_validation
         )
 
         logger.info("✅ Complete pipeline finished")
@@ -825,22 +823,12 @@ class ProjectDriverGenerator:
         logger.warning("Driver saving not yet implemented")
         
         return output_dir
-    
-    def _create_ot_factory(self, driver_size: int):
-        """
-        Create OTFactory (only_type policy)
-        """
-        if not self.grammar:
-            raise RuntimeError("No grammar available for OTFactory")
-        if not self.all_apis:
-            raise RuntimeError("No APIs available for OTFactory")
 
-        return OTFactory(
-            api_list=self.all_apis,
-            driver_size=driver_size,
-            grammar=self.grammar
-        )
-    
+    # OTFactory has been removed - only CBFactory is supported
+    # def _create_ot_factory(self, driver_size: int):
+    #     """Create OTFactory (only_type policy)"""
+    #     ...
+
     def _create_cb_factory(self, driver_size: int, enable_z3_validation: bool = False):
         """
         Create CBFactory (constraint_based policy)

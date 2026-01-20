@@ -13,7 +13,6 @@ from pathlib import Path
 import logging
 import json
 import re
-from liberator_adapter.driver.ir import ApiCall
 
 logger = logging.getLogger(__name__)
 
@@ -329,19 +328,7 @@ class FuzzingContext:
         try:
             grammar = generator.build_grammar()
 
-            # OLD: Use OTFactory driver generation to obtain grammar-respecting API sequences
-            # This has been replaced by direct grammar expansion to avoid OTFactory overhead
-            # raw_drivers = generator.generate_drivers(
-            #     num_drivers=max(num_sequences, 1),
-            #     driver_size=max(driver_size, 1),
-            #     policy="only_type"
-            # )
-            # api_sequences = _extract_sequences_from_drivers(
-            #     raw_drivers,
-            #     max_len=driver_size
-            # )
-
-            # NEW: Generate API sequences directly from grammar expansion
+            # Generate API sequences directly from grammar expansion
             api_sequences = _generate_sequences_from_grammar(
                 grammar=grammar,
                 num_sequences=num_sequences,
@@ -744,21 +731,6 @@ def _extract_existing_fuzzer_headers(project_name: str,
     return result
 
 
-def _extract_sequences_from_drivers(drivers, max_len: int = 5) -> List[List[str]]:
-    """Extract API call sequences from generated drivers."""
-    sequences: List[List[str]] = []
-    for drv in drivers or []:
-        seq: List[str] = []
-        for stmt in getattr(drv, "statements", []):
-            if isinstance(stmt, ApiCall):
-                seq.append(getattr(stmt, "function_name", None) or getattr(stmt, "original_api", None).function_name)
-        if max_len > 0:
-            seq = seq[:max_len]
-        if seq:
-            sequences.append(seq)
-    return sequences
-
-
 def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:
     """Deduplicate sequences while preserving order."""
     seen = set()
@@ -1118,8 +1090,8 @@ def _generate_sequences_from_grammar(
     """
     Generate API sequences directly from grammar expansion.
 
-    This replaces OTFactory-based sequence generation with direct grammar expansion,
-    which is simpler and doesn't require the full driver generation machinery.
+    Expands the grammar's non-terminals randomly to produce valid API call sequences
+    that respect the type dependency relationships encoded in the grammar.
 
     Args:
         grammar: Grammar object from GrammarGenerator
