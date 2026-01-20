@@ -1,738 +1,194 @@
 """
-LangGraphCrashAnalyzer agent for LangGraph workflow.
+LangGraphCrashAnalyzer agent - analyzes crashes using GDB.
 """
-from typing import Any, Dict, List, Optional, Tuple
 import argparse
 import os
 import re
-import json
+from typing import Any, Dict, List
 
 import logger
+from langchain_core.tools import BaseTool
 from llm_toolkit.models import LLM
 from agent_graph.state import FuzzingWorkflowState
 from agent_graph.agents.base import LangGraphAgent
-from agent_graph.agents.utils import parse_tag
+from agent_graph.agents.tool_calling_mixin import ToolCallingMixin
 from agent_graph.prompt_loader import get_prompt_manager
-from agent_graph.tools import get_all_crash_analyzer_tools
+from agent_graph.tools.langchain_adapters import BashExecuteTool, GDBExecuteTool
 from experiment.workdir import WorkDirs
 
 
-class LangGraphCrashAnalyzer(LangGraphAgent):
-    """
-    Crash analyzer agent for LangGraph.
-    
-    This agent follows the original CrashAnalyzer's approach:
-    - Uses GDBTool for interactive debugging
-    - Uses ProjectContainerTool for bash commands
-    - Multi-round interaction until conclusion is reached
-    - Parses GDB commands, bash commands, and conclusion tags
-    """
-    
+class LangGraphCrashAnalyzer(LangGraphAgent, ToolCallingMixin):
+    """Crash analyzer using ReAct-style tool calling with GDB."""
+
     def __init__(self, llm: LLM, trial: int, args: argparse.Namespace):
-        # Load system prompt from file
         prompt_manager = get_prompt_manager()
-        system_message = prompt_manager.get_system_prompt("crash_analyzer")
-        
         super().__init__(
             name="crash_analyzer",
             llm=llm,
             trial=trial,
             args=args,
-            system_message=system_message
+            system_message=prompt_manager.get_system_prompt("crash_analyzer")
         )
         self.gdb_tool = None
         self.bash_tool = None
         self.gdb_tool_used = False
-    
+
+    def get_langchain_tools(self) -> List[BaseTool]:
+        return [
+            GDBExecuteTool(executor=self._execute_gdb),
+            BashExecuteTool(executor=self._execute_bash)
+        ]
+
+    def parse_response(self, content: str) -> Dict[str, Any]:
+        """Parse crash analysis response."""
+        result = {'true_bug': None, 'insight': content, 'analyzed': True}
+        content_lower = content.lower()
+
+        # Parse true/false
+        if m := re.search(r'conclusion:\s*(true|false)', content_lower):
+            result['true_bug'] = m.group(1) == 'true'
+        elif 'true bug' in content_lower or 'project bug' in content_lower:
+            result['true_bug'] = True
+        elif 'false positive' in content_lower or 'driver bug' in content_lower:
+            result['true_bug'] = False
+
+        # Extract insight
+        if m := re.search(r'analysis:\s*(.+)', content, re.IGNORECASE | re.DOTALL):
+            result['insight'] = m.group(1).strip()
+
+        return result
+
+    def _execute_gdb(self, command: str) -> str:
+        self.gdb_tool_used = True
+        proc = self.gdb_tool.execute_in_screen(command)
+        lines = proc.stdout.strip().splitlines()
+        if lines and lines[-1].strip().startswith("(gdb)"):
+            lines.pop()
+        if lines:
+            lines[0] = f'(gdb) {lines[0].strip()}'
+        return self.truncate_tool_output("\n".join(lines))
+
+    def _execute_bash(self, command: str) -> str:
+        proc = self.bash_tool.execute(command)
+        parts = [f"$ {command}", f"exit={proc.returncode}"]
+        if proc.stdout:
+            parts.append(proc.stdout.strip())
+        if proc.stderr:
+            parts.append(f"STDERR: {proc.stderr.strip()}")
+        return self.truncate_tool_output("\n".join(parts))
+
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
-        """
-        Analyze crash using GDB and provide insights.
-        
-        First checks if this is a false positive (fuzz target bug), then 
-        performs detailed analysis if it's a potential true bug.
-        """
-        import os
-        import subprocess as sp
         from tool.container_tool import ProjectContainerTool
         from tool.gdb_tool import GDBTool
-        from experiment.workdir import WorkDirs
         from experiment import benchmark as benchmarklib
         from experiment import evaluator as evaluator_lib
         from experiment import oss_fuzz_checkout
-        
-        # Get benchmark object
-        benchmark_dict = state["benchmark"]
-        benchmark = benchmarklib.Benchmark.from_dict(benchmark_dict)
-        
-        # Get crash info and source
+
+        benchmark = benchmarklib.Benchmark.from_dict(state["benchmark"])
         crash_info = state.get("crash_info", {})
         fuzz_target_source = state.get("fuzz_target_source", "")
         build_script_source = state.get("build_script_source", "")
-        run_error = crash_info.get("error_message", "")
-        stack_trace = crash_info.get("stack_trace", "")
-        artifact_path = crash_info.get("artifact_path", "")
         run_log = state.get("run_log", "")
-        
-        # First, perform semantic check to detect false positives
-        semantic_result = self._check_false_positive(
-            run_log=run_log,
-            project_name=benchmark.project,
-            stack_trace=stack_trace
-        )
-        
-        # If it's a known false positive, skip detailed GDB analysis
-        if semantic_result["is_false_positive"]:
-            logger.info(
-                f'Crash identified as false positive: {semantic_result["reason"]}',
-                trial=self.trial
-            )
-            return {
-                "crash_analysis": {
-                    "root_cause": semantic_result["description"],
-                    "true_bug": False,
-                    "false_positive_type": semantic_result["fp_type"],
-                    "severity": "low",
-                    "analyzed": True,
-                    "gdb_used": False,
-                    "semantic_check": semantic_result
-                }
-            }
-        
-        # Validate artifact path
+
+        # Check for false positive first
+        fp_result = self._check_false_positive(run_log)
+        if fp_result["is_false_positive"]:
+            logger.info(f'False positive: {fp_result["reason"]}', trial=self.trial)
+            return {"crash_analysis": {
+                "root_cause": fp_result["description"],
+                "true_bug": False,
+                "false_positive_type": fp_result["fp_type"],
+                "severity": "low",
+                "analyzed": True,
+                "gdb_used": False
+            }}
+
+        artifact_path = crash_info.get("artifact_path", "")
         if not artifact_path or not os.path.exists(artifact_path):
-            logger.error(f'Artifact path {artifact_path} does not exist', 
-                        trial=self.trial)
-            return {
-                "errors": [{
-                    "node": "CrashAnalyzer",
-                    "message": f"Artifact path {artifact_path} not found"
-                }]
-            }
-        
-        # Create work directories
-        work_dirs_dict = state.get("work_dirs")
-        if not work_dirs_dict:
-            logger.error('No work_dirs in state', trial=self.trial)
-            return {"errors": [{"message": "No work_dirs found"}]}
+            return {"errors": [{"node": "CrashAnalyzer", "message": f"Artifact not found: {artifact_path}"}]}
 
-        work_dirs = WorkDirs.from_dict(work_dirs_dict)
-        
-        # Generate project name for GDB container
-        generated_target_name = os.path.basename(benchmark.target_path)
-        sample_id = os.path.splitext(generated_target_name)[0]
-        generated_oss_fuzz_project = (
-            f'{benchmark.id}-{sample_id}-gdb-{self.trial:02d}')
-        generated_oss_fuzz_project = oss_fuzz_checkout.rectify_docker_tag(
-            generated_oss_fuzz_project)
-        
-        # Write fuzz target and build script to files
-        fuzz_target_path = os.path.join(work_dirs.base, 'fuzz_targets',
-                                       f'{self.trial:02d}.fuzz_target')
+        work_dirs = WorkDirs.from_dict(state.get("work_dirs", {}))
+
+        # Setup GDB project
+        target_name = os.path.basename(benchmark.target_path)
+        sample_id = os.path.splitext(target_name)[0]
+        project_name = oss_fuzz_checkout.rectify_docker_tag(f'{benchmark.id}-{sample_id}-gdb-{self.trial:02d}')
+
+        fuzz_target_path = os.path.join(work_dirs.base, 'fuzz_targets', f'{self.trial:02d}.fuzz_target')
         os.makedirs(os.path.dirname(fuzz_target_path), exist_ok=True)
-        with open(fuzz_target_path, 'w') as ft_file:
-            ft_file.write(fuzz_target_source)
+        with open(fuzz_target_path, 'w') as f:
+            f.write(fuzz_target_source)
 
+        build_script_path = ''
         if build_script_source:
-            build_script_path = os.path.join(work_dirs.base, 'fuzz_targets',
-                                           f'{self.trial:02d}.build_script')
-            with open(build_script_path, 'w') as ft_file:
-                ft_file.write(build_script_source)
-        else:
-            build_script_path = ''
-        
-        # Create OSS-Fuzz project with GDB support
-        # Create a minimal RunResult-like object for compatibility
+            build_script_path = os.path.join(work_dirs.base, 'fuzz_targets', f'{self.trial:02d}.build_script')
+            with open(build_script_path, 'w') as f:
+                f.write(build_script_source)
+
         class MockRunResult:
-            def __init__(self, benchmark, artifact_path):
-                self.benchmark = benchmark
-                self.artifact_path = artifact_path
-        
+            def __init__(self, b, a):
+                self.benchmark, self.artifact_path = b, a
+
         mock_result = MockRunResult(benchmark, artifact_path)
-        
         evaluator_lib.Evaluator.create_ossfuzz_project_with_gdb(
-            benchmark, generated_oss_fuzz_project, fuzz_target_path,
-            mock_result, build_script_path, artifact_path)
-        
-        # Initialize GDB tool
-        self.gdb_tool = GDBTool(
-            benchmark,
-            result=mock_result,
-            name='gdb',
-            project_name=generated_oss_fuzz_project
-        )
-        
-        # Setup GDB environment
-        logger.info('Setting up GDB environment', trial=self.trial)
-        self.gdb_tool.execute(
-            'apt update && '
-            'apt install -y software-properties-common && '
-            'add-apt-repository -y ppa:ubuntu-toolchain-r/test && '
-            'apt update && '
-            'apt install -y gdb screen')
-        # 注意：export 和 compile 必须在同一个 shell 中执行，否则环境变量不会生效
-        self.gdb_tool.execute(
-            'export CFLAGS="$CFLAGS -g -O0" && '
-            'export CXXFLAGS="$CXXFLAGS -g -O0" && '
-            'compile > /dev/null'
-        )
-        
-        # Launch GDB session
-        self.gdb_tool.execute(
-            f'screen -dmS gdb_session -L '
-            f'-Logfile /tmp/gdb_log.txt '
-            f'gdb /out/{benchmark.target_name}')
-        
-        self.gdb_tool_used = False
-        
-        # Initialize bash tool for additional commands
-        self.bash_tool = ProjectContainerTool(
-            benchmark, name='check', project_name=generated_oss_fuzz_project)
+            benchmark, project_name, fuzz_target_path, mock_result, build_script_path, artifact_path)
+
+        self.gdb_tool = GDBTool(benchmark, result=mock_result, name='gdb', project_name=project_name)
+        self.gdb_tool.execute('apt update && apt install -y gdb screen 2>/dev/null')
+        self.gdb_tool.execute('export CFLAGS="$CFLAGS -g -O0" && export CXXFLAGS="$CXXFLAGS -g -O0" && compile > /dev/null')
+        self.gdb_tool.execute(f'screen -dmS gdb_session -L -Logfile /tmp/gdb_log.txt gdb /out/{benchmark.target_name}')
+
+        self.bash_tool = ProjectContainerTool(benchmark, name='check', project_name=project_name)
         self.bash_tool.compile(extra_commands=' && rm -rf /out/* > /dev/null')
-        
-        # Build initial prompt using PromptManager
-        from agent_graph.prompt_loader import get_prompt_manager
+        self.gdb_tool_used = False
+
         prompt_manager = get_prompt_manager()
-        
-        # Build user prompt with crash information
         user_prompt = prompt_manager.build_user_prompt(
             "crash_analyzer",
-            CRASH_INFO=run_error,
-            STACK_TRACE=stack_trace,
+            CRASH_INFO=crash_info.get("error_message", ""),
+            STACK_TRACE=crash_info.get("stack_trace", ""),
             FUZZ_TARGET_CODE=fuzz_target_source,
             ADDITIONAL_CONTEXT=f"Project: {benchmark.project}\nFunction: {benchmark.function_name}"
         )
-        
-        # Define tool specifications for function calling
-        tools = self._get_tool_definitions()
-        
-        # Initialize message list for tool calling
-        messages = [
-            {"role": "system", "content": self.system_message},
-            {"role": "user", "content": user_prompt}
-        ]
-        
-        # Multi-round interaction
-        crash_result = {
-            "true_bug": None,
-            "insight": "",
-            "stacktrace": stack_trace
-        }
-        
-        cur_round = 0
-        max_round = self.args.max_round
-        total_tool_calls = 0
-        MAX_TOOL_CALLS = 10  # Limit total tool calls to control token usage
 
         try:
-            while cur_round < max_round:
-                # Chat with LLM using tool calling
-                response = self.call_llm_with_tools(
-                    messages=messages,
-                    tools=tools,
-                    state=state,
-                    log_prefix=f"CRASH_ROUND_{cur_round:02d}"
-                )
-                
-                # Use normalized assistant message from response (already in OpenAI API format)
-                assistant_message = response["message"]
-                content = assistant_message.get("content", "") or ""
-                tool_calls = assistant_message.get("tool_calls", []) or []
-                
-                logger.info(
-                    f'<CRASH ANALYZER ROUND {cur_round}>\n'
-                    f'Content: {content}\n'
-                    f'Tool calls: {len(tool_calls)}\n'
-                    f'</CRASH ANALYZER ROUND {cur_round}>',
-                    trial=self.trial
-                )
-                
-                # Add assistant message to conversation
-                messages.append(assistant_message)
-                
-                # Check if LLM provided a conclusion
-                if self._has_conclusion(content):
-                    self._parse_conclusion(content, crash_result)
-                    break
-                
-                # Execute tool calls if any
-                if tool_calls:
-                    for i, tool_call in enumerate(tool_calls):
-                        # Check tool call limit
-                        if total_tool_calls >= MAX_TOOL_CALLS:
-                            # Add placeholder responses for skipped tool calls
-                            # OpenAI API requires every tool_call_id to have a response
-                            for skipped_call in tool_calls[i:]:
-                                messages.append({
-                                    "role": "tool",
-                                    "tool_call_id": skipped_call.get("id", ""),
-                                    "content": "[Skipped: tool call limit reached]"
-                                })
-                            logger.warning(
-                                f"Max tool calls ({MAX_TOOL_CALLS}) reached, {len(tool_calls) - i} calls skipped",
-                                trial=self.trial
-                            )
-                            break
-
-                        total_tool_calls += 1
-                        result = self._execute_tool(tool_call)
-
-                        # Add tool result to messages
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id", ""),
-                            "content": result
-                        })
-
-                        # Mark GDB as used if gdb_execute was called
-                        if tool_call.get("name") == "gdb_execute":
-                            self.gdb_tool_used = True
-
-                    # Check if we hit the limit - request conclusion
-                    if total_tool_calls >= MAX_TOOL_CALLS:
-                        messages.append({
-                            "role": "user",
-                            "content": "Tool call limit reached. Please provide your conclusion now."
-                        })
-
-                    # Continue to next round with tool results
-                    cur_round += 1
-                    continue
-                
-                # If no tool calls and no conclusion, something is wrong
-                if not tool_calls and not content:
-                    logger.warning(
-                        f'ROUND {cur_round} No tool calls or content from LLM',
-                        trial=self.trial
-                    )
-                    break
-                
-                cur_round += 1
-                    
+            result, _ = self.run_tool_calling_loop(
+                initial_prompt=user_prompt,
+                state=state,
+                max_rounds=self.args.max_round,
+                log_prefix="CRASH"
+            )
         finally:
-            # Cleanup: stop the containers
-            logger.debug(f'Stopping crash analyze containers: {self.gdb_tool.container_id}, {self.bash_tool.container_id}',
-                        trial=self.trial)
             if self.gdb_tool:
                 self.gdb_tool.terminate()
             if self.bash_tool:
                 self.bash_tool.terminate()
-        
-        # Flush logs for this agent after completing execution
+
         self._langgraph_logger.flush_agent_logs(self.name)
-        
-        # Return analysis result
-        return {
-            "crash_analysis": {
-                "root_cause": crash_result.get("insight", "No analysis provided"),
-                "true_bug": crash_result.get("true_bug", False),
-                "severity": "high" if crash_result.get("true_bug") else "low",
-                "analyzed": True,
-                "gdb_used": self.gdb_tool_used
-            }
-        }
-    
-    def _get_tool_definitions(self) -> list[dict]:
-        """
-        Get tool definitions for OpenAI function calling.
+        return {"crash_analysis": {
+            "root_cause": result.get("insight", "No analysis"),
+            "true_bug": result.get("true_bug", False),
+            "severity": "high" if result.get("true_bug") else "low",
+            "analyzed": True,
+            "gdb_used": self.gdb_tool_used
+        }}
 
-        Returns:
-            List of tool definitions in OpenAI format (gdb_execute + bash_execute)
-        """
-        return get_all_crash_analyzer_tools()
-    
-    def _execute_tool(self, tool_call: dict) -> str:
-        """
-        Execute a tool call from the LLM.
+    def _check_false_positive(self, run_log: str) -> Dict[str, Any]:
+        """Check for common false positive patterns."""
+        if 'AddressSanitizer: SEGV on unknown address' in run_log:
+            return {"is_false_positive": True, "fp_type": "NULL_DEREF", "reason": "Null deref", "description": "Null pointer dereference"}
+        if 'fuzz target exited' in run_log:
+            return {"is_false_positive": True, "fp_type": "EXIT", "reason": "Target exited", "description": "Fuzz target exited"}
+        if 'out-of-memory' in run_log or 'out of memory' in run_log:
+            return {"is_false_positive": True, "fp_type": "OOM", "reason": "OOM", "description": "Out of memory"}
+        if 'ERROR: libFuzzer: deadly signal' in run_log:
+            return {"is_false_positive": True, "fp_type": "SIGNAL", "reason": "Signal", "description": "Assertion failure"}
 
-        Args:
-            tool_call: Dictionary with 'name', 'arguments', and 'id' keys
-                       OR OpenAI format with 'function' nested structure
-
-        Returns:
-            Tool execution result as string (truncated to 10k chars)
-        """
-        import json
-
-        # Handle both direct and nested function structure
-        # OpenAI format: {"function": {"name": "...", "arguments": "..."}}
-        # Some formats: {"name": "...", "arguments": {...}}
-        if "function" in tool_call:
-            func_info = tool_call["function"]
-            tool_name = func_info.get("name", "")
-            arguments_raw = func_info.get("arguments", {})
-        else:
-            tool_name = tool_call.get("name", "")
-            arguments_raw = tool_call.get("arguments", {})
-
-        # Arguments may be a JSON string or a dict
-        if isinstance(arguments_raw, str):
-            try:
-                arguments = json.loads(arguments_raw)
-            except json.JSONDecodeError:
-                arguments = {}
-        else:
-            arguments = arguments_raw
-
-        try:
-            if tool_name == "gdb_execute":
-                command = arguments.get("command", "")
-                if not command:
-                    return "Error: No command provided"
-
-                # Execute GDB command
-                process = self.gdb_tool.execute_in_screen(command)
-                result = self._format_gdb_result(command, process)
-
-            elif tool_name == "bash_execute":
-                command = arguments.get("command", "")
-                if not command:
-                    return "Error: No command provided"
-
-                # Execute bash command
-                process = self.bash_tool.execute(command)
-                result = self._format_bash_result(command, process)
-
-            else:
-                return f"Error: Unknown tool '{tool_name}'"
-
-            return self.truncate_tool_output(result)
-
-        except Exception as e:
-            logger.error(f'Tool execution error: {e}', trial=self.trial)
-            return f"Error executing {tool_name}: {str(e)}"
-    
-    def _format_gdb_result(self, command: str, process) -> str:
-        """Format GDB execution result for LLM."""
-        raw_lines = process.stdout.strip().splitlines()
-        
-        # Remove trailing (gdb) prompt
-        if raw_lines and raw_lines[-1].strip().startswith("(gdb)"):
-            raw_lines.pop()
-        
-        # Add (gdb) prefix to first line
-        if raw_lines:
-            raw_lines[0] = f'(gdb) {raw_lines[0].strip()}'
-        
-        stdout = '\n'.join(raw_lines)
-        stderr = process.stderr.strip() if process.stderr else ""
-        
-        result = f"GDB Command: {command}\n\nOutput:\n{stdout}"
-        if stderr:
-            result += f"\n\nStderr:\n{stderr}"
-        
-        return result
-    
-    def _format_bash_result(self, command: str, process) -> str:
-        """Format bash execution result for LLM."""
-        stdout = process.stdout.strip() if process.stdout else ""
-        stderr = process.stderr.strip() if process.stderr else ""
-        returncode = process.returncode
-        
-        result = f"Bash Command: {command}\nReturn Code: {returncode}"
-        if stdout:
-            result += f"\n\nStdout:\n{stdout}"
-        if stderr:
-            result += f"\n\nStderr:\n{stderr}"
-        
-        return result
-    
-    def _has_conclusion(self, content: str) -> bool:
-        """
-        Check if LLM response contains a conclusion.
-        
-        Args:
-            content: LLM response content
-        
-        Returns:
-            True if conclusion is present
-        """
-        if not content:
-            return False
-        
-        # Look for conclusion markers
-        import re
-        
-        # Pattern 1: "Conclusion: True/False"
-        if re.search(r'conclusion:\s*(true|false)', content, re.IGNORECASE):
-            return True
-        
-        # Pattern 2: Structured conclusion with "True Bug:" or "False Positive:"
-        if re.search(r'(true bug|false positive):', content, re.IGNORECASE):
-            return True
-        
-        # Pattern 3: Final determination
-        if re.search(r'(final (determination|analysis)|root cause):', content, re.IGNORECASE):
-            return True
-        
-        return False
-    
-    def _parse_conclusion(self, content: str, crash_result: dict) -> None:
-        """
-        Parse conclusion from LLM response.
-        
-        Args:
-            content: LLM response content
-            crash_result: Dictionary to store parsed results
-        """
-        import re
-        
-        # Try to extract True/False determination
-        # Normalize content for matching
-        content_lower = content.lower()
-
-        # Pattern 1: "Conclusion: True/False" (preferred format)
-        conclusion_match = re.search(
-            r'conclusion:\s*(true|false)',
-            content_lower
-        )
-        # Pattern 2: "Content: True/False" (legacy format)
-        content_match = re.search(
-            r'content:\s*(true|false)',
-            content_lower
-        )
-        # Pattern 3: First word is True/False
-        first_word_match = re.match(
-            r'^\s*(true|false)\b',
-            content_lower
-        )
-
-        if conclusion_match:
-            crash_result['true_bug'] = (conclusion_match.group(1) == 'true')
-        elif content_match:
-            crash_result['true_bug'] = (content_match.group(1) == 'true')
-        elif first_word_match:
-            crash_result['true_bug'] = (first_word_match.group(1) == 'true')
-        else:
-            # Try alternative patterns in text
-            if re.search(r'true bug|project bug', content_lower):
-                crash_result['true_bug'] = True
-            elif re.search(r'false positive|driver bug', content_lower):
-                crash_result['true_bug'] = False
-            else:
-                logger.warning(
-                    f'Could not determine true/false from conclusion',
-                    trial=self.trial
-                )
-                crash_result['true_bug'] = None
-        
-        # Extract analysis/insight
-        # Try to find analysis section
-        analysis_match = re.search(
-            r'(analysis and suggestion|root cause analysis|analysis):\s*(.+)',
-            content,
-            re.IGNORECASE | re.DOTALL
-        )
-        
-        if analysis_match:
-            crash_result['insight'] = analysis_match.group(2).strip()
-        else:
-            # Use the entire content as insight
-            crash_result['insight'] = content
-        
-        logger.info(
-            f'Conclusion parsed: true_bug={crash_result["true_bug"]}, '
-            f'insight_length={len(crash_result.get("insight", ""))}',
-            trial=self.trial
-        )
-    
-    def _extract_crash_function(self, stack_trace: str) -> str:
-        """Extract the crashing function from stack trace."""
-        if not stack_trace:
-            return ""
-        
-        # Try to find function name in stack trace
-        # Common patterns: "in functionName", "at functionName", "functionName()"
-        import re
-        patterns = [
-            r'in\s+(\w+)',
-            r'at\s+(\w+)',
-            r'(\w+)\s*\(',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, stack_trace)
-            if match:
-                return match.group(1)
-        
-        return ""
-    
-    # All deprecated XML-based methods have been removed in favor of OpenAI Function Calling.
-    # The agent now uses chat_with_tools() for all tool interactions.
-    
-    def _check_false_positive(self, run_log: str, project_name: str, 
-                             stack_trace: str) -> Dict[str, Any]:
-        """
-        Check if crash is a false positive (fuzz target bug).
-        
-        Migrated from SemanticAnalyzer logic.
-        
-        Returns:
-            Dictionary with keys:
-            - is_false_positive: bool
-            - fp_type: str (type of false positive)
-            - reason: str (short reason)
-            - description: str (detailed description)
-        """
-        import re
-        
-        # Regex patterns (migrated from SemanticAnalyzer)
-        LIBFUZZER_MODULES_LOADED_REGEX = re.compile(
-            r'^INFO:\s+Loaded\s+\d+\s+(modules|PC tables)\s+\((\d+)\s+.*\).*')
-        LIBFUZZER_COV_REGEX = re.compile(r'.*cov: (\d+) ft:')
-        LIBFUZZER_COV_LINE_PREFIX = re.compile(r'^#(\d+)')
-        LIBFUZZER_STACK_FRAME_LINE_PREFIX = re.compile(r'^\s+#\d+')
-        CRASH_STACK_WITH_SOURCE_INFO = re.compile(r'in.*:\d+:\d+$')
-        
-        LIBFUZZER_LOG_STACK_FRAME_LLVM = '/src/llvm-project/compiler-rt'
-        LIBFUZZER_LOG_STACK_FRAME_LLVM2 = '/work/llvm-stage2/projects/compiler-rt'
-        LIBFUZZER_LOG_STACK_FRAME_CPP = '/usr/local/bin/../include/c++'
-        EARLY_FUZZING_ROUND_THRESHOLD = 3
-        
-        lines = run_log.split('\n')
-        
-        # Parse coverage info
-        initcov, donecov, lastround = None, None, None
-        for line in lines:
+        # Check for early crash
+        for line in run_log.split('\n'):
             if line.startswith('#'):
-                match = LIBFUZZER_COV_LINE_PREFIX.match(line)
-                roundno = int(match.group(1)) if match else None
-                
-                if roundno is not None:
-                    lastround = roundno
-                    if 'INITED' in line and 'cov: ' in line:
-                        initcov = int(line.split('cov: ')[1].split(' ft:')[0])
-                    elif 'DONE' in line and 'cov: ' in line:
-                        donecov = int(line.split('cov: ')[1].split(' ft:')[0])
-        
-        # Extract symptom from run log
-        symptom = self._extract_symptom(run_log)
-        
-        # Parse stack traces
-        crash_stacks = self._parse_stacks_from_libfuzzer_logs(lines)
-        
-        # FP case 1: Common fuzz target errors
-        if symptom == 'null-deref':
-            return {
-                "is_false_positive": True,
-                "fp_type": "NULL_DEREF",
-                "reason": "Null pointer dereference",
-                "description": "Null-deref indicating inadequate parameter initialization or wrong function usage"
-            }
-        
-        if symptom == 'signal':
-            return {
-                "is_false_positive": True,
-                "fp_type": "SIGNAL",
-                "reason": "Signal (assertion failure)",
-                "description": "Signal indicating assertion failure due to inadequate parameter initialization"
-            }
-        
-        if symptom.endswith('fuzz target exited'):
-            return {
-                "is_false_positive": True,
-                "fp_type": "EXIT",
-                "reason": "Fuzz target exited",
-                "description": "Fuzz target exited in a controlled manner, blocking bug discovery"
-            }
-        
-        if symptom.endswith('fuzz target overwrites its const input'):
-            return {
-                "is_false_positive": True,
-                "fp_type": "OVERWRITE_CONST",
-                "reason": "Modified const input",
-                "description": "Fuzz target overwrites its const input"
-            }
-        
-        if 'out-of-memory' in symptom or 'out of memory' in symptom:
-            return {
-                "is_false_positive": True,
-                "fp_type": "FP_OOM",
-                "reason": "Out of memory",
-                "description": "OOM indicating malloc parameter is too large (e.g., using size directly)"
-            }
-        
-        # FP case 2: Crash at init or first few rounds
-        if lastround is None or lastround <= EARLY_FUZZING_ROUND_THRESHOLD:
-            return {
-                "is_false_positive": True,
-                "fp_type": "FP_NEAR_INIT_CRASH",
-                "reason": "Crash near initialization",
-                "description": f"Crash occurred at round {lastround} (≤{EARLY_FUZZING_ROUND_THRESHOLD}), likely initialization issue"
-            }
-        
-        # FP case 3: No func in 1st thread stack belongs to testing project
-        if len(crash_stacks) > 0:
-            first_stack = crash_stacks[0]
-            for stack_frame in first_stack:
-                if self._stack_func_is_of_testing_project(stack_frame):
-                    if 'LLVMFuzzerTestOneInput' in stack_frame:
-                        return {
-                            "is_false_positive": True,
-                            "fp_type": "FP_TARGET_CRASH",
-                            "reason": "Crash in fuzz target code",
-                            "description": "Crash occurred in LLVMFuzzerTestOneInput, not in project code"
-                        }
-                    break
-        
-        # Not a known false positive
-        return {
-            "is_false_positive": False,
-            "fp_type": "NONE",
-            "reason": "Potential true bug",
-            "description": "No false positive pattern detected, proceeding with detailed analysis"
-        }
-    
-    def _extract_symptom(self, fuzzlog: str) -> str:
-        """Extract crash symptom from libFuzzer log."""
-        # This should match SemanticCheckResult.extract_symptom behavior
-        # Simplified version - real implementation would need full logic
-        if 'AddressSanitizer: SEGV on unknown address' in fuzzlog:
-            return 'null-deref'
-        if 'fuzz target exited' in fuzzlog:
-            return 'fuzz target exited'
-        if 'fuzz target overwrites its const input' in fuzzlog:
-            return 'fuzz target overwrites its const input'
-        if 'out-of-memory' in fuzzlog or 'out of memory' in fuzzlog:
-            return 'out-of-memory'
-        # Check for signal
-        if 'ERROR: libFuzzer: deadly signal' in fuzzlog:
-            return 'signal'
-        return 'unknown'
-    
-    def _parse_stacks_from_libfuzzer_logs(self, lines: list[str]) -> list[list[str]]:
-        """Parse stack traces from libFuzzer logs."""
-        import re
-        LIBFUZZER_STACK_FRAME_LINE_PREFIX = re.compile(r'^\s+#\d+')
-        
-        stacks = []
-        stack, stack_parsing = [], False
-        
-        for line in lines:
-            is_stack_frame_line = LIBFUZZER_STACK_FRAME_LINE_PREFIX.match(line) is not None
-            if (not stack_parsing) and is_stack_frame_line:
-                stack_parsing = True
-                stack = [line.strip()]
-            elif stack_parsing and is_stack_frame_line:
-                stack.append(line.strip())
-            elif stack_parsing and (not is_stack_frame_line):
-                stack_parsing = False
-                stacks.append(stack)
-        
-        if stack_parsing:
-            stacks.append(stack)
-        
-        return stacks
-    
-    def _stack_func_is_of_testing_project(self, stack_frame: str) -> bool:
-        """Check if stack frame belongs to testing project."""
-        import re
-        CRASH_STACK_WITH_SOURCE_INFO = re.compile(r'in.*:\d+:\d+$')
-        LIBFUZZER_LOG_STACK_FRAME_LLVM = '/src/llvm-project/compiler-rt'
-        LIBFUZZER_LOG_STACK_FRAME_LLVM2 = '/work/llvm-stage2/projects/compiler-rt'
-        LIBFUZZER_LOG_STACK_FRAME_CPP = '/usr/local/bin/../include/c++'
-        
-        return (bool(CRASH_STACK_WITH_SOURCE_INFO.match(stack_frame)) and
-                LIBFUZZER_LOG_STACK_FRAME_LLVM not in stack_frame and
-                LIBFUZZER_LOG_STACK_FRAME_LLVM2 not in stack_frame and
-                LIBFUZZER_LOG_STACK_FRAME_CPP not in stack_frame)
+                if m := re.match(r'^#(\d+)', line):
+                    if int(m.group(1)) <= 3:
+                        return {"is_false_positive": True, "fp_type": "EARLY_CRASH", "reason": "Early crash", "description": "Crash in first few rounds"}
 
+        return {"is_false_positive": False, "fp_type": "NONE", "reason": "Potential bug", "description": "Needs analysis"}

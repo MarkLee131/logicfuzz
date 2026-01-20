@@ -60,11 +60,11 @@ class FuzzingContext:
     skeleton_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Pre-generated skeletons
 
     # === Synthesized drivers (CBFactory program synthesis) ===
+    # Note: Synthesis is always enabled - CBFactory generates base drivers, LLM Prototyper refines them
     synthesized_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Full drivers from CBFactory
 
     # === Metadata ===
     preparation_time: float = 0.0
-    use_synthesis: bool = False  # Whether synthesis mode is enabled
     
     def __post_init__(self):
         """Validate required data is not empty."""
@@ -199,7 +199,6 @@ class FuzzingContext:
                 driver_size: int = 5,
                 filter_top_k: int = 12,
                 use_cache: bool = True,
-                use_synthesis: bool = False,
                 num_synthesis_drivers: int = 5) -> 'FuzzingContext':
         """
         Prepare all fuzzing data using Liberator project-level modeling.
@@ -220,7 +219,6 @@ class FuzzingContext:
             driver_size: Target length of each API sequence
             filter_top_k: Top-K sequences to keep after LLM filtering
             use_cache: Whether to try loading from cache first (default: True)
-            use_synthesis: Whether to use CBFactory for program synthesis (default: False)
             num_synthesis_drivers: Number of drivers to synthesize with CBFactory (default: 5)
 
         Returns:
@@ -587,27 +585,27 @@ class FuzzingContext:
             log.warning(f"Skeleton generation failed (non-critical): {e}")
             skeleton_drivers = []
 
-        # === Step 11: Generate synthesized drivers with CBFactory (if use_synthesis=True) ===
+        # === Step 11: Generate synthesized drivers with CBFactory (always enabled) ===
+        # Philosophy: CBFactory generates structurally correct base drivers, LLM Prototyper refines them
+        log.info(f'  11/11 Generating synthesized drivers with CBFactory...')
         synthesized_drivers = []
-        if use_synthesis:
-            log.info(f'  11/11 Generating synthesized drivers with CBFactory (use_synthesis=True)...')
-            try:
-                synthesized_drivers = _generate_cbfactory_drivers(
-                    generator=generator,
-                    num_drivers=num_synthesis_drivers,
-                    driver_size=driver_size,
-                    project_name=project_name,
-                    log=log
-                )
-                if synthesized_drivers:
-                    log.info(f'   ✅ Generated {len(synthesized_drivers)} synthesized drivers with CBFactory')
-                else:
-                    log.warning('   ⚠️ No drivers synthesized (CBFactory returned empty)')
-            except Exception as e:
-                log.warning(f"CBFactory synthesis failed: {e}")
-                import traceback
-                log.debug(traceback.format_exc())
-                synthesized_drivers = []
+        try:
+            synthesized_drivers = _generate_cbfactory_drivers(
+                generator=generator,
+                num_drivers=num_synthesis_drivers,
+                driver_size=driver_size,
+                project_name=project_name,
+                log=log
+            )
+            if synthesized_drivers:
+                log.info(f'   ✅ Generated {len(synthesized_drivers)} synthesized drivers with CBFactory')
+            else:
+                log.warning('   ⚠️ No drivers synthesized (CBFactory returned empty)')
+        except Exception as e:
+            log.warning(f"CBFactory synthesis failed: {e}")
+            import traceback
+            log.debug(traceback.format_exc())
+            synthesized_drivers = []
 
         # === Create context ===
         elapsed = time.time() - start_time
@@ -648,8 +646,7 @@ class FuzzingContext:
             pattern_analysis=pattern_analysis,
             skeleton_drivers=skeleton_drivers,
             synthesized_drivers=synthesized_drivers,
-            preparation_time=elapsed,
-            use_synthesis=use_synthesis
+            preparation_time=elapsed
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -667,7 +664,6 @@ class FuzzingContext:
             'skeleton_drivers': self.skeleton_drivers,
             'synthesized_drivers': self.synthesized_drivers,
             'preparation_time': self.preparation_time,
-            'use_synthesis': self.use_synthesis,
         }
     
     @classmethod

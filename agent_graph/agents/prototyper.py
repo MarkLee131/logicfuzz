@@ -39,8 +39,7 @@ class LangGraphPrototyper(LangGraphAgent):
         function_analysis = state.get("function_analysis", {})
         context = state.get('context', {})
 
-        # === Check for synthesis mode (CBFactory as base for LLM refinement) ===
-        use_synthesis = context.get('use_synthesis', False)
+        # === Synthesis mode is always enabled (CBFactory as base for LLM refinement) ===
         synthesized_drivers = context.get('synthesized_drivers', [])
 
         project_apis = context.get('project_apis', [])
@@ -93,8 +92,9 @@ class LangGraphPrototyper(LangGraphAgent):
         include_path_context = self._format_include_path_context(target_path, existing_fuzzer_headers)
 
         # === Synthesis mode: Format CBFactory base driver for LLM refinement ===
+        # Note: Synthesis is always enabled - CBFactory generates base, LLM refines
         synthesis_base_text = ""
-        if use_synthesis and synthesized_drivers:
+        if synthesized_drivers:
             synthesis_base_text = self._format_synthesis_base_driver(synthesized_drivers, state)
             logger.info(
                 f'[Synthesis Mode] Providing {len(synthesized_drivers)} CBFactory drivers as base for LLM refinement',

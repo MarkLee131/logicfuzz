@@ -1372,18 +1372,13 @@ def parse_args() -> argparse.Namespace:
                       dest='use_session_memory',
                       help='Disable session memory (short-memory) for cross-agent consensus sharing.')
 
-  # Program synthesis mode (CBFactory instead of LLM)
-  parser.add_argument('--use-synthesis',
-                      action='store_true',
-                      default=False,
-                      dest='use_synthesis',
-                      help='Use CBFactory program synthesis instead of LLM for driver generation. '
-                           'This generates drivers using traditional constraint-based synthesis.')
+  # Program synthesis configuration (CBFactory + LLM refinement)
+  # Note: Synthesis is always enabled - CBFactory generates base drivers, LLM Prototyper refines them
   parser.add_argument('--num-synthesis-drivers',
                       type=int,
                       default=5,
                       dest='num_synthesis_drivers',
-                      help='Number of drivers to generate with CBFactory when --use-synthesis is enabled (default: 5).')
+                      help='Number of base drivers to generate with CBFactory for LLM refinement (default: 5).')
 
   args = parser.parse_args()
   if args.num_samples:
