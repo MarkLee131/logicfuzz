@@ -28,7 +28,7 @@ from data_prep import introspector
 from experiment import benchmark as benchmarklib
 from experiment import evaluator, oss_fuzz_checkout, textcov
 from experiment.workdir import WorkDirs
-from llm_toolkit import models
+from src.llm import models
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess

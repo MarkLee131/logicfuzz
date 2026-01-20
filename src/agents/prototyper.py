@@ -8,7 +8,7 @@ import logger
 from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
 from src.agents.utils import parse_tag
-from agent_graph.prompt_loader import get_prompt_manager
+from src.utils.prompt_loader import get_prompt_manager
 from data_prep.api_classifier import classify_project_apis, APIRole
 
 
@@ -28,7 +28,7 @@ class LangGraphPrototyper(LangGraphAgent):
     
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         """Generate fuzz target code."""
-        from agent_graph.session_memory_injector import (
+        from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
             merge_session_memory_updates
@@ -613,7 +613,7 @@ Handle var-len relationships and use appropriate callback stubs if needed.
             Formatted validation warnings (empty string if no issues)
         """
         try:
-            from agent_graph.api_validator import validate_fuzz_target
+            from src.utils.api_validator import validate_fuzz_target
             
             is_valid, report = validate_fuzz_target(code, project_name)
             

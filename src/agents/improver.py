@@ -8,7 +8,7 @@ import logger
 from src.workflow.state import FuzzingWorkflowState, add_coverage_attempt
 from src.agents.base import LangGraphAgent
 from src.agents.utils import parse_tag
-from agent_graph.prompt_loader import get_prompt_manager
+from src.utils.prompt_loader import get_prompt_manager
 
 
 class LangGraphImprover(LangGraphAgent):
@@ -33,7 +33,7 @@ class LangGraphImprover(LangGraphAgent):
     
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         """Improve fuzz driver based on coverage analysis recommendations."""
-        from agent_graph.session_memory_injector import (
+        from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
             merge_session_memory_updates

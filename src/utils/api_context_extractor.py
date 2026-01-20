@@ -16,7 +16,7 @@ import logging
 import re
 from typing import Dict, List, Optional, Set
 from data_prep import introspector
-from agent_graph.api_heuristics import (
+from src.utils.api_heuristics import (
     INIT_SUFFIXES,
     CLEANUP_SUFFIXES,
     INIT_REQUIRED_KEYWORDS,

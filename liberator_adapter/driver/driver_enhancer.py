@@ -27,7 +27,7 @@ from liberator_adapter.constraints.special_patterns import (
     TLVAnalysisResult,
     LLMClient,
 )
-from llm_toolkit.adapter import create_llm_adapter
+from src.llm.adapter import create_llm_adapter
 
 logger = logging.getLogger(__name__)
 

@@ -77,7 +77,7 @@ Signature: void foo(int x)
 ### Loading Prompts
 
 ```python
-from agent_graph.prompt_loader import get_prompt_manager
+from src.utils.prompt_loader import get_prompt_manager
 
 # Get the global prompt manager
 pm = get_prompt_manager()

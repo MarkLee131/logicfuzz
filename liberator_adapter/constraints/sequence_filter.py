@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from liberator_adapter.common.api import Api
 from liberator_adapter.common.conditions import FunctionConditionsSet
 from liberator_adapter.prompt_loader import get_prompt_manager
-from llm_toolkit.adapter import create_llm_adapter
+from src.llm.adapter import create_llm_adapter
 
 logger = logging.getLogger(__name__)
 

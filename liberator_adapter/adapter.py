@@ -13,7 +13,7 @@ Clang/LLVM (new way, inferred by adapter)
 from typing import Dict, List, Set, Optional
 from liberator_adapter.common.api import Api, Arg
 from liberator_adapter.dependency import DependencyGraph, TypeDependencyGraphGenerator
-from agent_graph.api_context_extractor import APIContextExtractor
+from src.utils.api_context_extractor import APIContextExtractor
 
 class LiberatorAPIAdapter:
     """

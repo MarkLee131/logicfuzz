@@ -21,7 +21,7 @@ from experiment import oss_fuzz_checkout, textcov
 from experiment.benchmark import Benchmark
 from experiment.fuzz_target_error import SemanticCheckResult
 from experiment.workdir import WorkDirs
-from llm_toolkit.models import DEFAULT_MODEL
+from src.llm.models import DEFAULT_MODEL
 
 # Simplified TriageResult constants (replacing removed llm_toolkit.crash_triager)
 class TriageResult:

@@ -7,8 +7,8 @@ relying on the entire message history.
 """
 
 from typing import Dict, Any
-from agent_graph.state import FuzzingWorkflowState, format_session_memory_for_prompt
-from agent_graph.prompt_loader import get_prompt_manager
+from src.workflow.state import FuzzingWorkflowState, format_session_memory_for_prompt
+from src.utils.prompt_loader import get_prompt_manager
 
 
 def build_prompt_with_session_memory(
@@ -160,7 +160,7 @@ def merge_session_memory_updates(
         # Session memory disabled - return empty dict without updating
         return state.get("session_memory", {})
 
-    from agent_graph.state import (
+    from src.workflow.state import (
         add_api_constraint,
         add_known_fix,
         add_decision,

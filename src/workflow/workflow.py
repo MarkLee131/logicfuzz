@@ -7,7 +7,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from src.workflow.state import FuzzingWorkflowState, create_initial_state
 from src.workflow.adapters import ConfigAdapter
-from agent_graph.nodes import (
+from src.workflow.nodes import (
     prototyper_node,
     fixer_node,
     crash_analyzer_node,
@@ -179,9 +179,9 @@ class FuzzingWorkflow:
     
     def _create_full_workflow(self) -> StateGraph:
         """Create the full supervisor-based workflow."""
-        from agent_graph.nodes.coverage_analyzer_node import coverage_analyzer_node
-        from agent_graph.nodes.crash_feasibility_analyzer_node import crash_feasibility_analyzer_node
-        from agent_graph.nodes.improver_node import improver_node
+        from src.workflow.nodes import coverage_analyzer_node
+        from src.workflow.nodes import crash_feasibility_analyzer_node
+        from src.workflow.nodes import improver_node
         
         workflow = StateGraph(FuzzingWorkflowState)
         

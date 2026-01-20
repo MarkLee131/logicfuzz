@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool
 from src.workflow.state import FuzzingWorkflowState, add_coverage_attempt
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
-from agent_graph.prompt_loader import get_prompt_manager
+from src.utils.prompt_loader import get_prompt_manager
 from src.tools.langchain_adapters import BashExecuteTool
 
 
@@ -73,7 +73,7 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         from tool.container_tool import ProjectContainerTool
         from experiment import benchmark as benchmarklib
-        from agent_graph.session_memory_injector import (
+        from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
             merge_session_memory_updates

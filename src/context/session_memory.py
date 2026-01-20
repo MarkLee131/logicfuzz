@@ -8,7 +8,7 @@ relying on the entire message history.
 
 from typing import Dict, Any
 from src.workflow.state import FuzzingWorkflowState, format_session_memory_for_prompt
-from agent_graph.prompt_loader import get_prompt_manager
+from src.utils.prompt_loader import get_prompt_manager
 
 
 def build_prompt_with_session_memory(

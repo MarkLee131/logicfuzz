@@ -10,13 +10,13 @@ from multiprocessing import pool
 from typing import List, Optional
 
 import logger
-from agent_graph import FuzzingWorkflow
+from src.workflow import FuzzingWorkflow
 from experiment import builder_runner as builder_runner_lib
 from experiment import evaluator as exp_evaluator
 from experiment import oss_fuzz_checkout, textcov
 from experiment.benchmark import Benchmark
 from experiment.workdir import WorkDirs
-from llm_toolkit import models
+from src.llm import models
 from results import BenchmarkResult, Result, TrialResult
 
 # WARN: Avoid high value for NUM_EVA for local experiments.
@@ -189,7 +189,7 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       - header_info: Header file information
       - existing_fuzzer_headers: Headers from existing fuzzers
   """
-  from agent_graph.data_context import FuzzingContext
+  from src.context.data_context import FuzzingContext
 
   project_name = benchmark.project
 
@@ -277,7 +277,7 @@ def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
     
     # Convert LangGraph state back to legacy result format using StateAdapter
     trial_logger.info('🔄 Converting state to result_history...')
-    from agent_graph.adapters import StateAdapter
+    from src.workflow.adapters import StateAdapter
     
     # Use StateAdapter to properly convert state to result_history
     # This creates a complete result_history with BaseResult, BuildResult, RunResult, etc.
