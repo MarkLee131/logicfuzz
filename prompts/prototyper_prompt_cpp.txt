@@ -10,156 +10,141 @@ PROJECT ANALYSIS:
 
 {ADDITIONAL_CONTEXT}
 
-REQUIREMENTS:
-1. **PRIORITY: Use PARSER APIs** (Parse, Read, Load, Decode) - they consume external input and have highest bug potential
-2. If Parser APIs exist, build your driver around them (even if not in provided sequences)
-3. If no Parser APIs, pick ONE sequence from the provided list
-4. Use skeleton headers only (filtered, safe)
-5. Handle resource lifecycle: init -> use -> cleanup
-6. Match buffer sizes with length parameters (var-len relationships)
+=== CRITICAL: API QUANTITY OVER INPUT COMPLEXITY ===
 
-C++ FUZZ TARGET NOTES:
-- Use FuzzedDataProvider for structured input extraction
-- Use `extern "C"` for LLVMFuzzerTestOneInput declaration
-- If the target library is written in C, wrap its headers in `extern "C" { }`
+**THE #1 RULE: Call MORE library APIs, not write FANCY input generators.**
 
-PARAMETER STRATEGY:
+Coverage comes from exercising library code, not from your helper functions.
+Every line of helper code is a line NOT calling library APIs.
 
-DEFAULT: FuzzedDataProvider for splitting fuzzer input
-
+BAD EXAMPLE (DO NOT DO THIS):
 ```cpp
-#include <fuzzer/FuzzedDataProvider.h>
+// 150 lines of helper functions...
+static void AppendStr(...) { ... }      // 20 lines - WASTED
+static void AppendInt(...) { ... }      // 10 lines - WASTED
+static std::string MakeJson(...) { ... } // 50 lines - WASTED
+static std::string MakeXML(...) { ... }  // 40 lines - WASTED
 
+extern "C" int LLVMFuzzerTestOneInput(...) {
+  std::string input = MakeJson(fdp, 5);  // Complex input
+  library_parse(input.c_str());          // ONLY 1 API CALL!
+  return 0;
+}
+// Result: 150 lines of YOUR code, 1 line of LIBRARY code = LOW COVERAGE
+```
+
+GOOD EXAMPLE (DO THIS):
+```cpp
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   FuzzedDataProvider fdp(data, size);
 
-  // Consume data for each API call
-  std::string input1 = fdp.ConsumeRandomLengthString(1024);
-  int param1 = fdp.ConsumeIntegral<int>();
+  // Simple input - just get bytes from fuzzer
+  std::string input = fdp.ConsumeRandomLengthString(4096);
 
-  // Call APIs in sequence order
-  void* ctx = api_create(...);
+  // Call MANY library APIs
+  void* ctx = lib_create();
   if (!ctx) return 0;
 
-  api_init(ctx, input1.data(), input1.size());
-  api_process(ctx, param1);
+  lib_parse(ctx, input.data(), input.size());  // Parser API
+  lib_validate(ctx);                            // +1 API
+  lib_get_count(ctx);                           // +1 API
+  lib_get_item(ctx, 0);                         // +1 API
+  lib_iterate(ctx);                             // +1 API
+  lib_serialize(ctx);                           // +1 API
 
-  api_cleanup(ctx);
+  lib_destroy(ctx);
   return 0;
+}
+// Result: 20 lines total, 7 library API calls = HIGH COVERAGE
+```
+
+=== CODE BUDGET (STRICTLY ENFORCED) ===
+
+| Component | Budget | Violation = REJECTION |
+|-----------|--------|----------------------|
+| Input generation | MAX 15 lines | >30 lines = BAD |
+| Helper functions | MAX 10 lines total | >20 lines = BAD |
+| Library API calls | MIN 5 different APIs | <3 APIs = BAD |
+
+**If you write >30 lines of helper/input code, START OVER with simpler approach.**
+
+=== REQUIREMENTS ===
+
+1. **PRIORITY: Parser APIs** (Parse, Read, Load, Decode) - highest bug potential
+2. **QUANTITY: Call 5+ different library APIs** - not just 1-2
+3. **SIMPLICITY: Pass fuzzer data directly** - avoid complex generators
+4. Use FuzzedDataProvider for basic splitting only
+5. Handle resource lifecycle: init -> use -> cleanup
+
+=== C++ FUZZ TARGET NOTES ===
+
+- Use `extern "C"` for LLVMFuzzerTestOneInput declaration
+- If the target library is written in C, wrap its headers in `extern "C" { }`
+
+=== SIMPLE INPUT PATTERNS ===
+
+For MOST APIs, just pass fuzzer data directly:
+
+```cpp
+// Pattern 1: Direct bytes
+lib_parse(data, size);
+
+// Pattern 2: String from fuzzer
+std::string s = fdp.ConsumeRandomLengthString(4096);
+lib_parse_string(s.c_str(), s.size());
+
+// Pattern 3: Integer parameters
+int flags = fdp.ConsumeIntegral<int>();
+lib_set_flags(ctx, flags);
+
+// Pattern 4: Boolean choices
+if (fdp.ConsumeBool()) {
+  lib_enable_feature(ctx);
 }
 ```
 
-VAR-LEN HANDLING:
-- When buffer and size parameters are related, use the SAME source:
+For structured formats (JSON, XML), use MINIMAL generation:
+```cpp
+// ACCEPTABLE: Simple one-liner, not a 50-line function
+std::string json = "{\"key\":" + std::to_string(fdp.ConsumeIntegral<int>()) + "}";
+```
+
+=== VAR-LEN HANDLING ===
+
+When buffer and size are related:
 ```cpp
 std::string buf = fdp.ConsumeRandomLengthString(4096);
 api_func(buf.data(), buf.size());  // size matches buffer
 ```
 
-COVERAGE-OPTIMIZED INPUT STRATEGIES:
+=== CALLBACK HANDLING ===
 
-1. STRUCTURED INPUT GENERATION (for parsers like JSON, XML, config files):
-   - DO NOT use raw random strings for structured input formats
-   - Generate valid structured input using fuzz-derived choices
-   - Example for JSON parsers:
+Use minimal stubs:
 ```cpp
-// BAD: Random string → mostly invalid → parse fails early → low coverage
-std::string json = fdp.ConsumeRandomLengthString(4096);  // DON'T DO THIS
-
-// GOOD: Structured generation → valid input → deep parsing → high coverage
-static std::string MakeJson(FuzzedDataProvider& fdp, int depth) {
-  if (depth <= 0) {
-    switch (fdp.ConsumeIntegralInRange<int>(0, 4)) {
-      case 0: return "null";
-      case 1: return fdp.ConsumeBool() ? "true" : "false";
-      case 2: return std::to_string(fdp.ConsumeIntegral<int>());
-      case 3: return "\"" + fdp.ConsumeRandomLengthString(16) + "\"";
-      default: return "\"\"";
-    }
-  }
-  if (fdp.ConsumeBool()) {  // object
-    std::string k = fdp.ConsumeRandomLengthString(8);
-    if (k.empty()) k = "key";
-    return "{\"" + k + "\":" + MakeJson(fdp, depth-1) + "}";
-  } else {  // array
-    return "[" + MakeJson(fdp, depth-1) + "]";
-  }
-}
-std::string json = MakeJson(fdp, fdp.ConsumeIntegralInRange<int>(1, 4));
+void my_callback(void* ctx, int status) { /* empty */ }
+api_register_callback(ctx, my_callback, nullptr);
 ```
 
-2. BRANCH COVERAGE FOR DICT/OBJECT APIs:
-   - Pre-populate objects with items to exercise BOTH "found" and "not found" paths
-```cpp
-// BAD: Empty object → always "not found" → misses half the branches
-cJSON *obj = cJSON_CreateObject();
-cJSON_HasObjectItem(obj, key.c_str());  // always not-found
+=== IMPLEMENTATION STEPS ===
 
-// GOOD: Pre-seed known key → hit both found and not-found paths
-cJSON *obj = cJSON_CreateObject();
-cJSON_AddStringToObject(obj, "probe", "value");  // add known item
-cJSON_HasObjectItem(obj, "probe");    // FOUND path
-cJSON_HasObjectItem(obj, "missing");  // NOT-FOUND path
-```
+1. **Headers**: Use ONLY skeleton headers, filter internal/*
+2. **Init**: Call create/init APIs first, check returns
+3. **Use**: Call 5+ library APIs with simple fuzzer-derived inputs
+4. **Cleanup**: Free in reverse order
 
-3. ESCAPE SEQUENCES AND SPECIAL CHARACTERS (for string processing):
-   - Include escape sequences to test string parsing edge cases
-```cpp
-// Include escapes: \\, \n, \t, \", unicode \uXXXX
-std::string s = "test\\n\\t\\\"\\u0041";
-```
+=== OUTPUT FORMAT ===
 
-4. MIX VALID AND MALFORMED INPUT (for error path coverage):
-   - Sometimes generate intentionally malformed input to hit error handling code
-```cpp
-// Occasionally add malformed data to test error paths
-if (fdp.ConsumeBool()) {
-  int mut = fdp.ConsumeIntegralInRange<int>(0, 3);
-  if (mut == 0 && !input.empty()) input.pop_back();  // truncate
-  if (mut == 1) input += "trailing_garbage";         // extra data
-  if (mut == 2) input = "{incomplete";               // malformed
-}
-```
-
-CALLBACK HANDLING:
-- Use stub functions for callback parameters:
-```cpp
-void my_callback(void* ctx, int status) {
-    // Minimal stub - just return
-}
-api_register_callback(ctx, my_callback, NULL);
-```
-
-IMPLEMENTATION STEPS:
-
-1. Headers:
-   - Use ONLY reference skeleton headers if exists
-   - Filter out internal/*, detail/*, private/*
-
-2. Resource initialization:
-   - Call create/init APIs first
-   - Check return values before proceeding
-
-3. API sequence execution:
-   - Follow exact order from chosen sequence
-   - Use FuzzedDataProvider for varied inputs
-   - Handle var-len relationships
-
-4. Cleanup:
-   - Call cleanup/free/destroy APIs
-   - Cleanup in REVERSE order of creation
-
-OUTPUT FORMAT:
-
-**Conclusion:** Chosen sequence, APIs called, var-len handling, cleanup order
+**Conclusion:** [1-2 sentences: which APIs called, why]
 
 ```cpp
-[Complete LibFuzzer code with LLVMFuzzerTestOneInput]
+[Complete code - should be 30-60 lines total, NOT 150+ lines]
 ```
 
-CRITICAL REQUIREMENTS:
-- Follow exact markdown format above
-- Keep conclusion brief (max 3 sentences)
-- Include complete, compilable code in ```cpp block - NO placeholders
-- Only ONE ```cpp code block containing the complete fuzz target
-- NO extra commentary outside conclusion and code block
+=== FINAL CHECKLIST ===
+
+Before submitting, verify:
+- [ ] Total code < 80 lines
+- [ ] Helper functions < 20 lines total
+- [ ] Library API calls >= 5 different APIs
+- [ ] No complex input generators (MakeJson, MakeXML, etc.)
+- [ ] Uses FuzzedDataProvider simply, not elaborately
