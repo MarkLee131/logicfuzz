@@ -121,7 +121,6 @@ def aggregate_results(target_stats: list[tuple[int, exp_evaluator.Result]],
                           max_coverage_diff_report, all_textcov)
 
 def check_targets(
-    ai_binary: str,
     benchmark: Benchmark,
     work_dirs: WorkDirs,
     generated_targets: List[str],
@@ -149,10 +148,9 @@ def check_targets(
 
   evaluator = exp_evaluator.Evaluator(builder_runner, benchmark, work_dirs)
 
-  ai_target_pairs = [(ai_binary, target) for target in generated_targets]
   with pool.ThreadPool(NUM_EVA) as p:
     for i, target_stat in enumerate(
-        p.starmap(evaluator.check_target, ai_target_pairs)):
+        p.map(evaluator.check_target, generated_targets)):
       if target_stat is None:
         logging.error('This should never happen: Error evaluating target: %s',
                       generated_targets[i])

@@ -1,0 +1,4 @@
+"language": "c++"
+"project": "libaom"
+"target_name": "av1_dec_fuzzer"
+"target_path": "/src/aom/examples/av1_dec_fuzzer.cc"

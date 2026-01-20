@@ -287,13 +287,16 @@ class Evaluator:
 
     return name
 
-  def _fix_generated_fuzz_target(self, ai_binary: str,
+  def _fix_generated_fuzz_target(self,
                                  generated_oss_fuzz_project: str,
                                  target_path: str, iteration: int,
                                  build_result: BuildResult,
                                  run_result: Optional[RunResult],
                                  dual_logger: _Logger, language: str):
-    """Fixes the generated fuzz target for C/C++."""
+    """Fixes the generated fuzz target for C/C++.
+
+    Note: This is legacy code. LLM fixing is now handled by LangGraph workflow.
+    """
     error_desc, errors = '', []
     if build_result.succeeded:
       # For C/C++
@@ -305,9 +308,8 @@ class Evaluator:
     else:
       error_desc, errors = None, build_result.errors
 
-    code_fixer.llm_fix(ai_binary, target_path, self.benchmark, iteration,
-                       error_desc, errors, self.builder_runner.fixer_model_name,
-                       language)
+    # Legacy: code_fixer module removed in LangGraph migration
+    logger.warning('Legacy _fix_generated_fuzz_target called - LLM fixing not available')
     shutil.copyfile(
         target_path,
         os.path.join(oss_fuzz_checkout.OSS_FUZZ_DIR, 'projects',
@@ -315,56 +317,40 @@ class Evaluator:
 
   def triage_crash(
       self,
-      ai_binary: str,
       generated_oss_fuzz_project: str,
       driver_path: str,
       run_result: RunResult,
       dual_logger: _Logger,
   ) -> str:
-    """Triages the crash."""
+    """Triages the crash.
+
+    Note: This is legacy code. LLM crash triage is now handled by LangGraph workflow
+    (crash_analyzer agent). This method returns NOT_APPLICABLE.
+    """
     if run_result.crash_info:
-      crash_info = run_result.crash_info
-      crash_func = run_result.semantic_check.crash_func
-      return crash_triager.llm_triage(
-          ai_binary,
-          driver_path,
-          self.benchmark,
-          crash_info,
-          crash_func,
-          self.builder_runner.fixer_model_name,
-      )
+      # Legacy: crash_triager module removed in LangGraph migration
+      logger.warning('Legacy triage_crash called - LLM triage not available. '
+                     'Use LangGraph crash_analyzer agent instead.')
+      dual_logger.log(f'Warning: Legacy triage in {generated_oss_fuzz_project}. '
+                      'LLM crash triage is handled by LangGraph workflow.')
+      return TriageResult.NOT_APPLICABLE
 
     dual_logger.log(f'Warning: no crash info in {generated_oss_fuzz_project}.')
     return TriageResult.NOT_APPLICABLE
 
-  def extend_build_with_corpus(self, ai_binary, target_path,
-                               generated_oss_fuzz_project):
-    """Extends an OSS-Fuzz project with corpus generated programmatically."""
-    generated_project_path = os.path.join(oss_fuzz_checkout.OSS_FUZZ_DIR,
-                                          'projects',
-                                          generated_oss_fuzz_project)
-    generated_corp = corpus_generator.get_script(
-        ai_binary, self.builder_runner.fixer_model_name, target_path,
-        self.benchmark)
+  def extend_build_with_corpus(self, target_path: str,
+                               generated_oss_fuzz_project: str):
+    """Extends an OSS-Fuzz project with corpus generated programmatically.
 
-    corpus_generator_path = os.path.join(generated_project_path, 'corp_gen.py')
-    with open(corpus_generator_path, 'w') as f:
-      f.write(generated_corp)
+    Note: This is legacy code. LLM corpus generation was removed in LangGraph migration.
+    This method now only logs a warning.
+    """
+    # Legacy: corpus_generator module removed in LangGraph migration
+    logger.warning('Legacy extend_build_with_corpus called - LLM corpus generation '
+                   'not available. Skipping corpus extension for %s.',
+                   generated_oss_fuzz_project)
 
-    with open(os.path.join(generated_project_path, 'Dockerfile'), 'a') as f:
-      f.write('COPY corp_gen.py $SRC/corp_gen.py\n')
-    target_harness_file = os.path.basename(self.benchmark.target_path)
-    target_harness_file = os.path.splitext(target_harness_file)[0]
-    corpus_dst = '/src/generated-corpus/*'
-    with open(os.path.join(generated_project_path, 'build.sh'), 'a') as f:
-      f.write('\n# Generate a corpus for the modified harness.')
-      f.write('\nmkdir -p /src/generated-corpus')
-      f.write('\npushd /src/generated-corpus')
-      f.write('\npython3 $SRC/corp_gen.py')
-      f.write('\npopd')
-      f.write(f'\nzip $OUT/{target_harness_file}_seed_corpus.zip {corpus_dst}')
-
-  def check_target(self, ai_binary, target_path: str) -> Result:
+  def check_target(self, target_path: str) -> Result:
     """Builds and runs a target."""
     generated_target_name = os.path.basename(target_path)
     sample_id = os.path.splitext(generated_target_name)[0]
@@ -385,8 +371,7 @@ class Evaluator:
     # TODO: Log run success/failure.
 
     if GENERATE_CORPUS:
-      self.extend_build_with_corpus(ai_binary, target_path,
-                                    generated_oss_fuzz_project)
+      self.extend_build_with_corpus(target_path, generated_oss_fuzz_project)
 
     # Loop of evaluating and fixing fuzz target.
     llm_fix_count = 0
@@ -461,7 +446,7 @@ class Evaluator:
                       f'{self.builder_runner.fixer_model_name}, '
                       f'attempt {llm_fix_count}.')
       try:
-        self._fix_generated_fuzz_target(ai_binary, generated_oss_fuzz_project,
+        self._fix_generated_fuzz_target(generated_oss_fuzz_project,
                                         target_path, llm_fix_count,
                                         build_result, run_result, dual_logger,
                                         self.benchmark.language)
@@ -514,7 +499,6 @@ class Evaluator:
     dual_logger.log(f'Triaging the crash related to {target_path} with '
                     f'{self.builder_runner.fixer_model_name}.')
     run_result.triage = self.triage_crash(
-        ai_binary,
         generated_oss_fuzz_project,
         target_path,
         run_result,

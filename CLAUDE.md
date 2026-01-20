@@ -44,19 +44,65 @@ Benchmark YAML files in `comparison/` define "target projects" to fuzz.
 
 ---
 
+## 核心架构
+
+### Agent框架
+
+基于LangGraph的多Agent协作系统：
+
+| Agent | 文件 | 功能 |
+|-------|------|------|
+| **LangGraphPrototyper** | `agent_graph/agents/prototyper.py` | 生成fuzz target代码，使用synthesized drivers作为LLM refinement基础 |
+| **LangGraphCoverageAnalyzer** | `agent_graph/agents/coverage_analyzer.py` | 分析覆盖率，提取改进建议 |
+| **LangGraphCrashAnalyzer** | `agent_graph/agents/crash_analyzer.py` | 使用GDB+Bash工具分析crash |
+| **LangGraphCrashFeasibilityAnalyzer** | `agent_graph/agents/crash_feasibility_analyzer.py` | 判断crash可行性 |
+| **LangGraphFixer** | `agent_graph/agents/fixer.py` | 修复编译/运行时错误 |
+
+**ToolCallingMixin** (`agent_graph/agents/tool_calling_mixin.py`):
+- ReAct风格的工具调用循环
+- 支持并行工具执行（最多4个worker）
+- 自动检测结论并终止循环
+
+### 数据流
+
+```
+ProjectDriverGenerator
+    ↓ 提取APIs, 构建grammar
+FuzzingContext.prepare_project_level()
+    ↓ 生成API序列
+CBFactory
+    ↓ 约束求解生成skeleton drivers
+LangGraphPrototyper
+    ↓ LLM refinement
+FuzzTarget (可编译的driver)
+```
+
+### 关键数据结构
+
+**FuzzingContext** (`agent_graph/data_context.py`):
+- 不可变dataclass，存储fuzzing工作流所有数据
+- `project_apis`: 提取的所有API
+- `api_sequences`: 从grammar生成的调用序列
+- `dependency_graph`: 类型依赖图
+- `pattern_analysis`: VarLen/Loop/Callback/TLV分析结果
+- `skeleton_drivers`: 预生成的driver骨架
+- `synthesized_drivers`: CBFactory生成的完整drivers
+
+---
+
 ## Liberator静态分析瓶颈与解决策略
 
 ### 瓶颈分类总览
 
-| ID | 问题 | 影响 | 解决策略 |
-|----|------|------|----------|
-| **L1** | 类型依赖过度连接 | 误报多 | LLM语义过滤 |
-| **L2** | Var-len关系硬编码 | 不完整 | LLM推断 |
-| **L3** | 回调函数处理 | 丢失路径 | Stub + LLM补全 |
-| **L4** | 循环API调用 | 不支持 | 模式识别 |
-| **L5** | API角色识别 | 启发式 | LLM分类 |
-| **L6** | 生命周期追踪 | 不精确 | LLM验证 |
-| **L7** | Guard条件提取 | 未实现 | 延后 |
+| ID | 问题 | 影响 | 解决策略 | 状态 |
+|----|------|------|----------|------|
+| **L1** | 类型依赖过度连接 | 误报多 | LLM语义过滤 | ✅ 已实现 |
+| **L2** | Var-len关系硬编码 | 不完整 | LLM推断 | ✅ 已实现 |
+| **L3** | 回调函数处理 | 丢失路径 | Stub + LLM补全 | ✅ 已实现 |
+| **L4** | 循环API调用 | 不支持 | 模式识别 | ✅ 已实现 |
+| **L5** | API角色识别 | 启发式 | LLM分类 | ✅ 已实现 |
+| **L6** | 生命周期追踪 | 不精确 | LLM验证 | ✅ 已实现 |
+| **L7** | Guard条件提取 | 未实现 | 延后 | ❌ 延后 |
 
 ---
 
@@ -68,11 +114,13 @@ Benchmark YAML files in `comparison/` define "target projects" to fuzz.
 结果: 依赖数量虚高 (最多79个依赖)
 ```
 
-**当前状态**: 接受过度连接，后续用LLM过滤
-
-**解决策略**:
-- ✅ Provenance追踪（已实现）: 区分指针来源
-- ✅ LLM语义验证（已实现）: `LLMSequenceFilter`
+**解决策略**: ✅ 已实现
+- **ProvenanceChecker** (`liberator_adapter/constraints/provenance_checker.py`): 区分指针来源
+  - 支持多种provenance tag: HEAP_MALLOC, RETURN_OPAQUE, PARAM_BORROWED等
+  - 兼容性规则过滤不合理的依赖路径
+- **LLMSequenceFilter** (`liberator_adapter/constraints/sequence_filter.py`): 两阶段过滤
+  - 基础过滤: 空序列、长度限制(max 20)
+  - LLM语义验证: 批量API分类
 
 ---
 
@@ -84,22 +132,22 @@ void process(char* data, size_t len);  // data长度 = len?
 void read(void* buf, size_t size, size_t count, FILE* f);  // buf长度 = size*count?
 ```
 
-**Liberator做法**: 硬编码 `len_depends_on` 字段
+**解决策略**: ✅ 已实现 `VarLenAnalyzer`
 
-**局限性**:
-- 无法处理复杂计算: `len = size * count + header_size`
-- 无法处理间接关系: 长度存在struct字段里
-- 无法处理条件关系: `if (flag) len = a; else len = b;`
+**实现**: `liberator_adapter/constraints/special_patterns.py:65-348`
 
-**解决策略**: LLM推断
-```python
-# Prompt: 分析函数参数间的长度关系
-VARLEN_ANALYSIS_PROMPT = '''
-Analyze the relationship between buffer and size parameters:
-Function: {signature}
-Which parameter specifies the length/size of which buffer?
-'''
-```
+- **Phase 1 (静态分析)**:
+  - 识别(pointer, integer)参数对
+  - 指针类型模式: `char*`, `void*`, `uint8_t*`等
+  - 命名模式: `buf/buffer/data` + `len/length/size`
+  - 相邻参数检测
+
+- **Phase 2 (LLM确认)**:
+  - 可选的LLM验证语义关系
+  - 处理复杂关系: `size*count`, headers等
+  - 当LLM不可用时fallback到启发式
+
+- **缓存**: 按API缓存分析结果
 
 ---
 
@@ -111,22 +159,26 @@ typedef void (*callback_t)(void* data, int result);
 void async_operation(callback_t cb, void* user_data);
 ```
 
-**Liberator做法**: 生成stub函数
-```c
-void stub_callback(void* data, int result) {
-    // 空实现
-}
-```
+**解决策略**: ✅ 已实现 `CallbackAnalyzer`
 
-**局限性**:
-- 丢失回调内的资源操作
-- 无法验证回调的约束条件
-- 异步/事件驱动API不完整
+**实现**: `liberator_adapter/constraints/special_patterns.py:612-902`
 
-**解决策略**:
-1. **保守策略**: 保留stub，接受不完整
-2. **LLM补全**: 让LLM生成合理的回调实现
-3. **模式库**: 收集常见回调模式（如comparator, visitor）
+- **Phase 1 (模式检测)**:
+  - 函数指针类型识别: `(*)(...)`, `type (*)(...)`
+  - 关键词检测: `_func`, `_callback`, `_handler`, `_hook`
+  - 基于类型的分类
+
+- **Phase 2 (LLM生成)**:
+  - 可选的LLM生成专用stub
+  - 预置8种回调类型模板:
+    - COMPARATOR: qsort风格
+    - READER/WRITER: 流式读写
+    - ALLOCATOR/DEALLOCATOR: 内存管理
+    - VISITOR: 树遍历
+    - HANDLER: 事件回调
+
+- **DriverEnhancer集成** (`liberator_adapter/driver/driver_enhancer.py`):
+  - `EnhancedCallbackStubGenerator`: 基于CallbackAnalyzer生成定制stub
 
 ---
 
@@ -138,23 +190,22 @@ A → B → C → A  (循环)
 result: 无限展开 或 截断
 ```
 
-**常见需要循环的模式**:
-```c
-// 迭代器模式
-while ((item = get_next(iter)) != NULL) {
-    process(item);
-}
+**解决策略**: ✅ 已实现 `LoopPatternAnalyzer`
 
-// 增量读取
-while (bytes_read < total) {
-    bytes_read += read(buf, remaining);
-}
-```
+**实现**: `liberator_adapter/constraints/special_patterns.py:375-572`
 
-**解决策略**:
-1. 识别常见循环模式
-2. 生成有界循环（最多N次）
-3. LLM识别是否需要循环
+- **Phase 1 (命名模式检测)**:
+  - 迭代器模式: `_next`, `_iterate`, `_foreach`, `get_next`
+  - 增量模式: `_read`, `_recv`, `_fetch`, `_pull`
+  - 状态机模式: `_process`, `_run`, `_execute`, `_tick`
+  - 返回类型分析: bool/int/ssize_t/size_t 表示继续条件
+
+- **Phase 2 (LLM确认)**:
+  - 细化循环类型和终止条件
+  - 生成代码模板
+
+- **循环类型**: ITERATOR, INCREMENTAL, STATE_MACHINE, NONE
+- **安全限制**: 最大迭代100次
 
 ---
 
@@ -166,14 +217,15 @@ while (bytes_read < total) {
 *_free, *_destroy → CLEANUP
 ```
 
-**局限性**:
-- 命名不规范的API漏识别
-- 语义复杂的API误判（如`realloc`既是CREATE又是CLEANUP）
-- 项目特定命名无法覆盖
-
 **解决策略**: ✅ 已实现 `LLMLifecycleValidator`
-- 移除硬编码启发式
-- 完全使用LLM进行语义分类
+
+**实现**: `liberator_adapter/constraints/sequence_filter.py:87-366`
+
+- 完全使用LLM进行语义分类，移除硬编码启发式
+- **生命周期阶段**: CREATE, INIT, USE, CLEANUP, UNKNOWN
+- **批量操作**: 单次LLM调用处理多个API
+- **缓存**: 字典缓存避免重复查询
+- **Fallback**: LLM不可用时优雅降级
 
 ---
 
@@ -185,14 +237,10 @@ class Access(Enum):
     READ, WRITE, RETURN, CREATE, DELETE, NONE
 ```
 
-**局限性**:
-- 无法追踪多阶段生命周期: UNINITIALIZED → ALIVE → DEAD
-- 无法检测: use-after-free, double-free, uninitialized use
-- 无法处理所有权转移
-
 **解决策略**: ✅ 已实现 LLM验证
-- `LLMLifecycleValidator.validate_sequence()`
-- 检测生命周期违规
+- `LLMLifecycleValidator.validate_sequence()`: 完整序列生命周期验证
+- 检测生命周期违规: use-after-free, double-free等
+- 返回`LifecycleValidationResult`包含violation列表
 
 ---
 
@@ -207,7 +255,7 @@ if (ctx->initialized) {
 
 **影响**: 生成的driver可能违反前提条件
 
-**解决策略**: 延后实现
+**状态**: ❌ 延后实现
 - 需要更复杂的静态分析
 - 可以用LLM从文档/注释推断
 
@@ -215,49 +263,50 @@ if (ctx->initialized) {
 
 ### 特殊场景实现状态
 
-| 场景 | Phase 1 (静态) | Phase 2 (LLM) | Driver生成 |
-|------|----------------|---------------|------------|
-| **S1. Var-len** | ✅ 类型+命名匹配 | ✅ LLM确认 | ⚠️ 模板 |
-| **S2. TLV** | ✅ 解析函数识别 | ✅ LLM确认 | ⚠️ 模板 |
-| **S3. Loop** | ✅ 模式识别 | ✅ LLM确认 | ⚠️ 模板 |
-| **S4. Callback** | ✅ 函数指针检测 | ✅ LLM生成 | ✅ Stub模板 |
+| 场景 | Phase 1 (静态) | Phase 2 (LLM) | Driver生成 | 实现位置 |
+|------|----------------|---------------|------------|----------|
+| **S1. Var-len** | ✅ 类型+命名匹配 | ✅ LLM确认 | ✅ 模板生成 | `VarLenAnalyzer` |
+| **S2. TLV** | ✅ 解析函数识别 | ✅ LLM确认 | ✅ 格式检测 | `TLVAnalyzer` |
+| **S3. Loop** | ✅ 模式识别 | ✅ LLM确认 | ✅ 有界循环 | `LoopPatternAnalyzer` |
+| **S4. Callback** | ✅ 函数指针检测 | ✅ LLM生成 | ✅ 8种Stub模板 | `CallbackAnalyzer` |
 
-**实现文件**: `liberator_adapter/constraints/special_patterns.py`
-- `VarLenAnalyzer` - 变长参数分析
-- `LoopPatternAnalyzer` - 循环模式分析
-- `CallbackAnalyzer` - 回调函数分析
-- `TLVAnalyzer` - TLV格式分析
-- `SpecialPatternAnalyzer` - 统一分析器
+**统一接口**: `SpecialPatternAnalyzer` (`special_patterns.py:1110-1200`)
+- 协调所有四种分析器
+- 提供便捷方法: `get_varlen_relations()`, `needs_loop()`, `get_callbacks()`, `is_structured_parser()`
 
----
-
-### 解决策略总结
-
-| 策略 | 适用瓶颈 | 实现状态 |
-|------|----------|----------|
-| **Provenance追踪** | L1 | ✅ 已实现 |
-| **LLM语义过滤** | L1, L5, L6 | ✅ 已实现 |
-| **LLM角色分类** | L5 | ✅ 已实现 |
-| **LLM生命周期验证** | L6 | ✅ 已实现 |
-| **Var-len分析** | L2, S1 | ✅ 已实现 |
-| **TLV格式识别** | S2 | ✅ 已实现 |
-| **循环模式识别** | L4, S3 | ✅ 已实现 |
-| **回调Stub生成** | L3, S4 | ✅ 已实现 |
-| **Guard提取** | L7 | ❌ 延后 |
+**TLVAnalyzer** (`special_patterns.py:931-1093`):
+- 解析函数识别: `_parse`, `_decode`, `_deserialize`, `_unmarshal`, `_unpack`
+- 格式类型: TLV, FIXED_HEADER, LENGTH_PREFIXED, RAW, UNKNOWN
+- 提取magic bytes和约束条件
 
 ---
 
-### 设计原则
+## 程序合成
 
-1. **宁可误报，不可漏报**: 静态分析Phase 1允许误报，Phase 2用LLM过滤
-2. **LLM作为语义增强层**: 静态分析提供候选，LLM确认语义正确性
-3. **渐进式改进**: 先处理高频场景，低频corner case延后
-4. **可观测性**: 每个决策都有reason，便于调试
-5. **模板化生成**: 常见模式使用预定义模板，减少LLM负担
+### CBFactory
+
+**位置**: `liberator_adapter/driver/factory/constraint_based/CBFactory.py`
+
+基于约束的driver合成（OTFactory已移除）:
+- 使用ConditionManager进行约束管理
+- RunningContext管理变量和约束状态
+- 可选Z3约束求解验证
+- 集成DriverEnhancer生成增强callback
+
+### 序列生成
+
+**函数**: `_generate_sequences_from_grammar()` (`agent_graph/data_context.py:1080-1186`)
+
+从grammar生成API调用序列:
+1. 从起始符号随机展开grammar
+2. 非终结符展开（带回溯）
+3. 提取终结符作为API序列
+4. 过滤（最少2个API调用）
+5. 展开失败时fallback到简单API列表
 
 ---
 
-### 不处理的Corner Cases（scope外）
+## 不处理的Corner Cases（scope外）
 
 1. **跨线程/全局状态协议** - 需要动态分析
 2. **复杂所有权转移** - borrowed pointer, refcount协议
@@ -267,19 +316,19 @@ if (ctx->initialized) {
 
 ---
 
-### 待完成
+## 待完成
 
-0: 最要紧的： 统一LLM 交互的格式：XML or Markdown任选一个最佳实践用的。记得要统一，包括prompt和response的parse和设置。
-
-1. 查看results文件夹下，生成的driver是否存在问题。 同时，run-*.log有运行的终端输出。
-
-2. [ ] **从OSS-Fuzz drivers提取状态机知识**
+1. [ ] **从OSS-Fuzz drivers提取状态机知识**
    - 分析现有fuzz drivers的API调用模式
    - 提取跨项目的通用状态机规则
-   - 目前延后了。后面打算根据driver问题来确定我们这里提取什么
+   - 目前延后，后面根据driver问题来确定提取内容
 
-3. [ ] **public headers信息获取**
+2. [ ] **public headers信息获取**
    - 使用fuzz introspector获取
-   - 或使用逆拓扑排序手动获取 （？）
+   - 或使用逆拓扑排序手动获取
 
-4. [ ] Guard条件提取 (L7) - 延后
+3. [ ] **Guard条件提取 (L7)** - 延后
+
+4. [ ] **DriverEnhancer完善**
+   - Callback stub生成已完成
+   - VarLen、Loop、TLV的driver集成待完善

@@ -55,14 +55,11 @@ class LLM:
 
   def __init__(
       self,
-      ai_binary: str,
       max_tokens: int = MAX_TOKENS,
       num_samples: int = NUM_SAMPLES,
       temperature: float = TEMPERATURE,
       temperature_list: Optional[list[float]] = None,
   ):
-    self.ai_binary = ai_binary
-
     # Model parameters.
     self.max_tokens = max_tokens
     self.num_samples = num_samples
@@ -78,7 +75,6 @@ class LLM:
   @classmethod
   def setup(
       cls,
-      ai_binary: str,
       name: str,
       max_tokens: int = MAX_TOKENS,
       num_samples: int = NUM_SAMPLES,
@@ -86,14 +82,9 @@ class LLM:
       temperature_list: Optional[list[float]] = None,
   ):
     """Prepares the LLM for fuzz target generation."""
-    if ai_binary:
-      return AIBinaryModel(name, ai_binary, max_tokens, num_samples,
-                           temperature)
-
     for subcls in cls.all_llm_subclasses():
       if getattr(subcls, 'name', None) == name:
         return subcls(
-            ai_binary,
             max_tokens,
             num_samples,
             temperature,
@@ -114,7 +105,7 @@ class LLM:
     """Returns the current model name and all child model names."""
     names = []
     for subcls in cls.all_llm_subclasses():
-      if hasattr(subcls, 'name') and subcls.name != AIBinaryModel.name:
+      if hasattr(subcls, 'name'):
         names.append(subcls.name)
     return names
 
@@ -458,8 +449,6 @@ class GPT(LLM):
 
   def chat_llm(self, client: Any, messages: list[dict[str, str]]) -> str:
     """Queries LLM in a chat session and returns its response."""
-    if self.ai_binary:
-      raise ValueError(f'OpenAI does not use local AI binary: {self.ai_binary}')
     if self.temperature_list:
       logger.info('OpenAI does not allow temperature list: %s',
                   self.temperature_list)
@@ -488,8 +477,6 @@ class GPT(LLM):
   def chat_llm_with_tools(self, client: Any, prompt: Optional[Any],
                           tools) -> Any:
     """Queries LLM in a chat session with tools (legacy method)."""
-    if self.ai_binary:
-      raise ValueError(f'OpenAI does not use local AI binary: {self.ai_binary}')
     if self.temperature_list:
       logger.info('OpenAI does not allow temperature list: %s',
                   self.temperature_list)
@@ -518,8 +505,6 @@ class GPT(LLM):
     Returns:
         Dictionary with 'content' (str) and 'tool_calls' (list) keys
     """
-    if self.ai_binary:
-      raise ValueError(f'OpenAI does not use local AI binary: {self.ai_binary}')
     if self.temperature_list:
       logger.info('OpenAI does not allow temperature list: %s',
                   self.temperature_list)
@@ -620,8 +605,6 @@ class GPT5(GPT):
 
   def chat_llm(self, client: Any, messages: list[dict[str, str]]) -> str:
     """Queries LLM in a chat session and returns its response (no temperature)."""
-    if self.ai_binary:
-      raise ValueError(f'OpenAI does not use local AI binary: {self.ai_binary}')
     if self.temperature_list:
       logger.info('GPT-5 does not allow temperature list: %s',
                   self.temperature_list)
@@ -661,8 +644,6 @@ class GPT5(GPT):
     Returns:
         Dictionary with 'content' (str) and 'tool_calls' (list) keys
     """
-    if self.ai_binary:
-      raise ValueError(f'OpenAI does not use local AI binary: {self.ai_binary}')
     if self.temperature_list:
       logger.info('GPT-5 does not allow temperature list: %s',
                   self.temperature_list)
@@ -757,20 +738,17 @@ class ChatGPT(GPT):
 
   def __init__(
       self,
-      ai_binary: str,
       max_tokens: int = MAX_TOKENS,
       num_samples: int = NUM_SAMPLES,
       temperature: float = TEMPERATURE,
       temperature_list: Optional[list[float]] = None,
   ):
-    super().__init__(ai_binary, max_tokens, num_samples, temperature,
+    super().__init__(max_tokens, num_samples, temperature,
                      temperature_list)
     self.conversation_history = []
 
   def chat_llm(self, client: Any, messages: list[dict[str, str]]) -> str:
     """Queries the LLM in the given chat session and returns the response."""
-    if self.ai_binary:
-      raise ValueError(f'OpenAI does not use local AI binary: {self.ai_binary}')
     if self.temperature_list:
       logger.info('OpenAI does not allow temperature list: %s',
                   self.temperature_list)
@@ -1210,9 +1188,6 @@ class GeminiV1D5Chat(GeminiV1D5):
     return self.truncate_prompt(truncated_prompt, extra_text)
 
   def chat_llm(self, client: ChatSession, messages: list[dict[str, str]]) -> str:
-    if self.ai_binary:
-      logger.info('VertexAI does not use local AI binary: %s', self.ai_binary)
-
     # TODO(dongge): Use different values for different trials
     parameters_list = self._prepare_parameters()[0]
     response = self._do_generate(client, messages, parameters_list) or ''
@@ -1252,35 +1227,5 @@ class GeminiV2D5ProChat(GeminiV1D5Chat):
   context_window = 1048576
   name = 'vertex_ai_gemini-2-5-pro-chat'
   _vertex_ai_model = 'gemini-2.5-pro'
-
-class AIBinaryModel(GoogleModel):
-  """A customized model hosted internally."""
-
-  name = 'ai_binary_model'
-
-  def __init__(self, name: str, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-    self.name = name
-
-  def get_model(self) -> Any:
-    """Returns the underlying model instance."""
-    # Placeholder: No suitable implementation/usage yet.
-
-  def get_chat_client(self, model: Any) -> Any:
-    """Returns a new chat session."""
-    del model
-    # Placeholder: To Be Implemented.
-
-  def chat_llm(self, client: Any, messages: list[dict[str, str]]) -> str:
-    """Queries the LLM in the given chat session and returns the response."""
-    del client, messages
-    # Placeholder: To Be Implemented.
-    raise NotImplementedError(f"{self.__class__.__name__}.chat_llm is not implemented")
-
-  def chat_llm_with_tools(self, client: Any, prompt: Optional[Any],
-                          tools) -> Any:
-    """Queries the LLM in the given chat session with tools."""
-    # Placeholder: To Be Implemented.
-    return
 
 DefaultModel = DeepSeekChat

@@ -1209,7 +1209,6 @@ def run_experiments(benchmark: benchmarklib.Benchmark, args) -> Result:
     work_dirs = WorkDirs(os.path.join(args.work_dir, f'output-{benchmark.id}'))
     args.work_dirs = work_dirs
     model = models.LLM.setup(
-        ai_binary=args.ai_binary,
         name=args.model,
         max_tokens=MAX_TOKENS,
         num_samples=args.num_samples,
@@ -1267,13 +1266,6 @@ def parse_args() -> argparse.Namespace:
                       type=str,
                       help='A benchmark YAML file.')
   parser.add_argument('-to', '--run-timeout', type=int, default=RUN_TIMEOUT)
-  parser.add_argument('-a',
-                      '--ai-binary',
-                      required=False,
-                      nargs='?',
-                      const=os.getenv('AI_BINARY', ''),
-                      default='',
-                      type=str)
   parser.add_argument('-l',
                       '--model',
                       default=models.DefaultModel.name,

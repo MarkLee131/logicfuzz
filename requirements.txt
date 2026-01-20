@@ -388,9 +388,10 @@ yapf==0.40.1
 zipp==3.21.0
     # via importlib-metadata
 
-langgraph>=0.2.74
-langgraph-checkpoint>=1.0.0
-langgraph-checkpoint-postgres>=1.0.0
+langgraph>=1.0.6
+langgraph-prebuilt>=1.0.6
+langgraph-checkpoint>=3.0.0
+langgraph-checkpoint-postgres>=3.0.0
 
 # Tree-sitter for header extraction (Header Fix V2)
 tree-sitter>=0.25.0
