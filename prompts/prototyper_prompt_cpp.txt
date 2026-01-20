@@ -1,4 +1,4 @@
-Generate fuzz driver for this project: {PROJECT_NAME}
+Generate fuzz driver for this C++ project: {PROJECT_NAME}
 
 API SEQUENCES (from static analysis):
 The following API call sequences have been validated by lifecycle analysis.
@@ -17,6 +17,11 @@ REQUIREMENTS:
 4. Use skeleton headers only (filtered, safe)
 5. Handle resource lifecycle: init -> use -> cleanup
 6. Match buffer sizes with length parameters (var-len relationships)
+
+C++ FUZZ TARGET NOTES:
+- Use FuzzedDataProvider for structured input extraction
+- Use `extern "C"` for LLVMFuzzerTestOneInput declaration
+- If the target library is written in C, wrap its headers in `extern "C" { }`
 
 PARAMETER STRATEGY:
 

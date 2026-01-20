@@ -1,0 +1,167 @@
+Generate fuzz driver for this C project: {PROJECT_NAME}
+
+API SEQUENCES (from static analysis):
+The following API call sequences have been validated by lifecycle analysis.
+Use these as reference, but PRIORITIZE Parser APIs for maximum fuzzing value.
+
+PROJECT ANALYSIS:
+{SRS_SPECIFICATION}
+
+
+{ADDITIONAL_CONTEXT}
+
+REQUIREMENTS:
+1. **PRIORITY: Use PARSER APIs** (Parse, Read, Load, Decode) - they consume external input and have highest bug potential
+2. If Parser APIs exist, build your driver around them (even if not in provided sequences)
+3. If no Parser APIs, pick ONE sequence from the provided list
+4. Use skeleton headers only (filtered, safe)
+5. Handle resource lifecycle: init -> use -> cleanup
+6. Match buffer sizes with length parameters (var-len relationships)
+
+IMPORTANT: This is a C project - DO NOT use C++ features:
+- NO FuzzedDataProvider (it's a C++ class)
+- NO std::string, std::vector, or any STL
+- NO extern "C" wrapper (already C code)
+- Use raw data/size parameters directly
+
+PARAMETER STRATEGY FOR C:
+
+Use the raw `data` and `size` parameters directly:
+
+```c
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdlib.h>
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  if (size < 4) return 0;  // Minimum size check
+
+  // Extract parameters from raw data
+  // Option 1: Use data directly as buffer
+  api_parse(data, size);
+
+  // Option 2: Copy to null-terminated string
+  char *str = (char *)malloc(size + 1);
+  if (!str) return 0;
+  memcpy(str, data, size);
+  str[size] = '\0';
+  api_process_string(str);
+  free(str);
+
+  // Option 3: Extract fixed-size parameters
+  if (size >= sizeof(int)) {
+    int param;
+    memcpy(&param, data, sizeof(int));
+    api_with_int(param);
+  }
+
+  return 0;
+}
+```
+
+VAR-LEN HANDLING IN C:
+- Pass data pointer with size directly:
+```c
+api_func((const char *)data, size);  // size matches buffer
+```
+
+- For APIs needing null-terminated strings:
+```c
+char *buf = (char *)malloc(size + 1);
+if (buf) {
+  memcpy(buf, data, size);
+  buf[size] = '\0';
+  api_string_func(buf);
+  free(buf);
+}
+```
+
+COVERAGE-OPTIMIZED INPUT STRATEGIES:
+
+1. STRUCTURED INPUT GENERATION (for parsers like JSON, XML, config files):
+   - For C parsers, generate structured input using helper functions
+   - Example for structured data:
+```c
+// Helper to build simple key-value format
+static char* make_config(const uint8_t *data, size_t size, size_t *out_len) {
+  if (size < 2) return NULL;
+  char *buf = (char *)malloc(size + 32);
+  if (!buf) return NULL;
+
+  int offset = 0;
+  offset += sprintf(buf + offset, "key=");
+  size_t val_len = size > 64 ? 64 : size;
+  memcpy(buf + offset, data, val_len);
+  offset += val_len;
+  buf[offset++] = '\n';
+  buf[offset] = '\0';
+
+  *out_len = offset;
+  return buf;
+}
+```
+
+2. BRANCH COVERAGE FOR LOOKUP APIs:
+   - Pre-populate data structures to hit both "found" and "not found" paths
+```c
+// Pre-seed with known key
+hashtable_insert(ht, "probe", "value");
+hashtable_lookup(ht, "probe");    // FOUND path
+hashtable_lookup(ht, "missing");  // NOT-FOUND path
+```
+
+3. MIX VALID AND MALFORMED INPUT:
+```c
+// Occasionally truncate to test error paths
+size_t use_size = size;
+if (size > 2 && data[0] % 4 == 0) {
+  use_size = size / 2;  // truncated input
+}
+```
+
+CALLBACK HANDLING:
+- Use minimal stub functions:
+```c
+static void my_callback(void *ctx, int status) {
+    // Minimal stub - just return
+}
+api_register_callback(ctx, my_callback, NULL);
+```
+
+IMPLEMENTATION STEPS:
+
+1. Headers:
+   - Use ONLY reference skeleton headers if exists
+   - Filter out internal/*, detail/*, private/*
+   - Include standard C headers: stdint.h, stddef.h, string.h, stdlib.h
+
+2. Resource initialization:
+   - Call create/init APIs first
+   - Check return values before proceeding
+
+3. API sequence execution:
+   - Follow exact order from chosen sequence
+   - Extract parameters from data/size directly
+   - Handle var-len relationships
+
+4. Cleanup:
+   - Call cleanup/free/destroy APIs
+   - Cleanup in REVERSE order of creation
+   - Free any malloc'd buffers
+
+OUTPUT FORMAT:
+
+**Conclusion:** Chosen sequence, APIs called, var-len handling, cleanup order
+
+```c
+[Complete LibFuzzer code with LLVMFuzzerTestOneInput - pure C, no C++ features]
+```
+
+CRITICAL REQUIREMENTS:
+- Follow exact markdown format above
+- Keep conclusion brief (max 3 sentences)
+- Include complete, compilable C code in ```c block - NO placeholders
+- Only ONE ```c code block containing the complete fuzz target
+- NO C++ features (no FuzzedDataProvider, no std::, no extern "C")
+- NO extra commentary outside conclusion and code block

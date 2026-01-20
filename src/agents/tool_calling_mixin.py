@@ -10,7 +10,7 @@ Loop terminates when LLM stops making tool calls (standard ReAct behavior).
 import time
 from abc import abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
@@ -23,6 +23,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 
 import logger
+from src.workflow.state import update_token_usage
 
 
 class ToolCallingMixin:
@@ -210,10 +211,24 @@ class ToolCallingMixin:
 
         all_responses: List[str] = []
 
+        # Get agent name for token tracking
+        agent_name = getattr(self, 'name', 'unknown_agent')
+
         for cur_round in range(max_rounds):
             # Call LLM with tools
             response: AIMessage = model_with_tools.invoke(messages)  # type: ignore
             messages.append(response)
+
+            # Track token usage
+            token_usage = self._extract_token_usage_from_response(response)
+            if token_usage and state is not None:
+                update_token_usage(
+                    state,
+                    agent_name,
+                    token_usage.get('prompt_tokens', 0),
+                    token_usage.get('completion_tokens', 0),
+                    token_usage.get('total_tokens', 0)
+                )
 
             content = response.content or ""
             if isinstance(content, list):
@@ -267,3 +282,23 @@ class ToolCallingMixin:
         if len(s) > max_len:
             return s[:max_len] + f"...[truncated {len(s) - max_len} chars]"
         return s
+
+    def _extract_token_usage_from_response(self, response: AIMessage) -> Optional[Dict[str, int]]:
+        """
+        Extract token usage from LangChain response if available.
+
+        Args:
+            response: The AIMessage response from LLM
+
+        Returns:
+            Dict with prompt_tokens, completion_tokens, total_tokens or None
+        """
+        if hasattr(response, 'response_metadata') and response.response_metadata:
+            usage = response.response_metadata.get('token_usage') or response.response_metadata.get('usage')
+            if usage:
+                return {
+                    'prompt_tokens': usage.get('prompt_tokens', 0) or usage.get('input_tokens', 0),
+                    'completion_tokens': usage.get('completion_tokens', 0) or usage.get('output_tokens', 0),
+                    'total_tokens': usage.get('total_tokens', 0)
+                }
+        return None

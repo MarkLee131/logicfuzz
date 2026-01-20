@@ -52,7 +52,19 @@ class LangGraphPrototyper(LangGraphAgent):
         # Get target path info for include path calculation
         target_path = benchmark.get('target_path', '')
 
-        language = benchmark.get('language', 'C++')
+        # Determine target language from file extension (not yaml language field)
+        # .c -> C driver, .cpp/.cc -> C++ driver
+        library_language = benchmark.get('language', 'c++').lower()
+        cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
+        is_cpp_target = target_path.lower().endswith(cpp_extensions)
+        is_c_project = library_language in ('c',)
+
+        # Target language for prompt selection based on driver file extension
+        target_language = 'c++' if is_cpp_target else 'c'
+
+        # needs_extern: C++ fuzz target for C library needs extern "C" wrappers
+        needs_extern = is_cpp_target and is_c_project
+
         is_regeneration = state.get("compile_success") == False and state.get("fuzz_target_source", "") != ""
 
         prompt_manager = get_prompt_manager()
@@ -100,9 +112,28 @@ class LangGraphPrototyper(LangGraphAgent):
                 trial=self.trial
             )
 
+        # Add extern "C" guidance if needed (C++ driver for C library)
+        extern_c_note = ""
+        if needs_extern:
+            extern_c_note = """
+**IMPORTANT: extern "C" Required**
+This is a C++ fuzz target for a C library. You MUST wrap all C library headers in `extern "C"`:
+```cpp
+extern "C" {
+#include "library_header.h"
+}
+```
+This ensures proper C linkage for the library functions.
+"""
+            if additional_context:
+                additional_context = extern_c_note + "\n" + additional_context
+            else:
+                additional_context = extern_c_note
+
         try:
             base_prompt = prompt_manager.build_user_prompt(
                 "prototyper",
+                language=target_language,  # Based on target_path extension (.c or .cpp)
                 project_name=benchmark.get('project', 'unknown'),
                 function_name="",  # Empty for project-level
                 function_signature="",  # Empty for project-level
