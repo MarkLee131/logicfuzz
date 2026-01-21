@@ -99,12 +99,18 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
             self.inspect_tool.write_to_file(content=build_script_source, file_path=self.inspect_tool.build_script_path)
         self.inspect_tool.compile(extra_commands=' && rm -rf /out/* > /dev/null')
 
-        # Build prompt
+        # Determine target language from file extension (same logic as prototyper/improver)
+        target_path = benchmark.target_path
+        cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
+        is_cpp_target = target_path.lower().endswith(cpp_extensions)
+        target_language = 'c++' if is_cpp_target else 'c'
+
+        # Build prompt with language-specific template
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
             "coverage_analyzer",
+            language=target_language,  # For prompt template selection
             project=benchmark.project,
-            language=benchmark.file_type.value,
             fuzz_target=fuzz_target_source,
             fuzzing_log=fuzzing_log,
             function_requirements=self._get_function_requirements(state),

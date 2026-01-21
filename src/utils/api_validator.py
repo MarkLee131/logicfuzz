@@ -8,7 +8,7 @@ in the OSS-Fuzz build environment by scanning generated code for known patterns.
 
 import re
 import logging
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple, Set, Any
 
 logger = logging.getLogger(__name__)
 
@@ -317,19 +317,182 @@ class APIValidator:
 
 def validate_fuzz_target(code: str, project_name: str = None) -> Tuple[bool, str]:
     """Convenience function to validate fuzz target code.
-    
+
     Args:
         code: Generated C/C++ fuzz target code
         project_name: Optional project name
-    
+
     Returns:
         Tuple of (is_valid: bool, report: str)
     """
     validator = APIValidator()
     result = validator.validate_code(code, project_name)
     report = validator.format_validation_report(result)
-    
+
     return result['clean'], report
+
+
+class LanguageMismatchValidator:
+    """
+    Validates that generated code matches the expected target language.
+
+    Detects C++ features in code that's supposed to be pure C, which would
+    cause compilation failures.
+    """
+
+    # C++ features that should not appear in pure C code
+    CPP_INCLUDE_PATTERNS = [
+        (r'#include\s*<fuzzer/FuzzedDataProvider\.h>', 'FuzzedDataProvider is C++ only'),
+        (r'#include\s*<algorithm>', 'algorithm is a C++ header'),
+        (r'#include\s*<string>', 'string is a C++ header'),
+        (r'#include\s*<vector>', 'vector is a C++ header'),
+        (r'#include\s*<map>', 'map is a C++ header'),
+        (r'#include\s*<memory>', 'memory is a C++ header'),
+        (r'#include\s*<iostream>', 'iostream is a C++ header'),
+        (r'#include\s*<cstdint>', 'cstdint is C++ (use stdint.h for C)'),
+        (r'#include\s*<cstddef>', 'cstddef is C++ (use stddef.h for C)'),
+        (r'#include\s*<cstring>', 'cstring is C++ (use string.h for C)'),
+        (r'#include\s*<cstdlib>', 'cstdlib is C++ (use stdlib.h for C)'),
+    ]
+
+    CPP_SYNTAX_PATTERNS = [
+        (r'\bstd::\w+', 'std:: namespace is C++ only'),
+        (r'\bextern\s+"C"', 'extern "C" is C++ syntax (not needed in pure C)'),
+        (r'\bFuzzedDataProvider\s+\w+', 'FuzzedDataProvider is a C++ class'),
+        (r'\.Consume\w+\s*\(', 'FuzzedDataProvider methods are C++ only'),
+        (r'\bfdp\.\w+', 'fdp (FuzzedDataProvider) is C++ only'),
+        (r'\bnew\s+\w+', 'new operator is C++ only'),
+        (r'\bdelete\s+', 'delete operator is C++ only'),
+        (r'\bclass\s+\w+', 'class keyword is C++ only'),
+        (r'\btemplate\s*<', 'templates are C++ only'),
+        (r'\bnamespace\s+\w+', 'namespaces are C++ only'),
+        (r'::\w+\s*\(', 'scope resolution operator is C++ only'),
+        (r'\bauto\s+\w+\s*=', 'auto type deduction is C++ only'),
+        (r'<\w+>', 'template parameters are C++ only'),
+    ]
+
+    def __init__(self):
+        """Initialize the validator."""
+        self.include_patterns = [(re.compile(p), msg) for p, msg in self.CPP_INCLUDE_PATTERNS]
+        self.syntax_patterns = [(re.compile(p), msg) for p, msg in self.CPP_SYNTAX_PATTERNS]
+
+    def validate_for_c_target(self, code: str) -> Dict[str, Any]:
+        """
+        Validate that code is pure C (no C++ features).
+
+        Args:
+            code: Generated fuzz target code
+
+        Returns:
+            Dictionary with:
+            {
+                'is_pure_c': bool,  # True if no C++ features detected
+                'cpp_features': [   # List of detected C++ features
+                    {
+                        'pattern': 'std::string',
+                        'reason': 'std:: namespace is C++ only',
+                        'line_number': 10,
+                        'line': 'std::string input = ...',
+                        'severity': 'error'
+                    }
+                ]
+            }
+        """
+        cpp_features = []
+        lines = code.split('\n')
+
+        for line_num, line in enumerate(lines, 1):
+            # Skip comments
+            stripped = line.strip()
+            if stripped.startswith('//') or stripped.startswith('/*'):
+                continue
+
+            # Check include patterns
+            for pattern_re, reason in self.include_patterns:
+                match = pattern_re.search(line)
+                if match:
+                    cpp_features.append({
+                        'pattern': match.group(0),
+                        'reason': reason,
+                        'line_number': line_num,
+                        'line': line.strip(),
+                        'severity': 'error'
+                    })
+
+            # Check syntax patterns
+            for pattern_re, reason in self.syntax_patterns:
+                match = pattern_re.search(line)
+                if match:
+                    cpp_features.append({
+                        'pattern': match.group(0),
+                        'reason': reason,
+                        'line_number': line_num,
+                        'line': line.strip(),
+                        'severity': 'error'
+                    })
+
+        return {
+            'is_pure_c': len(cpp_features) == 0,
+            'cpp_features': cpp_features
+        }
+
+    def format_report(self, validation_result: Dict) -> str:
+        """Format validation result as human-readable report."""
+        if validation_result['is_pure_c']:
+            return "✅ Code is pure C - no C++ features detected"
+
+        features = validation_result['cpp_features']
+        lines = [
+            f"❌ C++ FEATURES DETECTED IN C CODE ({len(features)} issues)",
+            "",
+            "The following C++ features will cause compilation errors in a C project:",
+            ""
+        ]
+
+        # Group by reason to avoid repetition
+        seen_reasons = set()
+        for feature in features[:10]:  # Limit to first 10
+            reason_key = feature['reason']
+            if reason_key not in seen_reasons:
+                lines.append(f"  • Line {feature['line_number']}: {feature['reason']}")
+                lines.append(f"    `{feature['pattern']}`")
+                seen_reasons.add(reason_key)
+
+        if len(features) > 10:
+            lines.append(f"  ... and {len(features) - 10} more issues")
+
+        lines.extend([
+            "",
+            "💡 FIX: Rewrite using pure C patterns:",
+            "  - Use memcpy() to extract integers from fuzz data",
+            "  - Use malloc/free instead of new/delete",
+            "  - Use raw (data, size) instead of FuzzedDataProvider",
+            "  - Remove extern \"C\" wrapper (not needed in pure C)"
+        ])
+
+        return '\n'.join(lines)
+
+
+def validate_language_compatibility(code: str, is_c_target: bool) -> Tuple[bool, str]:
+    """
+    Validate that generated code is compatible with target language.
+
+    Args:
+        code: Generated fuzz target code
+        is_c_target: True if target is pure C, False if C++
+
+    Returns:
+        Tuple of (is_compatible: bool, report: str)
+    """
+    if not is_c_target:
+        # C++ targets can use any features
+        return True, "✅ C++ target - all features allowed"
+
+    validator = LanguageMismatchValidator()
+    result = validator.validate_for_c_target(code)
+    report = validator.format_report(result)
+
+    return result['is_pure_c'], report
 
 
 # Example usage

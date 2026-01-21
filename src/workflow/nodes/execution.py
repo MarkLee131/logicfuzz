@@ -369,10 +369,42 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
     # Check if we have a fuzz target to build
     fuzz_target_source = state.get("fuzz_target_source", "")
     build_script_source = state.get("build_script_source", "")
-    
+
     if not fuzz_target_source:
         raise ValueError("No fuzz target source available for building")
-    
+
+    # Pre-build language validation: detect C++ features in C targets
+    target_path = benchmark.target_path
+    cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
+    is_c_target = not target_path.lower().endswith(cpp_extensions)
+
+    if is_c_target:
+        from src.utils.api_validator import validate_language_compatibility
+        is_compatible, lang_report = validate_language_compatibility(fuzz_target_source, is_c_target=True)
+
+        if not is_compatible:
+            # C++ features detected in C code - fail fast with useful error
+            logger.warning(
+                f"Language mismatch detected: C++ features in C target. {lang_report}",
+                trial=trial
+            )
+            # Return early with validation error - saves build time
+            return {
+                "compile_success": False,
+                "build_errors": [
+                    "Language mismatch: C++ features detected in C project code.",
+                    "This will cause compilation failure. Please regenerate using pure C patterns.",
+                    "Common issues: FuzzedDataProvider (use memcpy), std::string (use char*), extern \"C\" (remove it)."
+                ],
+                "compile_log": lang_report,
+                "binary_exists": False,
+                "is_function_referenced": False,
+                "messages": [{
+                    "role": "assistant",
+                    "content": "Build failed: C++ features detected in C project code"
+                }]
+            }
+
     # Set up builder runner for build-only
     builder_runner = builder_runner_lib.BuilderRunner(
         benchmark=benchmark,

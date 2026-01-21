@@ -550,13 +550,19 @@ class FuzzingContext:
 
             if skeletons:
                 from liberator_adapter.driver.synthesis.skeleton_generator import render_skeleton
+
+                # Determine if target is C++ from benchmark target_path
+                target_path = benchmark.target_path if hasattr(benchmark, 'target_path') else ''
+                cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
+                is_cpp_target = target_path.lower().endswith(cpp_extensions)
+
                 for skeleton in skeletons:
                     # Get API sequence from target_apis
                     api_seq = [api.function_name for api in skeleton.target_apis] if skeleton.target_apis else []
 
-                    # Render skeleton code
+                    # Render skeleton code (use extern "C" only for C++ targets)
                     try:
-                        rendered_code = render_skeleton(skeleton, mark_holes=True)
+                        rendered_code = render_skeleton(skeleton, mark_holes=True, is_cpp_target=is_cpp_target)
                     except Exception:
                         rendered_code = str(skeleton)
 

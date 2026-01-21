@@ -1,0 +1,138 @@
+Analyze the following fuzz target to determine why it has low coverage and how to improve it.
+
+**Project**: {PROJECT}
+**Language**: {LANGUAGE} (C++ project - FuzzedDataProvider is available)
+
+**Current Fuzz Target**:
+```
+{FUZZ_TARGET}
+```
+
+**Fuzzing Log**:
+{FUZZING_LOG}
+
+**API Sequence Information**:
+{FUNCTION_REQUIREMENTS}
+
+{ADDITIONAL_CONTEXT}
+
+**Your Task**:
+Investigate why coverage is low and determine how to enhance the fuzz target. The driver calls multiple APIs in sequence - analyze which API calls are not being reached or are taking limited code paths.
+
+**Analysis Steps**:
+
+1. **Examine Current Coverage**:
+   - Review the fuzzing log to understand current coverage levels
+   - Identify which code blocks or APIs are NOT being executed
+   - Determine which branches are always taking the same path
+
+2. **Analyze the Fuzz Target**:
+   - How are parameters extracted from fuzzer input?
+   - What values are used (constants, naive values, processed input)?
+   - Is the approach too narrow (single code path)?
+   - Are all APIs in the sequence being called?
+
+3. **Identify Coverage Gaps**:
+   - Which API calls are never reached?
+   - Which conditionals or branches are never taken?
+   - What edge cases are not being tested?
+   - Which error paths are never executed?
+
+4. **Determine Root Causes**:
+   - Why does the fuzz target exercise only one narrow code path?
+   - Is input too naive or unprocessed?
+   - Are there missing setup/initialization calls?
+   - Is parameter variation insufficient?
+
+5. **Develop Improvement Solutions**:
+   - **Fine-grained Input Preprocessing**: Use FuzzedDataProvider to split raw input into meaningful parameters
+   - **Test Edge Cases**: Empty inputs, very short/long inputs, boundary values
+   - **Vary API Parameters**: Use FuzzedDataProvider for all inputs
+   - **Try Different Sequences**: If current sequence saturated, try different API sequence
+
+**Output Format**:
+
+Use these XML tags to provide your final analysis:
+
+<conclusion>True or False</conclusion>
+
+<insights>
+## Coverage Assessment
+[Current coverage level and what's missing]
+
+## Root Cause Analysis
+[Why the fuzz target achieves low coverage, with specific evidence]
+
+Example:
+The low coverage stems from:
+* **Fixed Parameters**: Using constants instead of fuzzed values
+* **Lack of Input Variation**: Input used verbatim without preprocessing
+* **Missing API Calls**: Not all APIs in sequence are being called
+* **Missing Edge Cases**: No testing of boundary conditions
+</insights>
+
+<suggestions>
+## Improvement Recommendations
+
+Provide specific, actionable suggestions with code examples:
+
+1. **Use FuzzedDataProvider for All Parameters**:
+```cpp
+#include <fuzzer/FuzzedDataProvider.h>
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  FuzzedDataProvider fdp(data, size);
+
+  // Extract varied parameters
+  std::string input1 = fdp.ConsumeRandomLengthString(1024);
+  std::string input2 = fdp.ConsumeRandomLengthString(512);
+  int param1 = fdp.ConsumeIntegral<int>();
+  uint32_t flags = fdp.ConsumeIntegralInRange<uint32_t>(0, 100);
+
+  // Call APIs with varied inputs
+  void *ctx = api_create();
+  if (ctx) {
+    api_configure(ctx, param1, flags);
+    api_process(ctx, input1.data(), input1.size());
+    api_cleanup(ctx);
+  }
+  return 0;
+}
+```
+
+2. **Call All APIs in Sequence**:
+```cpp
+ctx = api_create();
+api_init(ctx, config);
+api_process(ctx, input);  // Don't skip any API!
+api_cleanup(ctx);
+```
+
+3. **Test Edge Cases**:
+```cpp
+// Test empty, short, and boundary inputs
+if (size == 0) return 0;
+
+// Test with empty strings
+std::string empty_input = fdp.ConsumeRandomLengthString(0);
+api_optional_param(ctx, empty_input.empty() ? nullptr : empty_input.c_str());
+```
+
+4. **Vary Enum/Flag Values**:
+```cpp
+// Use ConsumeIntegralInRange for bounded values
+int mode = fdp.ConsumeIntegralInRange<int>(0, MAX_MODE);
+api_set_mode(ctx, mode);
+```
+</suggestions>
+
+**Critical Requirements**:
+- Use `<conclusion>True</conclusion>` if improvement is needed, `<conclusion>False</conclusion>` otherwise
+- Provide detailed analysis inside `<insights>` tags
+- Provide specific recommendations with code examples inside `<suggestions>` tags
+
+OUTPUT DISCIPLINE:
+Follow exact XML format: <conclusion>, <insights>, <suggestions>
+Keep <insights> concise (2-3 key findings max)
+Include code examples in suggestions
+No extra commentary outside XML tags

@@ -1,0 +1,158 @@
+Analyze the following fuzz target to determine why it has low coverage and how to improve it.
+
+**Project**: {PROJECT}
+**Language**: {LANGUAGE} (C project - DO NOT suggest C++ features)
+
+**Current Fuzz Target**:
+```
+{FUZZ_TARGET}
+```
+
+**Fuzzing Log**:
+{FUZZING_LOG}
+
+**API Sequence Information**:
+{FUNCTION_REQUIREMENTS}
+
+{ADDITIONAL_CONTEXT}
+
+**Your Task**:
+Investigate why coverage is low and determine how to enhance the fuzz target. The driver calls multiple APIs in sequence - analyze which API calls are not being reached or are taking limited code paths.
+
+**CRITICAL: This is a C project**
+- DO NOT suggest FuzzedDataProvider (it's a C++ class)
+- DO NOT suggest std::string, std::vector, or any STL
+- DO NOT suggest extern "C" (already C code)
+- Use raw data/size manipulation with memcpy for parameter extraction
+
+**Analysis Steps**:
+
+1. **Examine Current Coverage**:
+   - Review the fuzzing log to understand current coverage levels
+   - Identify which code blocks or APIs are NOT being executed
+   - Determine which branches are always taking the same path
+
+2. **Analyze the Fuzz Target**:
+   - How are parameters extracted from fuzzer input?
+   - What values are used (constants, naive values, processed input)?
+   - Is the approach too narrow (single code path)?
+   - Are all APIs in the sequence being called?
+
+3. **Identify Coverage Gaps**:
+   - Which API calls are never reached?
+   - Which conditionals or branches are never taken?
+   - What edge cases are not being tested?
+   - Which error paths are never executed?
+
+4. **Determine Root Causes**:
+   - Why does the fuzz target exercise only one narrow code path?
+   - Is input too naive or unprocessed?
+   - Are there missing setup/initialization calls?
+   - Is parameter variation insufficient?
+
+5. **Develop Improvement Solutions** (C-SPECIFIC):
+   - **Extract parameters from raw data**: Use memcpy to extract integers, split data for buffers
+   - **Test Edge Cases**: Empty inputs, very short/long inputs, boundary values
+   - **Vary API Parameters**: Extract different values from different offsets of fuzz data
+   - **Try Different Sequences**: If current sequence saturated, try different API sequence
+
+**Output Format**:
+
+Use these XML tags to provide your final analysis:
+
+<conclusion>True or False</conclusion>
+
+<insights>
+## Coverage Assessment
+[Current coverage level and what's missing]
+
+## Root Cause Analysis
+[Why the fuzz target achieves low coverage, with specific evidence]
+
+Example:
+The low coverage stems from:
+* **Fixed Parameters**: Using constants instead of fuzzed values
+* **Lack of Input Variation**: Input used verbatim without preprocessing
+* **Missing API Calls**: Not all APIs in sequence are being called
+* **Missing Edge Cases**: No testing of boundary conditions
+</insights>
+
+<suggestions>
+## Improvement Recommendations (PURE C - NO C++ FEATURES)
+
+Provide specific, actionable suggestions with C code examples:
+
+1. **Extract Parameters from Raw Data**:
+```c
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  if (size < 16) return 0;
+
+  // Extract integer parameters from fuzz data
+  int param1, param2;
+  memcpy(&param1, data, sizeof(int));
+  memcpy(&param2, data + sizeof(int), sizeof(int));
+
+  // Use remaining data as buffer
+  size_t offset = sizeof(int) * 2;
+  const uint8_t *buffer = data + offset;
+  size_t buffer_size = size - offset;
+
+  // Call APIs with varied parameters
+  void *ctx = api_create();
+  if (ctx) {
+    api_configure(ctx, param1);
+    api_process(ctx, buffer, buffer_size);
+    api_cleanup(ctx);
+  }
+  return 0;
+}
+```
+
+2. **Split Data for Multiple Buffers**:
+```c
+if (size >= 8) {
+  const uint8_t *part1 = data;
+  size_t part1_size = size / 2;
+  const uint8_t *part2 = data + part1_size;
+  size_t part2_size = size - part1_size;
+
+  api_process(ctx, part1, part1_size);
+  api_process(ctx, part2, part2_size);
+}
+```
+
+3. **Test Edge Cases**:
+```c
+// Handle empty and minimal input
+if (size == 0) return 0;
+if (size < MIN_REQUIRED) return 0;
+
+// Test with NULL where allowed
+api_optional_param(ctx, NULL, 0);
+```
+
+4. **Create Null-Terminated Strings**:
+```c
+if (size > 0) {
+  char *str = malloc(size + 1);
+  if (str) {
+    memcpy(str, data, size);
+    str[size] = '\0';
+    api_process_string(ctx, str);
+    free(str);
+  }
+}
+```
+</suggestions>
+
+**Critical Requirements**:
+- Use `<conclusion>True</conclusion>` if improvement is needed, `<conclusion>False</conclusion>` otherwise
+- Provide detailed analysis inside `<insights>` tags
+- Provide specific recommendations with PURE C code examples inside `<suggestions>` tags
+- NO FuzzedDataProvider, NO std::string, NO C++ features in suggestions
+
+OUTPUT DISCIPLINE:
+Follow exact XML format: <conclusion>, <insights>, <suggestions>
+Keep <insights> concise (2-3 key findings max)
+Include PURE C code examples in suggestions
+No extra commentary outside XML tags

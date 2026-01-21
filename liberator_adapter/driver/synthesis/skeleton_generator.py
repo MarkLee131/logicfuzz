@@ -588,8 +588,14 @@ class SkeletonRenderer:
     Renders DriverSkeleton to C code string
     """
 
-    def render(self, skeleton: DriverSkeleton) -> str:
-        """Render skeleton to C code"""
+    def render(self, skeleton: DriverSkeleton, is_cpp_target: bool = True) -> str:
+        """Render skeleton to C/C++ code
+
+        Args:
+            skeleton: Driver skeleton to render
+            is_cpp_target: If True, use 'extern "C"' for C++ fuzz target.
+                          If False, emit pure C code (no extern "C").
+        """
         lines = []
 
         # 1. Includes
@@ -603,7 +609,11 @@ class SkeletonRenderer:
             lines.append("")
 
         # 3. Fuzz function signature
-        lines.append("extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
+        # Only use extern "C" for C++ targets; pure C doesn't need it
+        if is_cpp_target:
+            lines.append("extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
+        else:
+            lines.append("int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
 
         # 4. Minimum size check
         lines.append("    if (size < 1) return 0;")
@@ -635,9 +645,9 @@ class SkeletonRenderer:
 
         return "\n".join(lines)
 
-    def render_with_holes_marked(self, skeleton: DriverSkeleton) -> str:
+    def render_with_holes_marked(self, skeleton: DriverSkeleton, is_cpp_target: bool = True) -> str:
         """Render skeleton, marking all Hole positions"""
-        code = self.render(skeleton)
+        code = self.render(skeleton, is_cpp_target=is_cpp_target)
 
         # Add comment for each Hole
         for hole in skeleton.holes:
@@ -671,9 +681,16 @@ def generate_skeleton_for_sequence(
     )
 
 
-def render_skeleton(skeleton: DriverSkeleton, mark_holes: bool = False) -> str:
-    """Convenience function: render skeleton"""
+def render_skeleton(skeleton: DriverSkeleton, mark_holes: bool = False, is_cpp_target: bool = True) -> str:
+    """Convenience function: render skeleton
+
+    Args:
+        skeleton: Driver skeleton to render
+        mark_holes: Whether to mark unfilled holes with comments
+        is_cpp_target: If True, use 'extern "C"' for C++ fuzz target.
+                      If False, emit pure C code (no extern "C").
+    """
     renderer = SkeletonRenderer()
     if mark_holes:
-        return renderer.render_with_holes_marked(skeleton)
-    return renderer.render(skeleton)
+        return renderer.render_with_holes_marked(skeleton, is_cpp_target=is_cpp_target)
+    return renderer.render(skeleton, is_cpp_target=is_cpp_target)

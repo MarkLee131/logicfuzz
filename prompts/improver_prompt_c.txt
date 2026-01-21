@@ -1,0 +1,134 @@
+Improve fuzz driver coverage for project: {PROJECT_NAME}
+
+CURRENT STATUS
+
+Coverage Metrics:
+- PC Coverage: {COVERAGE_PERCENT}
+- Line Coverage Diff: {LINE_COVERAGE_DIFF}
+
+Current Driver:
+```
+{CURRENT_CODE}
+```
+
+Coverage too low! Rewrite needed.
+
+COVERAGE ANALYZER DIAGNOSIS
+
+Root Cause:
+{COVERAGE_INSIGHTS}
+
+Recommended Actions:
+{IMPROVEMENT_SUGGESTIONS}
+
+TASK
+
+Rewrite driver to maximize coverage by addressing the diagnosis above.
+
+=== IMPORTANT: This is a C project ===
+
+DO NOT use C++ features:
+- NO FuzzedDataProvider (it's a C++ class)
+- NO std::string, std::vector, or any STL
+- NO extern "C" (already C code)
+- Use raw data/size parameters directly
+
+REQUIREMENTS:
+1. Implement coverage analyzer's recommended actions
+2. Use direct data/size manipulation for input variation
+3. Replace fixed/constant parameters with fuzzer-derived inputs
+4. Test edge cases (NULL, empty, boundary values)
+5. Maintain correct API sequence order
+6. Don't violate API lifecycle constraints
+
+IMPROVEMENT STRATEGIES (priority order):
+
+1. Vary more parameters using raw data:
+```c
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  if (size < 16) return 0;
+
+  // Extract varied inputs from fuzz data
+  int flags;
+  memcpy(&flags, data, sizeof(int));
+  size_t offset = sizeof(int);
+
+  // Use remaining data as input buffer
+  const uint8_t *input = data + offset;
+  size_t input_size = size - offset;
+
+  // Call API sequence with varied inputs
+  void *ctx = api_create();
+  if (ctx) {
+    api_configure(ctx, flags);
+    api_process(ctx, input, input_size);
+    api_cleanup(ctx);
+  }
+  return 0;
+}
+```
+
+2. Test edge cases:
+```c
+// Handle empty input gracefully
+if (size == 0) return 0;
+// Test with minimal input
+// Test with maximum reasonable input
+```
+
+3. Try different API sequences:
+   - If current sequence has low coverage, try a DIFFERENT sequence
+   - Focus on sequences that exercise different code paths
+
+4. Split data for multiple parameters:
+```c
+if (size >= 8) {
+  // Split fuzz data for multiple inputs
+  const uint8_t *part1 = data;
+  size_t part1_size = size / 2;
+  const uint8_t *part2 = data + part1_size;
+  size_t part2_size = size - part1_size;
+
+  api_process(ctx, part1, part1_size);
+  api_process(ctx, part2, part2_size);
+}
+```
+
+5. Extract integers/flags from data:
+```c
+if (size >= sizeof(int) * 2) {
+  int param1, param2;
+  memcpy(&param1, data, sizeof(int));
+  memcpy(&param2, data + sizeof(int), sizeof(int));
+  api_configure(ctx, param1, param2);
+}
+```
+
+OVERRIDE AUTHORITY:
+- Change FIXED values -> fuzzer-derived when coverage low
+- Try different API sequence if current one saturated
+- Document rationale when overriding
+
+COMMON ISSUES & FIXES:
+- Fixed params -> Extract from fuzz data
+- Single sequence -> Try different sequences
+- No edge cases -> Test NULL/empty/boundary
+- Missing API calls -> Add more APIs from the same sequence
+
+OUTPUT FORMAT:
+
+**Conclusion:** Root cause, changes made, expected improvement
+
+```c
+[Complete improved C code - NO FuzzedDataProvider, NO C++ features]
+```
+
+**Coverage Strategy:** New paths targeted, why better coverage expected
+
+CRITICAL REQUIREMENTS:
+- Follow exact markdown format above
+- Keep conclusion and strategy brief (max 3 sentences each)
+- Include complete, compilable C code in ```c block - NO placeholders
+- Only ONE ```c code block containing the complete fuzz target
+- NO extra commentary outside conclusion, code block, and strategy
+- NO FuzzedDataProvider or any C++ headers

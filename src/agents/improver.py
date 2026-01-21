@@ -59,9 +59,16 @@ class LangGraphImprover(LangGraphAgent):
         compressed_insights = self._compress_coverage_insights(insights)
         compressed_suggestions = self._compress_coverage_suggestions(suggestions)
 
+        # Determine target language from file extension (same logic as prototyper)
+        target_path = benchmark.get('target_path', '')
+        cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
+        is_cpp_target = target_path.lower().endswith(cpp_extensions)
+        target_language = 'c++' if is_cpp_target else 'c'
+
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
             "improver",
+            language=target_language,
             project_name=project_name,
             current_code=current_code,
             coverage_percent=f"{coverage_percent:.2%}",

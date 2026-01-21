@@ -33,6 +33,17 @@ from liberator_adapter.bias import Bias
 from liberator_adapter.backend.libfuzz import LFBackendDriver
 from liberator_adapter.driver.driver_enhancer import DriverEnhancer, APIPatternCache
 
+# Fuzz Introspector API client (optional, for better public header detection)
+try:
+    from data_prep.introspector import (
+        query_introspector_header_files,
+        set_introspector_endpoints,
+        DEFAULT_INTROSPECTOR_ENDPOINT,
+    )
+    FI_AVAILABLE = True
+except ImportError:
+    FI_AVAILABLE = False
+
 # Hybrid synthesis module
 from liberator_adapter.driver.synthesis import (
     SkeletonGenerator,
@@ -423,22 +434,25 @@ class ProjectDriverGenerator:
     def render_skeleton_to_code(
         self,
         skeleton: DriverSkeleton,
-        mark_holes: bool = False
+        mark_holes: bool = False,
+        is_cpp_target: bool = True
     ) -> str:
         """
-        Render skeleton to C code
+        Render skeleton to C/C++ code
 
         Args:
             skeleton: Driver skeleton
             mark_holes: Whether to mark unfilled Holes in code
+            is_cpp_target: If True, use 'extern "C"' for C++ fuzz target.
+                          If False, emit pure C code (no extern "C").
 
         Returns:
-            C code string
+            C/C++ code string
         """
         renderer = SkeletonRenderer()
         if mark_holes:
-            return renderer.render_with_holes_marked(skeleton)
-        return renderer.render(skeleton)
+            return renderer.render_with_holes_marked(skeleton, is_cpp_target=is_cpp_target)
+        return renderer.render(skeleton, is_cpp_target=is_cpp_target)
 
     def save_skeleton_drivers(
         self,
@@ -983,15 +997,71 @@ class ProjectDriverGenerator:
         
         return str(src_out)
     
+    def _get_public_headers_from_fi(self) -> Optional[List[str]]:
+        """
+        Try to get public header files from Fuzz Introspector API.
+
+        Returns:
+            List of public header file names (basename only), or None if FI unavailable
+        """
+        if not FI_AVAILABLE:
+            return None
+
+        # Internal header patterns to exclude
+        internal_patterns = {'_plugin', '_internal', '_private', '_impl', '_p.h'}
+
+        def is_internal(header_path: str) -> bool:
+            name_lower = os.path.basename(header_path).lower()
+            return any(p in name_lower for p in internal_patterns)
+
+        try:
+            # Query FI for all header files
+            all_headers = query_introspector_header_files(self.project_name)
+
+            if not all_headers:
+                logger.debug(f"FI returned no headers for {self.project_name}")
+                return None
+
+            # Filter out internal headers and extract basenames
+            public_headers = []
+            for h in all_headers:
+                if not is_internal(h):
+                    # Extract just the filename (e.g., /src/lcms/include/lcms2.h -> lcms2.h)
+                    basename = os.path.basename(h)
+                    if basename not in public_headers:
+                        public_headers.append(basename)
+
+            if public_headers:
+                logger.info(f"📡 Got {len(public_headers)} public headers from FI: {public_headers}")
+                return public_headers
+            else:
+                logger.debug(f"FI returned headers but all were internal")
+                return None
+
+        except Exception as e:
+            logger.debug(f"Failed to query FI for headers: {e}")
+            return None
+
     def _generate_public_headers_file(self, include_dir: str, output_path: Path):
         """
         Intelligently scan for public header files and write to output_path.
 
         Strategy:
-        1. First look in include/ directory (if exists)
-        2. If a header matches project name (e.g., cjson.h), use only that
-        3. Otherwise collect all headers, excluding test/example directories
+        1. Try Fuzz Introspector API first (most accurate)
+        2. Fall back to heuristic: look in include/ directory
+        3. If a header matches project name (e.g., cjson.h), use only that
+        4. Otherwise collect all headers, excluding test/example/internal directories
         """
+        # Try FI first
+        fi_headers = self._get_public_headers_from_fi()
+        if fi_headers:
+            logger.info(f"Using FI-provided public headers: {fi_headers}")
+            with open(output_path, "w") as f:
+                for h in sorted(fi_headers):
+                    f.write(h + "\n")
+            return
+
+        logger.info("FI unavailable, falling back to heuristic header detection")
         header_exts = {".h", ".hpp", ".hxx", ".hh"}
         exclude_dirs = {'tests', 'test', 'testing', 'examples', 'example',
                         'benchmarks', 'benchmark', 'docs', 'doc', 'unity'}
@@ -1039,13 +1109,22 @@ class ProjectDriverGenerator:
 
                 header_paths.append(rel_path)
 
+        # Exclude internal/plugin headers
+        internal_header_patterns = {'_plugin', '_internal', '_private', '_impl', '_p.h'}
+
+        def is_internal_header(name: str) -> bool:
+            name_lower = name.lower()
+            return any(p in name_lower for p in internal_header_patterns)
+
         # If project-named header found, use only that (+ closely related headers)
         if project_header_found:
             # Also include headers with similar names (e.g., cJSON.h + cJSON_Utils.h)
+            # but exclude internal/plugin headers
             base_name = Path(project_header_found).stem.lower()
             related_headers = [
                 h for h in header_paths
                 if Path(h).stem.lower().startswith(base_name)
+                and not is_internal_header(h)
             ]
             if related_headers:
                 header_paths = related_headers

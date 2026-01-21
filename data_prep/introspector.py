@@ -1,5 +1,161 @@
 #!/usr/bin/env python3
-"""Interacts with FuzzIntrospector APIs"""
+"""
+Fuzz Introspector API Client
+
+Interacts with FuzzIntrospector APIs for code analysis and fuzzing target identification.
+
+=== FUZZ INTROSPECTOR API REFERENCE ===
+
+All APIs are GET requests with query parameters. Base URL: http://localhost:8080/api
+
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│ FUNCTION ANALYSIS APIs                                                                   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/get-target-function         │ Get details about a specific function                │
+│   ?project=X&function=Y          │ Returns: function metadata, reachability, complexity │
+│                                                                                          │
+│ /api/all-functions               │ Get ALL functions in a project                       │
+│   ?project=X                     │ Returns: list of function dicts with signatures      │
+│                                                                                          │
+│ /api/function-signature          │ Get function signature for a function name           │
+│   ?project=X&function=Y          │ Returns: full signature string                       │
+│                                                                                          │
+│ /api/function-source-code        │ Get source code of a function                        │
+│   ?project=X&function_signature=Y│ Returns: source, filepath, src_begin, src_end        │
+│                                                                                          │
+│ /api/func-debug-types            │ Get argument types from debug info                   │
+│   ?project=X&function_signature=Y│ Returns: arg-types list                              │
+│                                                                                          │
+│ /api/all-cross-references        │ Get all call sites for a function                    │
+│   ?project=X&function_signature=Y│ Returns: callsites list                              │
+│                                                                                          │
+│ /api/sample-cross-references     │ Get source code of functions calling a function      │
+│   ?project=X&function_signature=Y│ Returns: source-code-refs list                       │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ TARGET ORACLE APIs (for identifying good fuzz targets)                                   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/optimal-targets             │ Best targets from Fuzz Introspector analysis         │
+│   ?project=X                     │ Returns: ranked function list                        │
+│                                                                                          │
+│ /api/far-reach-but-low-coverage  │ Functions with high reachability but low coverage    │
+│   ?project=X                     │ Returns: function list sorted by potential           │
+│                                                                                          │
+│ /api/far-reach-low-cov-fuzz-keyword │ Above + fuzzing-relevant names (parse, decode)    │
+│   ?project=X                     │ Returns: filtered function list                      │
+│                                                                                          │
+│ /api/easy-params-far-reach       │ Functions with fuzzer-friendly params (buffers)      │
+│   ?project=X                     │ Returns: function list with easy-to-fuzz args        │
+│                                                                                          │
+│ /api/all-public-candidates       │ ALL public function/constructor candidates           │
+│   ?project=X                     │ Returns: comprehensive public API list               │
+│                                                                                          │
+│ /api/function-target-oracle      │ Cross-project heuristic-based target analysis        │
+│   ?project=X                     │ Returns: targets based on all OSS-Fuzz projects      │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ PROJECT STRUCTURE APIs                                                                   │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/all-header-files            │ Get ALL header files in project source               │
+│   ?project=X                     │ Returns: all-header-files list (full paths)          │
+│                                                                                          │
+│ /api/get-header-files-needed-for-function │ Headers needed for a function              │
+│   ?project=X&function_signature=Y│ Returns: headers-to-include list                     │
+│                                                                                          │
+│ /api/all-project-source-files    │ Get all source file paths                            │
+│   ?project=X                     │ Returns: src_path list                               │
+│                                                                                          │
+│ /api/project-source-code         │ Get source code at a location                        │
+│   ?project=X&filepath=Y&begin_line=A&end_line=B │ Returns: source_code string          │
+│                                                                                          │
+│ /api/project-repository          │ Get source code repository URL                       │
+│   ?project=X                     │ Returns: repository URL                              │
+│                                                                                          │
+│ /api/get-project-language-from-source-files │ Detect project language                  │
+│   ?project=X                     │ Returns: language based on file extensions           │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ TYPE SYSTEM APIs                                                                         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/type-info                   │ Get type information                                 │
+│   ?project=X&type=Y              │ Returns: type details                                │
+│                                                                                          │
+│ /api/full-type-definition        │ Get ALL type definitions (struct, enum, typedef)     │
+│   ?project=X                     │ Returns: typedef_list with all custom types          │
+│                                                                                          │
+│ /api/function-with-matching-return-type │ Find functions returning a specific type     │
+│   ?project=X&return-type=Y       │ Returns: functions, constructors lists               │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ TEST & HARNESS APIs                                                                      │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/project-tests               │ Get test files of a project                          │
+│   ?project=X                     │ Returns: test-file-list                              │
+│                                                                                          │
+│ /api/project-tests-for-functions │ Get tests related to specific functions              │
+│   ?project=X&functions=A,B,C     │ Returns: test-files-xref mapping                     │
+│                                                                                          │
+│ /api/project-test-code           │ Get source code of a test file                       │
+│   ?project=X&filepath=Y          │ Returns: source_code string                          │
+│                                                                                          │
+│ /api/harness-source-and-executable │ Get harness source/executable pairs                │
+│   ?project=X                     │ Returns: pairs list [{source, executable}]           │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ PROJECT ANALYSIS APIs                                                                    │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/project-summary             │ High-level fuzzing stats                             │
+│   ?project=X                     │ Returns: coverage, function counts, etc.             │
+│                                                                                          │
+│ /api/annotated-cfg               │ Get annotated Control Flow Graph                     │
+│   ?project=X                     │ Returns: CFG with coverage annotations               │
+│                                                                                          │
+│ /api/branch-blockers             │ Get branch blocker analysis                          │
+│   ?project=X                     │ Returns: blocking branches limiting coverage         │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ JVM-SPECIFIC APIs                                                                        │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/all-jvm-constructors        │ Get all constructors in JVM project                  │
+│   ?project=X                     │ Returns: constructor list                            │
+│                                                                                          │
+│ /api/all-public-classes          │ Get public classes in JVM project                    │
+│   ?project=X                     │ Returns: classes list                                │
+│                                                                                          │
+│ /api/jvm-method-properties       │ Get JVM method properties                            │
+│   ?project=X&function_signature=Y│ Returns: exceptions, is-jvm-static, need-close       │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ UTILITY APIs                                                                             │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│ /api/database-language-stats     │ Get coverage stats across all languages              │
+│   (no params)                    │ Returns: language-wise statistics                    │
+│                                                                                          │
+│ /api/tester                      │ Simple API health check                              │
+│   (no params)                    │ Returns: test response                               │
+│                                                                                          │
+│ /api/shutdown                    │ Shutdown local server (local only)                   │
+│   (no params)                    │ WARNING: Will stop the FI server                     │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+=== COMMON QUERY PATTERNS ===
+
+1. Get public APIs for a project:
+   query_introspector_all_public_candidates('lcms')
+
+2. Get all header files (for public header detection):
+   query_introspector_header_files('lcms')
+
+3. Get function source code:
+   query_introspector_function_source('lcms', 'cmsCreateTransform')
+
+4. Get cross-references (usage examples):
+   query_introspector_sample_xrefs('lcms', 'void cmsDoTransform(...)')
+
+5. Get optimal fuzz targets:
+   query_introspector_for_optimal_targets('lcms')
+
+=== SETUP ===
+
+# Set endpoint (default is localhost:8080)
+set_introspector_endpoints('http://localhost:8080/api')
+
+# Or use cloud endpoint
+set_introspector_endpoints('https://introspector.oss-fuzz.com/api')
+"""
 
 import argparse
 import json
