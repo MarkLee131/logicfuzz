@@ -768,6 +768,24 @@ def _heuristic_filter_sequences(
     # Deduplicate
     api_sequences = _dedup_sequences(api_sequences)
 
+    # Filter out internal APIs (functions starting with '_')
+    # These are typically plugin/internal APIs not meant for normal usage
+    def _filter_internal_apis(seq: List[str]) -> List[str]:
+        return [api for api in seq if not api.startswith('_')]
+
+    filtered_sequences = []
+    internal_api_count = 0
+    for seq in api_sequences:
+        filtered_seq = _filter_internal_apis(seq)
+        if len(filtered_seq) >= 2:  # Keep sequences with at least 2 public APIs
+            filtered_sequences.append(filtered_seq)
+            internal_api_count += len(seq) - len(filtered_seq)
+
+    if internal_api_count > 0:
+        log.info(f'   🔒 Filtered {internal_api_count} internal APIs (starting with _)')
+
+    api_sequences = filtered_sequences if filtered_sequences else api_sequences
+
     # Get init/cleanup hints from condition_info
     inits = set(condition_info.get('inits', []))
     sinks = set(condition_info.get('sinks', []))
