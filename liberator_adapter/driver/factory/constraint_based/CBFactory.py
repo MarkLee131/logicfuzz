@@ -5,20 +5,26 @@ Constraint-based driver generation strategy, using ConditionManager and RunningC
 to ensure generated drivers satisfy API call constraints.
 
 Supports optional Z3 constraint solving validation.
+
+Key enhancement: Initialization chain backtracking
+- When an API cannot be instantiated due to unsatisfied constraints,
+  the factory attempts to find and prepend initialization APIs that can
+  produce the required values.
 """
 import copy
 import logging
+import random
 from typing import Dict, List, Optional, Set, Tuple
 
 from liberator_adapter.common import Api, FunctionConditionsSet, FunctionConditions, DataLayout
-from liberator_adapter.common import ValueMetadata, AccessTypeSet
+from liberator_adapter.common import ValueMetadata, AccessTypeSet, Access
 from liberator_adapter.constraints import ConditionUnsat, RunningContext, ConditionManager
 from liberator_adapter.dependency import DependencyGraph
 from liberator_adapter.driver import Driver
 from liberator_adapter.driver.factory import Factory
 from liberator_adapter.driver.ir import (
     ApiCall, PointerType, Variable, AllocType, Constant,
-    NullConstant, AssertNull, SetNull, Address, Function
+    NullConstant, AssertNull, SetNull, Address, Function, Type
 )
 from liberator_adapter.bias import Bias
 
@@ -96,7 +102,14 @@ class CBFactory(Factory):
                 for at in arg.ats:
                     RunningContext.type_to_hash[at.type_string] = at.type
 
+        # Keep original dependency graph for backward chaining (initialization lookup)
+        # Original graph: api -> {deps} means api needs values produced by deps
+        self.original_dep_graph: Dict[Api, Set[Api]] = {}
+        for api, deps in dgraph.items():
+            self.original_dep_graph[api] = set(deps)
+
         # DependencyGraph needs to be reversed (Liberator's design)
+        # Reversed graph: dep -> {apis} means dep's return value is used by apis
         inv_dep_graph = dict((k, set()) for k in list(dgraph.keys()))
         for api, deps in dgraph.items():
             for dep in deps:
@@ -114,6 +127,9 @@ class CBFactory(Factory):
         self.api_name_to_api: Dict[str, Api] = {
             api.function_name: api for api in self.api_list
         }
+
+        # Build type to producer APIs mapping for initialization chain lookup
+        self._build_type_producer_map()
 
     def try_to_instantiate_api_call(self, api_call: ApiCall,
                                     conditions: FunctionConditions, 
@@ -346,6 +362,262 @@ class CBFactory(Factory):
             logger.warning(f"Z3 validation failed: {e}")
             return True, []  # Conservative handling: consider valid when validation fails
 
+    def _build_type_producer_map(self):
+        """
+        Build a mapping from return types to APIs that produce them.
+        Used for initialization chain backtracking.
+        """
+        self.type_to_producers: Dict[str, List[Api]] = {}
+
+        for api in self.api_list:
+            ret_type = api.return_info.type
+            if ret_type and ret_type != "void":
+                # Normalize type string
+                type_key = ret_type.replace(" ", "").replace("const", "").strip()
+                if type_key not in self.type_to_producers:
+                    self.type_to_producers[type_key] = []
+                self.type_to_producers[type_key].append(api)
+
+        logger.debug(f"Built type-to-producer map with {len(self.type_to_producers)} types")
+
+    def find_producer_apis(self, required_type: str,
+                           required_cond: Optional[ValueMetadata] = None) -> List[Api]:
+        """
+        Find APIs that can produce a value of the required type.
+
+        Args:
+            required_type: The type string we need (e.g., "cmsHPROFILE", "void*")
+            required_cond: Optional condition metadata to match
+
+        Returns:
+            List of APIs that can produce this type
+        """
+        producers = []
+
+        # Normalize the required type
+        type_key = required_type.replace(" ", "").replace("const", "").strip()
+
+        # Direct match
+        if type_key in self.type_to_producers:
+            producers.extend(self.type_to_producers[type_key])
+
+        # Try without pointer suffix (for opaque pointer types)
+        if type_key.endswith("*"):
+            base_type = type_key[:-1]
+            if base_type in self.type_to_producers:
+                producers.extend(self.type_to_producers[base_type])
+
+        # Filter by source condition if provided
+        if required_cond is not None and producers:
+            filtered = []
+            for api in producers:
+                if api.function_name in self.conditions_map:
+                    ret_cond = self.conditions_map[api.function_name].return_at
+                    # Check if return is a CREATE access (source)
+                    if self.condition_manager.is_source(ret_cond):
+                        filtered.append(api)
+            if filtered:
+                producers = filtered
+
+        # Prioritize source APIs (they are more likely to be valid starting points)
+        source_producers = [p for p in producers if p in self.source_api]
+        if source_producers:
+            return source_producers
+
+        return producers
+
+    def _get_arg_type_info(self, api: Api, arg_pos: int) -> Tuple[str, bool]:
+        """
+        Get type information for an API argument.
+
+        Returns:
+            (type_string, is_opaque_pointer)
+        """
+        if arg_pos < 0 or arg_pos >= len(api.arguments_info):
+            return ("", False)
+
+        arg_info = api.arguments_info[arg_pos]
+        type_str = arg_info.type
+
+        # Check if it's an opaque pointer (incomplete struct pointer)
+        is_opaque = (arg_info.is_type_incomplete and
+                     type_str.endswith("*") and
+                     arg_info.flag == "struct")
+
+        return (type_str, is_opaque)
+
+    def _try_find_init_chain(self, target_api: Api, unsat_vars: Set,
+                              rng_ctx: RunningContext,
+                              max_depth: int = 3,
+                              visited: Optional[Set[str]] = None) -> Optional[List[Tuple[ApiCall, RunningContext]]]:
+        """
+        Try to find an initialization chain for unsatisfied variables.
+
+        This implements backward chaining: for each unsatisfied parameter,
+        find an API that can produce the required value and recursively
+        build the initialization chain.
+
+        Args:
+            target_api: The API we're trying to instantiate
+            unsat_vars: Set of (arg_pos, condition) tuples that couldn't be satisfied
+            rng_ctx: Current running context
+            max_depth: Maximum recursion depth to prevent infinite loops
+            visited: Set of visited API names to prevent cycles
+
+        Returns:
+            List of (ApiCall, RunningContext) tuples forming the init chain, or None if failed
+        """
+        if max_depth <= 0:
+            return None
+
+        if visited is None:
+            visited = set()
+
+        if target_api.function_name in visited:
+            return None
+
+        visited = visited | {target_api.function_name}
+
+        init_chain = []
+        current_ctx = copy.deepcopy(rng_ctx)
+
+        # Sort unsat_vars by position to handle them in order
+        sorted_unsat = sorted(list(unsat_vars), key=lambda x: x[0])
+
+        for arg_pos, arg_cond in sorted_unsat:
+            if arg_pos < 0:  # Return value, skip
+                continue
+
+            # Get the required type for this argument
+            type_str, is_opaque = self._get_arg_type_info(target_api, arg_pos)
+            if not type_str:
+                continue
+
+            logger.debug(f"Looking for producer of {type_str} for {target_api.function_name} arg {arg_pos}")
+
+            # Find APIs that can produce this type
+            producers = self.find_producer_apis(type_str, arg_cond)
+
+            if not producers:
+                logger.debug(f"No producer found for type {type_str}")
+                continue
+
+            # Try each producer
+            random.shuffle(producers)  # Randomize to avoid always picking the same
+
+            for producer in producers[:5]:  # Limit attempts
+                if producer.function_name in visited:
+                    continue
+
+                logger.debug(f"Trying producer {producer.function_name} for {type_str}")
+
+                get_cond = lambda x: self.conditions.get_function_conditions(x.function_name)
+                to_api = lambda x: Factory.api_to_apicall(x)
+
+                producer_cond = get_cond(producer)
+                producer_call = to_api(producer)
+
+                # Try to instantiate the producer
+                new_ctx, producer_unsat = self.try_to_instantiate_api_call(
+                    producer_call, producer_cond, current_ctx
+                )
+
+                if len(producer_unsat) == 0:
+                    # Producer can be instantiated directly
+                    logger.debug(f"Producer {producer.function_name} instantiated successfully")
+                    init_chain.append((producer_call, new_ctx))
+                    current_ctx = new_ctx
+                    break
+                else:
+                    # Producer also needs initialization - recurse
+                    sub_chain = self._try_find_init_chain(
+                        producer, producer_unsat, current_ctx,
+                        max_depth - 1, visited
+                    )
+
+                    if sub_chain:
+                        init_chain.extend(sub_chain)
+                        # Get the last context from the sub-chain
+                        current_ctx = sub_chain[-1][1]
+
+                        # Now try to instantiate the producer again
+                        producer_call = to_api(producer)  # Fresh call
+                        new_ctx, producer_unsat = self.try_to_instantiate_api_call(
+                            producer_call, producer_cond, current_ctx
+                        )
+
+                        if len(producer_unsat) == 0:
+                            init_chain.append((producer_call, new_ctx))
+                            current_ctx = new_ctx
+                            break
+
+        return init_chain if init_chain else None
+
+    def _try_all_source_apis(self, rng_ctx: RunningContext) -> Optional[Tuple[Api, ApiCall, RunningContext, List]]:
+        """
+        Try all source APIs and return the first one that can be instantiated,
+        or the one with the fewest unsatisfied variables for backtracking.
+
+        Returns:
+            (api, api_call, context, init_chain) on success, or
+            (best_api, None, None, unsat_vars) if all failed
+        """
+        get_cond = lambda x: self.conditions.get_function_conditions(x.function_name)
+        to_api = lambda x: Factory.api_to_apicall(x)
+
+        # Shuffle to avoid always picking the same order
+        shuffled_sources = list(self.source_api)
+        random.shuffle(shuffled_sources)
+
+        best_api = None
+        best_unsat = None
+        min_unsat_count = float('inf')
+
+        for api in shuffled_sources:
+            api_cond = get_cond(api)
+            api_call = to_api(api)
+
+            new_ctx, unsat_vars = self.try_to_instantiate_api_call(
+                api_call, api_cond, rng_ctx
+            )
+
+            if len(unsat_vars) == 0:
+                # Found one that works directly
+                logger.debug(f"Source API {api.function_name} instantiated directly")
+                return (api, api_call, new_ctx, [])
+
+            # Track the best candidate for backtracking
+            if len(unsat_vars) < min_unsat_count:
+                min_unsat_count = len(unsat_vars)
+                best_api = api
+                best_unsat = unsat_vars
+
+        # None worked directly, try backtracking on the best candidate
+        if best_api is not None and best_unsat is not None:
+            logger.info(f"Attempting init chain backtracking for {best_api.function_name} "
+                       f"with {len(best_unsat)} unsat vars")
+
+            init_chain = self._try_find_init_chain(best_api, best_unsat, rng_ctx)
+
+            if init_chain:
+                # Now try to instantiate the target API with the updated context
+                last_ctx = init_chain[-1][1]
+                api_call = to_api(best_api)
+                api_cond = get_cond(best_api)
+
+                new_ctx, unsat_vars = self.try_to_instantiate_api_call(
+                    api_call, api_cond, last_ctx
+                )
+
+                if len(unsat_vars) == 0:
+                    logger.info(f"Init chain backtracking succeeded for {best_api.function_name}")
+                    return (best_api, api_call, new_ctx, init_chain)
+                else:
+                    logger.warning(f"Init chain didn't fully satisfy {best_api.function_name}")
+
+        # Return the best we found for error reporting
+        return (best_api, None, None, best_unsat)
+
     def get_random_source_api(self):
         """Randomly select a source API"""
         return self.bias.get_random_candidate([], self.source_api)
@@ -362,7 +634,12 @@ class CBFactory(Factory):
 
     def create_random_driver(self) -> Driver:
         """
-        Create a random driver that satisfies constraints
+        Create a random driver that satisfies constraints.
+
+        Uses initialization chain backtracking when direct instantiation fails:
+        1. Try all source APIs
+        2. For the best candidate (fewest unsat vars), try to build init chain
+        3. Prepend init chain APIs to the driver
         """
         rng_ctx = RunningContext()
 
@@ -375,17 +652,23 @@ class CBFactory(Factory):
         # List[(ApiCall, RunningContext)]
         drv = list()
 
-        # Start with source API
-        begin_api = self.get_random_source_api()
-        begin_condition = get_cond(begin_api)
-        call_begin = to_api(begin_api)
+        # Try all source APIs with backtracking support
+        result = self._try_all_source_apis(rng_ctx)
+        begin_api, call_begin, rng_ctx_1, init_chain_or_unsat = result
 
-        rng_ctx_1, unsat_var_1 = self.try_to_instantiate_api_call(
-            call_begin, begin_condition, rng_ctx)
+        if call_begin is None or rng_ctx_1 is None:
+            # All source APIs failed even with backtracking
+            logger.error(f"Cannot instantiate any source API. Best candidate: "
+                        f"{begin_api.function_name if begin_api else 'None'}, "
+                        f"unsat vars: {init_chain_or_unsat}")
+            raise Exception(f"Cannot instantiate any source API. "
+                           f"Best candidate had unsat vars: {init_chain_or_unsat}")
 
-        if len(unsat_var_1) > 0:
-            logger.error(f"Cannot instantiate the first function: {unsat_var_1}")
-            raise Exception(f"Cannot instantiate the first function: {unsat_var_1}")
+        # Add init chain APIs first (if any)
+        if init_chain_or_unsat:  # This is the init_chain list when successful
+            for init_call, init_ctx in init_chain_or_unsat:
+                logger.debug(f"Adding init chain API: {init_call.function_name}")
+                drv.append((init_call, init_ctx))
 
         logger.debug(f"Starting with {call_begin.function_name}")
         drv.append((call_begin, rng_ctx_1))
@@ -431,21 +714,51 @@ class CBFactory(Factory):
 
                 drv.append((api_call, rng_ctx_1))
             else:
-                # Start new chain
-                api_n = self.get_random_source_api()
-                begin_condition = get_cond(api_n)
-                call_begin = to_api(api_n)
+                # Start new chain - use backtracking mechanism
+                logger.debug("Starting new chain with backtracking support")
 
-                logger.debug(f"Starting new chain with {api_n.function_name}")
+                # Use the current context for the new chain attempt
+                result = self._try_all_source_apis(rng_ctx_1)
+                new_api, new_call, new_ctx, chain_or_unsat = result
 
-                rng_ctx_1, unsat_var_1 = self.try_to_instantiate_api_call(
-                    call_begin, begin_condition, rng_ctx_1)
+                if new_call is None or new_ctx is None:
+                    # Failed to find any working source API
+                    # Try a simpler fallback: just pick a random one and continue
+                    # This allows partial drivers to be generated
+                    logger.warning(f"New chain backtracking failed for {new_api.function_name if new_api else 'None'}, "
+                                  f"trying simple fallback")
 
-                if len(unsat_var_1) > 0:
-                    logger.error(f"Cannot instantiate the first function [second]: {unsat_var_1}")
-                    raise Exception(f"Cannot instantiate the first function [second]: {unsat_var_1}")
+                    # Simple fallback: try each source API once without backtracking
+                    fallback_success = False
+                    for fallback_api in self.source_api:
+                        fallback_cond = get_cond(fallback_api)
+                        fallback_call = to_api(fallback_api)
+                        fallback_ctx, fallback_unsat = self.try_to_instantiate_api_call(
+                            fallback_call, fallback_cond, rng_ctx_1)
+                        if len(fallback_unsat) == 0:
+                            api_n = fallback_api
+                            rng_ctx_1 = fallback_ctx
+                            drv.append((fallback_call, rng_ctx_1))
+                            fallback_success = True
+                            logger.debug(f"Fallback succeeded with {fallback_api.function_name}")
+                            break
 
-                drv.append((call_begin, rng_ctx_1))
+                    if not fallback_success:
+                        logger.error(f"Cannot start new chain, all source APIs failed")
+                        # Instead of raising, break the loop and return partial driver
+                        logger.warning(f"Returning partial driver with {len(drv)} API calls")
+                        break
+                else:
+                    # Success - add any init chain APIs
+                    if chain_or_unsat:
+                        for init_call, init_ctx in chain_or_unsat:
+                            logger.debug(f"Adding new chain init API: {init_call.function_name}")
+                            drv.append((init_call, init_ctx))
+
+                    api_n = new_api
+                    rng_ctx_1 = new_ctx
+                    drv.append((new_call, rng_ctx_1))
+                    logger.debug(f"Starting new chain with {new_api.function_name}")
 
         # Use the last RunningContext
         context = [rng_ctx for _, rng_ctx in drv][-1]

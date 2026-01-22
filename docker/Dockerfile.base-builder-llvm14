@@ -6,11 +6,13 @@
 # - wllvm for whole-program LLVM bitcode extraction
 #
 # Build: docker build -f Dockerfile.base-builder-llvm14 -t logicfuzz/base-builder-llvm14 .
+#
+# NOTE: Using default tag (Ubuntu 20.04 based) to ensure GLIBC compatibility with base-runner:latest
+# Ubuntu 24.04 has GLIBC 2.38 which is incompatible with base-runner's older GLIBC
 
-FROM gcr.io/oss-fuzz-base/base-builder:ubuntu-24-04
+FROM gcr.io/oss-fuzz-base/base-builder
 
-# Add LLVM 14 repository for Ubuntu 24.04 (noble)
-# Note: LLVM 14 is not in official noble repos, so we use the focal packages
+# Add LLVM 14 repository for Ubuntu 20.04 (focal)
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
