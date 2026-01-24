@@ -90,9 +90,7 @@ class LangGraphImprover(LangGraphAgent):
         improved_code = parse_tag(response, 'fuzz_target')
         if not improved_code:
             logger.warning('No <fuzz_target> tag found in improver response', trial=self.trial)
-            # Fallback: use entire response, but still strip CDATA if present
-            from src.agents.utils import strip_cdata
-            improved_code = strip_cdata(response)
+            improved_code = response
 
         try:
             improvement_count = state.get("improvement_attempt_count", 0) + 1

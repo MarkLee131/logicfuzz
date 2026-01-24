@@ -41,6 +41,8 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
         match = re.search(r'<conclusion>\s*(true|false)\s*</conclusion>', text_lower)
         if match:
             result['improve_required'] = match.group(1) == 'true'
+        else:
+            logger.warning('No <conclusion> tag found in coverage analyzer response', trial=self.trial)
 
         # Extract insights
         insights_match = re.search(r'<insights?>(.*?)</insights?>', content, re.DOTALL | re.IGNORECASE)
@@ -51,11 +53,6 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
         suggestions_match = re.search(r'<suggestions?>(.*?)</suggestions?>', content, re.DOTALL | re.IGNORECASE)
         if suggestions_match:
             result['suggestions'] = suggestions_match.group(1).strip()
-
-        # Fallback: text format
-        if not match:
-            if 'true' in text_lower and ('improve' in text_lower or 'conclusion' in text_lower):
-                result['improve_required'] = True
 
         return result
 

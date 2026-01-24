@@ -39,20 +39,18 @@ class LangGraphCrashAnalyzer(LangGraphAgent, ToolCallingMixin):
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
-        """Parse crash analysis response."""
+        """Parse crash analysis response using XML tags."""
         result = {'true_bug': None, 'insight': content, 'analyzed': True}
         content_lower = content.lower()
 
-        # Parse true/false
-        if m := re.search(r'conclusion:\s*(true|false)', content_lower):
+        # XML format: <conclusion>true/false</conclusion>
+        if m := re.search(r'<conclusion>\s*(true|false)\s*</conclusion>', content_lower):
             result['true_bug'] = m.group(1) == 'true'
-        elif 'true bug' in content_lower or 'project bug' in content_lower:
-            result['true_bug'] = True
-        elif 'false positive' in content_lower or 'driver bug' in content_lower:
-            result['true_bug'] = False
+        else:
+            logger.warning('No <conclusion> tag found in crash analyzer response', trial=self.trial)
 
-        # Extract insight
-        if m := re.search(r'analysis:\s*(.+)', content, re.IGNORECASE | re.DOTALL):
+        # XML format: <root_cause>...</root_cause>
+        if m := re.search(r'<root_cause>(.*?)</root_cause>', content, re.DOTALL | re.IGNORECASE):
             result['insight'] = m.group(1).strip()
 
         return result

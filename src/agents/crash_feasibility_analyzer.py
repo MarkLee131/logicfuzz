@@ -72,14 +72,16 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
 
     def parse_response(self, content: str) -> Dict[str, Any]:
         """
-        Parse final LLM response to extract feasibility analysis.
+        Parse final LLM response to extract feasibility analysis using XML tags.
 
         Expected format:
-        FEASIBLE: true/false
-        ANALYSIS: ...
-        SOURCE_CODE_EVIDENCE: ...
-        RECOMMENDATIONS: ...
+        <feasible>true/false</feasible>
+        <analysis>...</analysis>
+        <source_code_evidence>...</source_code_evidence>
+        <recommendations>...</recommendations>
         """
+        import re
+
         result = {
             'feasible': False,
             'analysis': '',
@@ -88,49 +90,25 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
             'analyzed': True
         }
 
-        lines = content.split('\n')
-        current_section = None
-        content_buffer = []
+        content_lower = content.lower()
 
-        for line in lines:
-            line_lower = line.lower().strip()
+        # XML format: <feasible>true/false</feasible>
+        if m := re.search(r'<feasible>\s*(true|false)\s*</feasible>', content_lower):
+            result['feasible'] = m.group(1) == 'true'
+        else:
+            logger.warning('No <feasible> tag found in crash feasibility response', trial=self.trial)
 
-            if 'feasible:' in line_lower:
-                if content_buffer and current_section:
-                    result[current_section] = '\n'.join(content_buffer).strip()
-                    content_buffer = []
+        # XML format: <analysis>...</analysis>
+        if m := re.search(r'<analysis>(.*?)</analysis>', content, re.DOTALL | re.IGNORECASE):
+            result['analysis'] = m.group(1).strip()
 
-                # Extract true/false value
-                if 'true' in line_lower or 'yes' in line_lower:
-                    result['feasible'] = True
-                elif 'false' in line_lower or 'no' in line_lower:
-                    result['feasible'] = False
-                current_section = None
+        # XML format: <source_code_evidence>...</source_code_evidence>
+        if m := re.search(r'<source_code_evidence>(.*?)</source_code_evidence>', content, re.DOTALL | re.IGNORECASE):
+            result['source_code_evidence'] = m.group(1).strip()
 
-            elif 'analysis:' in line_lower:
-                if content_buffer and current_section:
-                    result[current_section] = '\n'.join(content_buffer).strip()
-                    content_buffer = []
-                current_section = 'analysis'
-
-            elif 'source_code_evidence:' in line_lower or 'evidence:' in line_lower:
-                if content_buffer and current_section:
-                    result[current_section] = '\n'.join(content_buffer).strip()
-                    content_buffer = []
-                current_section = 'source_code_evidence'
-
-            elif 'recommendations:' in line_lower or 'suggestions:' in line_lower:
-                if content_buffer and current_section:
-                    result[current_section] = '\n'.join(content_buffer).strip()
-                    content_buffer = []
-                current_section = 'recommendations'
-
-            elif current_section:
-                content_buffer.append(line)
-
-        # Save last section
-        if content_buffer and current_section:
-            result[current_section] = '\n'.join(content_buffer).strip()
+        # XML format: <recommendations>...</recommendations>
+        if m := re.search(r'<recommendations>(.*?)</recommendations>', content, re.DOTALL | re.IGNORECASE):
+            result['recommendations'] = m.group(1).strip()
 
         return result
 
