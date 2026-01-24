@@ -1,187 +1,180 @@
+<task>
 Determine if the following crash is feasible from the project's external entry points.
+</task>
 
-**Project**: {PROJECT_NAME}
+<project_info>
+Project: {PROJECT_NAME}
+</project_info>
 
-**Fuzz Target**:
+<fuzz_target>
 ```
 {FUZZ_TARGET}
 ```
+</fuzz_target>
 
-**Function Requirements**:
+<function_requirements>
 {FUNCTION_REQUIREMENTS}
+</function_requirements>
 
-**Crash Stacktrace**:
+<crash_stacktrace>
 {CRASH_STACKTRACE}
+</crash_stacktrace>
 
-**Crash Analysis**:
+<crash_analysis>
 {CRASH_ANALYSIS}
+</crash_analysis>
 
+<additional_context>
 {ADDITIONAL_CONTEXT}
+</additional_context>
 
-**Your Task**:
-Work backwards from the functions called by the fuzz target to the project's entry points and determine if the crash is feasible. Use available tools to investigate the source code and provide detailed analysis with evidence.
+<available_tools>
 
-AVAILABLE TOOLS:
+<bash_execute>
+Execute bash commands in project container:
+- bash_execute(command="grep -rn 'function_name' /src/")
+- bash_execute(command="cat /src/path/to/file.c")
+- bash_execute(command="find /src -name '*.h'")
+</bash_execute>
 
-1. **bash_execute(command)** - Execute bash commands in project container
-   - `bash_execute(command="grep -rn 'function_name' /src/")`
-   - `bash_execute(command="cat /src/path/to/file.c")`
-   - `bash_execute(command="find /src -name '*.h'")`
+<get_function_implementation>
+Get full source code of a function:
+- get_function_implementation(function_name="sam_hrecs_remove_ref_altnames")
+</get_function_implementation>
 
-2. **get_function_implementation(function_name)** - Get full source code of a function
-   - `get_function_implementation(function_name="sam_hrecs_remove_ref_altnames")`
+<get_function_signature>
+Get function signature (return type + parameters):
+- get_function_signature(function_name="parse_header")
+</get_function_signature>
 
-3. **get_function_signature(function_name)** - Get function signature (return type + parameters)
-   - `get_function_signature(function_name="parse_header")`
+<get_sample_cross_references>
+Get usage examples (VERY USEFUL for tracing call paths):
+- get_sample_cross_references(function_signature="void func(int x)")
+</get_sample_cross_references>
 
-4. **get_sample_cross_references(function_signature)** - Get usage examples
-   - `get_sample_cross_references(function_signature="void func(int x)")`
-   - Shows how the function is actually called in the project
-   - VERY USEFUL for tracing call paths!
+<get_type_definitions>
+Get all structs, enums, typedefs in project
+</get_type_definitions>
 
-5. **get_type_definitions()** - Get all structs, enums, typedefs in project
-   - `get_type_definitions()`
+<get_headers_for_function>
+Get required include files:
+- get_headers_for_function(function_signature="int parse_header(char *)")
+</get_headers_for_function>
 
-6. **get_headers_for_function(function_signature)** - Get required include files
-   - `get_headers_for_function(function_signature="int parse_header(char *)")`
+<get_tests_for_functions>
+Get test code using these functions:
+- get_tests_for_functions(function_names=["parse_header", "validate_input"])
+</get_tests_for_functions>
 
-7. **get_tests_for_functions(function_names)** - Get test code using these functions
-   - `get_tests_for_functions(function_names=["parse_header", "validate_input"])`
+</available_tools>
 
-8. **get_function_debug_types(function_signature)** - Get detailed parameter type info
-   - `get_function_debug_types(function_signature="int process(void *)")`
-
-9. **get_functions_by_return_type(return_type)** - Find constructors/factories
-   - `get_functions_by_return_type(return_type="sam_hrecs_t *")`
-
-TOOL USAGE STRATEGY:
-- Start with `get_function_implementation()` to see target function code
-- Use `get_sample_cross_references()` to trace callers
-- Use `get_type_definitions()` when encountering unfamiliar types
-- Use `bash_execute()` for custom searches
+<tool_usage_strategy>
+- Start with get_function_implementation() to see target function code
+- Use get_sample_cross_references() to trace callers
+- Use get_type_definitions() when encountering unfamiliar types
+- Use bash_execute() for custom searches
 - Call multiple tools to build complete picture
+</tool_usage_strategy>
 
-**Analysis Steps**:
+<analysis_steps>
 
-1. **Identify the Target Function**:
-   - Find the function called by the fuzz driver that led to the crash
-   - This is the function directly called by LLVMFuzzerTestOneInput or other fuzz driver functions
-   - Example: In stack trace `#4 encode_ise`, `#5 symbolic_to_physical`, `#6 LLVMFuzzerTestOneInput`
-     * The target function is `symbolic_to_physical` (called by fuzz driver)
-     * NOT `encode_ise` (called internally by symbolic_to_physical)
+<step1>
+Identify the Target Function:
+- Find the function called by the fuzz driver that led to the crash
+- This is the function directly called by LLVMFuzzerTestOneInput
+- Example: In stack trace #4 encode_ise, #5 symbolic_to_physical, #6 LLVMFuzzerTestOneInput
+  The target function is symbolic_to_physical (called by fuzz driver)
+</step1>
 
-2. **Identify Crash Input Conditions**:
-   - What specific input conditions did the fuzz driver create?
-   - What values or states directly led to the crash?
-   - How are these conditions necessary for the crash?
-   - Consider ALL variables involved and their relationships
+<step2>
+Identify Crash Input Conditions:
+- What specific input conditions did the fuzz driver create?
+- What values or states directly led to the crash?
+- Consider ALL variables involved and their relationships
+</step2>
 
-3. **Find Real Call Sites** (use bash commands):
-   - Use `grep -rn "target_function_name" /src/project/` to locate all places where the target function is called
-   - Read the source code at each call site to understand:
-     * How do these call sites generate input arguments?
-     * What constraints do they enforce on inputs?
-     * What validations are performed?
-   - Use `grep -A 10 -B 10` to get context around call sites
+<step3>
+Find Real Call Sites:
+- Use grep -rn "target_function_name" /src/project/ to locate all call sites
+- Read the source code at each call site
+- Understand how they generate input arguments and what constraints they enforce
+</step3>
 
-4. **Trace from Entry Points** (use bash commands):
-   - Use `grep` to identify the project's public entry points (exported functions, API functions, main functions)
-   - Trace backwards: Can you find a path from any entry point to the target function?
-   - Examine each function in the path to understand:
-     * What path constraints must be satisfied?
-     * Can the crash conditions be achieved along this path?
+<step4>
+Trace from Entry Points:
+- Use grep to identify public entry points (exported functions, API functions)
+- Trace backwards: Can you find a path from any entry point to the target function?
+- Examine path constraints and whether crash conditions can be achieved
+</step4>
 
-5. **Provide Source Code Evidence** (extracted via bash commands):
-   - Use bash commands to read and quote actual code showing constraints
-   - Provide file names and line numbers
-   - Show initialization patterns from real callers
-   - Demonstrate why the crash is or isn't possible
-   - DO NOT speculate - use bash commands to examine actual source code
+<step5>
+Provide Source Code Evidence:
+- Use bash commands to read and quote actual code
+- Provide file names and line numbers
+- Show initialization patterns from real callers
+- DO NOT speculate - examine actual source code
+</step5>
 
-6. **Determine Feasibility**:
-   - **Feasible (True)**: The crash can be triggered from entry points
-     * Show the execution path from entry point to crash
-     * Document all necessary conditions
-     * Prove they can all be satisfied
-   
-   - **Infeasible (False)**: The crash cannot be triggered from entry points
-     * Show which constraints prevent the crash
-     * Prove the fuzz driver violated function requirements
-     * Explain why real callers can't create this condition
+<step6>
+Determine Feasibility:
 
-7. **Provide Recommendations**:
-   - For infeasible crashes: How to fix the fuzz driver
-   - For feasible crashes: Describe the bug and its impact
+Feasible (True): The crash can be triggered from entry points
+- Show execution path from entry point to crash
+- Document all necessary conditions
+- Prove they can all be satisfied
 
-**Important Constraints**:
-- Consider relationships between variables (e.g., `data` NULL ⟺ `len` == 0)
-- For compound conditions (e.g., `x * y > limit`), analyze the cross product of ranges
-- Never assume function behavior - always examine implementations
-- Base all conclusions on actual source code evidence
+Infeasible (False): The crash cannot be triggered from entry points
+- Show which constraints prevent the crash
+- Prove the fuzz driver violated function requirements
+- Explain why real callers can't create this condition
+</step6>
 
-COMMON PATTERNS:
+</analysis_steps>
+
+<common_patterns>
 - Entry → Target (no validation) = Usually FEASIBLE
 - Entry → Validation → Target = Check if validation prevents crash
 - Multiple paths = FEASIBLE if ANY path allows crash
 - No path to entry points = INFEASIBLE (internal/dead code)
+</common_patterns>
 
-**FINAL REPORT Format**:
+<output_format>
+Provide your final report using these XML tags:
 
-When you have completed your analysis, provide your final report using EXACTLY this XML format:
+<feasible>True or False</feasible>
 
-<feasible>True</feasible>  <!-- or False -->
 <analysis>
 ## Target Function
 [The function called by the fuzz driver that led to the crash]
 
 ## Crash Conditions
-[Specific input conditions that caused the crash, with variable values and relationships]
+[Specific input conditions that caused the crash]
 
 ## Real Caller Analysis
-[How real callers in the project invoke the target function:
- - Call site locations (file:line)
- - Input generation patterns
- - Constraints enforced
- - Validations performed]
+[How real callers invoke the target function]
 
 ## Entry Point Tracing
-[Analysis of paths from public entry points:
- - Which entry points can reach the target function
- - Path constraints that must be satisfied
- - Whether crash conditions can be achieved]
+[Analysis of paths from public entry points]
 
 ## Feasibility Determination
-[Clear statement:
- - Feasible or Infeasible
- - Why (with evidence)
- - Which constraints allow or prevent the crash]
+[Clear statement with evidence]
 </analysis>
-<source_code_evidence>
-[Detailed source code quotes proving your conclusion:
- - Specific file names and line numbers
- - Code showing constraints or validations
- - Initialization patterns from real callers]
-</source_code_evidence>
-<recommendations>
-[If infeasible: Minimal fuzz driver modifications to prevent the crash, mirroring real caller patterns]
-[If feasible: Description of the bug, security impact, and likelihood of real-world triggering]
-</recommendations>
 
-**Critical Requirements**:
-- Use XML tags EXACTLY as shown above for the final report
+<source_code_evidence>
+[Detailed source code quotes proving your conclusion]
+</source_code_evidence>
+
+<recommendations>
+[If infeasible: Minimal fuzz driver modifications]
+[If feasible: Description of the bug and security impact]
+</recommendations>
+</output_format>
+
+<requirements>
 - The <feasible> tag MUST contain ONLY "True" or "False"
 - Provide actual source code evidence (file:line, code quotes)
 - Do NOT speculate or assume
 - Consider all variable relationships
-- Be thorough and methodical
-- Before submitting final report, use bash commands to gather ALL necessary evidence
-
-OUTPUT DISCIPLINE:
-✅ Follow exact XML format: <feasible>, <rationale>, <recommendations>, <target_func_input_requirements>
-✅ Keep <rationale> evidence-based (3-5 sentences, cite code)
-✅ Provide specific <recommendations> with examples
-✅ Include all required tags
-❌ No extra commentary outside XML tags
-❌ No speculation - only evidence-based conclusions
-
-
+- Use bash commands to gather ALL necessary evidence before final report
+- No extra commentary outside XML tags
+</requirements>

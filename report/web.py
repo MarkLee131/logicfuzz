@@ -103,6 +103,11 @@ class JinjaEnv:
 
     self._env.filters['syntax_highlight_agent'] = syntax_highlight_with_agent
 
+    # Load macros template and make it available as a global
+    macros_template = self._env.get_template('macros.html')
+    macros_module = macros_template.module
+    self._env.globals['macros'] = macros_module
+
     if template_globals:
       for key, val in template_globals.items():
         self._env.globals[key] = val

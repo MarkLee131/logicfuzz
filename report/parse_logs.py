@@ -8,6 +8,26 @@ from datetime import datetime
 
 from report.common import LogPart
 
+_RE_GREP_QUOTED = re.compile(r"(['\"])\s*(.+?)\1")
+_RE_STDERR_BLOCK = re.compile(r'<stderr>(.*?)</stderr>', flags=re.DOTALL)
+_RE_STEP_HEADER = re.compile(r"Step #(\d+) - \"(.+?)\":")
+_RE_STEP_SIMPLE = re.compile(r"Step #(\d+)")
+_RE_HTML_TAG = re.compile(r'&lt;/?[^&]*?&gt;')
+_RE_SYSTEM_BLOCK = re.compile(
+    r'&lt;system&gt;(\s*[^\s].*?[^\s]\s*|(?:\s*[^\s].*?)?)&lt;/system&gt;',
+    flags=re.DOTALL)
+_RE_BASH_OR_STDOUT = re.compile(r'&lt;(bash|stdout)&gt;(.*?)&lt;/\1&gt;',
+                                re.DOTALL)
+_RE_AGENT_HEADER = re.compile(r"\*{20,}([^*]+?)\*{20,}")
+_RE_CYCLE_NUM = re.compile(r'\(Cycle (\d+)\)')
+_RE_TRIAL_TS = re.compile(
+    r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}).*?\[Trial ID:\s*([^\]]+)\]')
+_RE_CRASH_SYMPTOM = re.compile(r'(?:^\s*\x1b\[[0-9;]*m)*==\d+==\s*(ERROR:.*)',
+                               re.DOTALL)
+_RE_STACK_LINE = re.compile(r'^ {4}#\d+\s+.*$')
+_RE_STACK_IN = re.compile(r'in (.+?) (/[^^\s]+)')
+
+
 def extract_project_from_coverage_path(file_path: str) -> str:
   """Extract the project name from coverage file paths."""
   if file_path.startswith('/src/'):
@@ -713,6 +733,25 @@ class LogsParser:
         cycles_dict[0][agent_name] = {'logs': agent_logs, 'steps': steps}
 
     return [cycles_dict[cycle] for cycle in sorted(cycles_dict.keys())]
+
+  def count_cycles(self) -> int:
+    """Count the number of cycles in the logs."""
+    return len(self.get_agent_cycles())
+
+  def compute_trial_durations_seconds(self) -> dict[str, float]:
+    """Compute trial durations in seconds from logs.
+
+    Returns a dictionary mapping cycle/trial identifiers to their durations.
+    """
+    durations = {}
+    cycles = self.get_agent_cycles()
+    for i, cycle in enumerate(cycles):
+      # Each cycle is a dict of agent_name -> {'logs': ..., 'steps': ...}
+      # We can estimate duration based on timestamp patterns in logs
+      # For now, return a placeholder duration per cycle
+      durations[f"cycle_{i}"] = 0.0
+    return durations
+
 
 class RunLogsParser:
   """Parse the run log."""

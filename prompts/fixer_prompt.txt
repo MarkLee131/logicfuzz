@@ -1,66 +1,71 @@
+<task>
 Fix compilation for project: {PROJECT_NAME}
+</task>
 
-CODE:
+<current_code>
 ```
 {CURRENT_CODE}
 ```
+</current_code>
 
-ERRORS:
+<errors>
 {BUILD_ERRORS}
+</errors>
 
-CONTEXT:
+<context>
 {ADDITIONAL_CONTEXT}
+</context>
 
-DEBUG PROCESS:
-
+<debug_process>
 1. Read error → identify error type
 2. Check headers → internal paths? conflicts?
 3. Apply minimal fix
 4. Verify API sequence still intact
+</debug_process>
 
-COMMON ERROR PATTERNS & FIXES:
+<error_patterns>
 
-1. Headers (check first):
-   - "No such file" → Check case-sensitive paths
-   - "internal/*" paths → Remove, use public API only
-   - C API conflicts → Keep *_c.h, remove *.h
-   - "typedef redefinition" → Header conflict, keep only one
+<headers>
+Check first:
+- "No such file" → Check case-sensitive paths
+- "internal/*" paths → Remove, use public API only
+- C API conflicts → Keep *_c.h, remove *.h
+- "typedef redefinition" → Header conflict, keep only one
+</headers>
 
-2. Linker errors:
-   - "undefined reference" → Add #include "impl.cpp" (not forward declare)
-   - Check existing fuzzers: grep '#include.*\.cpp' for pattern
-   - If no .cpp pattern exists → Report UNABLE_TO_FIX
+<linker_errors>
+- "undefined reference" → Add #include "impl.cpp" (not forward declare)
+- Check existing fuzzers: grep '#include.*\.cpp' for pattern
+- If no .cpp pattern exists → Report UNABLE_TO_FIX
+</linker_errors>
 
-3. API call errors:
-   - Type mismatch → Fix signatures/casts
-   - Const violations → Add/remove const qualifiers
-   - Wrong parameters → Check API documentation
+<api_call_errors>
+- Type mismatch → Fix signatures/casts
+- Const violations → Add/remove const qualifiers
+- Wrong parameters → Check API documentation
+</api_call_errors>
 
-4. Types/API:
-   - Deprecated APIs → Update to current API
-   - Uninitialized variables → Initialize before use
-   - Missing includes → Add required headers
+<types_api>
+- Deprecated APIs → Update to current API
+- Uninitialized variables → Initialize before use
+- Missing includes → Add required headers
+</types_api>
 
-SPECIAL CASES:
+</error_patterns>
 
+<special_cases>
 - If API doesn't exist: UNABLE_TO_FIX: API does not exist
 - If linker error but no .cpp available: Check existing fuzzers for pattern, or UNABLE_TO_FIX
+</special_cases>
 
-OUTPUT FORMAT:
+<output_format>
+First provide a brief conclusion (max 3 sentences): errors found, root causes, fixes applied.
 
-**Conclusion:** Errors found, root causes, fixes applied
+Then output your complete fixed code inside <fuzz_target> tags.
 
-```cpp
-[Complete corrected code]
-```
+If build script needs modification, output it inside <build_script> tags.
 
-```build_script
-[Only if build script modified, otherwise omit this block entirely]
-```
-
-CRITICAL REQUIREMENTS:
-- Follow exact markdown format above
-- Keep conclusion brief (max 3 sentences)
-- Include complete, compilable code in ```cpp block - NO placeholders like "// ... unchanged ..."
-- Only ONE ```cpp code block containing the complete fuzz target
-- NO extra commentary outside conclusion and code block
+CRITICAL:
+- Include complete, compilable code - NO placeholders like "// ... unchanged ..."
+- Only ONE code block containing the complete fuzz target
+</output_format>

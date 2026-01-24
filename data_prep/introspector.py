@@ -764,6 +764,24 @@ def query_introspector_test_source(project: str, filepath: str) -> str:
   })
   return _get_data(resp, 'source_code', '')
 
+
+def query_introspector_file_source(project: str, filepath: str) -> str:
+  """Queries the full source code of any file in the project.
+
+  This is a convenience wrapper around query_introspector_source_code
+  that fetches the entire file content.
+
+  Args:
+    project: Project name
+    filepath: Path to the file (as returned by harness-source-and-executable API)
+
+  Returns:
+    Full source code of the file, or empty string if not found
+  """
+  # Use a large line range to get the entire file
+  return query_introspector_source_code(project, filepath, begin_line=0, end_line=100000)
+
+
 def query_introspector_header_files(project: str) -> List[str]:
   """Queries for the header files used in a given project."""
   resp = _query_introspector(INTROSPECTOR_ALL_HEADER_FILES,

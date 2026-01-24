@@ -1,84 +1,114 @@
+<task>
 Analyze the crash: driver bug or project bug?
+</task>
 
-CRASH:
+<crash_info>
 {CRASH_INFO}
+</crash_info>
 
-STACK:
+<stack_trace>
 {STACK_TRACE}
+</stack_trace>
 
-DRIVER:
+<driver_code>
 ```
 {FUZZ_TARGET_CODE}
 ```
+</driver_code>
 
+<additional_context>
 {ADDITIONAL_CONTEXT}
+</additional_context>
 
-ANALYSIS PROCESS:
+<analysis_process>
 
-1. Parse stack trace:
-   - Find crashing function/instruction
-   - Locate first non-fuzzer frame
-   - Identify call chain
-   - Determine if crash in driver or project code
+<step1>
+Parse stack trace:
+- Find crashing function/instruction
+- Locate first non-fuzzer frame
+- Identify call chain
+- Determine if crash in driver or project code
+</step1>
 
-2. Identify crash type:
-   - Memory error (segfault, overflow, UAF, double-free)
-   - Assertion failure
-   - Abort/termination
-   - Other
+<step2>
+Identify crash type:
+- Memory error (segfault, overflow, UAF, double-free)
+- Assertion failure
+- Abort/termination
+- Other
+</step2>
 
-3. Root cause analysis:
-   - What triggered the crash?
-   - What input values/state were involved?
-   - Is this reachable in normal usage?
-   - Did driver violate requirements?
-   - Is project missing validation?
+<step3>
+Root cause analysis:
+- What triggered the crash?
+- What input values/state were involved?
+- Is this reachable in normal usage?
+- Did driver violate requirements?
+- Is project missing validation?
+</step3>
 
-4. Determine bug type:
+<step4>
+Determine bug type:
 
-   Driver bug indicators:
-   - Crash in LLVMFuzzerTestOneInput
-   - Preconditions violated (null pointer, invalid ranges, uninitialized)
-   - Missing setup/initialization
-   - Wrong call order or lifecycle
-   - Invalid parameter combinations
+Driver bug indicators:
+- Crash in LLVMFuzzerTestOneInput
+- Preconditions violated (null pointer, invalid ranges, uninitialized)
+- Missing setup/initialization
+- Wrong call order or lifecycle
+- Invalid parameter combinations
 
-   Project bug indicators:
-   - Crash deep in project code (not in driver)
-   - Preconditions satisfied
-   - Missing input validation
-   - Memory corruption in project logic
-   - Security vulnerability
+Project bug indicators:
+- Crash deep in project code (not in driver)
+- Preconditions satisfied
+- Missing input validation
+- Memory corruption in project logic
+- Security vulnerability
+</step4>
 
-5. Severity (if project bug):
-   - Critical: Exploitable memory corruption
-   - High: Security vulnerabilities, DoS
-   - Medium: Logic errors, assertions
-   - Low: Minor edge cases
-   - Info: Expected behavior
+<step5>
+Severity (if project bug):
+- Critical: Exploitable memory corruption
+- High: Security vulnerabilities, DoS
+- Medium: Logic errors, assertions
+- Low: Minor edge cases
+- Info: Expected behavior
+</step5>
 
-TOOLS AVAILABLE:
+</analysis_process>
+
+<tools_available>
 - gdb_execute(cmd) - Debug crash (bt, frame N, print VAR, x/Nx ADDR)
 - bash_execute(cmd) - Examine source (cat, grep, find)
 
 Must use gdb_execute before conclusion.
+</tools_available>
 
-OUTPUT FORMAT (MUST follow exactly):
+<output_format>
+Provide your analysis using these tags:
 
-Conclusion: True/False
+<conclusion>True or False</conclusion>
+(True = project bug / true positive, False = driver bug / false positive)
 
-Root Cause: [what, where, why, evidence]
+<root_cause>
+What, where, why, with specific evidence
+</root_cause>
 
-Determination: [driver bug / project bug, why, evidence]
+<determination>
+Driver bug or project bug, with reasoning and evidence
+</determination>
 
-Severity: [Critical/High/Medium/Low/Info - if project bug, N/A if driver bug]
+<severity>
+Critical/High/Medium/Low/Info (if project bug), N/A (if driver bug)
+</severity>
 
-Recommendations: [how to fix]
+<recommendations>
+How to fix the issue
+</recommendations>
+</output_format>
 
-CRITICAL REQUIREMENTS:
-- First line MUST be exactly "Conclusion: True" or "Conclusion: False"
-  - True = project bug (true positive)
-  - False = driver bug (false positive)
+<requirements>
 - Keep each section brief (2-3 sentences max)
 - Provide specific evidence (file:line, code quotes)
 - Use gdb_execute before final output
+- No extra commentary outside XML tags
+</requirements>

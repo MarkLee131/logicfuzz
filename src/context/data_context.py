@@ -63,6 +63,10 @@ class FuzzingContext:
     # Note: Synthesis is always enabled - CBFactory generates base drivers, LLM Prototyper refines them
     synthesized_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Full drivers from CBFactory
 
+    # === Existing driver knowledge (extracted from OSS-Fuzz fuzzers via LLM) ===
+    # Contains patterns, configurations, and fuzzing strategies learned from existing drivers
+    existing_driver_knowledge: Dict[str, Any] = field(default_factory=dict)
+
     # === Metadata ===
     preparation_time: float = 0.0
     
@@ -198,7 +202,8 @@ class FuzzingContext:
                 driver_size: int = 5,
                 filter_top_k: int = 12,
                 use_cache: bool = True,
-                num_synthesis_drivers: int = 5) -> 'FuzzingContext':
+                num_synthesis_drivers: int = 5,
+                llm_client: Any = None) -> 'FuzzingContext':
         """
         Prepare all fuzzing data using Liberator project-level modeling.
 
@@ -218,6 +223,7 @@ class FuzzingContext:
             filter_top_k: Top-K sequences to keep after heuristic filtering
             use_cache: Whether to try loading from cache first (default: True)
             num_synthesis_drivers: Number of drivers to synthesize with CBFactory (default: 5)
+            llm_client: Optional LLM client for extracting knowledge from existing drivers
 
         Returns:
             Fully initialized FuzzingContext with project-level API data
@@ -611,6 +617,27 @@ class FuzzingContext:
             log.debug(traceback.format_exc())
             synthesized_drivers = []
 
+        # === Step 12: Extract knowledge from existing drivers (optional, requires LLM) ===
+        log.info('  12/12 Extracting knowledge from existing drivers...')
+        existing_driver_knowledge = {}
+        try:
+            existing_driver_knowledge = _extract_existing_driver_knowledge(
+                project_name=project_name,
+                log=log,
+                llm_client=llm_client,
+                max_drivers=3
+            )
+            if existing_driver_knowledge.get('driver_sources'):
+                num_drivers = len(existing_driver_knowledge['driver_sources'])
+                has_llm = bool(existing_driver_knowledge.get('llm_analysis'))
+                log.info(f'   ✅ Extracted knowledge from {num_drivers} existing drivers'
+                        f'{" (with LLM analysis)" if has_llm else ""}')
+            else:
+                log.info('   ℹ️ No existing drivers found for knowledge extraction')
+        except Exception as e:
+            log.warning(f"Driver knowledge extraction failed (non-critical): {e}")
+            existing_driver_knowledge = {}
+
         # === Create context ===
         elapsed = time.time() - start_time
         log.info(f'✅ Project-level fuzzing context prepared in {elapsed:.2f}s')
@@ -650,6 +677,7 @@ class FuzzingContext:
             pattern_analysis=pattern_analysis,
             skeleton_drivers=skeleton_drivers,
             synthesized_drivers=synthesized_drivers,
+            existing_driver_knowledge=existing_driver_knowledge,
             preparation_time=elapsed
         )
     
@@ -667,6 +695,7 @@ class FuzzingContext:
             'pattern_analysis': self.pattern_analysis,
             'skeleton_drivers': self.skeleton_drivers,
             'synthesized_drivers': self.synthesized_drivers,
+            'existing_driver_knowledge': self.existing_driver_knowledge,
             'preparation_time': self.preparation_time,
         }
     
@@ -729,6 +758,141 @@ def _extract_existing_fuzzer_headers(project_name: str,
         log.warning(f"Failed to extract existing fuzzer headers: {e}")
 
     return result
+
+
+def _extract_existing_driver_knowledge(
+    project_name: str,
+    log: logging.Logger,
+    llm_client: Any = None,
+    max_drivers: int = 3
+) -> Dict[str, Any]:
+    """
+    Extract fuzzing knowledge from existing OSS-Fuzz drivers.
+
+    Fetches existing driver source code and optionally analyzes them with LLM
+    to extract reusable patterns and insights.
+
+    Args:
+        project_name: Target project name
+        log: Logger instance
+        llm_client: Optional LLM client for knowledge extraction
+        max_drivers: Maximum number of drivers to analyze
+
+    Returns:
+        Dictionary containing:
+        - driver_sources: List of {'path': str, 'source': str}
+        - analysis: LLM-generated natural language analysis (if llm_client provided)
+    """
+    from data_prep import introspector
+
+    result = {
+        'driver_sources': [],
+        'analysis': ''
+    }
+
+    try:
+        # Get all fuzzer files
+        harness_data = introspector.query_introspector_for_harness_intrinsics(project_name)
+        fuzzers = [item['source'] for item in harness_data if 'source' in item]
+        if not fuzzers:
+            log.info(f'No existing fuzzers found for {project_name}')
+            return result
+
+        log.info(f'Found {len(fuzzers)} existing fuzzers for {project_name}')
+
+        # Fetch source code for each fuzzer (limit to max_drivers)
+        driver_sources = []
+        for fuzzer_path in fuzzers[:max_drivers]:
+            try:
+                fuzzer_source = introspector.query_introspector_file_source(
+                    project_name, fuzzer_path
+                )
+                if fuzzer_source:
+                    driver_sources.append({
+                        'path': fuzzer_path,
+                        'source': fuzzer_source
+                    })
+                    log.debug(f'Fetched source for {fuzzer_path} ({len(fuzzer_source)} chars)')
+            except Exception as e:
+                log.debug(f'Failed to fetch source for {fuzzer_path}: {e}')
+                continue
+
+        if not driver_sources:
+            log.warning('Could not fetch any fuzzer source code')
+            return result
+
+        result['driver_sources'] = driver_sources
+        log.info(f'Fetched {len(driver_sources)} driver sources for analysis')
+
+        # If LLM client is provided, analyze drivers
+        if llm_client:
+            result['analysis'] = _analyze_drivers_with_llm(
+                driver_sources, project_name, llm_client, log
+            )
+
+    except Exception as e:
+        log.warning(f"Failed to extract driver knowledge: {e}")
+
+    return result
+
+
+def _analyze_drivers_with_llm(
+    driver_sources: List[Dict[str, str]],
+    project_name: str,
+    llm_client: Any,
+    log: logging.Logger
+) -> str:
+    """
+    Use LLM to analyze existing drivers and extract fuzzing knowledge.
+
+    Args:
+        driver_sources: List of {'path': str, 'source': str} dictionaries
+        project_name: Project name for context
+        llm_client: LLM client instance
+        log: Logger instance
+
+    Returns:
+        Natural language analysis of the drivers
+    """
+    if not driver_sources:
+        return ''
+
+    # Build prompt with driver sources
+    drivers_text = ""
+    for i, driver in enumerate(driver_sources[:3]):  # Limit to 3 for context size
+        drivers_text += f"\n--- Driver {i+1}: {driver['path']} ---\n"
+        # Truncate very long drivers
+        source = driver['source']
+        if len(source) > 3000:
+            source = source[:3000] + "\n// ... (truncated)"
+        drivers_text += source + "\n"
+
+    prompt = f"""<task>
+Analyze the existing fuzz drivers for the {project_name} project and extract reusable patterns.
+</task>
+
+<existing_drivers>
+{drivers_text}
+</existing_drivers>
+
+<instructions>
+Summarize the key patterns that would help generate new effective fuzz drivers:
+1. Common environment setup and initialization patterns
+2. How APIs are typically sequenced and combined
+3. Error handling and cleanup strategies
+4. How fuzz input is consumed and used
+
+Be concise and focus on actionable insights.
+</instructions>
+"""
+
+    try:
+        analysis = llm_client.query(prompt)
+        log.info('Successfully analyzed existing drivers with LLM')
+        return analysis.strip()
+    except Exception as e:
+        log.warning(f"LLM analysis failed: {e}")
+        return ''
 
 
 def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:

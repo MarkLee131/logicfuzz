@@ -1,49 +1,57 @@
+<task>
 Improve fuzz driver coverage for project: {PROJECT_NAME}
+</task>
 
-CURRENT STATUS
+<current_status>
 
-Coverage Metrics:
+<coverage_metrics>
 - PC Coverage: {COVERAGE_PERCENT}
 - Line Coverage Diff: {LINE_COVERAGE_DIFF}
+</coverage_metrics>
 
-Current Driver:
-```
+<current_driver>
 {CURRENT_CODE}
-```
+</current_driver>
 
 Coverage too low! Rewrite needed.
 
-COVERAGE ANALYZER DIAGNOSIS
+</current_status>
 
-Root Cause:
+<diagnosis>
+
+<root_cause>
 {COVERAGE_INSIGHTS}
+</root_cause>
 
-Recommended Actions:
+<recommended_actions>
 {IMPROVEMENT_SUGGESTIONS}
+</recommended_actions>
 
-TASK
+</diagnosis>
 
-Rewrite driver to maximize coverage by addressing the diagnosis above.
-
-=== IMPORTANT: This is a C project ===
-
-DO NOT use C++ features:
+<c_project_warning>
+IMPORTANT: This is a C project. DO NOT use C++ features:
 - NO FuzzedDataProvider (it's a C++ class)
 - NO std::string, std::vector, or any STL
 - NO extern "C" (already C code)
 - Use raw data/size parameters directly
+</c_project_warning>
 
-REQUIREMENTS:
+<instructions>
+Rewrite the driver to maximize coverage by addressing the diagnosis above.
+
+<requirements>
 1. Implement coverage analyzer's recommended actions
 2. Use direct data/size manipulation for input variation
 3. Replace fixed/constant parameters with fuzzer-derived inputs
 4. Test edge cases (NULL, empty, boundary values)
 5. Maintain correct API sequence order
 6. Don't violate API lifecycle constraints
+</requirements>
 
-IMPROVEMENT STRATEGIES (priority order):
+<improvement_strategies>
 
-1. Vary more parameters using raw data:
+<vary_parameters>
 ```c
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   if (size < 16) return 0;
@@ -67,20 +75,18 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   return 0;
 }
 ```
+</vary_parameters>
 
-2. Test edge cases:
+<test_edge_cases>
 ```c
 // Handle empty input gracefully
 if (size == 0) return 0;
 // Test with minimal input
 // Test with maximum reasonable input
 ```
+</test_edge_cases>
 
-3. Try different API sequences:
-   - If current sequence has low coverage, try a DIFFERENT sequence
-   - Focus on sequences that exercise different code paths
-
-4. Split data for multiple parameters:
+<split_data>
 ```c
 if (size >= 8) {
   // Split fuzz data for multiple inputs
@@ -93,8 +99,9 @@ if (size >= 8) {
   api_process(ctx, part2, part2_size);
 }
 ```
+</split_data>
 
-5. Extract integers/flags from data:
+<extract_integers>
 ```c
 if (size >= sizeof(int) * 2) {
   int param1, param2;
@@ -103,32 +110,45 @@ if (size >= sizeof(int) * 2) {
   api_configure(ctx, param1, param2);
 }
 ```
+</extract_integers>
 
-OVERRIDE AUTHORITY:
+</improvement_strategies>
+
+<override_authority>
 - Change FIXED values -> fuzzer-derived when coverage low
 - Try different API sequence if current one saturated
 - Document rationale when overriding
+</override_authority>
 
-COMMON ISSUES & FIXES:
+<common_issues>
 - Fixed params -> Extract from fuzz data
 - Single sequence -> Try different sequences
 - No edge cases -> Test NULL/empty/boundary
 - Missing API calls -> Add more APIs from the same sequence
+</common_issues>
 
-OUTPUT FORMAT:
+</instructions>
 
-**Conclusion:** Root cause, changes made, expected improvement
+<output_format>
+Provide your response using these tags:
 
-```c
+<conclusion>
+[Root cause, changes made, expected improvement - max 3 sentences]
+</conclusion>
+
+<fuzz_target>
 [Complete improved C code - NO FuzzedDataProvider, NO C++ features]
-```
+</fuzz_target>
 
-**Coverage Strategy:** New paths targeted, why better coverage expected
+<coverage_strategy>
+[New paths targeted, why better coverage expected - max 3 sentences]
+</coverage_strategy>
+</output_format>
 
-CRITICAL REQUIREMENTS:
-- Follow exact markdown format above
+<requirements>
 - Keep conclusion and strategy brief (max 3 sentences each)
-- Include complete, compilable C code in ```c block - NO placeholders
-- Only ONE ```c code block containing the complete fuzz target
-- NO extra commentary outside conclusion, code block, and strategy
+- Include complete, compilable C code - NO placeholders
+- Only ONE code block containing the complete fuzz target
+- NO extra commentary outside the specified tags
 - NO FuzzedDataProvider or any C++ headers
+</requirements>

@@ -48,6 +48,7 @@ class LangGraphPrototyper(LangGraphAgent):
         pattern_analysis = context.get('pattern_analysis', {})
         skeleton_drivers = context.get('skeleton_drivers', [])
         existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
+        existing_driver_knowledge = context.get('existing_driver_knowledge', {})
 
         # Get target path info for include path calculation
         target_path = benchmark.get('target_path', '')
@@ -101,6 +102,7 @@ class LangGraphPrototyper(LangGraphAgent):
         pattern_text = self._format_pattern_analysis(pattern_analysis)
         skeleton_text = self._format_skeleton_drivers(skeleton_drivers, limit=2)
         include_path_context = self._format_include_path_context(target_path, existing_fuzzer_headers)
+        driver_knowledge_text = self._format_driver_knowledge(existing_driver_knowledge)
 
         # === Synthesis mode: Format CBFactory base driver for LLM refinement ===
         # Note: Synthesis is always enabled - CBFactory generates base, LLM refines
@@ -143,8 +145,11 @@ This ensures proper C linkage for the library functions.
             )
             base_prompt += f"""
 
-**=== STEP 1: UNDERSTAND THE PROJECT (Think before coding!) ===**
+<task>
+Generate a high-coverage LibFuzzer fuzz driver for the {benchmark.get('project', 'unknown')} project.
+</task>
 
+<step1_understand_project>
 {api_understanding_text}
 
 Before writing any code, think about:
@@ -152,84 +157,120 @@ Before writing any code, think about:
 2. Which APIs are PARSERS that consume external input? (These are fuzzing priority!)
 3. What input format do the parsers expect? (JSON? XML? Binary?)
 4. What is the typical data flow? (Parse → Query → Modify → Serialize?)
+</step1_understand_project>
 
-**=== STEP 2: REFERENCE INFORMATION ===**
+<reference_information>
 
-**Include Path Context (IMPORTANT for correct #include statements):**
+<include_paths>
 {include_path_context}
+</include_paths>
 
-**API Sequences (from Liberator grammar):**
+<api_sequences>
 {api_sequences_text}
+</api_sequences>
 
-**Project APIs (sample):**
+<project_apis>
 {project_apis_text}
+</project_apis>
 
-**Dependency Graph (sample):**
+<dependency_graph>
 {dep_graph_text}
+</dependency_graph>
 
-**Liberator Constraints (ConditionManager):**
+<constraints>
 {condition_text}
+</constraints>
 
-**Special Pattern Analysis (VarLen/Loop/Callback/TLV):**
+<special_patterns>
 {pattern_text}
+</special_patterns>
 
-**Pre-generated Skeleton Drivers (reference):**
+<skeleton_drivers>
 {skeleton_text}
+</skeleton_drivers>
+{driver_knowledge_text}
 {synthesis_base_text}
-**=== STEP 3: GENERATE HIGH-COVERAGE DRIVER ===**
+</reference_information>
 
+<generation_rules>
 Generate a fuzz driver following these CRITICAL rules:
 
-1. **PRIORITY: Focus on PARSER APIs** - They consume external input and have highest bug potential
-2. **For parsers**: Generate STRUCTURED input (not random strings!)
+1. PRIORITY: Focus on PARSER APIs - They consume external input and have highest bug potential
+2. For parsers: Generate STRUCTURED input (not random strings!)
    - JSON parsers need valid JSON structure with fuzz-derived values
    - XML parsers need valid XML structure
    - Binary parsers need valid headers/magic bytes
-3. **For accessor APIs (Has*, Get*, Is*)**: Hit BOTH branches
+3. For accessor APIs (Has*, Get*, Is*): Hit BOTH branches
    - Pre-populate objects with known keys to hit "found" path
    - Query with missing keys to hit "not found" path
-4. **For type checks (IsArray, IsObject)**: Test multiple types
+4. For type checks (IsArray, IsObject): Test multiple types
 5. Follow the dependency order in sequences
 6. Clean up resources properly
-7. **Use correct include paths** - the fuzz target will be placed at the location shown above
+7. Use correct include paths - the fuzz target will be placed at the location shown above
+</generation_rules>
+
+<output_format>
+Output your fuzz driver code inside <fuzz_target> tags.
+</output_format>
 """
         except Exception as e:
             # Fallback: build prompt manually if template doesn't support project-level
             logger.warning(f"Prompt template may not support project-level mode: {e}", trial=self.trial)
-            base_prompt = f"""Generate a fuzz target for project {benchmark.get('project', 'unknown')}.
+            base_prompt = f"""<task>
+Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown')}.
+</task>
 
-**Include Path Context (IMPORTANT for correct #include statements):**
+<reference_information>
+
+<include_paths>
 {include_path_context}
+</include_paths>
 
-**API Sequences (from Liberator grammar):**
+<api_sequences>
 {api_sequences_text}
+</api_sequences>
 
-**Project APIs (sample):**
+<project_apis>
 {project_apis_text}
+</project_apis>
 
-**Dependency Graph (sample):**
+<dependency_graph>
 {dep_graph_text}
+</dependency_graph>
 
-**Liberator Constraints (ConditionManager):**
+<constraints>
 {condition_text}
+</constraints>
 
-**Special Pattern Analysis (VarLen/Loop/Callback/TLV):**
+<special_patterns>
 {pattern_text}
+</special_patterns>
 
-**Pre-generated Skeleton Drivers (reference):**
+<skeleton_drivers>
 {skeleton_text}
+</skeleton_drivers>
 
-**Project Analysis:**
+<project_analysis>
 {srs_specification}
+</project_analysis>
 
-**Skeleton Code:**
+<skeleton_code>
 {skeleton_code}
+</skeleton_code>
 
 {additional_context}
 
+</reference_information>
+
+<generation_rules>
 Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above.
 Handle var-len relationships and use appropriate callback stubs if needed.
-**Use correct include paths** - the fuzz target will be placed at the location shown above."""
+Use correct include paths - the fuzz target will be placed at the location shown above.
+</generation_rules>
+
+<output_format>
+Output your fuzz driver code inside <fuzz_target> tags.
+</output_format>"""
 
         prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
         response = self.chat_llm(state, prompt)
@@ -243,9 +284,8 @@ Handle var-len relationships and use appropriate callback stubs if needed.
 
         fuzz_target_code = parse_tag(response, 'fuzz_target')
         if not fuzz_target_code:
-            # Fallback: use entire response, but still strip CDATA if present
-            from src.agents.utils import strip_cdata
-            fuzz_target_code = strip_cdata(response)
+            logger.warning('No <fuzz_target> tag found in response, using raw response', trial=self.trial)
+            fuzz_target_code = response
 
         validation_warnings = self._validate_api_usage(
             fuzz_target_code,
@@ -585,6 +625,57 @@ Handle var-len relationships and use appropriate callback stubs if needed.
 
         if len(skeleton_drivers) > limit:
             lines.append(f"\n  ... and {len(skeleton_drivers) - limit} more skeleton drivers")
+
+        return "\n".join(lines)
+
+    def _format_driver_knowledge(self, driver_knowledge: Dict[str, Any]) -> str:
+        """
+        Format knowledge extracted from existing drivers for the prompt.
+
+        Args:
+            driver_knowledge: Dictionary containing:
+                - driver_sources: List of {'path': str, 'source': str}
+                - analysis: LLM-generated natural language analysis
+
+        Returns:
+            Formatted string with XML tags to include in the prompt
+        """
+        if not driver_knowledge:
+            return ""
+
+        driver_sources = driver_knowledge.get('driver_sources', [])
+        analysis = driver_knowledge.get('analysis', '')
+
+        if not driver_sources and not analysis:
+            return ""
+
+        lines = []
+        lines.append("")
+        lines.append("<existing_driver_knowledge>")
+
+        # Show LLM analysis if available
+        if analysis:
+            lines.append("<analysis>")
+            lines.append("The following insights were extracted from existing fuzz drivers in this project:")
+            lines.append("")
+            lines.append(analysis)
+            lines.append("</analysis>")
+
+        # Show sample code from existing drivers if no LLM analysis
+        elif driver_sources:
+            first_driver = driver_sources[0]
+            path = first_driver.get('path', 'unknown')
+            source = first_driver.get('source', '')
+            lines.append(f"<example_driver path=\"{path}\">")
+            # Show first 60 lines
+            source_lines = source.split('\n')[:60]
+            lines.extend(source_lines)
+            if len(source.split('\n')) > 60:
+                lines.append("// ... (truncated)")
+            lines.append("</example_driver>")
+
+        lines.append("</existing_driver_knowledge>")
+        lines.append("")
 
         return "\n".join(lines)
 

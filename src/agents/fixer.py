@@ -11,7 +11,7 @@ from langchain_core.tools import BaseTool
 from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
-from src.agents.utils import parse_tag, strip_cdata
+from src.agents.utils import parse_tag
 from src.utils.prompt_loader import get_prompt_manager
 from src.tools.langchain_adapters import BashExecuteTool
 
@@ -35,8 +35,10 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
 
     def parse_response(self, content: str) -> Dict[str, Any]:
         """Extract fixed code from response."""
-        code = parse_tag(content, 'fuzz_target') or strip_cdata(content)
-        return {'fuzz_target_code': code, 'raw_response': content, 'fixed': bool(code)}
+        code = parse_tag(content, 'fuzz_target')
+        if not code:
+            logger.warning('No <fuzz_target> tag found in fixer response', trial=self.trial)
+        return {'fuzz_target_code': code or content, 'raw_response': content, 'fixed': bool(code)}
 
     def _execute_bash(self, command: str) -> str:
         result = self.inspect_tool.execute(command)
@@ -101,7 +103,8 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         # Extract code
         fuzz_target_code = result.get('fuzz_target_code')
         if not fuzz_target_code and all_responses:
-            fuzz_target_code = strip_cdata(all_responses[-1])
+            # Fallback to last response if no fuzz_target tag found
+            fuzz_target_code = all_responses[-1]
 
         # Session memory
         combined = "\n\n".join(all_responses)

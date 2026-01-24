@@ -10,35 +10,24 @@ import re
 
 def parse_tag(response: str, tag: str) -> str:
     """
-    Parse XML-style or code block-style tags from LLM response.
+    Parse XML-style tags from LLM response.
 
     Args:
         response: LLM response text
-        tag: Tag name to extract (e.g., 'fuzz_target', 'solution')
+        tag: Tag name to extract (e.g., 'fuzz_target', 'conclusion')
 
     Returns:
         Content within the tag, or empty string if not found
     """
-    patterns = [
-        rf'<{tag}>(.*?)</{tag}>',  # XML style: <tag>...</tag>
-        rf'```{tag}\n?(.*?)```'    # Code block style: ```tag...```
-    ]
+    # XML style: <tag>...</tag>
+    pattern = rf'<{tag}>(.*?)</{tag}>'
+    match = re.search(pattern, response, re.DOTALL)
 
-    # For fuzz_target, also try common code block languages
-    if tag == 'fuzz_target':
-        patterns.extend([
-            r'```cpp\n?(.*?)```',   # ```cpp code block
-            r'```c\n?(.*?)```',     # ```c code block
-            r'```c\+\+\n?(.*?)```', # ```c++ code block
-        ])
-
-    for pattern in patterns:
-        match = re.search(pattern, response, re.DOTALL)
-        if match:
-            content = match.group(1).strip()
-            # Remove CDATA wrapper if present
-            content = strip_cdata(content)
-            return content
+    if match:
+        content = match.group(1).strip()
+        # Remove CDATA wrapper if present
+        content = strip_cdata(content)
+        return content
 
     return ''
 
@@ -60,4 +49,3 @@ def strip_cdata(content: str) -> str:
         content = content[:-3]
 
     return content.strip()
-

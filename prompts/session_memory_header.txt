@@ -1,7 +1,5 @@
-# Current Consensus Constraints
-
+<current_consensus_constraints>
 {CONSENSUS_CONTEXT}
----
-# Your Specific Task
+</current_consensus_constraints>
 
-
+<your_task>
