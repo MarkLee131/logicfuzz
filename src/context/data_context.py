@@ -783,6 +783,76 @@ def _extract_existing_fuzzer_headers(project_name: str,
     return result
 
 
+def _strip_license_header(source: str) -> str:
+    """
+    Remove license header from source code while preserving the actual code.
+
+    Handles common license patterns:
+    - /* ... */ block comments at the start
+    - // line comments at the start
+    - Copyright notices
+    - License boilerplate (Apache, MIT, BSD, etc.)
+
+    Args:
+        source: Raw source code string
+
+    Returns:
+        Source code with license header removed
+    """
+    lines = source.split('\n')
+
+    # Track where the license block ends
+    code_start_index = 0
+    in_block_comment = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # Handle block comment start
+        if stripped.startswith('/*'):
+            in_block_comment = True
+            # Check if block comment ends on same line
+            if '*/' in stripped:
+                in_block_comment = False
+            code_start_index = i + 1
+            continue
+
+        # Handle block comment end
+        if in_block_comment:
+            if '*/' in stripped:
+                in_block_comment = False
+            code_start_index = i + 1
+            continue
+
+        # Handle line comments at the start (often license headers)
+        if stripped.startswith('//'):
+            # Check if this looks like license/copyright
+            lower = stripped.lower()
+            if any(kw in lower for kw in ['copyright', 'license', 'permission',
+                                          'redistribution', 'disclaimer', 'warranty',
+                                          'use of this source', 'apache', 'mit', 'bsd']):
+                code_start_index = i + 1
+                continue
+            # Stop if we see actual code comments (not license)
+            if not any(kw in lower for kw in ['copyright', 'license', 'permission',
+                                              'redistribution', 'http://', 'https://']):
+                break
+
+        # Empty lines at the start - keep scanning
+        if not stripped:
+            code_start_index = i + 1
+            continue
+
+        # Non-comment, non-empty line - this is code, stop here
+        break
+
+    # Return code starting from after the license
+    result = '\n'.join(lines[code_start_index:])
+
+    # Strip leading empty lines
+    return result.lstrip('\n')
+
+
 def _extract_existing_driver_knowledge(
     project_name: str,
     log: logging.Logger,
@@ -852,35 +922,47 @@ def _analyze_driver_patterns(
     project_name: str,
     llm_client: Any,
     log: logging.Logger
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """
     Analyze existing drivers to extract:
     1. Core functionality - what this library does and which APIs are essential
     2. Setup/Teardown patterns - initialization and cleanup code patterns
+    3. Code snippets - categorized code examples showing how to use key APIs
 
-    Returns dict with 'core_functionality' and 'setup_teardown' keys (both strings).
+    Returns dict with 'core_functionality', 'setup_teardown', and 'code_snippets' keys.
     """
-    # Format driver code for prompt
+    from src.utils.prompt_loader import load_prompt_file
+
+    # Format driver code for prompt - strip license headers instead of brutal truncation
     drivers_text = ""
-    for i, d in enumerate(driver_sources[:3]):
-        source = d['source'][:4000] if len(d['source']) > 4000 else d['source']
+    for i, d in enumerate(driver_sources[:5]):  # Allow up to 5 drivers for better coverage
+        # Strip license header to save tokens while preserving actual code
+        source = _strip_license_header(d['source'])
         drivers_text += f"\n=== Driver {i+1}: {d['path']} ===\n{source}\n"
 
-    prompt = f"""Analyze these existing fuzz drivers for the {project_name} library.
+    # Load prompt from file
+    try:
+        prompt_template = load_prompt_file('driver_pattern_analyzer_prompt.txt')
+        prompt = prompt_template.replace('{PROJECT_NAME}', project_name)
+        prompt = prompt.replace('{DRIVERS_TEXT}', drivers_text)
+    except FileNotFoundError:
+        log.warning("driver_pattern_analyzer_prompt.txt not found, using inline prompt")
+        # Fallback to inline prompt if file not found
+        prompt = f"""Analyze these existing fuzz drivers for the {project_name} library.
 
 {drivers_text}
 
-Based on these drivers, provide TWO things:
+Based on these drivers, provide THREE things:
 
 ## 1. Core Functionality
 What is this library's main purpose? Which APIs are ESSENTIAL to test for meaningful coverage?
-Be specific - list the actual API names and explain why they matter.
 
 ## 2. Setup/Teardown Patterns
 Extract the common initialization and cleanup patterns from these drivers.
-Include actual code snippets where helpful, mixed with explanations.
 
-Keep your response focused and practical - this will guide new driver generation."""
+## 3. Code Snippets by Category
+Extract ACTUAL code snippets showing how fuzz data flows into the library APIs.
+Focus on patterns that maximize code coverage."""
 
     try:
         response = llm_client.query(prompt)
@@ -889,7 +971,8 @@ Keep your response focused and practical - this will guide new driver generation
         # Parse response into sections
         result = {
             'core_functionality': '',
-            'setup_teardown': ''
+            'setup_teardown': '',
+            'code_snippets': ''
         }
 
         lines = response.split('\n')
@@ -897,15 +980,20 @@ Keep your response focused and practical - this will guide new driver generation
         section_content = []
 
         for line in lines:
-            if '## 1.' in line or 'Core Functionality' in line:
+            if '## 1.' in line or ('Core Functionality' in line and '##' in line):
                 if current_section and section_content:
                     result[current_section] = '\n'.join(section_content).strip()
                 current_section = 'core_functionality'
                 section_content = []
-            elif '## 2.' in line or 'Setup/Teardown' in line:
+            elif '## 2.' in line or ('Setup/Teardown' in line and '##' in line):
                 if current_section and section_content:
                     result[current_section] = '\n'.join(section_content).strip()
                 current_section = 'setup_teardown'
+                section_content = []
+            elif '## 3.' in line or ('Code Snippets' in line and '##' in line):
+                if current_section and section_content:
+                    result[current_section] = '\n'.join(section_content).strip()
+                current_section = 'code_snippets'
                 section_content = []
             elif current_section:
                 section_content.append(line)
@@ -915,14 +1003,14 @@ Keep your response focused and practical - this will guide new driver generation
             result[current_section] = '\n'.join(section_content).strip()
 
         # Fallback: if parsing failed, put everything in core_functionality
-        if not result['core_functionality'] and not result['setup_teardown']:
+        if not result['core_functionality'] and not result['setup_teardown'] and not result['code_snippets']:
             result['core_functionality'] = response.strip()
 
         return result
 
     except Exception as e:
         log.warning(f"Driver pattern analysis failed: {e}")
-        return {'core_functionality': '', 'setup_teardown': ''}
+        return {'core_functionality': '', 'setup_teardown': '', 'code_snippets': ''}
 
 
 def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:

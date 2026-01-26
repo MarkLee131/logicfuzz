@@ -1,0 +1,44 @@
+Analyze these existing fuzz drivers for the {PROJECT_NAME} library.
+
+{DRIVERS_TEXT}
+
+Based on these drivers, provide THREE things:
+
+<instructions>
+## 1. Core Functionality
+What is this library's main purpose? Which APIs are ESSENTIAL to test for meaningful coverage?
+Be specific - list the actual API names and explain why they matter.
+
+## 2. Setup/Teardown Patterns
+Extract the common initialization and cleanup patterns from these drivers.
+Include actual code snippets where helpful, mixed with explanations.
+
+## 3. Code Snippets by Category
+Extract ACTUAL code snippets from the drivers, organized by functional category.
+For each category, show the most instructive code pattern.
+
+Format each snippet as:
+### [Category Name] (e.g., "Input Parsing", "Transform/Conversion", "Profile Handling", "Memory Operations")
+Brief description of what this pattern does and WHY it's effective for fuzzing.
+```c
+// Actual code from: [driver_path]
+[code snippet - include the key API calls and surrounding context]
+```
+
+CRITICAL REQUIREMENTS:
+1. Include snippets that show how fuzz data flows into the library APIs.
+   - Look for patterns like: OpenFromMem(data, size), CreateFromBuffer(data, size)
+   - These patterns are essential because they let the fuzzer exercise the library with varied inputs
+2. If a driver creates objects from fuzz data (not from fixed/hardcoded values), PRIORITIZE that pattern.
+3. For transform/conversion APIs, show the complete flow: input creation -> transform setup -> execution
+4. Focus on patterns that maximize code coverage by exercising core library paths.
+</instructions>
+
+<output_format>
+Your response should have three clearly marked sections using ## headers:
+- ## 1. Core Functionality
+- ## 2. Setup/Teardown Patterns
+- ## 3. Code Snippets by Category
+
+Keep your response focused and practical - this will guide new driver generation.
+</output_format>

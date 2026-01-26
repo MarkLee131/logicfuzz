@@ -64,6 +64,34 @@ Benchmark YAML files in `comparison/` define "target projects" to fuzz.
 - 支持并行工具执行（最多4个worker）
 - 自动检测结论并终止循环
 
+### LLM Pattern Query Tools
+
+LLM agents使用pattern query tools来理解静态分析难以处理的特殊模式：
+
+| Tool | 功能 | 返回内容 |
+|------|------|----------|
+| `query_varlen_relations` | 查询var-len参数关系 | buffer-length参数对、语义关系 |
+| `query_loop_pattern` | 查询循环模式 | 是否需要循环、循环类型、终止条件 |
+| `query_callback_info` | 查询回调函数信息 | 函数指针参数、回调类型、stub代码 |
+| `query_tlv_format` | 查询TLV/结构化格式 | 是否为parser、格式类型、magic bytes |
+| `query_all_api_patterns` | 一次性查询所有模式 | 综合分析结果 |
+
+**实现文件**:
+- `src/tools/langchain_adapters.py`: Tool定义（LangChain BaseTool模式）
+- `src/tools/pattern_query_executor.py`: 数据提供者（从FuzzingContext提取）
+
+**使用场景**:
+- **LangGraphPrototyper**: 生成driver时查询特殊模式以正确处理参数
+- **LangGraphImprover**: 改进driver时获取详细的模式信息
+
+```python
+# 创建pattern query tools
+from src.tools.pattern_query_executor import create_pattern_query_tools
+
+tools = create_pattern_query_tools(fuzzing_context)
+# tools["query_varlen_relations"], tools["query_loop_pattern"], etc.
+```
+
 ### 数据流
 
 ```
@@ -71,8 +99,8 @@ ProjectDriverGenerator
     ↓ 提取APIs, 构建grammar
 FuzzingContext.prepare_project_level()
     ↓ 生成API序列
-CBFactory
-    ↓ 约束求解生成skeleton drivers
+CBFactory (Z3引导合成)
+    ↓ 约束求解 + 增量验证生成skeleton drivers
 LangGraphPrototyper
     ↓ LLM refinement
 FuzzTarget (可编译的driver)
@@ -284,15 +312,108 @@ if (ctx->initialized) {
 
 ## 程序合成
 
-### CBFactory
+### CBFactory (Z3引导合成)
 
 **位置**: `liberator_adapter/driver/factory/constraint_based/CBFactory.py`
 
-基于约束的driver合成（OTFactory已移除）:
-- 使用ConditionManager进行约束管理
-- RunningContext管理变量和约束状态
-- 可选Z3约束求解验证
-- 集成DriverEnhancer生成增强callback
+基于约束的driver合成，Z3作为**核心决策参与者**（非后置验证器）:
+
+#### 核心改进：Z3引导决策
+
+**原流程问题**:
+```
+暴力尝试source APIs → 暴力尝试producers → 生成driver → Z3验证(失败就reject)
+```
+
+**新流程**:
+```
+Z3评估source APIs可行性 → 返回排序列表
+    ↓
+Z3引导producer选择 → 只尝试SAT的选项
+    ↓
+每添加API增量验证 → 早期发现冲突
+    ↓
+UNSAT时分析core → 智能backtrack
+```
+
+#### 关键组件
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| `IncrementalZ3Solver` | `constraints/z3_guided_synthesis.py` | Push/pop增量求解，支持checkpoint回滚 |
+| `Z3GuidedSynthesisController` | `constraints/z3_guided_synthesis.py` | 高层协调器，管理资源追踪和候选评估 |
+| `UnsatCoreDiagnoser` | `constraints/z3_guided_synthesis.py` | 分析unsat core，诊断失败原因并建议恢复策略 |
+
+#### 决策点集成
+
+**D1: Source API选择** (`_try_all_source_apis`):
+```python
+# Z3评估每个source API
+for api in source_apis:
+    result = z3_controller.solver.check_candidate(api, required_types, produced_types)
+    if result.is_feasible:
+        candidates.append((api, result.score + complexity_score))
+
+# 按score排序，优先尝试简单的
+candidates.sort(key=lambda x: x[1])
+```
+
+**D2: 初始化链查找** (`_try_find_init_chain`):
+```python
+# Z3评估producer可行性
+for producer in producers:
+    result = z3_controller.solver.check_candidate(producer, ...)
+    if result.is_feasible:
+        producer_candidates.append((producer, score))
+
+# 每添加producer都增量验证
+z3_controller.add_api_to_sequence(producer, position, required, produced)
+```
+
+**D3: 候选API评估** (`_evaluate_candidates_with_z3`):
+```python
+# 在主循环中评估下一个API候选
+scored = z3_controller._evaluate_candidates_with_z3(candidates, position)
+best_api = scored[0]  # 选择最优候选
+```
+
+#### 资源追踪
+
+```python
+# 追踪已产生的资源类型
+z3_controller.solver.add_resource_produced("cJSON*", "cJSON_Parse", "var_0")
+
+# 检查所需资源是否可用
+z3_controller.solver.add_resource_required("cJSON*", "cJSON_Print")
+
+# check_candidate会验证资源可用性
+result = solver.check_candidate("cJSON_Print", required=["cJSON*"], produced=["char*"])
+# result.is_feasible = True (因为cJSON*已被cJSON_Parse产生)
+```
+
+#### 失败诊断
+
+```python
+class DiagnosisType(Enum):
+    MISSING_RESOURCE    # 缺少所需资源 → 建议ADD_PRODUCER
+    LIFECYCLE_VIOLATION # 生命周期违规 → 建议REORDER_APIS
+    TYPE_MISMATCH       # 类型不兼容 → 建议TRY_DIFFERENT_SOURCE
+    ORDER_VIOLATION     # 顺序约束违规 → 建议REORDER_APIS
+```
+
+#### 配置选项
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `enable_z3_guidance` | `True` | 启用Z3引导决策 |
+| `z3_strict_mode` | `True` | 严格模式：Z3失败时报错（便于调试） |
+| `z3_timeout_ms` | `1000` | Z3求解超时（毫秒） |
+
+#### 其他组件
+
+- **ConditionManager**: 约束管理，识别source/sink/init APIs
+- **RunningContext**: 管理变量和约束状态
+- **DriverEnhancer**: 生成增强callback stub
 
 ### 序列生成
 
@@ -314,6 +435,17 @@ if (ctx->initialized) {
 3. **异步/重入回调** - event loop, reentrancy
 4. **宏展开** - 除非在编译后IR上做
 5. **Deep alias精确性** - 只做may-alias
+
+---
+
+## 已完成
+
+1. [x] **Z3引导合成** (`liberator_adapter/constraints/z3_guided_synthesis.py`)
+   - Z3从后置验证器转变为核心决策参与者
+   - 增量求解 + checkpoint回滚
+   - Source API可行性评估和排序
+   - 初始化链的Z3引导查找
+   - Unsat core诊断和恢复建议
 
 ---
 

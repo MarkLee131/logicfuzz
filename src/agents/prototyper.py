@@ -635,7 +635,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
         Args:
             driver_knowledge: Dictionary containing:
                 - driver_sources: List of {'path': str, 'source': str}
-                - analysis: Dict with 'core_functionality' and 'setup_teardown' strings
+                - analysis: Dict with 'core_functionality', 'setup_teardown', and 'code_snippets'
 
         Returns:
             Formatted string to include in the prompt
@@ -660,6 +660,16 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append(core_func)
             lines.append("")
 
+        # Code snippets by category - THIS IS THE KEY ADDITION
+        code_snippets = analysis.get('code_snippets', '')
+        if code_snippets:
+            lines.append("## Key Code Patterns from Existing Drivers")
+            lines.append("IMPORTANT: Study these patterns carefully. They show how to effectively use fuzz data")
+            lines.append("to exercise the library's core functionality and maximize coverage.")
+            lines.append("")
+            lines.append(code_snippets)
+            lines.append("")
+
         # Setup/Teardown patterns (how to structure the driver)
         setup_teardown = analysis.get('setup_teardown', '')
         if setup_teardown:
@@ -667,12 +677,23 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append(setup_teardown)
             lines.append("")
 
-        # Show one reference driver as example
+        # Show multiple reference drivers as examples (up to 3, selecting diverse ones)
         if driver_sources:
-            lines.append("## Reference Driver Example")
-            d = driver_sources[0]
-            source = d['source'][:2500] if len(d['source']) > 2500 else d['source']
-            lines.append(f"```c\n// From: {d['path']}\n{source}\n```")
+            from src.context.data_context import _strip_license_header
+
+            lines.append("## Reference Driver Examples")
+            lines.append("Below are complete driver examples. Note how each uses fuzz data differently.")
+            lines.append("")
+
+            # Show up to 3 drivers - strip license headers instead of brutal truncation
+            max_drivers_to_show = min(3, len(driver_sources))
+
+            for i, d in enumerate(driver_sources[:max_drivers_to_show]):
+                # Strip license header to save tokens while preserving actual code
+                source = _strip_license_header(d['source'])
+                lines.append(f"### Driver {i+1}: {d['path']}")
+                lines.append(f"```c\n{source}\n```")
+                lines.append("")
 
         lines.append("</existing_driver_knowledge>")
         return "\n".join(lines)
