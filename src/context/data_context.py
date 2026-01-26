@@ -922,21 +922,18 @@ def _analyze_driver_patterns(
     project_name: str,
     llm_client: Any,
     log: logging.Logger
-) -> Dict[str, Any]:
+) -> Dict[str, str]:
     """
-    Analyze existing drivers to extract:
-    1. Core functionality - what this library does and which APIs are essential
-    2. Setup/Teardown patterns - initialization and cleanup code patterns
-    3. Code snippets - categorized code examples showing how to use key APIs
+    Analyze existing drivers to extract reusable patterns using XML tag format.
 
-    Returns dict with 'core_functionality', 'setup_teardown', and 'code_snippets' keys.
+    Returns dict with 'core_functionality', 'setup_teardown', and 'code_patterns' keys.
     """
     from src.utils.prompt_loader import load_prompt_file
+    from src.agents.utils import parse_tag
 
-    # Format driver code for prompt - strip license headers instead of brutal truncation
+    # Format driver code - strip license headers to save tokens
     drivers_text = ""
-    for i, d in enumerate(driver_sources[:5]):  # Allow up to 5 drivers for better coverage
-        # Strip license header to save tokens while preserving actual code
+    for i, d in enumerate(driver_sources[:5]):
         source = _strip_license_header(d['source'])
         drivers_text += f"\n=== Driver {i+1}: {d['path']} ===\n{source}\n"
 
@@ -946,71 +943,30 @@ def _analyze_driver_patterns(
         prompt = prompt_template.replace('{PROJECT_NAME}', project_name)
         prompt = prompt.replace('{DRIVERS_TEXT}', drivers_text)
     except FileNotFoundError:
-        log.warning("driver_pattern_analyzer_prompt.txt not found, using inline prompt")
-        # Fallback to inline prompt if file not found
-        prompt = f"""Analyze these existing fuzz drivers for the {project_name} library.
-
-{drivers_text}
-
-Based on these drivers, provide THREE things:
-
-## 1. Core Functionality
-What is this library's main purpose? Which APIs are ESSENTIAL to test for meaningful coverage?
-
-## 2. Setup/Teardown Patterns
-Extract the common initialization and cleanup patterns from these drivers.
-
-## 3. Code Snippets by Category
-Extract ACTUAL code snippets showing how fuzz data flows into the library APIs.
-Focus on patterns that maximize code coverage."""
+        log.warning("driver_pattern_analyzer_prompt.txt not found")
+        return {'core_functionality': '', 'setup_teardown': '', 'code_patterns': ''}
 
     try:
         response = llm_client.query(prompt)
         log.info('Analyzed driver patterns with LLM')
 
-        # Parse response into sections
+        # Parse XML tags from response
         result = {
-            'core_functionality': '',
-            'setup_teardown': '',
-            'code_snippets': ''
+            'core_functionality': parse_tag(response, 'core_functionality'),
+            'setup_teardown': parse_tag(response, 'setup_teardown'),
+            'code_patterns': parse_tag(response, 'code_patterns'),
         }
 
-        lines = response.split('\n')
-        current_section = None
-        section_content = []
-
-        for line in lines:
-            if '## 1.' in line or ('Core Functionality' in line and '##' in line):
-                if current_section and section_content:
-                    result[current_section] = '\n'.join(section_content).strip()
-                current_section = 'core_functionality'
-                section_content = []
-            elif '## 2.' in line or ('Setup/Teardown' in line and '##' in line):
-                if current_section and section_content:
-                    result[current_section] = '\n'.join(section_content).strip()
-                current_section = 'setup_teardown'
-                section_content = []
-            elif '## 3.' in line or ('Code Snippets' in line and '##' in line):
-                if current_section and section_content:
-                    result[current_section] = '\n'.join(section_content).strip()
-                current_section = 'code_snippets'
-                section_content = []
-            elif current_section:
-                section_content.append(line)
-
-        # Don't forget last section
-        if current_section and section_content:
-            result[current_section] = '\n'.join(section_content).strip()
-
-        # Fallback: if parsing failed, put everything in core_functionality
-        if not result['core_functionality'] and not result['setup_teardown'] and not result['code_snippets']:
-            result['core_functionality'] = response.strip()
+        # Log if any tags are missing
+        for key, value in result.items():
+            if not value:
+                log.debug(f"Missing <{key}> tag in driver pattern analysis response")
 
         return result
 
     except Exception as e:
         log.warning(f"Driver pattern analysis failed: {e}")
-        return {'core_functionality': '', 'setup_teardown': '', 'code_snippets': ''}
+        return {'core_functionality': '', 'setup_teardown': '', 'code_patterns': ''}
 
 
 def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:

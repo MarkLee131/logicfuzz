@@ -89,8 +89,9 @@ class LangGraphImprover(LangGraphAgent):
 
         improved_code = parse_tag(response, 'fuzz_target')
         if not improved_code:
-            logger.warning('No <fuzz_target> tag found in improver response', trial=self.trial)
-            improved_code = response
+            # No fallback - keep current code if LLM didn't follow format
+            logger.warning('No <fuzz_target> tag found in improver response, keeping current code', trial=self.trial)
+            improved_code = current_code
 
         try:
             improvement_count = state.get("improvement_attempt_count", 0) + 1

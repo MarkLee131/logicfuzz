@@ -64,33 +64,23 @@ Benchmark YAML files in `comparison/` define "target projects" to fuzz.
 - 支持并行工具执行（最多4个worker）
 - 自动检测结论并终止循环
 
-### LLM Pattern Query Tools
+### LLM工具：FuzzIntrospector集成
 
-LLM agents使用pattern query tools来理解静态分析难以处理的特殊模式：
+LLM agents使用FuzzIntrospector工具获取原始信息，自行分析特殊模式（var-len、loop、callback、TLV）：
 
-| Tool | 功能 | 返回内容 |
-|------|------|----------|
-| `query_varlen_relations` | 查询var-len参数关系 | buffer-length参数对、语义关系 |
-| `query_loop_pattern` | 查询循环模式 | 是否需要循环、循环类型、终止条件 |
-| `query_callback_info` | 查询回调函数信息 | 函数指针参数、回调类型、stub代码 |
-| `query_tlv_format` | 查询TLV/结构化格式 | 是否为parser、格式类型、magic bytes |
-| `query_all_api_patterns` | 一次性查询所有模式 | 综合分析结果 |
+| Tool | 功能 | 用途 |
+|------|------|------|
+| `get_function_implementation` | 获取函数源码 | 理解函数内部逻辑 |
+| `get_sample_cross_references` | 获取调用示例 | 学习正确的调用模式 |
+| `get_function_signature` | 获取函数签名 | 确认参数类型 |
+| `get_tests_for_functions` | 获取测试用例 | 参考测试代码 |
 
-**实现文件**:
-- `src/tools/langchain_adapters.py`: Tool定义（LangChain BaseTool模式）
-- `src/tools/pattern_query_executor.py`: 数据提供者（从FuzzingContext提取）
+**设计原则**：
+- 直接使用FI获取**原始信息**（源码、示例）
+- **不依赖静态分析结论** - 静态分析可能误导LLM
+- LLM基于源码和示例**自行判断**特殊模式
 
-**使用场景**:
-- **LangGraphPrototyper**: 生成driver时查询特殊模式以正确处理参数
-- **LangGraphImprover**: 改进driver时获取详细的模式信息
-
-```python
-# 创建pattern query tools
-from src.tools.pattern_query_executor import create_pattern_query_tools
-
-tools = create_pattern_query_tools(fuzzing_context)
-# tools["query_varlen_relations"], tools["query_loop_pattern"], etc.
-```
+**实现文件**: `src/tools/langchain_adapters.py`
 
 ### 数据流
 

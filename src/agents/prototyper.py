@@ -284,8 +284,8 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
         fuzz_target_code = parse_tag(response, 'fuzz_target')
         if not fuzz_target_code:
-            logger.warning('No <fuzz_target> tag found in response, using raw response', trial=self.trial)
-            fuzz_target_code = response
+            # No fallback - if LLM didn't follow format, compilation will fail and trigger retry
+            logger.error('No <fuzz_target> tag found in prototyper response - LLM did not follow output format', trial=self.trial)
 
         validation_warnings = self._validate_api_usage(
             fuzz_target_code,
@@ -635,10 +635,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
         Args:
             driver_knowledge: Dictionary containing:
                 - driver_sources: List of {'path': str, 'source': str}
-                - analysis: Dict with 'core_functionality', 'setup_teardown', and 'code_snippets'
-
-        Returns:
-            Formatted string to include in the prompt
+                - analysis: Dict with 'core_functionality', 'setup_teardown', 'code_patterns'
         """
         if not driver_knowledge:
             return ""
@@ -649,51 +646,46 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if not driver_sources and not analysis:
             return ""
 
+        from src.context.data_context import _strip_license_header
+
         lines = ["<existing_driver_knowledge>"]
-        lines.append(f"Learn from {len(driver_sources)} existing OSS-Fuzz fuzz drivers for this project.")
+        lines.append(f"Learn from {len(driver_sources)} existing OSS-Fuzz fuzz drivers.")
         lines.append("")
 
         # Core functionality (what to test)
         core_func = analysis.get('core_functionality', '')
         if core_func:
-            lines.append("## Core Functionality (What APIs to Test)")
+            lines.append("<core_apis>")
             lines.append(core_func)
+            lines.append("</core_apis>")
             lines.append("")
 
-        # Code snippets by category - THIS IS THE KEY ADDITION
-        code_snippets = analysis.get('code_snippets', '')
-        if code_snippets:
-            lines.append("## Key Code Patterns from Existing Drivers")
-            lines.append("IMPORTANT: Study these patterns carefully. They show how to effectively use fuzz data")
-            lines.append("to exercise the library's core functionality and maximize coverage.")
-            lines.append("")
-            lines.append(code_snippets)
+        # Code patterns - key patterns showing how to use fuzz data
+        code_patterns = analysis.get('code_patterns', '')
+        if code_patterns:
+            lines.append("<code_patterns>")
+            lines.append("IMPORTANT: These patterns show how to effectively use fuzz data.")
+            lines.append(code_patterns)
+            lines.append("</code_patterns>")
             lines.append("")
 
-        # Setup/Teardown patterns (how to structure the driver)
+        # Setup/Teardown patterns
         setup_teardown = analysis.get('setup_teardown', '')
         if setup_teardown:
-            lines.append("## Setup/Teardown Patterns")
+            lines.append("<setup_teardown>")
             lines.append(setup_teardown)
+            lines.append("</setup_teardown>")
             lines.append("")
 
-        # Show multiple reference drivers as examples (up to 3, selecting diverse ones)
+        # Show reference drivers (up to 3, license stripped)
         if driver_sources:
-            from src.context.data_context import _strip_license_header
-
-            lines.append("## Reference Driver Examples")
-            lines.append("Below are complete driver examples. Note how each uses fuzz data differently.")
-            lines.append("")
-
-            # Show up to 3 drivers - strip license headers instead of brutal truncation
-            max_drivers_to_show = min(3, len(driver_sources))
-
-            for i, d in enumerate(driver_sources[:max_drivers_to_show]):
-                # Strip license header to save tokens while preserving actual code
+            lines.append("<reference_drivers>")
+            for d in driver_sources[:3]:
                 source = _strip_license_header(d['source'])
-                lines.append(f"### Driver {i+1}: {d['path']}")
-                lines.append(f"```c\n{source}\n```")
-                lines.append("")
+                lines.append(f"<driver path=\"{d['path']}\">")
+                lines.append(source)
+                lines.append("</driver>")
+            lines.append("</reference_drivers>")
 
         lines.append("</existing_driver_knowledge>")
         return "\n".join(lines)

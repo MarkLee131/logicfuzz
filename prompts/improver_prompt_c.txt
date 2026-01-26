@@ -150,5 +150,4 @@ Provide your response using these tags:
 - Include complete, compilable C code - NO placeholders
 - Only ONE code block containing the complete fuzz target
 - NO extra commentary outside the specified tags
-- NO FuzzedDataProvider or any C++ headers
 </requirements>

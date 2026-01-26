@@ -37,8 +37,10 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         """Extract fixed code from response."""
         code = parse_tag(content, 'fuzz_target')
         if not code:
+            # No fallback - if LLM didn't follow format, keep code empty
+            # The execute() method will fall back to current_code
             logger.warning('No <fuzz_target> tag found in fixer response', trial=self.trial)
-        return {'fuzz_target_code': code or content, 'raw_response': content, 'fixed': bool(code)}
+        return {'fuzz_target_code': code, 'raw_response': content, 'fixed': bool(code)}
 
     def _execute_bash(self, command: str) -> str:
         result = self.inspect_tool.execute(command)
@@ -100,11 +102,9 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             if self.inspect_tool:
                 self.inspect_tool.terminate()
 
-        # Extract code
+        # Extract code - no fallback to raw response
+        # If LLM didn't output <fuzz_target> tag, we keep current_code (line 117)
         fuzz_target_code = result.get('fuzz_target_code')
-        if not fuzz_target_code and all_responses:
-            # Fallback to last response if no fuzz_target tag found
-            fuzz_target_code = all_responses[-1]
 
         # Session memory
         combined = "\n\n".join(all_responses)

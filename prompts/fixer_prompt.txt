@@ -3,9 +3,7 @@ Fix compilation for project: {PROJECT_NAME}
 </task>
 
 <current_code>
-```
 {CURRENT_CODE}
-```
 </current_code>
 
 <errors>
