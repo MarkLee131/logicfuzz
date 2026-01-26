@@ -719,7 +719,7 @@ class ProjectDriverGenerator:
         self,
         num_drivers: int = 10,
         driver_size: int = 5,
-        enable_z3_validation: bool = False
+        enable_z3_validation: bool = True
     ) -> List[Driver]:
         """
         Generate driver list using CBFactory (constraint-based synthesis).
@@ -766,7 +766,7 @@ class ProjectDriverGenerator:
         function_conditions: Optional[FunctionConditionsSet] = None,
         analyze_patterns: bool = True,
         llm_client=None,
-        enable_z3_validation: bool = False,
+        enable_z3_validation: bool = True,
         **extract_kwargs
     ) -> List[Driver]:
         """
@@ -843,7 +843,7 @@ class ProjectDriverGenerator:
     #     """Create OTFactory (only_type policy)"""
     #     ...
 
-    def _create_cb_factory(self, driver_size: int, enable_z3_validation: bool = False):
+    def _create_cb_factory(self, driver_size: int, enable_z3_validation: bool = True):
         """
         Create CBFactory (constraint_based policy)
 

@@ -1138,14 +1138,14 @@ def generate_drivers_for_benchmark(
     # Create bias (default random selection)
     bias = Bias()
 
-    # Create CBFactory
+    # Create CBFactory with Z3 validation enabled
     factory = CBFactory(
         api_list=set(filtered_api_list),
         driver_size=driver_size,
         dgraph=filtered_dep_graph,
         conditions=function_conditions,
         bias=bias,
-        enable_z3_validation=False
+        enable_z3_validation=True  # Use Z3 to validate sequence feasibility
     )
 
     # Generate drivers

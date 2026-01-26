@@ -1220,7 +1220,7 @@ def _generate_cbfactory_drivers(
 
         log.debug(f"   Using {len(filtered_apis)}/{len(generator.all_apis)} APIs with conditions")
 
-        # Create CBFactory
+        # Create CBFactory with Z3 validation enabled
         bias = Bias()
         factory = CBFactory(
             api_list=filtered_apis,
@@ -1228,7 +1228,7 @@ def _generate_cbfactory_drivers(
             dgraph=generator.dependency_graph,
             conditions=generator.function_conditions,
             bias=bias,
-            enable_z3_validation=False
+            enable_z3_validation=True  # Use Z3 to validate sequence feasibility
         )
 
         # Create temporary directory for rendering drivers

@@ -763,6 +763,23 @@ class CBFactory(Factory):
         # Use the last RunningContext
         context = [rng_ctx for _, rng_ctx in drv][-1]
 
+        # Z3 Validation: Check if the generated sequence is feasible
+        if self.enable_z3_validation and self.z3_validator:
+            # Extract API sequence for validation
+            api_sequence = []
+            for api_call, _ in drv:
+                # Find the original Api object from api_list
+                for api in self.api_list:
+                    if api.function_name == api_call.function_name:
+                        api_sequence.append(api)
+                        break
+
+            is_valid, violations = self.validate_sequence_with_z3(api_sequence)
+            if not is_valid:
+                violation_str = ", ".join(violations[:3]) if violations else "unknown"
+                logger.warning(f"Z3 validation failed for sequence: {violation_str}")
+                raise Exception(f"Z3 validation failed: sequence violates constraints ({violation_str})")
+
         statements_apicall = []
         for api_call, _ in drv:
             statements_apicall.append(api_call)
