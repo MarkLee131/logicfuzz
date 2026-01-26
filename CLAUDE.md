@@ -50,37 +50,56 @@ Benchmark YAML files in `comparison/` define "target projects" to fuzz.
 
 基于LangGraph的多Agent协作系统：
 
-| Agent | 文件 | 功能 |
-|-------|------|------|
-| **LangGraphPrototyper** | `src/agents/prototyper.py` | 生成fuzz target代码，使用synthesized drivers作为LLM refinement基础 |
-| **LangGraphCoverageAnalyzer** | `src/agents/coverage_analyzer.py` | 分析覆盖率，提取改进建议 |
-| **LangGraphCrashAnalyzer** | `src/agents/crash_analyzer.py` | 使用GDB+Bash工具分析crash |
-| **LangGraphCrashFeasibilityAnalyzer** | `src/agents/crash_feasibility_analyzer.py` | 判断crash可行性 |
-| **LangGraphFixer** | `src/agents/fixer.py` | 修复编译/运行时错误 |
-| **LangGraphImprover** | `src/agents/improver.py` | 基于覆盖率分析改进fuzz target |
+| Agent | 文件 | 功能 | 工具支持 |
+|-------|------|------|----------|
+| **LangGraphPrototyper** | `src/agents/prototyper.py` | 生成fuzz target代码 | ✅ FI工具 |
+| **LangGraphImprover** | `src/agents/improver.py` | 基于覆盖率分析改进fuzz target | ✅ FI工具 |
+| **LangGraphCoverageAnalyzer** | `src/agents/coverage_analyzer.py` | 分析覆盖率，提取改进建议 | ✅ Bash工具 |
+| **LangGraphCrashAnalyzer** | `src/agents/crash_analyzer.py` | 使用GDB+Bash工具分析crash | ✅ GDB+Bash工具 |
+| **LangGraphCrashFeasibilityAnalyzer** | `src/agents/crash_feasibility_analyzer.py` | 判断crash可行性 | ✅ FI+Bash工具 |
+| **LangGraphFixer** | `src/agents/fixer.py` | 修复编译/运行时错误 | ✅ Bash工具 |
 
 **ToolCallingMixin** (`src/agents/tool_calling_mixin.py`):
 - ReAct风格的工具调用循环
 - 支持并行工具执行（最多4个worker）
 - 自动检测结论并终止循环
+- 工具调用**可选** - LLM可以根据需要决定是否使用工具
 
 ### LLM工具：FuzzIntrospector集成
 
-LLM agents使用FuzzIntrospector工具获取原始信息，自行分析特殊模式（var-len、loop、callback、TLV）：
+**核心设计：LLM主动查询，而非被动接收静态分析结论**
 
-| Tool | 功能 | 用途 |
-|------|------|------|
-| `get_function_implementation` | 获取函数源码 | 理解函数内部逻辑 |
-| `get_sample_cross_references` | 获取调用示例 | 学习正确的调用模式 |
+Prototyper和Improver现在可以**主动查询**FuzzIntrospector获取原始信息：
+
+| Tool | 功能 | 使用场景 |
+|------|------|----------|
+| `get_function_implementation` | 获取函数源码 | 理解var-len关系、buffer处理逻辑 |
+| `get_sample_cross_references` | 获取调用示例 | 学习正确的API使用模式、callback签名 |
 | `get_function_signature` | 获取函数签名 | 确认参数类型 |
-| `get_tests_for_functions` | 获取测试用例 | 参考测试代码 |
+| `get_tests_for_functions` | 获取测试用例 | 参考测试代码的API用法 |
 
 **设计原则**：
-- 直接使用FI获取**原始信息**（源码、示例）
-- **不依赖静态分析结论** - 静态分析可能误导LLM
-- LLM基于源码和示例**自行判断**特殊模式
+1. **LLM主动查询** - 当不确定API用法时，LLM使用工具查询源码和示例
+2. **不依赖静态分析结论** - 静态分析（VarLenAnalyzer等）可能产生误导
+3. **工具调用可选** - 简单API直接生成代码，复杂API再查询
+4. **原始信息优先** - 返回源码和示例，让LLM自行判断
 
-**实现文件**: `src/tools/langchain_adapters.py`
+**示例工作流**：
+```
+LLM看到 API: process(char* data, size_t len)
+    ↓
+不确定 data 和 len 的关系
+    ↓
+调用 get_function_implementation("process") 获取源码
+    ↓
+从源码中看到: memcpy(buf, data, len)
+    ↓
+判断: len 是 data 的长度
+    ↓
+生成正确的 driver 代码
+```
+
+**实现文件**: `src/tools/langchain_adapters.py`, `src/agents/prototyper.py`, `src/agents/improver.py`
 
 ### 数据流
 
@@ -436,6 +455,12 @@ class DiagnosisType(Enum):
    - Source API可行性评估和排序
    - 初始化链的Z3引导查找
    - Unsat core诊断和恢复建议
+
+2. [x] **Prototyper/Improver 工具调用重构**
+   - 添加 ToolCallingMixin 支持
+   - 集成 FuzzIntrospector 工具（源码、示例、签名、测试）
+   - 移除静态分析结论的直接传递
+   - LLM主动查询策略：不确定时使用工具获取原始信息
 
 ---
 

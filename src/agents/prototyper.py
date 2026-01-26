@@ -1,19 +1,39 @@
 """
 LangGraphPrototyper agent for LangGraph workflow.
+
+Refactored to use ToolCallingMixin for FuzzIntrospector tool access.
+LLM can query function source code and usage examples when needed.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import argparse
 
 import logger
+from langchain_core.tools import BaseTool
 from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
+from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.agents.utils import parse_tag
 from src.utils.prompt_loader import get_prompt_manager
-from data_prep.api_classifier import classify_project_apis, APIRole
+from src.tools.langchain_adapters import (
+    GetFunctionImplementationTool,
+    GetFunctionSignatureTool,
+    GetSampleCrossReferencesTool,
+    GetTestsForFunctionsTool,
+)
+from data_prep.api_classifier import classify_project_apis
 
 
-class LangGraphPrototyper(LangGraphAgent):
-    """Prototyper agent for LangGraph."""
+class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
+    """
+    Prototyper agent for LangGraph.
+
+    Now supports FuzzIntrospector tool access for querying:
+    - Function source code (to understand implementation details)
+    - Usage examples (to learn correct API patterns)
+    - Function signatures (to verify parameter types)
+
+    LLM can decide when to use tools based on uncertainty about API usage.
+    """
 
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
@@ -25,9 +45,97 @@ class LangGraphPrototyper(LangGraphAgent):
             args=args,
             system_message=system_message
         )
-    
+        self.fi_tool = None
+        self.project_name = None
+        self.benchmark = None
+
+    # =========================================================================
+    # ToolCallingMixin Implementation
+    # =========================================================================
+
+    def get_tools(self) -> List[BaseTool]:
+        """Return FuzzIntrospector tools for API understanding."""
+        return [
+            GetFunctionImplementationTool(executor=self._get_function_implementation),
+            GetFunctionSignatureTool(executor=self._get_function_signature),
+            GetSampleCrossReferencesTool(executor=self._get_sample_cross_references),
+            GetTestsForFunctionsTool(executor=self._get_tests_for_functions),
+        ]
+
+    def parse_response(self, content: str) -> Dict[str, Any]:
+        """Parse final LLM response to extract fuzz target code."""
+        fuzz_target_code = parse_tag(content, 'fuzz_target')
+        return {
+            'fuzz_target_code': fuzz_target_code,
+            'raw_response': content
+        }
+
+    # =========================================================================
+    # Tool Executors
+    # =========================================================================
+
+    def _init_fi_tool(self):
+        """Initialize FuzzIntrospector tool for the project."""
+        if self.fi_tool is None and self.benchmark is not None:
+            from tool.fuzz_introspector_tool import FuzzIntrospectorTool
+            from experiment import benchmark as benchmarklib
+            benchmark_obj = benchmarklib.Benchmark.from_dict(self.benchmark)
+            logger.info(f"Initializing FuzzIntrospector for project: {benchmark_obj.project}", trial=self.trial)
+            self.fi_tool = FuzzIntrospectorTool(benchmark_obj)
+            self.project_name = benchmark_obj.project
+
+    def _get_function_implementation(self, function_name: str) -> str:
+        """Get function source code via FuzzIntrospector."""
+        self._init_fi_tool()
+        if not self.fi_tool:
+            return f"Error: FuzzIntrospector not available"
+        impl = self.fi_tool.get_function_implementation(self.project_name, function_name)
+        if impl:
+            return f"Source code for '{function_name}':\n```c\n{impl}\n```"
+        return f"Error: Could not find source code for function '{function_name}'"
+
+    def _get_function_signature(self, function_name: str) -> str:
+        """Get function signature via FuzzIntrospector."""
+        self._init_fi_tool()
+        if not self.fi_tool:
+            return f"Error: FuzzIntrospector not available"
+        signature = self.fi_tool.get_function_signature(function_name)
+        if signature:
+            return f"Function signature: {signature}"
+        return f"Error: Could not find signature for function '{function_name}'"
+
+    def _get_sample_cross_references(self, function_signature: str) -> str:
+        """Get sample usage examples via FuzzIntrospector."""
+        self._init_fi_tool()
+        if not self.fi_tool:
+            return f"Error: FuzzIntrospector not available"
+        cross_refs = self.fi_tool.get_sample_cross_references(function_signature)
+        if cross_refs:
+            result = f"Usage examples for '{function_signature}':\n\n"
+            for i, ref in enumerate(cross_refs[:5], 1):
+                result += f"Example {i}:\n```c\n{ref}\n```\n\n"
+            return result
+        return f"No usage examples found for '{function_signature}'"
+
+    def _get_tests_for_functions(self, function_names: List[str]) -> str:
+        """Get test code that uses these functions."""
+        self._init_fi_tool()
+        if not self.fi_tool:
+            return f"Error: FuzzIntrospector not available"
+        tests = self.fi_tool.get_tests_for_functions(function_names)
+        if tests and tests.get('source'):
+            result = f"Test examples using functions: {', '.join(function_names)}\n\n"
+            for i, snippet in enumerate(tests['source'][:3], 1):
+                result += f"Test {i}:\n```c\n{snippet}\n```\n\n"
+            return result
+        return f"No tests found for functions: {', '.join(function_names)}"
+
+    # =========================================================================
+    # Main Execution
+    # =========================================================================
+
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
-        """Generate fuzz target code."""
+        """Generate fuzz target code with optional tool access."""
         from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
@@ -35,6 +143,7 @@ class LangGraphPrototyper(LangGraphAgent):
         )
 
         benchmark = state["benchmark"]
+        self.benchmark = benchmark  # Store for FI tool initialization
         function_analysis = state.get("function_analysis", {})
         context = state.get('context', {})
 
@@ -45,7 +154,6 @@ class LangGraphPrototyper(LangGraphAgent):
         api_sequences = context.get('api_sequences', [])
         dependency_graph = context.get('dependency_graph', {})
         condition_info = context.get('condition_info', {})
-        pattern_analysis = context.get('pattern_analysis', {})
         skeleton_drivers = context.get('skeleton_drivers', [])
         existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
         existing_driver_knowledge = context.get('existing_driver_knowledge', {})
@@ -53,17 +161,13 @@ class LangGraphPrototyper(LangGraphAgent):
         # Get target path info for include path calculation
         target_path = benchmark.get('target_path', '')
 
-        # Determine target language from file extension (not yaml language field)
-        # .c -> C driver, .cpp/.cc -> C++ driver
+        # Determine target language from file extension
         library_language = benchmark.get('language', 'c++').lower()
         cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
         is_cpp_target = target_path.lower().endswith(cpp_extensions)
         is_c_project = library_language in ('c',)
 
-        # Target language for prompt selection based on driver file extension
         target_language = 'c++' if is_cpp_target else 'c'
-
-        # needs_extern: C++ fuzz target for C library needs extern "C" wrappers
         needs_extern = is_cpp_target and is_c_project
 
         is_regeneration = state.get("compile_success") == False and state.get("fuzz_target_source", "") != ""
@@ -74,15 +178,13 @@ class LangGraphPrototyper(LangGraphAgent):
             build_errors = state.get("build_errors", [])
             if build_errors:
                 additional_context = f"\n**Note**: Previous code generation failed to compile. Key errors:\n"
-                additional_context += "\n".join(build_errors[:3])  # Show first 3 errors
+                additional_context += "\n".join(build_errors[:3])
                 additional_context += "\n\nPlease generate a completely new approach that avoids these issues."
 
         skeleton_code = self._retrieve_skeleton(function_analysis)
-        # NOTE: SRS has been removed; this now formats the raw analysis summary
         srs_specification = self._format_analysis_summary(function_analysis)
 
-        # === API Classification and Project Understanding ===
-        # Classify APIs by semantic role to guide generation strategy
+        # === API Classification ===
         project_name = benchmark.get('project', 'unknown')
         api_classification = classify_project_apis(project_name, project_apis)
         api_understanding_text = self._format_api_understanding(api_classification)
@@ -99,13 +201,11 @@ class LangGraphPrototyper(LangGraphAgent):
         project_apis_text = self._format_project_apis(project_apis, limit=20)
         dep_graph_text = self._format_dependency_graph(dependency_graph, limit=12)
         condition_text = self._format_condition_info(condition_info)
-        pattern_text = self._format_pattern_analysis(pattern_analysis)
         skeleton_text = self._format_skeleton_drivers(skeleton_drivers, limit=2)
         include_path_context = self._format_include_path_context(target_path, existing_fuzzer_headers)
         driver_knowledge_text = self._format_driver_knowledge(existing_driver_knowledge)
 
         # === Synthesis mode: Format CBFactory base driver for LLM refinement ===
-        # Note: Synthesis is always enabled - CBFactory generates base, LLM refines
         synthesis_base_text = ""
         if synthesized_drivers:
             synthesis_base_text = self._format_synthesis_base_driver(synthesized_drivers, state)
@@ -114,7 +214,7 @@ class LangGraphPrototyper(LangGraphAgent):
                 trial=self.trial
             )
 
-        # Add extern "C" guidance if needed (C++ driver for C library)
+        # Add extern "C" guidance if needed
         extern_c_note = ""
         if needs_extern:
             extern_c_note = """
@@ -125,20 +225,20 @@ extern "C" {
 #include "library_header.h"
 }
 ```
-This ensures proper C linkage for the library functions.
 """
             if additional_context:
                 additional_context = extern_c_note + "\n" + additional_context
             else:
                 additional_context = extern_c_note
 
+        # Build the base prompt
         try:
             base_prompt = prompt_manager.build_user_prompt(
                 "prototyper",
-                language=target_language,  # Based on target_path extension (.c or .cpp)
+                language=target_language,
                 project_name=benchmark.get('project', 'unknown'),
-                function_name="",  # Empty for project-level
-                function_signature="",  # Empty for project-level
+                function_name="",
+                function_signature="",
                 srs_specification=srs_specification,
                 additional_context=additional_context,
                 skeleton_code=skeleton_code
@@ -181,16 +281,36 @@ Before writing any code, think about:
 {condition_text}
 </constraints>
 
-<special_patterns>
-{pattern_text}
-</special_patterns>
-
 <skeleton_drivers>
 {skeleton_text}
 </skeleton_drivers>
 {driver_knowledge_text}
 {synthesis_base_text}
 </reference_information>
+
+<tool_usage_guidance>
+**You have access to tools to query more information about APIs if needed:**
+
+- **get_function_implementation**: Get the source code of any API function
+  Use when: You need to understand how a function handles parameters (e.g., var-len relationships, buffer handling)
+
+- **get_function_signature**: Get the exact signature of a function
+  Use when: You're unsure about parameter types
+
+- **get_sample_cross_references**: Get real usage examples from the codebase
+  Use when: You want to see how other code correctly uses an API (especially for callbacks, complex patterns)
+
+- **get_tests_for_functions**: Get test code that uses these functions
+  Use when: You want to learn from existing test patterns
+
+**When to use tools:**
+- If you're uncertain about buffer-size relationships → query source code
+- If you need to implement callbacks → query usage examples to see signatures
+- If you're unsure about API lifecycle → query tests to see correct patterns
+- If the API usage is straightforward → no need to query, just generate code
+
+**Tool calls are optional** - use them only when you need more information.
+</tool_usage_guidance>
 
 <generation_rules>
 Generate a fuzz driver following these CRITICAL rules:
@@ -214,9 +334,71 @@ Output your fuzz driver code inside <fuzz_target> tags.
 </output_format>
 """
         except Exception as e:
-            # Fallback: build prompt manually if template doesn't support project-level
             logger.warning(f"Prompt template may not support project-level mode: {e}", trial=self.trial)
-            base_prompt = f"""<task>
+            base_prompt = self._build_fallback_prompt(
+                benchmark, include_path_context, api_sequences_text, project_apis_text,
+                dep_graph_text, condition_text, skeleton_text, srs_specification,
+                skeleton_code, additional_context
+            )
+
+        prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
+
+        # Use tool calling loop - LLM can optionally use tools
+        try:
+            parsed_result, all_responses = self.run_tool_calling_loop(
+                initial_prompt=prompt,
+                state=state,
+                max_rounds=getattr(self.args, 'max_round', 5),  # Allow a few rounds for tool use
+                log_prefix="PROTOTYPER"
+            )
+        except Exception as e:
+            logger.warning(f"Tool calling loop failed, falling back to direct call: {e}", trial=self.trial)
+            response = self.chat_llm(state, prompt)
+            parsed_result = self.parse_response(response)
+            all_responses = [response]
+
+        # Extract session memory updates
+        combined_response = "\n\n".join(all_responses)
+        session_memory_updates = extract_session_memory_updates_from_response(
+            combined_response,
+            agent_name=self.name,
+            current_iteration=state.get("current_iteration", 0)
+        )
+        updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
+
+        fuzz_target_code = parsed_result.get('fuzz_target_code', '')
+        if not fuzz_target_code:
+            logger.error('No <fuzz_target> tag found in prototyper response', trial=self.trial)
+
+        validation_warnings = self._validate_api_usage(
+            fuzz_target_code,
+            benchmark.get('project', 'unknown')
+        )
+
+        state_update = {
+            "fuzz_target_source": fuzz_target_code,
+            "compile_success": None,
+            "build_errors": [],
+            "retry_count": 0,
+            "session_memory": updated_session_memory,
+            "api_validation_warnings": validation_warnings
+        }
+
+        if is_regeneration:
+            prototyper_regenerate_count = state.get("prototyper_regenerate_count", 0)
+            state_update["prototyper_regenerate_count"] = prototyper_regenerate_count + 1
+            state_update["compilation_retry_count"] = 0
+            logger.info(f'Prototyper regeneration #{prototyper_regenerate_count + 1}', trial=self.trial)
+
+        self._langgraph_logger.flush_agent_logs(self.name)
+
+        return state_update
+
+    def _build_fallback_prompt(self, benchmark, include_path_context, api_sequences_text,
+                               project_apis_text, dep_graph_text, condition_text,
+                               skeleton_text, srs_specification, skeleton_code, additional_context):
+        """Build fallback prompt when template fails."""
+        return f"""<task>
 Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown')}.
 </task>
 
@@ -242,10 +424,6 @@ Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown'
 {condition_text}
 </constraints>
 
-<special_patterns>
-{pattern_text}
-</special_patterns>
-
 <skeleton_drivers>
 {skeleton_text}
 </skeleton_drivers>
@@ -262,9 +440,17 @@ Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown'
 
 </reference_information>
 
+<tool_usage_guidance>
+You have access to FuzzIntrospector tools:
+- get_function_implementation: Get function source code
+- get_sample_cross_references: Get usage examples
+- get_tests_for_functions: Get test code
+
+Use these when you need to understand API patterns (var-len, callbacks, lifecycle).
+</tool_usage_guidance>
+
 <generation_rules>
 Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above.
-Handle var-len relationships and use appropriate callback stubs if needed.
 Use correct include paths - the fuzz target will be placed at the location shown above.
 </generation_rules>
 
@@ -272,67 +458,13 @@ Use correct include paths - the fuzz target will be placed at the location shown
 Output your fuzz driver code inside <fuzz_target> tags.
 </output_format>"""
 
-        prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
-        response = self.chat_llm(state, prompt)
-
-        session_memory_updates = extract_session_memory_updates_from_response(
-            response,
-            agent_name=self.name,
-            current_iteration=state.get("current_iteration", 0)
-        )
-        updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
-
-        fuzz_target_code = parse_tag(response, 'fuzz_target')
-        if not fuzz_target_code:
-            # No fallback - if LLM didn't follow format, compilation will fail and trigger retry
-            logger.error('No <fuzz_target> tag found in prototyper response - LLM did not follow output format', trial=self.trial)
-
-        validation_warnings = self._validate_api_usage(
-            fuzz_target_code,
-            benchmark.get('project', 'unknown')
-        )
-
-        state_update = {
-            "fuzz_target_source": fuzz_target_code,
-            "compile_success": None,
-            "build_errors": [],
-            "retry_count": 0,
-            "session_memory": updated_session_memory,
-            "api_validation_warnings": validation_warnings
-        }
-
-        if is_regeneration:
-            prototyper_regenerate_count = state.get("prototyper_regenerate_count", 0)
-            state_update["prototyper_regenerate_count"] = prototyper_regenerate_count + 1
-            state_update["compilation_retry_count"] = 0
-            logger.info(f'Prototyper regeneration #{prototyper_regenerate_count + 1}, '
-                       f'resetting compilation_retry_count', trial=self.trial)
-
-        self._langgraph_logger.flush_agent_logs(self.name)
-
-        return state_update
-
-    # === Synthesis mode support ===
+    # =========================================================================
+    # Formatting helpers (unchanged from original)
+    # =========================================================================
 
     def _format_synthesis_base_driver(self, synthesized_drivers: List[Dict[str, Any]],
                                       state: FuzzingWorkflowState) -> str:
-        """
-        Format CBFactory synthesized drivers as base for LLM refinement.
-
-        In synthesis mode, CBFactory generates structurally correct but basic drivers.
-        The LLM's job is to refine and improve these drivers by:
-        - Adding proper error handling
-        - Improving input generation strategy
-        - Adding coverage-improving logic
-        - Fixing any compilation issues
-
-        Args:
-            synthesized_drivers: List of synthesized driver dictionaries
-            state: Current workflow state (for tracking which driver to use)
-
-        Returns:
-            Formatted string to include in the prompt
-        """
+        """Format CBFactory synthesized drivers as base for LLM refinement."""
         if not synthesized_drivers:
             return ""
 
@@ -351,12 +483,10 @@ Output your fuzz driver code inside <fuzz_target> tags.
         lines.append("5. **Keep the API sequence** - The call order is constraint-validated, preserve it")
         lines.append("")
 
-        # Select which driver to show (can rotate through them on regeneration)
         synthesis_index = state.get("synthesis_driver_index", 0) if state else 0
         if synthesis_index >= len(synthesized_drivers):
             synthesis_index = 0
 
-        # Show the selected driver
         driver = synthesized_drivers[synthesis_index]
         driver_name = driver.get('name', f'cbfactory_driver_{synthesis_index}')
         api_sequence = driver.get('api_sequence', [])
@@ -372,11 +502,10 @@ Output your fuzz driver code inside <fuzz_target> tags.
         lines.append("")
         lines.append("**Base Code (REFINE THIS):**")
         lines.append("```cpp")
-        # Truncate if too long
         code_lines = code.split('\n')
         if len(code_lines) > 80:
             lines.extend(code_lines[:80])
-            lines.append("// ... (truncated, see full code in synthesis output)")
+            lines.append("// ... (truncated)")
         else:
             lines.append(code)
         lines.append("```")
@@ -385,38 +514,26 @@ Output your fuzz driver code inside <fuzz_target> tags.
         lines.append("but improve the driver to be compilable and achieve high code coverage.")
         lines.append("")
 
-        # If there are more drivers, mention them
         if len(synthesized_drivers) > 1:
-            lines.append(f"*({len(synthesized_drivers) - 1} more synthesized drivers available for reference)*")
+            lines.append(f"*({len(synthesized_drivers) - 1} more synthesized drivers available)*")
             lines.append("")
 
         return "\n".join(lines)
 
-    # === Formatting helpers ===
-
     def _format_api_understanding(self, classification) -> str:
-        """
-        Format API classification into project understanding guidance.
-
-        This helps the LLM understand the project's API structure and
-        guides it to generate better initial drivers.
-        """
+        """Format API classification into project understanding guidance."""
         from data_prep.api_classifier import APIClassificationResult
 
         if not isinstance(classification, APIClassificationResult):
             return "  (API classification not available)"
 
         lines = []
-
-        # Summary
         lines.append("**API Role Analysis** (automated classification):")
         lines.append(f"  Total APIs analyzed: {len(classification.apis)}")
         lines.append("")
 
-        # Parser APIs - HIGHEST PRIORITY
         if classification.parsers:
             lines.append("**🎯 PARSER APIs (PRIORITY - consume external input):**")
-            lines.append("  These APIs should be the PRIMARY fuzzing targets!")
             for api in classification.parsers[:5]:
                 lines.append(f"  • {api.name} (confidence: {api.confidence:.0%})")
                 if api.signature:
@@ -424,12 +541,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
             if len(classification.parsers) > 5:
                 lines.append(f"  ... and {len(classification.parsers) - 5} more")
             lines.append("")
-            lines.append("  ⚠️ CRITICAL: For parser APIs, generate STRUCTURED input!")
-            lines.append("     DO NOT use fdp.ConsumeRandomLengthString() for parsers.")
-            lines.append("     Instead, generate valid structure with fuzz-derived values.")
-            lines.append("")
 
-        # Accessor APIs - Need branch coverage
         if classification.accessors:
             lines.append("**🔍 ACCESSOR APIs (need both found/not-found branches):**")
             for api in classification.accessors[:5]:
@@ -437,11 +549,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
             if len(classification.accessors) > 5:
                 lines.append(f"  ... and {len(classification.accessors) - 5} more")
             lines.append("")
-            lines.append("  ⚠️ TIP: Pre-populate objects with known keys,")
-            lines.append("     then query both existing and missing keys.")
-            lines.append("")
 
-        # Creator APIs
         if classification.creators:
             lines.append("**🏗️ CREATOR APIs (construct objects):**")
             for api in classification.creators[:5]:
@@ -450,7 +558,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 lines.append(f"  ... and {len(classification.creators) - 5} more")
             lines.append("")
 
-        # Mutator APIs
         if classification.mutators:
             lines.append("**✏️ MUTATOR APIs (modify objects):**")
             for api in classification.mutators[:5]:
@@ -459,21 +566,18 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 lines.append(f"  ... and {len(classification.mutators) - 5} more")
             lines.append("")
 
-        # Serializer APIs
         if classification.serializers:
             lines.append("**📤 SERIALIZER APIs (output data):**")
             for api in classification.serializers[:3]:
                 lines.append(f"  • {api.name}")
             lines.append("")
 
-        # Destructor APIs
         if classification.destructors:
             lines.append("**🗑️ DESTRUCTOR APIs (cleanup - call last):**")
             for api in classification.destructors[:3]:
                 lines.append(f"  • {api.name}")
             lines.append("")
 
-        # Priority recommendation
         lines.append("**📋 RECOMMENDED FUZZING PRIORITY:**")
         priority_apis = classification.get_priority_apis()[:8]
         for i, api in enumerate(priority_apis, 1):
@@ -500,11 +604,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
             fn = api.get("function_name", "unknown")
             rt = api.get("return_type", "void")
             args = api.get("arguments", [])
-            # Handle args that can be either strings or dicts
             args_formatted = []
             for arg in args[:3]:
                 if isinstance(arg, dict):
-                    # Format dict args as "type name"
                     arg_type = arg.get("type", arg.get("type_clang", ""))
                     arg_name = arg.get("name", "")
                     args_formatted.append(f"{arg_type} {arg_name}".strip())
@@ -545,53 +647,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
         lines.append(f"  Init ({len(inits)}): {', '.join(inits[:10])}" + (" ..." if len(inits) > 10 else ""))
         return "\n".join(lines)
 
-    def _format_pattern_analysis(self, pattern_analysis: Dict[str, Any]) -> str:
-        """Format pattern analysis results (VarLen/Loop/Callback/TLV) for prompt."""
-        if not pattern_analysis:
-            return "  (no pattern analysis available)"
-
-        lines = []
-
-        # Summary
-        summary = pattern_analysis.get("summary", {})
-        if summary:
-            lines.append(f"  Summary: {summary.get('apis_with_varlen', 0)} APIs with var-len, "
-                        f"{summary.get('apis_needing_loop', 0)} needing loop, "
-                        f"{summary.get('apis_with_callbacks', 0)} with callbacks, "
-                        f"{summary.get('structured_parsers', 0)} TLV parsers")
-
-        # VarLen relations
-        varlen = pattern_analysis.get("varlen", {})
-        if varlen:
-            lines.append("\n  **Var-Len Relations** (buffer ↔ size parameters):")
-            for api_name, relations in list(varlen.items())[:5]:
-                for rel in relations:
-                    lines.append(f"    • {api_name}: {rel['buffer_arg_name']} {rel['relationship']} {rel['length_arg_name']}")
-
-        # Loop patterns
-        loop = pattern_analysis.get("loop", {})
-        if loop:
-            lines.append("\n  **Loop Patterns** (APIs that may need loop calls):")
-            for api_name, info in list(loop.items())[:5]:
-                lines.append(f"    • {api_name}: {info['loop_type']} loop, terminate when {info['termination_condition']}")
-
-        # Callback info
-        callback = pattern_analysis.get("callback", {})
-        if callback:
-            lines.append("\n  **Callback Parameters** (function pointers):")
-            for api_name, cbs in list(callback.items())[:5]:
-                for cb in cbs:
-                    lines.append(f"    • {api_name}[{cb['arg_idx']}]: {cb['callback_type']} callback ({cb['arg_name']})")
-
-        # TLV parsers
-        tlv = pattern_analysis.get("tlv", {})
-        if tlv:
-            lines.append("\n  **Structured Data Parsers** (TLV/protocol):")
-            for api_name, info in list(tlv.items())[:5]:
-                lines.append(f"    • {api_name}: {info['format_type']} format, min_size={info['min_size']}")
-
-        return "\n".join(lines) if lines else "  (no patterns detected)"
-
     def _format_skeleton_drivers(self, skeleton_drivers: List[Dict[str, Any]], limit: int = 2) -> str:
         """Format pre-generated skeleton drivers for prompt."""
         if not skeleton_drivers:
@@ -612,7 +667,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 hole_types = [str(h['hole_type']) for h in unfilled[:3]]
                 lines.append(f"    Holes to fill: {len(unfilled)} ({', '.join(hole_types)})")
 
-            # Show truncated code snippet
             if code:
                 code_lines = code.split('\n')[:15]
                 lines.append("    Code preview:")
@@ -629,14 +683,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
         return "\n".join(lines)
 
     def _format_driver_knowledge(self, driver_knowledge: Dict[str, Any]) -> str:
-        """
-        Format knowledge extracted from existing drivers for the prompt.
-
-        Args:
-            driver_knowledge: Dictionary containing:
-                - driver_sources: List of {'path': str, 'source': str}
-                - analysis: Dict with 'core_functionality', 'setup_teardown', 'code_patterns'
-        """
+        """Format knowledge extracted from existing drivers."""
         if not driver_knowledge:
             return ""
 
@@ -646,13 +693,10 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if not driver_sources and not analysis:
             return ""
 
-        from src.context.data_context import _strip_license_header
-
         lines = ["<existing_driver_knowledge>"]
         lines.append(f"Learn from {len(driver_sources)} existing OSS-Fuzz fuzz drivers.")
         lines.append("")
 
-        # Core functionality (what to test)
         core_func = analysis.get('core_functionality', '')
         if core_func:
             lines.append("<core_apis>")
@@ -660,7 +704,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append("</core_apis>")
             lines.append("")
 
-        # Code patterns - key patterns showing how to use fuzz data
         code_patterns = analysis.get('code_patterns', '')
         if code_patterns:
             lines.append("<code_patterns>")
@@ -669,7 +712,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append("</code_patterns>")
             lines.append("")
 
-        # Setup/Teardown patterns
         setup_teardown = analysis.get('setup_teardown', '')
         if setup_teardown:
             lines.append("<setup_teardown>")
@@ -677,11 +719,14 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append("</setup_teardown>")
             lines.append("")
 
-        # Show reference drivers (up to 3, license stripped)
         if driver_sources:
             lines.append("<reference_drivers>")
             for d in driver_sources[:3]:
-                source = _strip_license_header(d['source'])
+                source = d['source']
+                # Strip license header if present (simple heuristic)
+                if source.startswith('/*') or source.startswith('//'):
+                    import re
+                    source = re.sub(r'^(/\*.*?\*/|//.*?\n)+\s*', '', source, flags=re.DOTALL)
                 lines.append(f"<driver path=\"{d['path']}\">")
                 lines.append(source)
                 lines.append("</driver>")
@@ -691,21 +736,11 @@ Output your fuzz driver code inside <fuzz_target> tags.
         return "\n".join(lines)
 
     def _format_include_path_context(self, target_path: str, existing_fuzzer_headers: Dict[str, Any]) -> str:
-        """
-        Format include path context to help LLM generate correct #include statements.
-
-        Args:
-            target_path: Where the fuzz target will be placed (e.g., /src/cjson/fuzzing/cjson_read_fuzzer.c)
-            existing_fuzzer_headers: Headers extracted from existing fuzzers
-
-        Returns:
-            Formatted context string with target location and example includes
-        """
+        """Format include path context."""
         import os
 
         lines = []
 
-        # 1. Show where the target will be placed
         if target_path:
             lines.append(f"  **Fuzz target location**: `{target_path}`")
             target_dir = os.path.dirname(target_path)
@@ -714,12 +749,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append("  When writing #include statements, remember:")
             lines.append(f"  - Your code will be saved to `{target_path}`")
             lines.append("  - Use relative paths from this location to reach header files")
-            lines.append("  - Example: if header is at `/src/project/header.h` and target is at `/src/project/fuzzing/fuzz.c`,")
-            lines.append("    use `#include \"../header.h\"` (go up one directory)")
         else:
             lines.append("  (target path not specified)")
 
-        # 2. Show existing fuzzer includes as reference
         project_headers = existing_fuzzer_headers.get('project_headers', [])
         if project_headers:
             lines.append("")
@@ -735,457 +767,40 @@ Output your fuzz driver code inside <fuzz_target> tags.
         return "\n".join(lines)
 
     def _validate_api_usage(self, code: str, project_name: str) -> str:
-        """
-        Validate generated code for internal/private API usage.
-        
-        Args:
-            code: Generated fuzz target code
-            project_name: Project name
-        
-        Returns:
-            Formatted validation warnings (empty string if no issues)
-        """
+        """Validate generated code for internal/private API usage."""
         try:
             from src.utils.api_validator import validate_fuzz_target
-            
+
             is_valid, report = validate_fuzz_target(code, project_name)
-            
+
             if not is_valid:
-                logger.warning(
-                    f'Generated code contains internal API usage - validation failed',
-                    trial=self.trial
-                )
-                logger.info(f'Validation report:\n{report}', trial=self.trial)
+                logger.warning('Generated code contains internal API usage', trial=self.trial)
                 return report
             else:
                 logger.info('Generated code passed API validation', trial=self.trial)
                 return ""
-        
         except Exception as e:
             logger.warning(f'API validation failed with error: {e}', trial=self.trial)
             return ""
-    
+
     def _format_analysis_summary(self, function_analysis: dict) -> str:
-        """
-        Format analysis summary for the Prototyper prompt.
-
-        NOTE: SRS has been removed. This method now simply returns the raw_analysis
-        text generated by the function analyzer from Liberator data.
-
-        Args:
-            function_analysis: Analysis containing raw_analysis text
-
-        Returns:
-            Formatted analysis summary string
-        """
-        # SRS has been removed - srs_data is always None now
-        # Simply return the raw analysis text from function analyzer
+        """Format analysis summary for the Prototyper prompt."""
         srs_data = function_analysis.get('srs_data')
-
-        # Always fall back to raw analysis (srs_data is always None now)
         if not srs_data:
             return function_analysis.get('raw_analysis', 'No analysis available')
-        
-        # Build formatted SRS specification
+
+        # Build formatted SRS specification (kept for backward compatibility)
         output = []
-        
-        # Add archetype information
+
         archetype = srs_data.get('archetype', {})
         output.append("### Archetype Pattern")
         output.append(f"**Primary Pattern**: {archetype.get('primary_pattern', 'Unknown')}")
         output.append(f"**Reference**: {archetype.get('reference', 'N/A')}")
-        output.append(f"**Confidence**: {archetype.get('confidence', 'Unknown')}")
-        output.append(f"**Evidence**: {archetype.get('evidence_count', 'N/A')}")
         output.append("")
-        
-        # Add functional requirements
-        frs = srs_data.get('functional_requirements', [])
-        if frs:
-            output.append("### Functional Requirements")
-            for fr in frs:
-                output.append(f"**{fr.get('id', 'FR-?')}** [{fr.get('priority', 'MANDATORY')}]")
-                output.append(f"- **Requirement**: {fr.get('requirement', 'N/A')}")
-                if fr.get('parameter'):
-                    output.append(f"- **Parameter**: {fr['parameter']}")
-                output.append(f"- **Rationale**: {fr.get('rationale', 'N/A')}")
-                impl = fr.get('implementation', {})
-                if impl.get('code'):
-                    output.append(f"- **Implementation**:")
-                    output.append(f"```{impl.get('language', 'c')}")
-                    output.append(impl['code'])
-                    output.append("```")
-                output.append(f"- **Failure Mode**: {fr.get('failure_mode', 'Unknown')}")
-                output.append("")
-        
-        # Add preconditions
-        pres = srs_data.get('preconditions', [])
-        if pres:
-            output.append("### Preconditions")
-            for pre in pres:
-                output.append(f"**{pre.get('id', 'PRE-?')}** [{pre.get('priority', 'MANDATORY')}]")
-                output.append(f"- **Requirement**: {pre.get('requirement', 'N/A')}")
-                output.append(f"- **Check Method**: {pre.get('check_method', 'N/A')}")
-                output.append(f"- **Rationale**: {pre.get('rationale', 'N/A')}")
-                output.append(f"- **Violation → {pre.get('violation_consequence', 'Unknown')}**")
-                output.append("")
-        
-        # Add postconditions
-        posts = srs_data.get('postconditions', [])
-        if posts:
-            output.append("### Postconditions")
-            for post in posts:
-                output.append(f"**{post.get('id', 'POST-?')}** [{post.get('priority', 'MANDATORY')}]")
-                output.append(f"- **Requirement**: {post.get('requirement', 'N/A')}")
-                output.append(f"- **Check Method**: {post.get('check_method', 'N/A')}")
-                output.append(f"- **Rationale**: {post.get('rationale', 'N/A')}")
-                output.append("")
-        
-        # Add constraints
-        cons = srs_data.get('constraints', [])
-        if cons:
-            output.append("### Constraints")
-            for con in cons:
-                output.append(f"**{con.get('id', 'CON-?')}** [Type: {con.get('type', 'Unknown')}]")
-                output.append(f"- **Requirement**: {con.get('requirement', 'N/A')}")
-                if con.get('parameter'):
-                    output.append(f"- **Parameter**: {con['parameter']}")
-                output.append(f"- **Valid Range/Sequence**: {con.get('valid_range_or_sequence', 'N/A')}")
-                output.append(f"- **Rationale**: {con.get('rationale', 'N/A')}")
-                
-                # Add execution sequence if available
-                impl = con.get('implementation', {})
-                sequence = impl.get('sequence', [])
-                if sequence:
-                    output.append("- **Execution Sequence**:")
-                    for step in sequence:
-                        output.append(f"  {step.get('step', '?')}. {step.get('description', 'N/A')}")
-                        if step.get('code'):
-                            output.append(f"     ```c")
-                            output.append(f"     {step['code']}")
-                            output.append(f"     ```")
-                output.append("")
-        
-        # Add parameter strategies
-        params = srs_data.get('parameter_strategies', [])
-        if params:
-            output.append("### Parameter Strategies")
-            for param in params:
-                output.append(f"**Parameter**: `{param.get('parameter', 'unknown')}`")
-                output.append(f"- **Type**: {param.get('type', 'unknown')}")
-                output.append(f"- **Strategy**: {param.get('strategy', 'DIRECT_FUZZ')}")
-                output.append(f"- **Construction**: {param.get('construction_method', 'N/A')}")
-                if param.get('constraints'):
-                    output.append(f"- **Constraints**: {param['constraints']}")
-                if param.get('fixed_value'):
-                    output.append(f"- **Fixed Value**: {param['fixed_value']}")
-                if param.get('driver_code'):
-                    output.append(f"- **Driver Code**:")
-                    output.append(f"```c")
-                    output.append(param['driver_code'])
-                    output.append("```")
-                output.append("")
-        
-        # Add metadata
-        metadata = srs_data.get('metadata', {})
-        if metadata:
-            output.append("### Metadata")
-            output.append(f"- **Category**: {metadata.get('category', 'Unknown')}")
-            output.append(f"- **Complexity**: {metadata.get('complexity', 'Unknown')}")
-            output.append(f"- **State Model**: {metadata.get('state_model', 'Unknown')}")
-            output.append(f"- **Recommended Approach**: {metadata.get('recommended_approach', 'direct_call')}")
-            output.append(f"- **Purpose**: {metadata.get('purpose', 'N/A')}")
-            output.append("")
-        
+
         return "\n".join(output)
-    
-    def _retrieve_skeleton(self, function_analysis: dict) -> str:
-        """
-        Retrieve skeleton code based on archetype.
 
-        Note: long_term_memory module has been removed. This method now returns
-        empty string. Skeleton generation is handled by Liberator's CBFactory.
-
-        Args:
-            function_analysis: Analysis containing archetype and header information
-
-        Returns:
-            Empty string (skeleton retrieval disabled)
-        """
-        # long_term_memory module has been removed
-        # Skeleton generation is now handled by Liberator's driver generation pipeline
+    def _retrieve_skeleton(self, _function_analysis: dict) -> str:
+        """Retrieve skeleton code based on archetype (currently disabled)."""
+        # Skeleton generation is now handled by CBFactory
         return ""
-    
-    def _format_header_section(self, header_info: dict, archetype: str = None) -> str:
-        """
-        Format header information as C/C++ comments for skeleton injection.
-        
-        Priority (NEW - API-aware):
-        - For C APIs: FuzzIntrospector headers > Definition file headers
-        - For C++ APIs: Definition file headers > FuzzIntrospector headers
-        
-        Rationale:
-        - C APIs often have separate declaration headers (e.g., ada_c.h vs ada.cpp)
-        - C++ APIs usually declare in the same header they include (e.g., ada.h)
-        
-        Args:
-            header_info: Dictionary containing header information
-            archetype: Archetype name (used to determine required standard headers)
-        """
-        if not header_info:
-            return "// NOTE: Header file information not available"
-        
-        # Detect API type
-        is_c_api = header_info.get('is_c_api', False)
-        
-        # Start with LibFuzzer required headers
-        header_lines = [
-            "// === HEADER FILES ===",
-            "// IMPORTANT: These headers are carefully selected from the project's source code.",
-            "// Do NOT modify unless you encounter build errors (e.g., 'file not found').",
-            "// If you see errors about internal headers (../../internal/, _impl.h, etc.),",
-            "// remove them and use the public API headers instead.",
-            "//",
-            "// LibFuzzer required headers",
-            "#include <stddef.h>",
-            "#include <stdint.h>"
-        ]
-        
-        # Add archetype-specific standard headers
-        if archetype == "round_trip":
-            header_lines.extend([
-                "#include <stdlib.h>",
-                "#include <string.h>",
-                "#include <assert.h>"
-            ])
-        elif archetype == "file_based":
-            header_lines.extend([
-                "#include <stdio.h>",
-                "#include <unistd.h>"
-            ])
-        
-        header_lines.append("")  # Blank line after standard headers
-        
-        # ===== HEADER PRIORITY: EXISTING FUZZERS FIRST =====
-        # RATIONALE: Existing fuzzer headers are PROVEN to compile in OSS-Fuzz
-        # They are the ONLY source that guarantees correct paths and availability
-        
-        func_header = header_info.get('function_header')
-        related_headers = header_info.get('related_headers', [])
-        definition_headers = header_info.get('definition_file_headers')
-        existing = header_info.get('existing_fuzzer_headers', {})
-        
-        has_fi_headers = func_header or related_headers
-        has_definition = definition_headers and (
-            definition_headers.get('standard_headers') or 
-            definition_headers.get('project_headers')
-        )
-        has_existing = existing.get('standard_headers') or existing.get('project_headers')
-        
-        # PRIORITY 1 (HIGHEST): Headers from existing fuzzers
-        if has_existing:
-            header_lines.append("//")
-            header_lines.append("// PRIMARY HEADERS (from working fuzzers - COPY THESE):")
-            header_lines.append("// ⚠️ THESE ARE PROVEN TO COMPILE - use exactly as shown")
-            header_lines.append("//")
-            
-            # Add project headers from existing fuzzers (highest confidence)
-            existing_proj = existing.get('project_headers', [])[:5]  # Top 5 most common
-            if existing_proj:
-                # CRITICAL FILTER: Remove inappropriate headers
-                filtered_headers = []
-                for proj_h in existing_proj:
-                    # ⚠️ KEEP .cpp/.cc files if they appear in existing fuzzers!
-                    # Some projects (e.g., ada-url, header-only libs) explicitly include
-                    # implementation files. If existing fuzzers use them, they're valid.
-                    # DO NOT filter them out - trust the existing fuzzer patterns.
-                    # (Previously we skipped .cpp files, but this broke single-header patterns)
-                    
-                    # For C API functions: prioritize C headers but keep .cpp if used by existing fuzzers
-                    if is_c_api:
-                        base_name = proj_h.lower()
-                        
-                        # ALWAYS keep .cpp/.cc/.cxx files (implementation includes)
-                        # Even C API fuzzers may need them (e.g., ada_c.c needs ada.cpp)
-                        if proj_h.endswith('.cpp') or proj_h.endswith('.cc') or proj_h.endswith('.cxx'):
-                            filtered_headers.append(proj_h)
-                            logger.debug(f'Keeping implementation file for C API (from existing fuzzers): {proj_h}', trial=self.trial)
-                        # Keep C API headers (e.g., ada_c.h)
-                        elif '_c.h' in base_name or base_name.endswith('_c.h'):
-                            filtered_headers.append(proj_h)
-                        # Keep generic .h files (might be C-compatible)
-                        elif base_name.endswith('.h') and not any(cpp_indicator in base_name for cpp_indicator in ['.hpp', 'xx']):
-                            filtered_headers.append(proj_h)
-                        else:
-                            # Skip pure C++ headers (ada.h, ada.hpp) for C API
-                            logger.debug(f'Skipping C++ header for C API function: {proj_h}', trial=self.trial)
-                    else:
-                        # For C++ API: keep all headers (including both C++ and C headers)
-                        filtered_headers.append(proj_h)
-                
-                if filtered_headers:
-                    header_lines.append("// Project headers (copy these first):")
-                    for proj_h in filtered_headers:
-                        header_lines.append(f'#include "{proj_h}"')
-                    header_lines.append("")
-                else:
-                    logger.warning(f'All existing project headers were filtered out for {"C" if is_c_api else "C++"} API', trial=self.trial)
-            
-            # Add standard headers from existing fuzzers (as comments - uncomment if needed)
-            existing_std = existing.get('standard_headers', [])[:8]
-            if existing_std:
-                header_lines.append("// Standard headers from working fuzzers (uncomment if needed):")
-                for std_h in existing_std:
-                    header_lines.append(f'// #include <{std_h}>')
-                header_lines.append("")
-        
-        # PRIORITY 2: API-specific headers (FI or Definition) - AS FALLBACK/REFERENCE
-        # CASE 1: C API - FuzzIntrospector headers as SECONDARY/REFERENCE
-        if is_c_api and has_fi_headers:
-            header_lines.append("//")
-            header_lines.append("// SECONDARY: FuzzIntrospector headers (C API - uncomment if needed):")
-            header_lines.append("// NOTE: Existing fuzzer headers above are higher priority")
-            header_lines.append("//")
-            
-            # Add FI's primary header as COMMENT (not directly included)
-            if func_header:
-                header_lines.append(f'// #include "{func_header}"  // FI suggestion')
-                logger.info(f'FI header for C API (as reference): {func_header}', trial=self.trial)
-            
-            # Add related FI headers as comments (optional)
-            if related_headers:
-                for h in related_headers[:3]:
-                    header_lines.append(f'// #include "{h}"')
-            
-            header_lines.append("")
-            
-            # Definition file headers become TERTIARY (supplementary standard headers only)
-            if has_definition:
-                std_headers = definition_headers.get('standard_headers', [])[:10]  # Limit to top 10
-                if std_headers:
-                    header_lines.append("// Supplementary standard headers (from definition file):")
-                    for std_h in sorted(set(std_headers)):
-                        header_lines.append(f'// #include {std_h}  // Uncomment if needed')
-                    header_lines.append("")
-        
-        # CASE 2: C++ API OR No FI headers - Definition file headers as SECONDARY
-        elif has_definition and not has_existing:
-            # Only use definition headers if NO existing fuzzer headers are available
-            header_lines.append("//")
-            if is_c_api:
-                header_lines.append("// SECONDARY: Headers from definition file (C API fallback):")
-            else:
-                header_lines.append("// SECONDARY: Headers from definition file (C++ API):")
-            header_lines.append("//")
-            
-            # Add project headers (from definition file) - most important
-            proj_headers = definition_headers.get('project_headers', [])
-            if proj_headers:
-                for proj_h in sorted(set(proj_headers)):
-                    # Already includes " "
-                    header_lines.append(f'#include {proj_h}')
-                header_lines.append("")
-            
-            # Add standard library headers (from definition file) as comments
-            std_headers = definition_headers.get('standard_headers', [])[:10]
-            if std_headers:
-                header_lines.append("// Standard headers from definition (uncomment if needed):")
-                for std_h in sorted(set(std_headers)):
-                    # Already includes < >
-                    header_lines.append(f'// #include {std_h}')
-                header_lines.append("")
-            
-            # FI headers become TERTIARY (as comments)
-            if has_fi_headers:
-                header_lines.append("// FuzzIntrospector headers (uncomment if needed):")
-                if func_header:
-                    header_lines.append(f'// #include "{func_header}"')
-                for h in related_headers[:3]:
-                    header_lines.append(f'// #include "{h}"')
-                header_lines.append("")
-        
-        # CASE 3: Fallback - only FI headers available (lowest priority)
-        elif has_fi_headers and not has_existing:
-            header_lines.append("//")
-            header_lines.append("// Headers from FuzzIntrospector (use with caution):")
-            header_lines.append("//")
-            
-            if func_header:
-                header_lines.append(f'// #include "{func_header}"  // May need path adjustment')
-            
-            if related_headers:
-                for h in related_headers[:3]:
-                    header_lines.append(f'// #include "{h}"')
-            
-            header_lines.append("")
-        # ===============================================
-        
-        header_lines.append("// ====================")
-        return "\n".join(header_lines)
-    
-    def _extract_archetype_from_analysis(self, analysis_text: str) -> Optional[str]:
-        """
-        Extract archetype from function analysis text.
-        
-        Looks for explicit archetype declarations or infers from keywords.
-        """
-        if not analysis_text:
-            return None
-        
-        # Look for explicit archetype declaration
-        import re
-        
-        # Pattern 1: "Primary pattern: {archetype}"
-        # FIX: Use non-greedy match and stop at line end to avoid capturing next line
-        pattern1 = r"Primary pattern:\s*([A-Za-z\-\s]+?)(?:\n|$)"
-        match = re.search(pattern1, analysis_text, re.IGNORECASE)
-        if match:
-            archetype_name = match.group(1).strip().lower()
-            # Normalize to our archetype names
-            mapping = {
-                "stateless parser": "stateless_parser",
-                "object lifecycle": "object_lifecycle",
-                "state machine": "state_machine",
-                "stream processor": "stream_processor",
-                "round-trip": "round_trip",
-                "round trip": "round_trip",
-                "file-based": "file_based",
-                "file based": "file_based",
-                "global initialization": "global_initialization",
-                "global init": "global_initialization",
-                "stateful fuzzing": "stateful_fuzzing",
-                "stateful": "stateful_fuzzing"
-            }
-            result = mapping.get(archetype_name)
-            if result:
-                logger.debug(f"Extracted archetype via Pattern 1: '{archetype_name}' -> '{result}'", trial=self.trial)
-                return result
-        
-        # Pattern 2: "Archetype: {archetype}"
-        # FIX: Use non-greedy match and stop at line end
-        pattern2 = r"Archetype:\s*([A-Za-z\-\s]+?)(?:\n|$)"
-        match = re.search(pattern2, analysis_text, re.IGNORECASE)
-        if match:
-            archetype_name = match.group(1).strip().lower()
-            mapping = {
-                "stateless parser": "stateless_parser",
-                "object lifecycle": "object_lifecycle",
-                "state machine": "state_machine",
-                "stream processor": "stream_processor",
-                "round-trip": "round_trip",
-                "round trip": "round_trip",
-                "file-based": "file_based",
-                "file based": "file_based",
-                "global initialization": "global_initialization",
-                "global init": "global_initialization",
-                "stateful fuzzing": "stateful_fuzzing",
-                "stateful": "stateful_fuzzing"
-            }
-            result = mapping.get(archetype_name)
-            if result:
-                logger.debug(f"Extracted archetype via Pattern 2: '{archetype_name}' -> '{result}'", trial=self.trial)
-                return result
-        
-        logger.debug(f"No archetype pattern matched in analysis text (length: {len(analysis_text)})", trial=self.trial)
-        return None
-    
-
