@@ -55,6 +55,13 @@ class ConstraintType(Enum):
     ARRAY_BOUNDS = "array_bounds"       # Array bounds constraint
     RESOURCE_LIFECYCLE = "lifecycle"    # Resource lifecycle constraint
 
+    # Extended constraint types for Z3-guided decision making
+    VARIABLE_AVAILABILITY = "variable_availability"  # Variable exists and is usable
+    RESOURCE_EXISTENCE = "resource_existence"        # Required resource type exists
+    PARAMETER_BINDING = "parameter_binding"          # Parameter binds to valid variable
+    INIT_COMPLETION = "init_completion"              # Initialization API has been called
+    PRODUCER_REQUIRED = "producer_required"          # A producer API is needed for a type
+
 
 @dataclass
 class Z3Constraint:

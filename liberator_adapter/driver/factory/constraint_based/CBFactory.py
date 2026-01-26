@@ -44,6 +44,25 @@ except ImportError:
     Z3_AVAILABLE = False
     Z3SequenceValidator = None
 
+# Z3-guided synthesis (optional)
+try:
+    from liberator_adapter.constraints.z3_guided_synthesis import (
+        Z3GuidedSynthesisController,
+        is_z3_guided_available,
+        create_guided_controller,
+        DiagnosisType,
+        RecoveryAction,
+        Z3GuidedSynthesisError,
+    )
+    Z3_GUIDED_AVAILABLE = is_z3_guided_available()
+except ImportError:
+    Z3_GUIDED_AVAILABLE = False
+    Z3GuidedSynthesisController = None
+    create_guided_controller = None
+    DiagnosisType = None
+    RecoveryAction = None
+    Z3GuidedSynthesisError = Exception
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,7 +79,10 @@ class CBFactory(Factory):
     def __init__(self, api_list: Set[Api], driver_size: int,
                  dgraph: DependencyGraph, conditions: FunctionConditionsSet,
                  bias: Bias, enable_z3_validation: bool = False,
-                 driver_enhancer: Optional['DriverEnhancer'] = None):
+                 driver_enhancer: Optional['DriverEnhancer'] = None,
+                 enable_z3_guidance: bool = True,
+                 z3_strict_mode: bool = True,
+                 z3_timeout_ms: int = 1000):
         """
         Initialize CBFactory
 
@@ -72,6 +94,9 @@ class CBFactory(Factory):
             bias: Random selection strategy
             enable_z3_validation: Whether to enable Z3 sequence validation
             driver_enhancer: DriverEnhancer instance (optional, for enhanced callback generation)
+            enable_z3_guidance: Whether to enable Z3-guided decision making
+            z3_strict_mode: If True, raise errors on Z3 failures (for debugging)
+            z3_timeout_ms: Z3 solving timeout in milliseconds
         """
         self.api_list = api_list
         self.driver_size = driver_size
@@ -79,6 +104,11 @@ class CBFactory(Factory):
         self.bias = bias
         self.enable_z3_validation = enable_z3_validation and Z3_AVAILABLE
         self.driver_enhancer = driver_enhancer
+
+        # Z3-guided synthesis configuration
+        self.enable_z3_guidance = enable_z3_guidance and Z3_GUIDED_AVAILABLE
+        self.z3_strict_mode = z3_strict_mode
+        self.z3_timeout_ms = z3_timeout_ms
 
         # Initialize Z3 validator
         self.z3_validator = None
@@ -89,6 +119,23 @@ class CBFactory(Factory):
             except Exception as e:
                 logger.warning(f"[Z3 Validator] Failed to initialize: {e}")
                 self.enable_z3_validation = False
+
+        # Initialize Z3-guided synthesis controller
+        self.z3_controller: Optional['Z3GuidedSynthesisController'] = None
+        if self.enable_z3_guidance:
+            try:
+                self.z3_controller = create_guided_controller(
+                    timeout_ms=self.z3_timeout_ms,
+                    strict_mode=self.z3_strict_mode
+                )
+                if self.z3_controller:
+                    logger.info("[Z3 Guided] Enabled for decision guidance "
+                               f"(strict={z3_strict_mode}, timeout={z3_timeout_ms}ms)")
+                else:
+                    self.enable_z3_guidance = False
+            except Exception as e:
+                logger.warning(f"[Z3 Guided] Failed to initialize: {e}")
+                self.enable_z3_guidance = False
 
         # Build function condition mapping
         self.conditions_map: Dict[str, FunctionConditions] = {}
@@ -446,16 +493,77 @@ class CBFactory(Factory):
 
         return (type_str, is_opaque)
 
+    # ========== Z3-Guided Synthesis Methods ==========
+
+    def _get_required_types(self, api: Api) -> List[str]:
+        """
+        Get the types required by an API (input parameter types).
+
+        Args:
+            api: API object
+
+        Returns:
+            List of required type strings (filtered for pointer/opaque types)
+        """
+        required = []
+        for arg_info in api.arguments_info:
+            type_str = arg_info.type
+            # Focus on pointer types that need to be provided
+            if type_str and type_str.endswith("*") and type_str != "void*":
+                # Normalize
+                type_key = type_str.replace(" ", "").replace("const", "").strip()
+                required.append(type_key)
+        return required
+
+    def _get_produced_types(self, api: Api) -> List[str]:
+        """
+        Get the types produced by an API (return type).
+
+        Args:
+            api: API object
+
+        Returns:
+            List of produced type strings
+        """
+        ret_type = api.return_info.type
+        if ret_type and ret_type != "void":
+            type_key = ret_type.replace(" ", "").replace("const", "").strip()
+            return [type_key]
+        return []
+
+    def _compute_api_complexity(self, api: Api) -> float:
+        """
+        Compute a complexity score for an API (lower is better).
+
+        Based on:
+        - Number of parameters
+        - Number of opaque pointer parameters
+        - Name length (heuristic: shorter names are often simpler)
+        """
+        score = 0.0
+
+        # Parameter count
+        score += len(api.arguments_info) * 1.0
+
+        # Opaque pointer parameters (harder to satisfy)
+        for arg_info in api.arguments_info:
+            if arg_info.is_type_incomplete and arg_info.type.endswith("*"):
+                score += 2.0
+
+        # Name length heuristic
+        score += len(api.function_name) * 0.01
+
+        return score
+
     def _try_find_init_chain(self, target_api: Api, unsat_vars: Set,
                               rng_ctx: RunningContext,
                               max_depth: int = 3,
                               visited: Optional[Set[str]] = None) -> Optional[List[Tuple[ApiCall, RunningContext]]]:
         """
-        Try to find an initialization chain for unsatisfied variables.
+        Find an initialization chain for unsatisfied variables.
 
-        This implements backward chaining: for each unsatisfied parameter,
-        find an API that can produce the required value and recursively
-        build the initialization chain.
+        Uses Z3 to validate chain feasibility and guide producer selection when available.
+        Falls back to random selection when Z3 is not available.
 
         Args:
             target_api: The API we're trying to instantiate
@@ -480,56 +588,86 @@ class CBFactory(Factory):
 
         init_chain = []
         current_ctx = copy.deepcopy(rng_ctx)
+        chain_position = 0
 
-        # Sort unsat_vars by position to handle them in order
+        get_cond = lambda x: self.conditions.get_function_conditions(x.function_name)
+        to_api = lambda x: Factory.api_to_apicall(x)
+
         sorted_unsat = sorted(list(unsat_vars), key=lambda x: x[0])
 
         for arg_pos, arg_cond in sorted_unsat:
-            if arg_pos < 0:  # Return value, skip
+            if arg_pos < 0:
                 continue
 
-            # Get the required type for this argument
             type_str, is_opaque = self._get_arg_type_info(target_api, arg_pos)
             if not type_str:
                 continue
 
-            logger.debug(f"Looking for producer of {type_str} for {target_api.function_name} arg {arg_pos}")
+            logger.debug(f"Finding producer for {type_str} ({target_api.function_name} arg {arg_pos})")
 
-            # Find APIs that can produce this type
             producers = self.find_producer_apis(type_str, arg_cond)
-
             if not producers:
-                logger.debug(f"No producer found for type {type_str}")
+                logger.debug(f"No producer found for {type_str}")
                 continue
 
-            # Try each producer
-            random.shuffle(producers)  # Randomize to avoid always picking the same
+            # Rank producers (Z3-guided or random)
+            if self.enable_z3_guidance and self.z3_controller:
+                producer_candidates = []
+                for producer in producers:
+                    if producer.function_name in visited:
+                        continue
+                    required = self._get_required_types(producer)
+                    produced = self._get_produced_types(producer)
+                    result = self.z3_controller.solver.check_candidate(
+                        producer.function_name, required, produced
+                    )
+                    if result.is_feasible:
+                        score = result.score + self._compute_api_complexity(producer)
+                        producer_candidates.append((producer, score))
+                producer_candidates.sort(key=lambda x: x[1])
+            else:
+                # Random order
+                filtered = [p for p in producers if p.function_name not in visited]
+                random.shuffle(filtered)
+                producer_candidates = [(p, 0.0) for p in filtered]
 
-            for producer in producers[:5]:  # Limit attempts
-                if producer.function_name in visited:
-                    continue
+            for producer, score in producer_candidates[:5]:
+                logger.debug(f"Trying producer {producer.function_name}")
 
-                logger.debug(f"Trying producer {producer.function_name} for {type_str}")
-
-                get_cond = lambda x: self.conditions.get_function_conditions(x.function_name)
-                to_api = lambda x: Factory.api_to_apicall(x)
+                checkpoint = None
+                if self.z3_controller:
+                    checkpoint = self.z3_controller.checkpoint()
 
                 producer_cond = get_cond(producer)
                 producer_call = to_api(producer)
 
-                # Try to instantiate the producer
                 new_ctx, producer_unsat = self.try_to_instantiate_api_call(
                     producer_call, producer_cond, current_ctx
                 )
 
                 if len(producer_unsat) == 0:
-                    # Producer can be instantiated directly
-                    logger.debug(f"Producer {producer.function_name} instantiated successfully")
+                    # Producer works directly
+                    if self.z3_controller:
+                        try:
+                            required = self._get_required_types(producer)
+                            produced = self._get_produced_types(producer)
+                            self.z3_controller.add_api_to_sequence(
+                                producer, position=chain_position,
+                                required_types=required, produced_types=produced
+                            )
+                        except Exception as e:
+                            logger.debug(f"Z3 rejected producer: {e}")
+                            if checkpoint is not None:
+                                self.z3_controller.rollback_to(checkpoint)
+                            continue
+
+                    chain_position += 1
                     init_chain.append((producer_call, new_ctx))
                     current_ctx = new_ctx
+                    logger.debug(f"Producer {producer.function_name} added to chain")
                     break
                 else:
-                    # Producer also needs initialization - recurse
+                    # Producer needs initialization - recurse
                     sub_chain = self._try_find_init_chain(
                         producer, producer_unsat, current_ctx,
                         max_depth - 1, visited
@@ -537,26 +675,112 @@ class CBFactory(Factory):
 
                     if sub_chain:
                         init_chain.extend(sub_chain)
-                        # Get the last context from the sub-chain
                         current_ctx = sub_chain[-1][1]
+                        chain_position += len(sub_chain)
 
-                        # Now try to instantiate the producer again
-                        producer_call = to_api(producer)  # Fresh call
+                        # Try producer again
+                        producer_call = to_api(producer)
                         new_ctx, producer_unsat = self.try_to_instantiate_api_call(
                             producer_call, producer_cond, current_ctx
                         )
 
                         if len(producer_unsat) == 0:
+                            if self.z3_controller:
+                                try:
+                                    required = self._get_required_types(producer)
+                                    produced = self._get_produced_types(producer)
+                                    self.z3_controller.add_api_to_sequence(
+                                        producer, position=chain_position,
+                                        required_types=required, produced_types=produced
+                                    )
+                                except Exception as e:
+                                    logger.debug(f"Z3 rejected after sub-chain: {e}")
+                                    if checkpoint is not None:
+                                        self.z3_controller.rollback_to(checkpoint)
+                                    continue
+
+                            chain_position += 1
                             init_chain.append((producer_call, new_ctx))
                             current_ctx = new_ctx
                             break
 
+                # Rollback Z3 state if we didn't break
+                if self.z3_controller and checkpoint is not None:
+                    self.z3_controller.rollback_to(checkpoint)
+
         return init_chain if init_chain else None
+
+    def _normalize_type(self, type_str: str) -> str:
+        """Normalize a type string for consistent comparison"""
+        return type_str.replace(" ", "").replace("const", "").strip()
+
+    def _track_api_in_z3(self, api: Api, position: int):
+        """
+        Track an API addition in the Z3 controller state.
+
+        Args:
+            api: API object being added to the sequence
+            position: Position in the sequence
+        """
+        if not self.enable_z3_guidance or not self.z3_controller:
+            return
+
+        try:
+            required = self._get_required_types(api)
+            produced = self._get_produced_types(api)
+            self.z3_controller.add_api_to_sequence(
+                api, position=position,
+                required_types=required, produced_types=produced
+            )
+            logger.debug(f"[Z3Guided] Tracked API {api.function_name} at position {position}")
+        except Exception as e:
+            if self.z3_strict_mode:
+                raise
+            logger.debug(f"[Z3Guided] Failed to track API {api.function_name}: {e}")
+
+    def _evaluate_candidates_with_z3(self, candidates: List[Tuple[ApiCall, RunningContext, Api]],
+                                     current_position: int) -> List[Tuple[ApiCall, RunningContext, Api, float]]:
+        """
+        Evaluate candidate APIs using Z3 and return them with scores.
+
+        Args:
+            candidates: List of (api_call, context, api) tuples
+            current_position: Current position in the sequence
+
+        Returns:
+            List of (api_call, context, api, score) tuples, sorted by score
+        """
+        if not self.enable_z3_guidance or not self.z3_controller:
+            # Return with default scores
+            return [(call, ctx, api, 0.0) for call, ctx, api in candidates]
+
+        scored = []
+        for api_call, ctx, api in candidates:
+            required = self._get_required_types(api)
+            produced = self._get_produced_types(api)
+
+            result = self.z3_controller.solver.check_candidate(
+                api.function_name, required, produced
+            )
+
+            if result.is_feasible:
+                score = result.score + self._compute_api_complexity(api)
+                scored.append((api_call, ctx, api, score))
+            else:
+                # Still include but with high score (low priority)
+                score = 100.0 + self._compute_api_complexity(api)
+                scored.append((api_call, ctx, api, score))
+
+        # Sort by score (lower is better)
+        scored.sort(key=lambda x: x[3])
+        return scored
 
     def _try_all_source_apis(self, rng_ctx: RunningContext) -> Optional[Tuple[Api, ApiCall, RunningContext, List]]:
         """
         Try all source APIs and return the first one that can be instantiated,
         or the one with the fewest unsatisfied variables for backtracking.
+
+        Uses Z3-guided selection when enabled, falls back to random selection otherwise.
 
         Returns:
             (api, api_call, context, init_chain) on success, or
@@ -565,42 +789,81 @@ class CBFactory(Factory):
         get_cond = lambda x: self.conditions.get_function_conditions(x.function_name)
         to_api = lambda x: Factory.api_to_apicall(x)
 
-        # Shuffle to avoid always picking the same order
-        shuffled_sources = list(self.source_api)
-        random.shuffle(shuffled_sources)
+        # Prepare source API candidates
+        if self.enable_z3_guidance and self.z3_controller:
+            # Z3-guided: evaluate and rank source APIs
+            self.z3_controller.reset()
+            candidates = []
+            for api in self.source_api:
+                required = self._get_required_types(api)
+                produced = self._get_produced_types(api)
+                result = self.z3_controller.solver.check_candidate(
+                    api.function_name, required, produced
+                )
+                if result.is_feasible:
+                    score = result.score + self._compute_api_complexity(api)
+                    candidates.append((api, score))
+                    logger.debug(f"[Z3] Source {api.function_name} feasible, score={score:.2f}")
+                else:
+                    logger.debug(f"[Z3] Source {api.function_name} not feasible")
+
+            candidates.sort(key=lambda x: x[1])
+            if not candidates:
+                # Fallback: use all sources with random order
+                candidates = [(api, 0.0) for api in self.source_api]
+                random.shuffle(candidates)
+        else:
+            # Non-guided: random order
+            shuffled = list(self.source_api)
+            random.shuffle(shuffled)
+            candidates = [(api, 0.0) for api in shuffled]
 
         best_api = None
         best_unsat = None
         min_unsat_count = float('inf')
 
-        for api in shuffled_sources:
+        for api, score in candidates:
             api_cond = get_cond(api)
             api_call = to_api(api)
+
+            # Create Z3 checkpoint if available
+            checkpoint = None
+            if self.z3_controller:
+                checkpoint = self.z3_controller.checkpoint()
 
             new_ctx, unsat_vars = self.try_to_instantiate_api_call(
                 api_call, api_cond, rng_ctx
             )
 
             if len(unsat_vars) == 0:
-                # Found one that works directly
-                logger.debug(f"Source API {api.function_name} instantiated directly")
+                # Success
+                if self.z3_controller:
+                    required = self._get_required_types(api)
+                    produced = self._get_produced_types(api)
+                    self.z3_controller.add_api_to_sequence(
+                        api, position=0, required_types=required, produced_types=produced
+                    )
+                logger.debug(f"Source API {api.function_name} instantiated")
                 return (api, api_call, new_ctx, [])
 
-            # Track the best candidate for backtracking
+            # Track best candidate
             if len(unsat_vars) < min_unsat_count:
                 min_unsat_count = len(unsat_vars)
                 best_api = api
                 best_unsat = unsat_vars
 
-        # None worked directly, try backtracking on the best candidate
+            # Rollback Z3 state
+            if self.z3_controller and checkpoint is not None:
+                self.z3_controller.rollback_to(checkpoint)
+
+        # Try backtracking on best candidate
         if best_api is not None and best_unsat is not None:
-            logger.info(f"Attempting init chain backtracking for {best_api.function_name} "
-                       f"with {len(best_unsat)} unsat vars")
+            logger.info(f"Attempting init chain for {best_api.function_name} "
+                       f"({len(best_unsat)} unsat vars)")
 
             init_chain = self._try_find_init_chain(best_api, best_unsat, rng_ctx)
 
             if init_chain:
-                # Now try to instantiate the target API with the updated context
                 last_ctx = init_chain[-1][1]
                 api_call = to_api(best_api)
                 api_cond = get_cond(best_api)
@@ -610,12 +873,9 @@ class CBFactory(Factory):
                 )
 
                 if len(unsat_vars) == 0:
-                    logger.info(f"Init chain backtracking succeeded for {best_api.function_name}")
+                    logger.info(f"Init chain succeeded for {best_api.function_name}")
                     return (best_api, api_call, new_ctx, init_chain)
-                else:
-                    logger.warning(f"Init chain didn't fully satisfy {best_api.function_name}")
 
-        # Return the best we found for error reporting
         return (best_api, None, None, best_unsat)
 
     def get_random_source_api(self):
@@ -637,9 +897,10 @@ class CBFactory(Factory):
         Create a random driver that satisfies constraints.
 
         Uses initialization chain backtracking when direct instantiation fails:
-        1. Try all source APIs
+        1. Try all source APIs (with Z3 guidance if enabled)
         2. For the best candidate (fewest unsat vars), try to build init chain
         3. Prepend init chain APIs to the driver
+        4. Continue adding APIs with Z3-guided candidate selection
         """
         rng_ctx = RunningContext()
 
@@ -649,8 +910,14 @@ class CBFactory(Factory):
         if len(self.source_api) == 0:
             raise Exception("I cannot find APIs to begin with :(")
 
+        # Reset Z3 controller for new driver synthesis
+        if self.enable_z3_guidance and self.z3_controller:
+            self.z3_controller.reset()
+            logger.debug("[Z3Guided] Controller reset for new driver synthesis")
+
         # List[(ApiCall, RunningContext)]
         drv = list()
+        current_position = 0  # Track position for Z3
 
         # Try all source APIs with backtracking support
         result = self._try_all_source_apis(rng_ctx)
@@ -669,9 +936,16 @@ class CBFactory(Factory):
             for init_call, init_ctx in init_chain_or_unsat:
                 logger.debug(f"Adding init chain API: {init_call.function_name}")
                 drv.append((init_call, init_ctx))
+                # Track in Z3 (find the Api object)
+                init_api = self.api_name_to_api.get(init_call.function_name)
+                if init_api:
+                    self._track_api_in_z3(init_api, current_position)
+                current_position += 1
 
         logger.debug(f"Starting with {call_begin.function_name}")
         drv.append((call_begin, rng_ctx_1))
+        self._track_api_in_z3(begin_api, current_position)
+        current_position += 1
 
         api_n = begin_api
         while len(drv) < self.driver_size:
@@ -706,13 +980,22 @@ class CBFactory(Factory):
             # Avoid driver degenerating into repeated calls of a single API
             if len(candidate_api) == 1 and candidate_api[0][2] == api_n:
                 candidate_api = []
-                
+
             if candidate_api:
-                # (ApiCall, RunningContext, Api)
-                (api_call, rng_ctx_1, api_n) = self.get_random_candidate(candidate_api)
-                logger.debug(f"Choose {api_call.function_name}")
+                # Use Z3 to evaluate and rank candidates if enabled
+                if self.enable_z3_guidance and self.z3_controller and len(candidate_api) > 1:
+                    scored_candidates = self._evaluate_candidates_with_z3(candidate_api, current_position)
+                    # Pick the best candidate (lowest score)
+                    api_call, rng_ctx_1, api_n, score = scored_candidates[0]
+                    logger.debug(f"[Z3Guided] Choose {api_call.function_name} (score={score:.2f})")
+                else:
+                    # (ApiCall, RunningContext, Api)
+                    (api_call, rng_ctx_1, api_n) = self.get_random_candidate(candidate_api)
+                    logger.debug(f"Choose {api_call.function_name}")
 
                 drv.append((api_call, rng_ctx_1))
+                self._track_api_in_z3(api_n, current_position)
+                current_position += 1
             else:
                 # Start new chain - use backtracking mechanism
                 logger.debug("Starting new chain with backtracking support")
@@ -739,6 +1022,8 @@ class CBFactory(Factory):
                             api_n = fallback_api
                             rng_ctx_1 = fallback_ctx
                             drv.append((fallback_call, rng_ctx_1))
+                            self._track_api_in_z3(fallback_api, current_position)
+                            current_position += 1
                             fallback_success = True
                             logger.debug(f"Fallback succeeded with {fallback_api.function_name}")
                             break
@@ -754,10 +1039,17 @@ class CBFactory(Factory):
                         for init_call, init_ctx in chain_or_unsat:
                             logger.debug(f"Adding new chain init API: {init_call.function_name}")
                             drv.append((init_call, init_ctx))
+                            # Track in Z3
+                            init_api = self.api_name_to_api.get(init_call.function_name)
+                            if init_api:
+                                self._track_api_in_z3(init_api, current_position)
+                            current_position += 1
 
                     api_n = new_api
                     rng_ctx_1 = new_ctx
                     drv.append((new_call, rng_ctx_1))
+                    self._track_api_in_z3(new_api, current_position)
+                    current_position += 1
                     logger.debug(f"Starting new chain with {new_api.function_name}")
 
         # Use the last RunningContext
