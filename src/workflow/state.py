@@ -66,8 +66,6 @@ class FuzzingWorkflowState(TypedDict):
     
     # === Workflow Control ===
     next_action: NotRequired[str]  # For supervisor routing
-    retry_count: NotRequired[int]
-    max_retries: NotRequired[int]
     node_visit_counts: NotRequired[Dict[str, int]]  # Per-node visit counter (loop prevention)
     workflow_phase: NotRequired[str]  # Current workflow phase: "compilation" or "optimization"
     compilation_retry_count: NotRequired[int]  # Separate counter for compilation retries

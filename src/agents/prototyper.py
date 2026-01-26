@@ -379,7 +379,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
             "fuzz_target_source": fuzz_target_code,
             "compile_success": None,
             "build_errors": [],
-            "retry_count": 0,
             "session_memory": updated_session_memory,
             "api_validation_warnings": validation_warnings
         }

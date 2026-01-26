@@ -94,7 +94,7 @@ Z3 as **core decision participant** (not post-hoc validator):
 - [ ] VarLen boundary seeds: generate edge-case seeds based on buffer-size relations (size=0, size=1, size=boundary)
 - [ ] Loop iteration seeds: leverage `LoopPatternInfo.max_iterations` for iteration-boundary testing
 
-### Scheduzz-inspired Improvements (from 2507.18289v1)
+### Scheduzz-inspired Improvements (from ScheDuzz)
 - [ ] **P0: Dual Scheduling Framework** - Group Scheduler (similarity, coverage, group length, entropy) + Driver Scheduler (energy, cov/time score)
 - [ ] **P1: Imply/Conflict Constraints** - Extract explicit `imply(api1, api2)` and `conflict(api1, api2)` relations via LLM, integrate with Z3
 - [ ] **P2: Early Crash Detection** - 15s short-term fuzzing to filter irrational drivers before full execution

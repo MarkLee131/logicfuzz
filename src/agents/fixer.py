@@ -66,7 +66,6 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         current_code = state.get("fuzz_target_source", "")
         build_script_source = state.get("build_script_source", "")
         build_errors = state.get("build_errors", [])
-        workflow_phase = state.get("workflow_phase", "compilation")
 
         # Setup container
         self.inspect_tool = ProjectContainerTool(benchmark, name='fixer_inspect')
@@ -116,13 +115,10 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             "previous_fuzz_target_source": current_code,
             "compile_success": None,
             "build_errors": [],
-            "session_memory": session_memory
+            "session_memory": session_memory,
+            # Always increment compilation_retry_count when fixer is called for build errors
+            "compilation_retry_count": state.get("compilation_retry_count", 0) + 1
         }
-
-        if workflow_phase == "compilation":
-            state_update["compilation_retry_count"] = state.get("compilation_retry_count", 0) + 1
-        else:
-            state_update["retry_count"] = state.get("retry_count", 0) + 1
 
         self._langgraph_logger.flush_agent_logs(self.name)
         return state_update

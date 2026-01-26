@@ -268,7 +268,8 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
             "build_errors": [],
             "coverage_analysis": None,
             "session_memory": updated_session_memory,
-            "no_coverage_improvement_count": 0
+            "no_coverage_improvement_count": 0,
+            # Note: compilation_retry_count is NOT reset - it's a global limit across the workflow
         }
 
         improvement_count = state.get("improvement_attempt_count", 0)
