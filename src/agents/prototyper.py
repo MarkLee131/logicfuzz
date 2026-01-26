@@ -635,48 +635,46 @@ Output your fuzz driver code inside <fuzz_target> tags.
         Args:
             driver_knowledge: Dictionary containing:
                 - driver_sources: List of {'path': str, 'source': str}
-                - analysis: LLM-generated natural language analysis
+                - analysis: Dict with 'core_functionality' and 'setup_teardown' strings
 
         Returns:
-            Formatted string with XML tags to include in the prompt
+            Formatted string to include in the prompt
         """
         if not driver_knowledge:
             return ""
 
         driver_sources = driver_knowledge.get('driver_sources', [])
-        analysis = driver_knowledge.get('analysis', '')
+        analysis = driver_knowledge.get('analysis', {}) or {}
 
         if not driver_sources and not analysis:
             return ""
 
-        lines = []
+        lines = ["<existing_driver_knowledge>"]
+        lines.append(f"Learn from {len(driver_sources)} existing OSS-Fuzz fuzz drivers for this project.")
         lines.append("")
-        lines.append("<existing_driver_knowledge>")
 
-        # Show LLM analysis if available
-        if analysis:
-            lines.append("<analysis>")
-            lines.append("The following insights were extracted from existing fuzz drivers in this project:")
+        # Core functionality (what to test)
+        core_func = analysis.get('core_functionality', '')
+        if core_func:
+            lines.append("## Core Functionality (What APIs to Test)")
+            lines.append(core_func)
             lines.append("")
-            lines.append(analysis)
-            lines.append("</analysis>")
 
-        # Show sample code from existing drivers if no LLM analysis
-        elif driver_sources:
-            first_driver = driver_sources[0]
-            path = first_driver.get('path', 'unknown')
-            source = first_driver.get('source', '')
-            lines.append(f"<example_driver path=\"{path}\">")
-            # Show first 60 lines
-            source_lines = source.split('\n')[:60]
-            lines.extend(source_lines)
-            if len(source.split('\n')) > 60:
-                lines.append("// ... (truncated)")
-            lines.append("</example_driver>")
+        # Setup/Teardown patterns (how to structure the driver)
+        setup_teardown = analysis.get('setup_teardown', '')
+        if setup_teardown:
+            lines.append("## Setup/Teardown Patterns")
+            lines.append(setup_teardown)
+            lines.append("")
+
+        # Show one reference driver as example
+        if driver_sources:
+            lines.append("## Reference Driver Example")
+            d = driver_sources[0]
+            source = d['source'][:2500] if len(d['source']) > 2500 else d['source']
+            lines.append(f"```c\n// From: {d['path']}\n{source}\n```")
 
         lines.append("</existing_driver_knowledge>")
-        lines.append("")
-
         return "\n".join(lines)
 
     def _format_include_path_context(self, target_path: str, existing_fuzzer_headers: Dict[str, Any]) -> str:

@@ -1,7 +1,13 @@
 """
 Unified interface for loading all agent prompts.
 
-Supports language-specific prompts for C vs C++ projects.
+Supports:
+- Language-specific prompts for C vs C++ projects
+
+Directory structure:
+  prompts/
+    {agent}_system.txt          - System prompts
+    {agent}_prompt[_c|_cpp].txt - User prompt templates
 """
 import os
 from typing import Dict, Optional

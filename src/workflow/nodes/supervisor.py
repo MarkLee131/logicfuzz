@@ -132,7 +132,23 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
     """
     workflow_phase = state.get("workflow_phase", "compilation")
     trial = state.get("trial", 0)
-    
+
+    # Check for terminated phase (set when total build failures exceeded)
+    if workflow_phase == "terminated":
+        total_failures = state.get("total_build_failure_count", 0)
+        logger.error(f'Workflow terminated due to excessive build failures ({total_failures})', trial=trial)
+        return "END"
+
+    # Check global build failure limit as safety net
+    MAX_TOTAL_BUILD_FAILURES = 10
+    total_build_failures = state.get("total_build_failure_count", 0)
+    if total_build_failures >= MAX_TOTAL_BUILD_FAILURES:
+        logger.error(
+            f'Global build failure limit reached ({total_build_failures}/{MAX_TOTAL_BUILD_FAILURES}). Ending workflow.',
+            trial=trial
+        )
+        return "END"
+
     # Step 1: Check if we need a fuzz target
     fuzz_target_source = state.get("fuzz_target_source")
     if not fuzz_target_source:
@@ -140,7 +156,7 @@ def _determine_next_action(state: FuzzingWorkflowState) -> str:
         return "prototyper"
     else:
         logger.debug(f'fuzz_target_source exists (length={len(fuzz_target_source)})', trial=trial)
-    
+
     # ===== PHASE 1: COMPILATION =====
     if workflow_phase == "compilation":
         logger.debug(f'In COMPILATION phase', trial=trial)

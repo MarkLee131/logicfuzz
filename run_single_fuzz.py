@@ -169,7 +169,8 @@ def prepare(oss_fuzz_dir: str) -> None:
   oss_fuzz_checkout.clone_oss_fuzz(oss_fuzz_dir)
   oss_fuzz_checkout.postprocess_oss_fuzz()
 
-def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Namespace) -> dict:
+def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Namespace,
+                                        model_name: str = None) -> dict:
   """
   Extract shared data using Liberator project-level modeling.
 
@@ -179,6 +180,7 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
   Args:
       benchmark: Benchmark containing project info (project-level mode)
       args: Command line arguments
+      model_name: LLM model name for driver knowledge extraction
 
   Returns:
       Dictionary with shared data:
@@ -188,8 +190,10 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       - grammar_info: Grammar metadata
       - header_info: Header file information
       - existing_fuzzer_headers: Headers from existing fuzzers
+      - existing_driver_knowledge: Knowledge extracted from existing OSS-Fuzz drivers
   """
   from src.context.data_context import FuzzingContext
+  from src.llm.adapter import create_llm_adapter
 
   project_name = benchmark.project
 
@@ -198,11 +202,21 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
     # Note: Synthesis is always enabled (CBFactory + LLM refinement)
     num_synthesis_drivers = getattr(args, 'num_synthesis_drivers', 5) if args else 5
 
+    # Create LLM adapter for driver knowledge extraction (optional)
+    llm_client = None
+    if model_name:
+      try:
+        llm_client = create_llm_adapter(model_name)
+        logger.info(f'✅ Created LLM adapter ({model_name}) for driver knowledge extraction', trial=0)
+      except Exception as e:
+        logger.warning(f'⚠️ Could not create LLM adapter: {e}. Driver knowledge extraction will be limited.', trial=0)
+
     context = FuzzingContext.prepare(
       project_name=project_name,
       benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
       logger_instance=None,  # Use standard logging - no trial concept here
-      num_synthesis_drivers=num_synthesis_drivers
+      num_synthesis_drivers=num_synthesis_drivers,
+      llm_client=llm_client  # Pass LLM for driver knowledge extraction
     )
     return context.to_dict()
   except (ValueError, RuntimeError) as e:
@@ -394,7 +408,7 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
   shared_data_start = time.time()
   
   try:
-    shared_data = _prepare_shared_data_for_benchmark(benchmark, args)
+    shared_data = _prepare_shared_data_for_benchmark(benchmark, args, model_name)
   except ValueError as e:
     # Data preparation failed due to bad input - this is terminal
     logger.error(

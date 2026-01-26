@@ -7,7 +7,7 @@ This module establishes clear data ownership:
 - Failure is explicit, not hidden with fallbacks
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 import logging
@@ -242,7 +242,30 @@ class FuzzingContext:
             cached = cls.load_from_cache(project_name, logger_instance=log)
             if cached:
                 log.info(f'✅ Using cached static analysis for {project_name} (skipping ~60s analysis)')
-                return cached
+
+                # Even when loading from cache, extract knowledge from existing drivers
+                # This ensures we always have the latest driver patterns
+                log.info('  📚 Extracting knowledge from existing OSS-Fuzz drivers...')
+                existing_driver_knowledge = {}
+                try:
+                    existing_driver_knowledge = _extract_existing_driver_knowledge(
+                        project_name=project_name,
+                        log=log,
+                        llm_client=llm_client,
+                        max_drivers=3
+                    )
+                    if existing_driver_knowledge.get('driver_sources'):
+                        num_drivers = len(existing_driver_knowledge['driver_sources'])
+                        has_analysis = bool(existing_driver_knowledge.get('analysis'))
+                        extra_str = " (with LLM analysis)" if has_analysis else ""
+                        log.info(f'   ✅ Extracted knowledge from {num_drivers} existing drivers{extra_str}')
+                    else:
+                        log.info('   ℹ️ No existing drivers found for knowledge extraction')
+                except Exception as e:
+                    log.warning(f"Driver knowledge extraction failed (non-critical): {e}")
+
+                # Create new context with driver knowledge (FuzzingContext is frozen)
+                return replace(cached, existing_driver_knowledge=existing_driver_knowledge)
             log.info(f'📦 No valid cache found, running full static analysis for {project_name}')
 
         start_time = time.time()
@@ -629,9 +652,9 @@ class FuzzingContext:
             )
             if existing_driver_knowledge.get('driver_sources'):
                 num_drivers = len(existing_driver_knowledge['driver_sources'])
-                has_llm = bool(existing_driver_knowledge.get('llm_analysis'))
+                has_analysis = bool(existing_driver_knowledge.get('analysis'))
                 log.info(f'   ✅ Extracted knowledge from {num_drivers} existing drivers'
-                        f'{" (with LLM analysis)" if has_llm else ""}')
+                        f'{" (with LLM analysis)" if has_analysis else ""}')
             else:
                 log.info('   ℹ️ No existing drivers found for knowledge extraction')
         except Exception as e:
@@ -769,29 +792,20 @@ def _extract_existing_driver_knowledge(
     """
     Extract fuzzing knowledge from existing OSS-Fuzz drivers.
 
-    Fetches existing driver source code and optionally analyzes them with LLM
-    to extract reusable patterns and insights.
-
-    Args:
-        project_name: Target project name
-        log: Logger instance
-        llm_client: Optional LLM client for knowledge extraction
-        max_drivers: Maximum number of drivers to analyze
-
     Returns:
         Dictionary containing:
         - driver_sources: List of {'path': str, 'source': str}
-        - analysis: LLM-generated natural language analysis (if llm_client provided)
+        - analysis: Structured analysis with core_functionality and setup_teardown
     """
     from data_prep import introspector
 
     result = {
         'driver_sources': [],
-        'analysis': ''
+        'analysis': None  # Will contain structured knowledge if LLM available
     }
 
     try:
-        # Get all fuzzer files
+        # Fetch existing fuzzer source code
         harness_data = introspector.query_introspector_for_harness_intrinsics(project_name)
         fuzzers = [item['source'] for item in harness_data if 'source' in item]
         if not fuzzers:
@@ -800,7 +814,6 @@ def _extract_existing_driver_knowledge(
 
         log.info(f'Found {len(fuzzers)} existing fuzzers for {project_name}')
 
-        # Fetch source code for each fuzzer (limit to max_drivers)
         driver_sources = []
         for fuzzer_path in fuzzers[:max_drivers]:
             try:
@@ -812,21 +825,19 @@ def _extract_existing_driver_knowledge(
                         'path': fuzzer_path,
                         'source': fuzzer_source
                     })
-                    log.debug(f'Fetched source for {fuzzer_path} ({len(fuzzer_source)} chars)')
             except Exception as e:
                 log.debug(f'Failed to fetch source for {fuzzer_path}: {e}')
-                continue
 
         if not driver_sources:
             log.warning('Could not fetch any fuzzer source code')
             return result
 
         result['driver_sources'] = driver_sources
-        log.info(f'Fetched {len(driver_sources)} driver sources for analysis')
+        log.info(f'Fetched {len(driver_sources)} driver sources')
 
-        # If LLM client is provided, analyze drivers
-        if llm_client:
-            result['analysis'] = _analyze_drivers_with_llm(
+        # LLM analysis: extract core functionality and setup/teardown patterns
+        if llm_client and driver_sources:
+            result['analysis'] = _analyze_driver_patterns(
                 driver_sources, project_name, llm_client, log
             )
 
@@ -836,63 +847,82 @@ def _extract_existing_driver_knowledge(
     return result
 
 
-def _analyze_drivers_with_llm(
+def _analyze_driver_patterns(
     driver_sources: List[Dict[str, str]],
     project_name: str,
     llm_client: Any,
     log: logging.Logger
-) -> str:
+) -> Dict[str, str]:
     """
-    Use LLM to analyze existing drivers and extract fuzzing knowledge.
+    Analyze existing drivers to extract:
+    1. Core functionality - what this library does and which APIs are essential
+    2. Setup/Teardown patterns - initialization and cleanup code patterns
 
-    Args:
-        driver_sources: List of {'path': str, 'source': str} dictionaries
-        project_name: Project name for context
-        llm_client: LLM client instance
-        log: Logger instance
-
-    Returns:
-        Natural language analysis of the drivers
+    Returns dict with 'core_functionality' and 'setup_teardown' keys (both strings).
     """
-    if not driver_sources:
-        return ''
-
-    # Build prompt with driver sources
+    # Format driver code for prompt
     drivers_text = ""
-    for i, driver in enumerate(driver_sources[:3]):  # Limit to 3 for context size
-        drivers_text += f"\n--- Driver {i+1}: {driver['path']} ---\n"
-        # Truncate very long drivers
-        source = driver['source']
-        if len(source) > 3000:
-            source = source[:3000] + "\n// ... (truncated)"
-        drivers_text += source + "\n"
+    for i, d in enumerate(driver_sources[:3]):
+        source = d['source'][:4000] if len(d['source']) > 4000 else d['source']
+        drivers_text += f"\n=== Driver {i+1}: {d['path']} ===\n{source}\n"
 
-    prompt = f"""<task>
-Analyze the existing fuzz drivers for the {project_name} project and extract reusable patterns.
-</task>
+    prompt = f"""Analyze these existing fuzz drivers for the {project_name} library.
 
-<existing_drivers>
 {drivers_text}
-</existing_drivers>
 
-<instructions>
-Summarize the key patterns that would help generate new effective fuzz drivers:
-1. Common environment setup and initialization patterns
-2. How APIs are typically sequenced and combined
-3. Error handling and cleanup strategies
-4. How fuzz input is consumed and used
+Based on these drivers, provide TWO things:
 
-Be concise and focus on actionable insights.
-</instructions>
-"""
+## 1. Core Functionality
+What is this library's main purpose? Which APIs are ESSENTIAL to test for meaningful coverage?
+Be specific - list the actual API names and explain why they matter.
+
+## 2. Setup/Teardown Patterns
+Extract the common initialization and cleanup patterns from these drivers.
+Include actual code snippets where helpful, mixed with explanations.
+
+Keep your response focused and practical - this will guide new driver generation."""
 
     try:
-        analysis = llm_client.query(prompt)
-        log.info('Successfully analyzed existing drivers with LLM')
-        return analysis.strip()
+        response = llm_client.query(prompt)
+        log.info('Analyzed driver patterns with LLM')
+
+        # Parse response into sections
+        result = {
+            'core_functionality': '',
+            'setup_teardown': ''
+        }
+
+        lines = response.split('\n')
+        current_section = None
+        section_content = []
+
+        for line in lines:
+            if '## 1.' in line or 'Core Functionality' in line:
+                if current_section and section_content:
+                    result[current_section] = '\n'.join(section_content).strip()
+                current_section = 'core_functionality'
+                section_content = []
+            elif '## 2.' in line or 'Setup/Teardown' in line:
+                if current_section and section_content:
+                    result[current_section] = '\n'.join(section_content).strip()
+                current_section = 'setup_teardown'
+                section_content = []
+            elif current_section:
+                section_content.append(line)
+
+        # Don't forget last section
+        if current_section and section_content:
+            result[current_section] = '\n'.join(section_content).strip()
+
+        # Fallback: if parsing failed, put everything in core_functionality
+        if not result['core_functionality'] and not result['setup_teardown']:
+            result['core_functionality'] = response.strip()
+
+        return result
+
     except Exception as e:
-        log.warning(f"LLM analysis failed: {e}")
-        return ''
+        log.warning(f"Driver pattern analysis failed: {e}")
+        return {'core_functionality': '', 'setup_teardown': ''}
 
 
 def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:

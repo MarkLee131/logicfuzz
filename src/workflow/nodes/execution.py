@@ -198,12 +198,39 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
             elif hasattr(build_result, 'succeeded') and not build_result.succeeded:
                 build_error_msg = "Build failed (no detailed error available)"
 
-        logger.warning(f'Build failed in execution phase: {build_error_msg}', trial=trial)
+        # Track total build failures across all phases to prevent infinite loops
+        total_build_failures = state.get("total_build_failure_count", 0) + 1
+        MAX_TOTAL_BUILD_FAILURES = 10  # Hard limit on total build failures
+
+        if total_build_failures >= MAX_TOTAL_BUILD_FAILURES:
+            logger.error(
+                f'❌ Total build failures ({total_build_failures}) exceeded limit ({MAX_TOTAL_BUILD_FAILURES}). '
+                f'Ending workflow to prevent infinite loop.',
+                trial=trial
+            )
+            # Return state that will terminate the workflow
+            return {
+                "compile_success": False,
+                "build_errors": [build_error_msg, f"Exceeded max total build failures ({MAX_TOTAL_BUILD_FAILURES})"],
+                "run_success": False,
+                "total_build_failure_count": total_build_failures,
+                "workflow_phase": "terminated",  # Special phase to signal termination
+                "messages": [{
+                    "role": "assistant",
+                    "content": f"Workflow terminated: exceeded max build failures. Last error: {build_error_msg}"
+                }]
+            }
+
+        logger.warning(
+            f'Build failed in execution phase (total failures: {total_build_failures}/{MAX_TOTAL_BUILD_FAILURES}): {build_error_msg}',
+            trial=trial
+        )
 
         return {
             "compile_success": False,
             "build_errors": [build_error_msg],
             "run_success": False,
+            "total_build_failure_count": total_build_failures,
             "workflow_phase": "compilation",  # Go back to compilation phase
             "messages": [{
                 "role": "assistant",
@@ -458,7 +485,13 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
             "content": f"Build {'successful' if compile_success else 'failed'}"
         }]
     }
-    
+
+    # Track total build failures to prevent infinite loops
+    if not compile_success:
+        total_build_failures = state.get("total_build_failure_count", 0) + 1
+        state_update["total_build_failure_count"] = total_build_failures
+        logger.debug(f'Build failed, total_build_failure_count={total_build_failures}', trial=trial)
+
     # If compilation successful and we're in compilation phase, switch to optimization phase
     if compile_success and state.get("workflow_phase") == "compilation":
         logger.info('Compilation successful, switching workflow_phase to optimization', trial=trial)

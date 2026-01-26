@@ -71,6 +71,7 @@ class FuzzingWorkflowState(TypedDict):
     node_visit_counts: NotRequired[Dict[str, int]]  # Per-node visit counter (loop prevention)
     workflow_phase: NotRequired[str]  # Current workflow phase: "compilation" or "optimization"
     compilation_retry_count: NotRequired[int]  # Separate counter for compilation retries
+    total_build_failure_count: NotRequired[int]  # Total build failures across all phases (prevents infinite loops)
     prototyper_regenerate_count: NotRequired[int]  # Counter for prototyper regenerations
     previous_fuzz_target_source: NotRequired[str]  # Store previous version for diff generation
     

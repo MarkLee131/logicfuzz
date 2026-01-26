@@ -52,13 +52,14 @@ Benchmark YAML files in `comparison/` define "target projects" to fuzz.
 
 | Agent | 文件 | 功能 |
 |-------|------|------|
-| **LangGraphPrototyper** | `agent_graph/agents/prototyper.py` | 生成fuzz target代码，使用synthesized drivers作为LLM refinement基础 |
-| **LangGraphCoverageAnalyzer** | `agent_graph/agents/coverage_analyzer.py` | 分析覆盖率，提取改进建议 |
-| **LangGraphCrashAnalyzer** | `agent_graph/agents/crash_analyzer.py` | 使用GDB+Bash工具分析crash |
-| **LangGraphCrashFeasibilityAnalyzer** | `agent_graph/agents/crash_feasibility_analyzer.py` | 判断crash可行性 |
-| **LangGraphFixer** | `agent_graph/agents/fixer.py` | 修复编译/运行时错误 |
+| **LangGraphPrototyper** | `src/agents/prototyper.py` | 生成fuzz target代码，使用synthesized drivers作为LLM refinement基础 |
+| **LangGraphCoverageAnalyzer** | `src/agents/coverage_analyzer.py` | 分析覆盖率，提取改进建议 |
+| **LangGraphCrashAnalyzer** | `src/agents/crash_analyzer.py` | 使用GDB+Bash工具分析crash |
+| **LangGraphCrashFeasibilityAnalyzer** | `src/agents/crash_feasibility_analyzer.py` | 判断crash可行性 |
+| **LangGraphFixer** | `src/agents/fixer.py` | 修复编译/运行时错误 |
+| **LangGraphImprover** | `src/agents/improver.py` | 基于覆盖率分析改进fuzz target |
 
-**ToolCallingMixin** (`agent_graph/agents/tool_calling_mixin.py`):
+**ToolCallingMixin** (`src/agents/tool_calling_mixin.py`):
 - ReAct风格的工具调用循环
 - 支持并行工具执行（最多4个worker）
 - 自动检测结论并终止循环
@@ -79,7 +80,7 @@ FuzzTarget (可编译的driver)
 
 ### 关键数据结构
 
-**FuzzingContext** (`agent_graph/data_context.py`):
+**FuzzingContext** (`src/context/data_context.py`):
 - 不可变dataclass，存储fuzzing工作流所有数据
 - `project_apis`: 提取的所有API
 - `api_sequences`: 从grammar生成的调用序列
@@ -295,7 +296,7 @@ if (ctx->initialized) {
 
 ### 序列生成
 
-**函数**: `_generate_sequences_from_grammar()` (`agent_graph/data_context.py:1080-1186`)
+**函数**: `_generate_sequences_from_grammar()` (`src/context/data_context.py`)
 
 从grammar生成API调用序列:
 1. 从起始符号随机展开grammar
@@ -332,3 +333,7 @@ if (ctx->initialized) {
 4. [ ] **DriverEnhancer完善**
    - Callback stub生成已完成
    - VarLen、Loop、TLV的driver集成待完善
+
+5. [ ] **核心功能识别**
+   - 识别并标注library的核心功能（如lcms的颜色转换cmsCreateTransform+cmsDoTransform）
+   - 从现有fuzzers中提取API使用pattern（如"必须先创建两个profile，再创建transform"）
