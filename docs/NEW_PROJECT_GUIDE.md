@@ -21,7 +21,7 @@
 - Docker 已安装并运行
 - Python 3.10+
 - LogicFuzz 仓库已克隆
-- FuzzIntrospector 本地服务已启动（端口8080）
+- Git
 
 ### 1.2 目录结构
 
@@ -32,9 +32,26 @@ logicfuzz/
 │       └── your-project/    # 新项目放这里
 ├── conti-benchmark/
 │   └── your-project.yaml    # benchmark配置
-└── fuzz-introspector/
+└── fuzz-introspector/       # 需要单独克隆
     └── tools/web-fuzzing-introspection/app/static/assets/db/
-        └── all-functions-db-your-project.json  # FI数据库
+        ├── all-functions-db-your-project.json
+        ├── all-constructors-db-your-project.json
+        ├── all-project-current.json
+        ├── all-project-timestamps.json
+        └── db-timestamps.json
+```
+
+### 1.3 克隆 FuzzIntrospector（首次使用）
+
+如果 `fuzz-introspector/` 目录为空或不存在，需要先克隆：
+
+```bash
+cd /path/to/logicfuzz
+git clone https://github.com/ossf/fuzz-introspector fuzz-introspector
+
+# 安装依赖
+cd fuzz-introspector/tools/web-fuzzing-introspection
+pip install -r requirements.txt
 ```
 
 ---
@@ -175,6 +192,11 @@ cp $SRC/my-project/strparser.h $OUT/
 cp $SRC/my-project/strparser.c $OUT/
 ```
 
+**注意**：创建后需要添加执行权限：
+```bash
+chmod +x build.sh
+```
+
 ### 2.5 创建project.yaml
 
 ```yaml
@@ -198,8 +220,8 @@ sanitizers:
 ```bash
 cd /path/to/logicfuzz/oss-fuzz
 
-# 构建Docker镜像
-python infra/helper.py build_image my-project
+# 构建Docker镜像（输入 'n' 跳过拉取基础镜像）
+echo "n" | python infra/helper.py build_image my-project
 
 # 使用introspector sanitizer构建（生成FI数据）
 python infra/helper.py build_fuzzers --sanitizer introspector my-project
@@ -208,26 +230,41 @@ python infra/helper.py build_fuzzers --sanitizer introspector my-project
 ### 3.2 验证构建结果
 
 ```bash
-# 检查生成的fuzzer
+# 检查生成的fuzzer和inspector数据
 ls -la build/out/my-project/
+ls -la build/out/my-project/inspector/
 
 # 应该看到类似文件：
-# my_project_fuzzer
-# fuzzerLogFile-my_project_fuzzer.data
-# fuzzerLogFile-my_project_fuzzer.data.yaml
+# build/out/my-project/
+#   my_project_fuzzer
+#   strparser.c
+#   strparser.h
+# build/out/my-project/inspector/
+#   all-fuzz-introspector-functions.json
+#   source-code/
 ```
 
-### 3.3 生成FI数据库
-
-introspector构建会在 `build/out/my-project/inspector/` 目录下生成完整的FI数据，包括：
-- `all-fuzz-introspector-functions.json` - 所有函数的元数据
-- `source-code/` - 源代码文件副本
-
-使用以下Python脚本将数据转换为FI webapp格式：
+### 3.3 验证捕获的函数
 
 ```bash
-cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
+# 查看捕获的函数
+cat build/out/my-project/inspector/all-fuzz-introspector-functions.json | python3 -m json.tool | head -50
+```
 
+---
+
+## 4. 导入FI数据库
+
+### 4.1 创建数据库目录
+
+```bash
+mkdir -p fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
+cd fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
+```
+
+### 4.2 转换FI数据为webapp格式
+
+```bash
 python3 << 'EOF'
 import json
 import os
@@ -242,30 +279,30 @@ functions_file = os.path.join(inspector_dir, "all-fuzz-introspector-functions.js
 with open(functions_file, 'r') as f:
     functions_data = json.load(f)
 
-# 转换为FI webapp格式
+# 转换为FI webapp格式（注意：字段名与原始数据不同）
 converted = []
 for func in functions_data:
     converted.append({
-        "name": func.get("function_name", ""),
-        "file": func.get("function_filename", ""),
+        "name": func.get("Func name", ""),
+        "file": func.get("Functions filename", ""),
         "sig": func.get("function_signature", ""),
-        "cov": func.get("runtime_coverage_percent", 0.0),
-        "fuzzers": func.get("reached_by_fuzzers", []),
-        "cov_fuzzers": func.get("cov_fuzzers", []),
-        "comb_fuzzers": func.get("comb_fuzzers", []),
+        "cov": 0.0,
+        "fuzzers": func.get("Reached by Fuzzers", []),
+        "cov_fuzzers": func.get("Runtime reached by Fuzzers", []),
+        "comb_fuzzers": func.get("Combined reached by Fuzzers", []),
         "cov_url": "",
-        "icount": func.get("llvm_instruction_count", 0),
-        "acc_cc": func.get("accummulated_complexity", 0),
-        "u-cc": func.get("undiscovered_complexity", 0),
-        "args": func.get("function_arguments", []),
-        "args-names": func.get("function_argument_names", []),
+        "icount": func.get("I Count", 0),
+        "acc_cc": func.get("Accumulated cyclomatic complexity", 0),
+        "u-cc": func.get("Undiscovered complexity", 0),
+        "args": func.get("Args", []),
+        "args-names": func.get("ArgNames", []),
         "rtn": func.get("return_type", ""),
-        "raw-name": func.get("raw_function_name", ""),
+        "raw-name": func.get("raw-function-name", ""),
         "src_begin": func.get("source_line_begin", -1),
         "src_end": func.get("source_line_end", -1),
-        "debug": func.get("debug_summary", {}),
-        "access": True,
-        "asserts": func.get("assert_stmts", [])
+        "debug": func.get("debug_function_info", {}),
+        "access": func.get("is_accessible", True),
+        "asserts": func.get("asserts", [])
     })
 
 # 写入数据库文件
@@ -280,37 +317,28 @@ print(f"Created all-functions-db-{PROJECT}.json with {len(converted)} functions"
 EOF
 ```
 
----
-
-## 4. 导入FI数据库
-
-### 4.1 确认数据库文件
-
-确保以下文件存在：
-
-```
-fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db/
-├── all-functions-db-my-project.json
-└── all-constructors-db-my-project.json
-```
-
-### 4.2 注册项目到FI数据库
+### 4.3 注册项目到FI数据库
 
 **重要**：新项目必须添加到FI的项目配置文件中，否则FI无法识别该项目。
 
 ```bash
-cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
-
-# 运行以下Python脚本添加项目
 python3 << 'EOF'
 import json
+import os
 from datetime import date
 
 PROJECT_NAME = "my-project"  # 修改为你的项目名
+FUNCTION_COUNT = 3  # 修改为实际函数数量
+
+def load_or_create(filename, default_content):
+    """加载文件或创建新文件"""
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            return json.load(f)
+    return default_content
 
 # 添加到 all-project-current.json
-with open('all-project-current.json', 'r') as f:
-    projects = json.load(f)
+projects = load_or_create('all-project-current.json', [])
 
 if not any(p.get('project_name') == PROJECT_NAME for p in projects):
     projects.append({
@@ -324,7 +352,7 @@ if not any(p.get('project_name') == PROJECT_NAME for p in projects):
             "coverage_lines": 0.0,
             "static_reachability": 0.0,
             "fuzzer_count": 1,
-            "function_count": 0,
+            "function_count": FUNCTION_COUNT,
             "functions_covered_estimate": 0.0,
             "annotated_cfg": [],
             "optimal_targets": [],
@@ -340,10 +368,11 @@ if not any(p.get('project_name') == PROJECT_NAME for p in projects):
     with open('all-project-current.json', 'w') as f:
         json.dump(projects, f, indent=2)
     print(f"Added {PROJECT_NAME} to all-project-current.json")
+else:
+    print(f"{PROJECT_NAME} already exists in all-project-current.json")
 
 # 添加到 all-project-timestamps.json
-with open('all-project-timestamps.json', 'r') as f:
-    timestamps = json.load(f)
+timestamps = load_or_create('all-project-timestamps.json', [])
 
 if not any(p.get('project_name') == PROJECT_NAME for p in timestamps):
     timestamps.append({
@@ -360,45 +389,70 @@ if not any(p.get('project_name') == PROJECT_NAME for p in timestamps):
     with open('all-project-timestamps.json', 'w') as f:
         json.dump(timestamps, f, indent=2)
     print(f"Added {PROJECT_NAME} to all-project-timestamps.json")
+else:
+    print(f"{PROJECT_NAME} already exists in all-project-timestamps.json")
+
+print("Done!")
 EOF
 ```
 
-### 4.3 启动FI本地服务（Local模式）
+### 4.4 创建db-timestamps.json（必需）
+
+**重要**：FI webapp 需要此文件才能启动。
+
+```bash
+cat > db-timestamps.json << 'EOF'
+[
+  {
+    "date": "2026-01-27",
+    "project_count": 1,
+    "fuzzer_count": 1,
+    "function_count": 3,
+    "function_coverage_estimate": 0.0,
+    "accummulated_lines_total": 100,
+    "accummulated_lines_covered": 0
+  }
+]
+EOF
+```
+
+### 4.5 启动FI本地服务
 
 **关键**：必须设置 `FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ` 环境变量，指向OSS-Fuzz目录，这样FI才能读取本地构建的源代码。
 
 ```bash
-cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection
-
-# 如果使用虚拟环境
-source .venv/bin/activate
+cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app
 
 # 设置本地模式环境变量（重要！）
 export FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ=/path/to/logicfuzz/oss-fuzz
 
-# 启动Flask应用
-python3 ./app/main.py
+# 启动Flask应用（前台运行）
+python3 main.py
+
+# 或者后台运行
+nohup python3 main.py > /tmp/fi_server.log 2>&1 &
 ```
 
 服务启动后应该显示：
 ```
 Local webapp is set
-* Running on http://0.0.0.0:8080
+Loading db
+ * Running on http://0.0.0.0:8080
 ```
 
 **注意**：如果没有看到 "Local webapp is set"，说明环境变量没有正确设置，源代码查找功能将无法工作。
 
-### 4.4 验证API
+### 4.6 验证API
 
 ```bash
 # 获取项目的所有函数
-curl "http://localhost:8080/api/all-functions?project=my-project"
+curl -s "http://localhost:8080/api/all-functions?project=my-project" | python3 -m json.tool | head -30
 
 # 获取特定函数签名
-curl "http://localhost:8080/api/function-signature?project=my-project&function=strparser_hex_decode"
+curl -s "http://localhost:8080/api/function-signature?project=my-project&function=strparser_hex_decode" | python3 -m json.tool
 
 # 测试源代码获取（关键测试）
-curl "http://localhost:8080/api/function-source-code?project=my-project&function_signature=int%20strparser_hex_decode(const%20char%20*,%20size_t,%20uint8_t%20*,%20size_t,%20size_t%20*)"
+curl -s "http://localhost:8080/api/function-source-code?project=my-project&function_signature=int%20strparser_hex_decode(const%20char%20*,%20size_t,%20uint8_t%20*,%20size_t,%20size_t%20*)" | python3 -m json.tool
 ```
 
 如果服务正常运行，会返回JSON数据。如果返回 `{"msg":"No source code","result":"error"}`，说明：
@@ -410,6 +464,8 @@ curl "http://localhost:8080/api/function-source-code?project=my-project&function
 ## 5. 创建Benchmark配置
 
 在 `conti-benchmark/` 目录下创建 `my-project.yaml`：
+
+**重要**：`signature` 字段中的类型必须使用空格分隔（如 `const char *` 而不是 `const char*`），需要与FI API返回的签名格式一致。
 
 ```yaml
 "functions":
@@ -426,12 +482,17 @@ curl "http://localhost:8080/api/function-source-code?project=my-project&function
   - "name": "output_len"
     "type": "size_t*"
   "return_type": "int"
-  "signature": "int strparser_hex_decode(const char*, size_t, uint8_t*, size_t, size_t*)"
+  "signature": "int strparser_hex_decode(const char *, size_t, uint8_t *, size_t, size_t *)"
 
 "language": "c"
 "project": "my-project"
 "target_name": "my_project_fuzzer"
 "target_path": "/src/my-project/fuzzer.c"
+```
+
+**提示**：可以通过FI API获取正确的签名格式：
+```bash
+curl -s "http://localhost:8080/api/function-signature?project=my-project&function=strparser_hex_decode" | python3 -c "import sys,json; print(json.load(sys.stdin)['signature'])"
 ```
 
 ---
@@ -469,13 +530,30 @@ python run_logicfuzz.py \
 | 参数 | 说明 |
 |------|------|
 | `-y` | benchmark YAML配置文件路径 |
-| `--model` | LLM模型（deepseek-chat, gpt-4, claude-3等） |
+| `--model` | LLM模型（deepseek-chat, gpt-4o, claude-3-5-sonnet等） |
 | `-n` | 试验次数 |
 | `--run-timeout` | fuzzer运行超时时间（秒） |
 | `-e` | FuzzIntrospector API端点 |
 | `-of` | OSS-Fuzz目录路径 |
+| `--enable-source-filter` | 启用源代码过滤 |
+| `--source-filter-min-lines` | 源代码最小行数过滤阈值 |
 
-### 6.4 查看结果
+### 6.4 运行示例
+
+```bash
+# 带源代码过滤的完整命令
+python run_logicfuzz.py \
+  -y conti-benchmark/my-project.yaml \
+  --model deepseek-chat \
+  -n 1 \
+  --run-timeout 60 \
+  -e http://localhost:8080/api \
+  -of oss-fuzz \
+  --enable-source-filter \
+  --source-filter-min-lines 50
+```
+
+### 6.5 查看结果
 
 ```bash
 # 生成的fuzz target
@@ -486,13 +564,34 @@ ls results/output-my-project-strparser_hex_decode/code-coverage-reports/
 
 # 日志文件
 ls results/output-my-project-strparser_hex_decode/logs/
+
+# benchmark配置
+cat results/output-my-project-strparser_hex_decode/benchmark.yaml
+```
+
+### 6.6 预期输出
+
+成功运行后，日志末尾应显示类似：
+```
+Total Drivers Generated:     1
+Successful Drivers:          1
+...
+build success rate: 1.0, crash rate: 0.0
+max coverage: 0.52
 ```
 
 ---
 
 ## 7. 常见问题
 
-### 7.1 FI API返回"No source code"
+### 7.1 FI服务启动失败：FileNotFoundError db-timestamps.json
+
+**原因**：缺少 `db-timestamps.json` 文件。
+
+**解决方案**：
+创建 `db-timestamps.json` 文件（参见4.4节）。
+
+### 7.2 FI API返回"No source code"
 
 **原因**：FI无法找到源代码文件。
 
@@ -502,7 +601,7 @@ ls results/output-my-project-strparser_hex_decode/logs/
 3. 重启FI服务后验证输出中显示 "Local webapp is set"
 4. 检查源代码是否存在于 `oss-fuzz/build/out/my-project/inspector/source-code/` 目录
 
-### 7.2 FI API返回"Unable to find function"
+### 7.3 FI API返回"Unable to find function"
 
 **原因**：函数没有被捕获到FI数据库中。
 
@@ -511,17 +610,16 @@ ls results/output-my-project-strparser_hex_decode/logs/
 2. 使用introspector sanitizer重新构建
 3. 检查 `all-functions-db-my-project.json` 是否正确生成
 
-### 7.3 Docker构建失败："path not found"
+### 7.4 Docker构建时提示输入
 
-**原因**：路径解析问题。
+**原因**：`build_image` 命令会询问是否拉取最新基础镜像。
 
 **解决方案**：
-确保使用绝对路径或正确设置工作目录：
 ```bash
-export OFG_CLEAN_UP_OSS_FUZZ=0
+echo "n" | python infra/helper.py build_image my-project
 ```
 
-### 7.4 项目目录被删除
+### 7.5 项目目录被删除
 
 **原因**：OSS-Fuzz的git clean命令删除了未跟踪的文件。
 
@@ -530,7 +628,7 @@ export OFG_CLEAN_UP_OSS_FUZZ=0
 export OFG_CLEAN_UP_OSS_FUZZ=0
 ```
 
-### 7.5 函数签名不匹配
+### 7.6 函数签名不匹配
 
 **原因**：YAML中的签名与FI数据库中的签名格式不同（如空格差异，例如 `char*` vs `char *`）。
 
@@ -540,7 +638,7 @@ LogicFuzz会自动尝试解析函数名并查询完整签名。如果仍失败�
 curl "http://localhost:8080/api/function-signature?project=my-project&function=strparser_hex_decode"
 ```
 
-### 7.6 构建成功但覆盖率为0
+### 7.7 构建成功但覆盖率为0
 
 **原因**：生成的fuzz target可能有问题。
 
@@ -554,30 +652,58 @@ curl "http://localhost:8080/api/function-signature?project=my-project&function=s
 ## 附录：完整示例命令
 
 ```bash
+# ============================================================
 # 1. 创建项目
+# ============================================================
 mkdir -p oss-fuzz/projects/my-project
-# ... 创建源文件、Dockerfile、build.sh、project.yaml
+cd oss-fuzz/projects/my-project
+# 创建 strparser.h, strparser.c, Dockerfile, build.sh, project.yaml
+chmod +x build.sh
 
+# ============================================================
 # 2. 构建并生成FI数据
-cd oss-fuzz
-python infra/helper.py build_image my-project
+# ============================================================
+cd /path/to/logicfuzz/oss-fuzz
+echo "n" | python infra/helper.py build_image my-project
 python infra/helper.py build_fuzzers --sanitizer introspector my-project
 
-# 3. 注册项目到FI数据库（参见4.2节的Python脚本）
-cd fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
-# 运行添加项目的Python脚本...
+# 验证构建结果
+ls build/out/my-project/inspector/all-fuzz-introspector-functions.json
 
-# 4. 启动FI服务（另一个终端，使用Local模式）
-cd fuzz-introspector/tools/web-fuzzing-introspection
+# ============================================================
+# 3. 设置FI数据库（如果fuzz-introspector目录为空，先克隆）
+# ============================================================
+cd /path/to/logicfuzz
+# git clone https://github.com/ossf/fuzz-introspector fuzz-introspector
+# pip install -r fuzz-introspector/tools/web-fuzzing-introspection/requirements.txt
+
+cd fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
+# 运行4.2节的Python脚本转换数据
+# 运行4.3节的Python脚本注册项目
+# 运行4.4节的命令创建db-timestamps.json
+
+# ============================================================
+# 4. 启动FI服务（新终端）
+# ============================================================
+cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app
 export FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ=/path/to/logicfuzz/oss-fuzz
-python3 ./app/main.py
+python3 main.py
 # 确认输出中显示 "Local webapp is set"
 
-# 5. 验证FI API（可选但推荐）
-curl "http://localhost:8080/api/all-functions?project=my-project"
+# ============================================================
+# 5. 验证FI API
+# ============================================================
+curl -s "http://localhost:8080/api/all-functions?project=my-project" | python3 -m json.tool | head -20
 
-# 6. 运行LogicFuzz
+# ============================================================
+# 6. 创建Benchmark配置
+# ============================================================
 cd /path/to/logicfuzz
+# 创建 conti-benchmark/my-project.yaml
+
+# ============================================================
+# 7. 运行LogicFuzz
+# ============================================================
 export OFG_CLEAN_UP_OSS_FUZZ=0
 export DEEPSEEK_API_KEY=your-key
 
@@ -589,6 +715,55 @@ python run_logicfuzz.py \
   -e http://localhost:8080/api \
   -of oss-fuzz
 
-# 7. 查看结果
+# ============================================================
+# 8. 查看结果
+# ============================================================
 cat results/output-my-project-strparser_hex_decode/fuzz_targets/01.fuzz_target
+```
+
+---
+
+## 附录：生成的Fuzz Target示例
+
+成功运行后，LogicFuzz会生成类似以下的fuzz target：
+
+```cpp
+#include <fuzzer/FuzzedDataProvider.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string>
+#include <vector>
+
+extern "C" {
+#include "strparser.h"
+}
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  FuzzedDataProvider fdp(data, size);
+
+  // Construct input string (parameter 1)
+  std::string input_str = fdp.ConsumeRandomLengthString(fdp.remaining_bytes());
+  const char *input_ptr = input_str.c_str();
+  // Use length of constructed string (parameter 2)
+  size_t input_len = input_str.length();
+
+  // Determine required output capacity
+  size_t required_capacity = (input_len + 1) / 2;
+
+  // Construct output buffer (parameter 3) with sufficient capacity
+  std::vector<uint8_t> output_buf(required_capacity);
+  uint8_t *output_ptr = output_buf.data();
+
+  // Construct output capacity (parameter 4)
+  size_t output_capacity = output_buf.size();
+
+  // Construct bytes_written variable and pointer (parameter 5)
+  size_t bytes_written = 0;
+  size_t *bytes_written_ptr = &bytes_written;
+
+  // Call target function
+  strparser_hex_decode(input_ptr, input_len, output_ptr, output_capacity, bytes_written_ptr);
+
+  return 0;
+}
 ```
