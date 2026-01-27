@@ -1,0 +1,3 @@
+pairings:
+- executable_path: /out/my_project_fuzzer
+  fuzzer_log_file: fuzzerLogFile-0-YpnrPIMI2J

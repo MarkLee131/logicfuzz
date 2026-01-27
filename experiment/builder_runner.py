@@ -810,10 +810,10 @@ class BuilderRunner:
                    self.benchmark.project, sanitizer)
 
     # Build the image
+    # Use relative path 'projects/...' since cwd is set to OSS_FUZZ_DIR
     command = [
         'docker', 'build', '-t', f'gcr.io/oss-fuzz/{generated_project}',
-        os.path.join(oss_fuzz_checkout.OSS_FUZZ_DIR, 'projects',
-                     generated_project)
+        os.path.join('projects', generated_project)
     ]
     with open(log_path, 'w+') as log_file:
       try:
@@ -1364,5 +1364,7 @@ def get_build_artifact_dir(generated_project: str, build_artifact: str) -> str:
   """
   Returns the |build_artifact| absolute directory path for |generated_project|.
   """
-  return os.path.join(oss_fuzz_checkout.OSS_FUZZ_DIR, 'build', build_artifact,
+  path = os.path.join(oss_fuzz_checkout.OSS_FUZZ_DIR, 'build', build_artifact,
                       generated_project)
+  # Convert to absolute path for docker volume mounts
+  return os.path.abspath(path)

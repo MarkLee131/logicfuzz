@@ -1,0 +1,516 @@
+All functions:
+  Elements:
+  - BBCount: 1
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 0
+    EdgeCount: 0
+    ICount: 2
+    argCount: 2
+    argNames:
+    - data
+    - size
+    argTypes:
+    - uint8_t*
+    - size_t
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 7
+      start: 4
+    functionDepth: 0
+    functionLinenumber: 4
+    functionLinenumberEnd: 7
+    functionName: LLVMFuzzerTestOneInput
+    functionSourceFile: /src/fuzzer.c
+    functionUses: 0
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
+  - BBCount: 1
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 5
+    EdgeCount: 5
+    ICount: 2
+    argCount: 1
+    argNames:
+    - c
+    argTypes:
+    - char
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 17
+      start: 13
+    functionDepth: 0
+    functionLinenumber: 13
+    functionLinenumberEnd: 17
+    functionName: is_hex_digit
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: int is_hex_digit(char c)
+  - BBCount: 4
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 6
+    EdgeCount: 6
+    ICount: 8
+    argCount: 1
+    argNames:
+    - c
+    argTypes:
+    - char
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 25
+      start: 20
+    functionDepth: 0
+    functionLinenumber: 20
+    functionLinenumberEnd: 25
+    functionName: hex_to_int
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: int hex_to_int(char c)
+  - BBCount: 14
+    BranchProfiles: []
+    Callsites:
+    - Dst: malloc
+      Src: /src/my-project/strparser.c:43,1
+    - Dst: isspace
+      Src: /src/my-project/strparser.c:53,1
+    - Dst: isdigit
+      Src: /src/my-project/strparser.c:67,1
+    - Dst: isdigit
+      Src: /src/my-project/strparser.c:75,1
+    - Dst: realloc
+      Src: /src/my-project/strparser.c:90,1
+    - Dst: free
+      Src: /src/my-project/strparser.c:93,1
+    - Dst: isspace
+      Src: /src/my-project/strparser.c:104,1
+    CyclomaticComplexity: 27
+    EdgeCount: 27
+    ICount: 64
+    argCount: 3
+    argNames:
+    - input
+    - input_len
+    - result
+    argTypes:
+    - char*
+    - size_t
+    - strparser_int_list_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 113
+      start: 27
+    functionDepth: 0
+    functionLinenumber: 27
+    functionLinenumberEnd: 113
+    functionName: strparser_parse_int_list
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached:
+    - isdigit
+    - isspace
+    - malloc
+    - realloc
+    - free
+    linkageType: ''
+    returnType: int
+    signature: "int strparser_parse_int_list(const char *input, size_t input_len,\n
+      \                            strparser_int_list_t *result)"
+  - BBCount: 2
+    BranchProfiles: []
+    Callsites:
+    - Dst: free
+      Src: /src/my-project/strparser.c:117,1
+    CyclomaticComplexity: 1
+    EdgeCount: 1
+    ICount: 7
+    argCount: 1
+    argNames:
+    - result
+    argTypes:
+    - strparser_int_list_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 122
+      start: 115
+    functionDepth: 0
+    functionLinenumber: 115
+    functionLinenumberEnd: 122
+    functionName: strparser_free_int_list
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached:
+    - free
+    linkageType: ''
+    returnType: void
+    signature: void strparser_free_int_list(strparser_int_list_t *result)
+  - BBCount: 5
+    BranchProfiles: []
+    Callsites: []
+    CyclomaticComplexity: 10
+    EdgeCount: 10
+    ICount: 20
+    argCount: 6
+    argNames:
+    - input
+    - input_len
+    - delimiter
+    - tokens
+    - max_tokens
+    - num_tokens
+    argTypes:
+    - char*
+    - size_t
+    - char
+    - strparser_token_t*
+    - size_t
+    - size_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 155
+      start: 124
+    functionDepth: 0
+    functionLinenumber: 124
+    functionLinenumberEnd: 155
+    functionName: strparser_split
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached: []
+    linkageType: ''
+    returnType: int
+    signature: "int strparser_split(const char *input, size_t input_len, char delimiter,\n
+      \                   strparser_token_t *tokens, size_t max_tokens,\n                    size_t
+      *num_tokens)"
+  - BBCount: 8
+    BranchProfiles: []
+    Callsites:
+    - Dst: isspace
+      Src: /src/my-project/strparser.c:188,1
+    - Dst: isspace
+      Src: /src/my-project/strparser.c:194,1
+    - Dst: memcpy
+      Src: /src/my-project/strparser.c:202,1
+    - Dst: isspace
+      Src: /src/my-project/strparser.c:210,1
+    - Dst: isspace
+      Src: /src/my-project/strparser.c:216,1
+    - Dst: memcpy
+      Src: /src/my-project/strparser.c:224,1
+    CyclomaticComplexity: 18
+    EdgeCount: 18
+    ICount: 44
+    argCount: 3
+    argNames:
+    - input
+    - input_len
+    - kv
+    argTypes:
+    - char*
+    - size_t
+    - strparser_kv_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 228
+      start: 157
+    functionDepth: 0
+    functionLinenumber: 157
+    functionLinenumberEnd: 228
+    functionName: strparser_parse_kv
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached:
+    - isspace
+    - memcpy
+    linkageType: ''
+    returnType: int
+    signature: "int strparser_parse_kv(const char *input, size_t input_len,\n                       strparser_kv_t
+      *kv)"
+  - BBCount: 6
+    BranchProfiles: []
+    Callsites:
+    - Dst: strparser_split
+      Src: /src/my-project/strparser.c:246,1
+    - Dst: strparser_parse_kv
+      Src: /src/my-project/strparser.c:254,1
+    CyclomaticComplexity: 10
+    EdgeCount: 10
+    ICount: 20
+    argCount: 6
+    argNames:
+    - input
+    - input_len
+    - delimiter
+    - kvs
+    - max_kvs
+    - num_kvs
+    argTypes:
+    - char*
+    - size_t
+    - char
+    - strparser_kv_t*
+    - size_t
+    - size_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 264
+      start: 230
+    functionDepth: 1
+    functionLinenumber: 230
+    functionLinenumberEnd: 264
+    functionName: strparser_parse_kv_list
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached:
+    - strparser_parse_kv
+    - strparser_split
+    linkageType: ''
+    returnType: int
+    signature: "int strparser_parse_kv_list(const char *input, size_t input_len,\n
+      \                           char delimiter, strparser_kv_t *kvs,\n                            size_t
+      max_kvs, size_t *num_kvs)"
+  - BBCount: 6
+    BranchProfiles: []
+    Callsites:
+    - Dst: is_hex_digit
+      Src: /src/my-project/strparser.c:282,1
+    - Dst: is_hex_digit
+      Src: /src/my-project/strparser.c:282,1
+    - Dst: hex_to_int
+      Src: /src/my-project/strparser.c:284,1
+    - Dst: hex_to_int
+      Src: /src/my-project/strparser.c:285,1
+    CyclomaticComplexity: 12
+    EdgeCount: 12
+    ICount: 29
+    argCount: 5
+    argNames:
+    - input
+    - input_len
+    - output
+    - output_len
+    - decoded_len
+    argTypes:
+    - char*
+    - size_t
+    - char*
+    - size_t
+    - size_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 309
+      start: 266
+    functionDepth: 1
+    functionLinenumber: 266
+    functionLinenumberEnd: 309
+    functionName: strparser_url_decode
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached:
+    - is_hex_digit
+    - hex_to_int
+    linkageType: ''
+    returnType: int
+    signature: "int strparser_url_decode(const char *input, size_t input_len,\n                         char
+      *output, size_t output_len,\n                         size_t *decoded_len)"
+  - BBCount: 5
+    BranchProfiles: []
+    Callsites:
+    - Dst: is_hex_digit
+      Src: /src/my-project/strparser.c:331,1
+    - Dst: is_hex_digit
+      Src: /src/my-project/strparser.c:331,1
+    - Dst: hex_to_int
+      Src: /src/my-project/strparser.c:335,1
+    - Dst: hex_to_int
+      Src: /src/my-project/strparser.c:336,1
+    CyclomaticComplexity: 8
+    EdgeCount: 8
+    ICount: 19
+    argCount: 5
+    argNames:
+    - input
+    - input_len
+    - output
+    - output_len
+    - decoded_len
+    argTypes:
+    - char*
+    - size_t
+    - uint8_t*
+    - size_t
+    - size_t*
+    assertStmts: []
+    constantsTouched: []
+    func_position:
+      end: 342
+      start: 311
+    functionDepth: 1
+    functionLinenumber: 311
+    functionLinenumberEnd: 342
+    functionName: strparser_hex_decode
+    functionSourceFile: /src/my-project/strparser.c
+    functionUses: 0
+    functionsReached:
+    - is_hex_digit
+    - hex_to_int
+    linkageType: ''
+    returnType: int
+    signature: "int strparser_hex_decode(const char *input, size_t input_len,\n                         uint8_t
+      *output, size_t output_len,\n                         size_t *decoded_len)"
+Fuzzer filename: /src/fuzzer.c
+Fuzzing method: LLVMFuzzerTestOneInput
+included-header-files:
+- stdlib.h
+- stdint.h
+- string.h
+- stddef.h
+- ctype.h
+- strparser.h
+- limits.h
+- errno.h
+report: name
+sources:
+- function_names:
+  - LLVMFuzzerTestOneInput
+  source_file: /src/fuzzer.c
+  types:
+    enum: []
+    preproc_defs: []
+    structs: []
+    typedefs: []
+    union: []
+- function_names: []
+  source_file: /src/my-project/strparser.h
+  types:
+    enum: []
+    preproc_defs:
+    - item_type: preproc_def
+      name: STRPARSER_OK
+      pos:
+        line_end: 17
+        line_start: 16
+        source_file: /src/my-project/strparser.h
+      type_or_value: '0'
+    - item_type: preproc_def
+      name: STRPARSER_ERR_NULL
+      pos:
+        line_end: 18
+        line_start: 17
+        source_file: /src/my-project/strparser.h
+      type_or_value: '-1'
+    - item_type: preproc_def
+      name: STRPARSER_ERR_EMPTY
+      pos:
+        line_end: 19
+        line_start: 18
+        source_file: /src/my-project/strparser.h
+      type_or_value: '-2'
+    - item_type: preproc_def
+      name: STRPARSER_ERR_FORMAT
+      pos:
+        line_end: 20
+        line_start: 19
+        source_file: /src/my-project/strparser.h
+      type_or_value: '-3'
+    - item_type: preproc_def
+      name: STRPARSER_ERR_OVERFLOW
+      pos:
+        line_end: 21
+        line_start: 20
+        source_file: /src/my-project/strparser.h
+      type_or_value: '-4'
+    - item_type: preproc_def
+      name: STRPARSER_ERR_MEMORY
+      pos:
+        line_end: 22
+        line_start: 21
+        source_file: /src/my-project/strparser.h
+      type_or_value: '-5'
+    - item_type: preproc_def
+      name: STRPARSER_MAX_TOKENS
+      pos:
+        line_end: 25
+        line_start: 24
+        source_file: /src/my-project/strparser.h
+      type_or_value: '256'
+    - item_type: preproc_def
+      name: STRPARSER_MAX_LINE
+      pos:
+        line_end: 26
+        line_start: 25
+        source_file: /src/my-project/strparser.h
+      type_or_value: '4096'
+    structs:
+    - fields:
+      - name: '*start'
+        type: char
+      - name: length
+        type: size_t
+      item_type: struct
+      name: strparser_token_t
+      pos:
+        line_end: 31
+        line_start: 28
+        source_file: /src/my-project/strparser.h
+    - fields:
+      - name: key[128]
+        type: char
+      - name: value[256]
+        type: char
+      item_type: struct
+      name: strparser_kv_t
+      pos:
+        line_end: 37
+        line_start: 34
+        source_file: /src/my-project/strparser.h
+    - fields:
+      - name: '*values'
+        type: int
+      - name: count
+        type: size_t
+      - name: capacity
+        type: size_t
+      item_type: struct
+      name: strparser_int_list_t
+      pos:
+        line_end: 44
+        line_start: 40
+        source_file: /src/my-project/strparser.h
+    typedefs: []
+    union: []
+- function_names:
+  - is_hex_digit
+  - hex_to_int
+  - strparser_parse_int_list
+  - strparser_free_int_list
+  - strparser_split
+  - strparser_parse_kv
+  - strparser_parse_kv_list
+  - strparser_url_decode
+  - strparser_hex_decode
+  source_file: /src/my-project/strparser.c
+  types:
+    enum: []
+    preproc_defs: []
+    structs: []
+    typedefs: []
+    union: []
