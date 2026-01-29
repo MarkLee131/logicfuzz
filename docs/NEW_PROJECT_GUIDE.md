@@ -219,6 +219,45 @@ cp $SRC/my-project/strparser.c $OUT/
 chmod +x build.sh
 ```
 
+#### 2.4.1 理解桩 Fuzzer（fuzzer.c）的作用
+
+build.sh 中创建的 `fuzzer.c` 是一个**桩 Fuzzer（Stub Fuzzer）**，它有两个关键作用：
+
+**1. 让 FuzzIntrospector 捕获函数信息（必需）**
+
+FuzzIntrospector 通过分析 fuzzer 的调用关系来发现库中的函数。如果没有一个 fuzzer 调用库函数，FuzzIntrospector 就**无法捕获**这些函数的信息。
+
+桩 fuzzer 必须调用所有需要被 LogicFuzz 分析的目标函数，例如：
+```c
+// 在 fuzzer.c 中调用所有目标函数
+strparser_hex_decode(...);
+strparser_url_decode(...);
+strparser_parse_int_list(...);
+strparser_split(...);
+strparser_parse_kv(...);
+```
+
+这样 FuzzIntrospector 在使用 `--sanitizer introspector` 构建时，就能捕获到这些函数的签名、参数类型、源代码位置等信息，并生成 `all-fuzz-introspector-functions.json` 数据库。
+
+**2. 提供基础的 fuzzing 能力**
+
+这个 fuzzer 也是一个可以实际运行的 libFuzzer target，它会：
+- 接收随机输入数据 (`data`, `size`)
+- 将数据传递给各个库函数进行测试
+- 可以发现库中的崩溃和漏洞
+
+**桩 Fuzzer vs LogicFuzz 生成的 Fuzz Target**
+
+| 特性 | fuzzer.c (桩 Fuzzer) | LogicFuzz 生成的 Fuzz Target |
+|------|---------------------|------------------------------|
+| **目的** | 让 FI 捕获函数信息 | 针对特定函数深度测试 |
+| **输入构造** | 简单（直接传递原始数据） | 智能（使用 FuzzedDataProvider） |
+| **参数处理** | 固定缓冲区大小 | 动态分配，边界检查 |
+| **覆盖函数** | 一个 fuzzer 覆盖所有函数 | 每个函数一个专门的 fuzzer |
+| **代码质量** | 手写，较简单 | LLM 生成，考虑前置条件 |
+
+> **重要**：`fuzzer.c` 是 FuzzIntrospector 数据收集的**必要条件**，没有它就无法生成函数数据库，LogicFuzz 也就无法工作。
+
 ### 2.5 创建project.yaml
 
 ```yaml
