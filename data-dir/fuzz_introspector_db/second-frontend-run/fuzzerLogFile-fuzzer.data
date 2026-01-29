@@ -1,0 +1,2 @@
+Call tree
+LLVMFuzzerTestOneInput /src/fuzzer.c -1
