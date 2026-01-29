@@ -2,6 +2,8 @@
 
 本文档详细介绍如何将一个新的C/C++项目集成到OSS-Fuzz，生成FuzzIntrospector数据库，并运行LogicFuzz进行自动化fuzz target生成。
 
+> **实测验证**：本指南已通过 `gejingquan-project` 项目完整验证，成功生成5个fuzz targets，构建成功率100%，最大覆盖率68.8%。
+
 ## 目录
 
 1. [前提条件](#1-前提条件)
@@ -11,6 +13,7 @@
 5. [创建Benchmark配置](#5-创建benchmark配置)
 6. [运行LogicFuzz](#6-运行logicfuzz)
 7. [常见问题](#7-常见问题)
+8. [完整实战案例](#8-完整实战案例)
 
 ---
 
@@ -22,14 +25,17 @@
 - Python 3.10+
 - LogicFuzz 仓库已克隆
 - Git
+- LLM API 密钥（DeepSeek、OpenAI 或 Claude）
 
 ### 1.2 目录结构
 
 ```
 logicfuzz/
-├── oss-fuzz/
-│   └── projects/
-│       └── your-project/    # 新项目放这里
+├── oss-fuzz/                # 需要克隆完整的 OSS-Fuzz 仓库
+│   ├── infra/               # OSS-Fuzz 构建基础设施（必需）
+│   ├── projects/
+│   │   └── your-project/    # 新项目放这里
+│   └── build/out/           # 构建输出目录
 ├── conti-benchmark/
 │   └── your-project.yaml    # benchmark配置
 └── fuzz-introspector/       # 需要单独克隆
@@ -41,7 +47,22 @@ logicfuzz/
         └── db-timestamps.json
 ```
 
-### 1.3 克隆 FuzzIntrospector（首次使用）
+### 1.3 克隆 OSS-Fuzz（首次使用，必需）
+
+**重要**：必须克隆完整的 OSS-Fuzz 仓库，因为需要 `infra/helper.py` 等构建工具。
+
+```bash
+cd /path/to/logicfuzz
+
+# 如果 oss-fuzz 目录为空或只有 projects 子目录，需要重新克隆
+rm -rf oss-fuzz
+git clone --depth 1 https://github.com/google/oss-fuzz.git oss-fuzz
+
+# 验证克隆成功
+ls oss-fuzz/infra/helper.py  # 应该存在此文件
+```
+
+### 1.4 克隆 FuzzIntrospector（首次使用）
 
 如果 `fuzz-introspector/` 目录为空或不存在，需要先克隆：
 
@@ -61,6 +82,7 @@ pip install -r requirements.txt
 ### 2.1 创建项目目录
 
 ```bash
+cd /path/to/logicfuzz
 mkdir -p oss-fuzz/projects/my-project
 cd oss-fuzz/projects/my-project
 ```
@@ -573,12 +595,24 @@ cat results/output-my-project-strparser_hex_decode/benchmark.yaml
 
 成功运行后，日志末尾应显示类似：
 ```
-Total Drivers Generated:     1
-Successful Drivers:          1
-...
-build success rate: 1.0, crash rate: 0.0
-max coverage: 0.52
+**** FINAL RESULTS: ****
+
+================================================================================
+*my-project, int strparser_hex_decode(const char *, size_t, uint8_t *, size_t, size_t *)*
+build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.6880733944954128, max line coverage diff: 0.9086021505376344
+
+**** TOTAL COVERAGE GAIN: ****
+*my-project: 0.9941176470588236
 ```
+
+**关键指标说明**：
+| 指标 | 说明 | 理想值 |
+|------|------|--------|
+| build success rate | 构建成功率 | 1.0 (100%) |
+| crash rate | 崩溃率 | 0.0 (0%) |
+| max coverage | 最大代码覆盖率 | > 0.5 |
+| max line coverage diff | 最大行覆盖率增量 | > 0.8 |
+| TOTAL COVERAGE GAIN | 总覆盖率增益 | > 0.9 |
 
 ---
 
@@ -647,9 +681,188 @@ curl "http://localhost:8080/api/function-signature?project=my-project&function=s
 2. 手动编译测试
 3. 查看日志文件中的错误信息
 
+### 7.8 OSS-Fuzz 缺少 infra/helper.py
+
+**原因**：`oss-fuzz` 目录不完整，只有 `projects` 子目录。
+
+**解决方案**：
+```bash
+cd /path/to/logicfuzz
+rm -rf oss-fuzz
+git clone --depth 1 https://github.com/google/oss-fuzz.git oss-fuzz
+```
+
+### 7.9 LLM API 认证失败
+
+**原因**：API 密钥无效或未设置。
+
+**解决方案**：
+```bash
+# 检查环境变量
+echo $DEEPSEEK_API_KEY
+
+# 重新设置（确保密钥正确）
+export DEEPSEEK_API_KEY=sk-your-valid-api-key
+
+# 或使用 OpenAI
+export OPENAI_API_KEY=sk-your-openai-key
+```
+
+### 7.10 FI 服务连接被拒绝
+
+**原因**：FI 服务未启动或已停止。
+
+**解决方案**：
+```bash
+# 检查服务是否运行
+curl -s "http://localhost:8080/api/all-functions?project=my-project"
+
+# 如果连接被拒绝，重新启动服务
+cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app
+export FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ=/path/to/logicfuzz/oss-fuzz
+nohup python3 main.py > /tmp/fi_server.log 2>&1 &
+
+# 等待服务启动
+sleep 5
+```
+
 ---
 
-## 附录：完整示例命令
+## 8. 完整实战案例
+
+以下是 `gejingquan-project` 项目从0到1的完整实战记录。
+
+### 8.1 项目概述
+
+- **项目名称**：gejingquan-project
+- **语言**：C
+- **功能**：字符串解析库（hex解码、URL解码、整数列表解析、字符串分割、键值对解析）
+- **目标函数**：5个
+
+### 8.2 执行步骤
+
+```bash
+# ============================================================
+# 步骤1：克隆 OSS-Fuzz（如果目录不完整）
+# ============================================================
+cd /path/to/logicfuzz
+git clone --depth 1 https://github.com/google/oss-fuzz.git oss-fuzz
+
+# ============================================================
+# 步骤2：创建项目目录和源文件
+# ============================================================
+mkdir -p oss-fuzz/projects/gejingquan-project
+
+# 创建源文件：strparser.h, strparser.c, Dockerfile, build.sh, project.yaml
+# （参考第2节的内容）
+
+chmod +x oss-fuzz/projects/gejingquan-project/build.sh
+
+# ============================================================
+# 步骤3：构建 Docker 镜像
+# ============================================================
+cd oss-fuzz
+echo "n" | python3 infra/helper.py build_image gejingquan-project
+
+# ============================================================
+# 步骤4：使用 introspector sanitizer 构建
+# ============================================================
+python3 infra/helper.py build_fuzzers --sanitizer introspector gejingquan-project
+
+# 验证构建结果
+ls build/out/gejingquan-project/inspector/all-fuzz-introspector-functions.json
+
+# ============================================================
+# 步骤5：设置 FI 数据库
+# ============================================================
+cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
+
+# 转换 FI 数据（使用4.2节的脚本，PROJECT="gejingquan-project"）
+# 注册项目（使用4.3节的脚本）
+# 创建 db-timestamps.json（使用4.4节的命令）
+
+# ============================================================
+# 步骤6：启动 FI 服务
+# ============================================================
+cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app
+export FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ=/path/to/logicfuzz/oss-fuzz
+nohup python3 main.py > /tmp/fi_server.log 2>&1 &
+
+# 验证服务启动
+sleep 5
+curl -s "http://localhost:8080/api/all-functions?project=gejingquan-project" | head -c 200
+
+# ============================================================
+# 步骤7：创建 Benchmark 配置
+# ============================================================
+# 创建 conti-benchmark/gejingquan-project.yaml（参考第5节）
+
+# ============================================================
+# 步骤8：运行 LogicFuzz
+# ============================================================
+cd /path/to/logicfuzz
+export OFG_CLEAN_UP_OSS_FUZZ=0
+export DEEPSEEK_API_KEY=sk-your-api-key
+
+python run_logicfuzz.py \
+  -y conti-benchmark/gejingquan-project.yaml \
+  --model deepseek-chat \
+  -n 1 \
+  --run-timeout 60 \
+  -e http://localhost:8080/api \
+  -of oss-fuzz
+```
+
+### 8.3 实际运行结果
+
+```
+**** FINAL RESULTS: ****
+
+================================================================================
+*gejingquan-project, int strparser_hex_decode(...)*
+build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.6880733944954128
+
+================================================================================
+*gejingquan-project, int strparser_url_decode(...)*
+build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.6880733944954128
+
+================================================================================
+*gejingquan-project, int strparser_parse_int_list(...)*
+build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.6880733944954128
+
+================================================================================
+*gejingquan-project, int strparser_split(...)*
+build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.6880733944954128
+
+================================================================================
+*gejingquan-project, int strparser_parse_kv(...)*
+build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.6880733944954128
+
+**** TOTAL COVERAGE GAIN: ****
+*gejingquan-project: 0.9941176470588236
+```
+
+### 8.4 生成的文件
+
+```
+results/
+├── output-gejingquan-project-strparser_hex_decode/
+│   ├── fuzz_targets/
+│   │   └── 01.fuzz_target          # 生成的 fuzz target
+│   ├── code-coverage-reports/
+│   │   └── 01.fuzz_target          # 覆盖率报告
+│   ├── logs/                        # 日志文件
+│   └── benchmark.yaml               # benchmark 配置
+├── output-gejingquan-project-strparser_url_decode/
+├── output-gejingquan-project-strparser_parse_int_list/
+├── output-gejingquan-project-strparser_split/
+├── output-gejingquan-project-strparser_parse_kv/
+└── report.json                      # 汇总报告
+```
+
+---
+
+## 附录A：完整示例命令
 
 ```bash
 # ============================================================
@@ -723,16 +936,18 @@ cat results/output-my-project-strparser_hex_decode/fuzz_targets/01.fuzz_target
 
 ---
 
-## 附录：生成的Fuzz Target示例
+## 附录B：生成的Fuzz Target示例
 
-成功运行后，LogicFuzz会生成类似以下的fuzz target：
+以下是 LogicFuzz 为 `gejingquan-project` 实际生成的 fuzz target 示例：
+
+### strparser_hex_decode
 
 ```cpp
 #include <fuzzer/FuzzedDataProvider.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <string>
-#include <vector>
+#include <stdlib.h>
+#include <string.h>
 
 extern "C" {
 #include "strparser.h"
@@ -741,29 +956,202 @@ extern "C" {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   FuzzedDataProvider fdp(data, size);
 
-  // Construct input string (parameter 1)
+  // Construct input string - hex decode expects hex characters
   std::string input_str = fdp.ConsumeRandomLengthString(fdp.remaining_bytes());
-  const char *input_ptr = input_str.c_str();
-  // Use length of constructed string (parameter 2)
   size_t input_len = input_str.length();
 
-  // Determine required output capacity
-  size_t required_capacity = (input_len + 1) / 2;
+  // PRE-1: Input pointer must be valid or NULL
+  const char* input_ptr = input_str.c_str();
+  if (input_len == 0) {
+    input_ptr = NULL;
+  }
 
-  // Construct output buffer (parameter 3) with sufficient capacity
-  std::vector<uint8_t> output_buf(required_capacity);
-  uint8_t *output_ptr = output_buf.data();
+  // Allocate output buffer - capacity should be at least half input length
+  size_t output_capacity = (input_len / 2) + 1;
+  uint8_t* output_buf = NULL;
 
-  // Construct output capacity (parameter 4)
-  size_t output_capacity = output_buf.size();
+  // PRE-2: Output buffer pointer must be valid if capacity > 0
+  if (output_capacity > 0) {
+    output_buf = (uint8_t*)malloc(output_capacity);
+    if (!output_buf) {
+      return 0;
+    }
+  }
 
-  // Construct bytes_written variable and pointer (parameter 5)
   size_t bytes_written = 0;
-  size_t *bytes_written_ptr = &bytes_written;
 
-  // Call target function
-  strparser_hex_decode(input_ptr, input_len, output_ptr, output_capacity, bytes_written_ptr);
+  // Call the target function
+  int result = strparser_hex_decode(input_ptr, input_len, output_buf, output_capacity, &bytes_written);
+
+  // Cleanup
+  if (output_buf) {
+    free(output_buf);
+  }
 
   return 0;
 }
+```
+
+### strparser_parse_kv
+
+```cpp
+#include <stddef.h>
+#include <stdint.h>
+#include <fuzzer/FuzzedDataProvider.h>
+
+extern "C" {
+#include "strparser.h"
+}
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+  if (size == 0) return 0;
+
+  FuzzedDataProvider fdp(data, size);
+
+  // Split input: first half for string, second half for potential other fuzzing
+  size_t str_len = fdp.ConsumeIntegralInRange<size_t>(0, fdp.remaining_bytes());
+  std::string input_str = fdp.ConsumeBytesAsString(str_len);
+
+  // Initialize the key-value struct
+  strparser_kv_t kv = {0};
+
+  // Call the target function
+  int ret = strparser_parse_kv(input_str.c_str(), input_str.length(), &kv);
+
+  return 0;
+}
+```
+
+### strparser_split
+
+```cpp
+#include <fuzzer/FuzzedDataProvider.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <vector>
+
+extern "C" {
+#include "strparser.h"
+}
+
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  if (size == 0) {
+    return 0;
+  }
+
+  FuzzedDataProvider fdp(data, size);
+
+  // Construct input string
+  std::string input_str = fdp.ConsumeRandomLengthString(4096);
+  const char* input = input_str.c_str();
+  size_t input_len = input_str.length();
+
+  // Construct delimiter
+  char delimiter = fdp.ConsumeIntegral<char>();
+
+  // Construct max_tokens with reasonable bounds
+  size_t max_tokens = fdp.ConsumeIntegralInRange<size_t>(0, 1024);
+
+  // Allocate tokens array if max_tokens > 0
+  std::vector<strparser_token_t> tokens_vec;
+  strparser_token_t* tokens = nullptr;
+
+  if (max_tokens > 0) {
+    tokens_vec.resize(max_tokens);
+    tokens = tokens_vec.data();
+  }
+
+  // Output parameter
+  size_t tokens_written = 0;
+  size_t* tokens_written_ptr = &tokens_written;
+
+  // Call the target function
+  int result = strparser_split(input, input_len, delimiter, tokens,
+                               max_tokens, tokens_written_ptr);
+
+  return 0;
+}
+```
+
+---
+
+## 附录C：Benchmark YAML 配置示例
+
+以下是 `gejingquan-project` 的完整 benchmark 配置：
+
+```yaml
+"functions":
+- "name": "strparser_hex_decode"
+  "params":
+  - "name": "input"
+    "type": "const char*"
+  - "name": "input_len"
+    "type": "size_t"
+  - "name": "output"
+    "type": "uint8_t*"
+  - "name": "output_size"
+    "type": "size_t"
+  - "name": "output_len"
+    "type": "size_t*"
+  "return_type": "int"
+  "signature": "int strparser_hex_decode(const char *, size_t, uint8_t *, size_t, size_t *)"
+
+- "name": "strparser_url_decode"
+  "params":
+  - "name": "input"
+    "type": "const char*"
+  - "name": "input_len"
+    "type": "size_t"
+  - "name": "output"
+    "type": "char*"
+  - "name": "output_size"
+    "type": "size_t"
+  - "name": "output_len"
+    "type": "size_t*"
+  "return_type": "int"
+  "signature": "int strparser_url_decode(const char *, size_t, char *, size_t, size_t *)"
+
+- "name": "strparser_parse_int_list"
+  "params":
+  - "name": "input"
+    "type": "const char*"
+  - "name": "input_len"
+    "type": "size_t"
+  - "name": "result"
+    "type": "strparser_int_list_t*"
+  "return_type": "int"
+  "signature": "int strparser_parse_int_list(const char *, size_t, strparser_int_list_t *)"
+
+- "name": "strparser_split"
+  "params":
+  - "name": "input"
+    "type": "const char*"
+  - "name": "input_len"
+    "type": "size_t"
+  - "name": "delimiter"
+    "type": "char"
+  - "name": "tokens"
+    "type": "strparser_token_t*"
+  - "name": "max_tokens"
+    "type": "size_t"
+  - "name": "token_count"
+    "type": "size_t*"
+  "return_type": "int"
+  "signature": "int strparser_split(const char *, size_t, char, strparser_token_t *, size_t, size_t *)"
+
+- "name": "strparser_parse_kv"
+  "params":
+  - "name": "input"
+    "type": "const char*"
+  - "name": "input_len"
+    "type": "size_t"
+  - "name": "result"
+    "type": "strparser_kv_t*"
+  "return_type": "int"
+  "signature": "int strparser_parse_kv(const char *, size_t, strparser_kv_t *)"
+
+"language": "c"
+"project": "gejingquan-project"
+"target_name": "gejingquan_project_fuzzer"
+"target_path": "/src/gejingquan-project/fuzzer.c"
 ```
