@@ -595,10 +595,10 @@ sanitizers:
 cd /path/to/logicfuzz/oss-fuzz
 
 # 构建Docker镜像（输入 'n' 跳过拉取基础镜像）
-echo "n" | python infra/helper.py build_image my-project
+echo "n" | python infra/helper.py build_image gejingquan-project
 
 # 使用introspector sanitizer构建（生成FI数据）
-python infra/helper.py build_fuzzers --sanitizer introspector my-project
+python infra/helper.py build_fuzzers --sanitizer introspector gejingquan-project
 ```
 
 ### 3.2 验证构建结果
