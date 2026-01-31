@@ -643,7 +643,7 @@ python3 << 'EOF'
 import json
 import os
 
-PROJECT = "my-project"  # 修改为你的项目名
+PROJECT = "gejingquan-project"  # 修改为你的项目名
 OSS_FUZZ_DIR = "/path/to/logicfuzz/oss-fuzz"  # 修改为实际路径
 
 # 读取introspector生成的函数数据
@@ -701,7 +701,7 @@ import json
 import os
 from datetime import date
 
-PROJECT_NAME = "my-project"  # 修改为你的项目名
+PROJECT_NAME = "gejingquan-project"  # 修改为你的项目名
 FUNCTION_COUNT = 3  # 修改为实际函数数量
 
 def load_or_create(filename, default_content):
@@ -837,7 +837,7 @@ curl -s "http://localhost:8080/api/function-source-code?project=gejingquan-proje
 
 ## 5. 创建Benchmark配置
 
-在 `conti-benchmark/` 目录下创建 `my-project.yaml`：
+在 `conti-benchmark/` 目录下创建 `gejingquan-project.yaml`：
 
 **重要**：`signature` 字段中的类型必须使用空格分隔（如 `const char *` 而不是 `const char*`），需要与FI API返回的签名格式一致。
 
@@ -859,14 +859,14 @@ curl -s "http://localhost:8080/api/function-source-code?project=gejingquan-proje
   "signature": "int strparser_hex_decode(const char *, size_t, uint8_t *, size_t, size_t *)"
 
 "language": "c"
-"project": "my-project"
+"project": "gejingquan-project"
 "target_name": "my_project_fuzzer"
-"target_path": "/src/my-project/fuzzer.c"
+"target_path": "/src/gejingquan-project/fuzzer.c"
 ```
 
 **提示**：可以通过FI API获取正确的签名格式：
 ```bash
-curl -s "http://localhost:8080/api/function-signature?project=my-project&function=strparser_hex_decode" | python3 -c "import sys,json; print(json.load(sys.stdin)['signature'])"
+curl -s "http://localhost:8080/api/function-signature?project=gejingquan-project&function=strparser_hex_decode" | python3 -c "import sys,json; print(json.load(sys.stdin)['signature'])"
 ```
 
 ---
@@ -891,7 +891,7 @@ export OPENAI_API_KEY=your-api-key
 cd /path/to/logicfuzz
 
 python run_logicfuzz.py \
-  -y conti-benchmark/my-project.yaml \
+  -y conti-benchmark/gejingquan-project.yaml \
   --model deepseek-chat \
   -n 1 \
   --run-timeout 60 \
@@ -917,7 +917,7 @@ python run_logicfuzz.py \
 ```bash
 # 带源代码过滤的完整命令
 python run_logicfuzz.py \
-  -y conti-benchmark/my-project.yaml \
+  -y conti-benchmark/gejingquan-project.yaml \
   --model deepseek-chat \
   -n 1 \
   --run-timeout 60 \
@@ -931,16 +931,16 @@ python run_logicfuzz.py \
 
 ```bash
 # 生成的fuzz target
-cat results/output-my-project-strparser_hex_decode/fuzz_targets/01.fuzz_target
+cat results/output-gejingquan-project-strparser_hex_decode/fuzz_targets/01.fuzz_target
 
 # 覆盖率报告
-ls results/output-my-project-strparser_hex_decode/code-coverage-reports/
+ls results/output-gejingquan-project-strparser_hex_decode/code-coverage-reports/
 
 # 日志文件
-ls results/output-my-project-strparser_hex_decode/logs/
+ls results/output-gejingquan-project-strparser_hex_decode/logs/
 
 # benchmark配置
-cat results/output-my-project-strparser_hex_decode/benchmark.yaml
+cat results/output-gejingquan-project-strparser_hex_decode/benchmark.yaml
 ```
 
 ### 6.6 预期输出
@@ -950,11 +950,11 @@ cat results/output-my-project-strparser_hex_decode/benchmark.yaml
 **** FINAL RESULTS: ****
 
 ================================================================================
-*my-project, int strparser_hex_decode(const char *, size_t, uint8_t *, size_t, size_t *)*
+*gejingquan-project, int strparser_hex_decode(const char *, size_t, uint8_t *, size_t, size_t *)*
 build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.6880733944954128, max line coverage diff: 0.9086021505376344
 
 **** TOTAL COVERAGE GAIN: ****
-*my-project: 0.9941176470588236
+*gejingquan-project: 0.9941176470588236
 ```
 
 **关键指标说明**：
@@ -985,7 +985,7 @@ build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.68807339
 1. 确保启动FI时设置了 `FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ` 环境变量
 2. 确保项目已添加到 `all-project-current.json` 和 `all-project-timestamps.json`
 3. 重启FI服务后验证输出中显示 "Local webapp is set"
-4. 检查源代码是否存在于 `oss-fuzz/build/out/my-project/inspector/source-code/` 目录
+4. 检查源代码是否存在于 `oss-fuzz/build/out/gejingquan-project/inspector/source-code/` 目录
 
 ### 7.3 FI API返回"Unable to find function"
 
@@ -994,7 +994,7 @@ build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.68807339
 **解决方案**：
 1. 确保build.sh中的fuzzer调用了目标函数
 2. 使用introspector sanitizer重新构建
-3. 检查 `all-functions-db-my-project.json` 是否正确生成
+3. 检查 `all-functions-db-gejingquan-project.json` 是否正确生成
 
 ### 7.4 Docker构建时提示输入
 
@@ -1002,7 +1002,7 @@ build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.68807339
 
 **解决方案**：
 ```bash
-echo "n" | python infra/helper.py build_image my-project
+echo "n" | python infra/helper.py build_image gejingquan-project
 ```
 
 ### 7.5 项目目录被删除
@@ -1021,7 +1021,7 @@ export OFG_CLEAN_UP_OSS_FUZZ=0
 **解决方案**：
 LogicFuzz会自动尝试解析函数名并查询完整签名。如果仍失败，使用FI API查询正确的签名格式：
 ```bash
-curl "http://localhost:8080/api/function-signature?project=my-project&function=strparser_hex_decode"
+curl "http://localhost:8080/api/function-signature?project=gejingquan-project&function=strparser_hex_decode"
 ```
 
 ### 7.7 构建成功但覆盖率为0
@@ -1067,7 +1067,7 @@ export OPENAI_API_KEY=sk-your-openai-key
 **解决方案**：
 ```bash
 # 检查服务是否运行
-curl -s "http://localhost:8080/api/all-functions?project=my-project"
+curl -s "http://localhost:8080/api/all-functions?project=gejingquan-project"
 
 # 如果连接被拒绝，重新启动服务
 cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app
@@ -1220,8 +1220,8 @@ results/
 # ============================================================
 # 1. 创建项目
 # ============================================================
-mkdir -p oss-fuzz/projects/my-project
-cd oss-fuzz/projects/my-project
+mkdir -p oss-fuzz/projects/gejingquan-project
+cd oss-fuzz/projects/gejingquan-project
 # 创建 strparser.h, strparser.c, Dockerfile, build.sh, project.yaml
 chmod +x build.sh
 
@@ -1229,11 +1229,11 @@ chmod +x build.sh
 # 2. 构建并生成FI数据
 # ============================================================
 cd /path/to/logicfuzz/oss-fuzz
-echo "n" | python infra/helper.py build_image my-project
-python infra/helper.py build_fuzzers --sanitizer introspector my-project
+echo "n" | python infra/helper.py build_image gejingquan-project
+python infra/helper.py build_fuzzers --sanitizer introspector gejingquan-project
 
 # 验证构建结果
-ls build/out/my-project/inspector/all-fuzz-introspector-functions.json
+ls build/out/gejingquan-project/inspector/all-fuzz-introspector-functions.json
 
 # ============================================================
 # 3. 设置FI数据库（如果fuzz-introspector目录为空，先克隆）
@@ -1258,13 +1258,13 @@ python3 main.py
 # ============================================================
 # 5. 验证FI API
 # ============================================================
-curl -s "http://localhost:8080/api/all-functions?project=my-project" | python3 -m json.tool | head -20
+curl -s "http://localhost:8080/api/all-functions?project=gejingquan-project" | python3 -m json.tool | head -20
 
 # ============================================================
 # 6. 创建Benchmark配置
 # ============================================================
 cd /path/to/logicfuzz
-# 创建 conti-benchmark/my-project.yaml
+# 创建 conti-benchmark/gejingquan-project.yaml
 
 # ============================================================
 # 7. 运行LogicFuzz
@@ -1273,7 +1273,7 @@ export OFG_CLEAN_UP_OSS_FUZZ=0
 export DEEPSEEK_API_KEY=your-key
 
 python run_logicfuzz.py \
-  -y conti-benchmark/my-project.yaml \
+  -y conti-benchmark/gejingquan-project.yaml \
   --model deepseek-chat \
   -n 1 \
   --run-timeout 60 \
@@ -1283,7 +1283,7 @@ python run_logicfuzz.py \
 # ============================================================
 # 8. 查看结果
 # ============================================================
-cat results/output-my-project-strparser_hex_decode/fuzz_targets/01.fuzz_target
+cat results/output-gejingquan-project-strparser_hex_decode/fuzz_targets/01.fuzz_target
 ```
 
 ---
