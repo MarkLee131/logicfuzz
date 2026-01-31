@@ -605,15 +605,15 @@ python infra/helper.py build_fuzzers --sanitizer introspector gejingquan-project
 
 ```bash
 # 检查生成的fuzzer和inspector数据
-ls -la build/out/my-project/
-ls -la build/out/my-project/inspector/
+ls -la build/out/gejingquan-project/
+ls -la build/out/gejingquan-project/inspector/
 
 # 应该看到类似文件：
-# build/out/my-project/
-#   my_project_fuzzer
+# build/out/gejingquan-project/
+#   gejingquan_project_fuzzer
 #   strparser.c
 #   strparser.h
-# build/out/my-project/inspector/
+# build/out/gejingquan-project/inspector/
 #   all-fuzz-introspector-functions.json
 #   source-code/
 ```
@@ -622,7 +622,7 @@ ls -la build/out/my-project/inspector/
 
 ```bash
 # 查看捕获的函数
-cat build/out/my-project/inspector/all-fuzz-introspector-functions.json | python3 -m json.tool | head -50
+cat build/out/gejingquan-project/inspector/all-fuzz-introspector-functions.json | python3 -m json.tool | head -50
 ```
 
 ---
