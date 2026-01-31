@@ -820,13 +820,13 @@ Loading db
 
 ```bash
 # 获取项目的所有函数
-curl -s "http://localhost:8080/api/all-functions?project=my-project" | python3 -m json.tool | head -30
+curl -s "http://localhost:8080/api/all-functions?project=gejingquan-project" | python3 -m json.tool | head -30
 
 # 获取特定函数签名
-curl -s "http://localhost:8080/api/function-signature?project=my-project&function=strparser_hex_decode" | python3 -m json.tool
+curl -s "http://localhost:8080/api/function-signature?project=gejingquan-project&function=strparser_hex_decode" | python3 -m json.tool
 
 # 测试源代码获取（关键测试）
-curl -s "http://localhost:8080/api/function-source-code?project=my-project&function_signature=int%20strparser_hex_decode(const%20char%20*,%20size_t,%20uint8_t%20*,%20size_t,%20size_t%20*)" | python3 -m json.tool
+curl -s "http://localhost:8080/api/function-source-code?project=gejingquan-project&function_signature=int%20strparser_hex_decode(const%20char%20*,%20size_t,%20uint8_t%20*,%20size_t,%20size_t%20*)" | python3 -m json.tool
 ```
 
 如果服务正常运行，会返回JSON数据。如果返回 `{"msg":"No source code","result":"error"}`，说明：
