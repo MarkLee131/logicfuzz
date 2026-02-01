@@ -860,7 +860,7 @@ curl -s "http://localhost:8080/api/function-source-code?project=gejingquan-proje
 
 "language": "c"
 "project": "gejingquan-project"
-"target_name": "my_project_fuzzer"
+"target_name": "gejingquan_project_fuzzer"
 "target_path": "/src/gejingquan-project/fuzzer.c"
 ```
 
