@@ -702,7 +702,7 @@ import os
 from datetime import date
 
 PROJECT_NAME = "gejingquan-project"  # 修改为你的项目名
-FUNCTION_COUNT = 3  # 修改为实际函数数量
+FUNCTION_COUNT = 9  # 修改为实际函数数量
 
 def load_or_create(filename, default_content):
     """加载文件或创建新文件"""
@@ -781,7 +781,7 @@ cat > db-timestamps.json << 'EOF'
     "date": "2026-01-27",
     "project_count": 1,
     "fuzzer_count": 1,
-    "function_count": 3,
+    "function_count": 9,
     "function_coverage_estimate": 0.0,
     "accummulated_lines_total": 100,
     "accummulated_lines_covered": 0
