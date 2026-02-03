@@ -1,42 +1,42 @@
-# 新项目集成指南：OSS-Fuzz + FuzzIntrospector + LogicFuzz
+# New Project Integration Guide: OSS-Fuzz + FuzzIntrospector + LogicFuzz
 
-本文档详细介绍如何将一个新的C/C++项目集成到OSS-Fuzz，生成FuzzIntrospector数据库，并运行LogicFuzz进行自动化fuzz target生成。
+This document provides detailed instructions on how to integrate a new C/C++ project into OSS-Fuzz, generate a FuzzIntrospector database, and run LogicFuzz for automated fuzz target generation.
 
-> **实测验证**：本指南已通过 `gejingquan-project` 项目完整验证，成功生成5个fuzz targets，构建成功率100%，最大覆盖率68.8%。
+> **Verified**: This guide has been fully validated with the `gejingquan-project`, successfully generating 5 fuzz targets with 100% build success rate and maximum coverage of 68.8%.
 
-## 目录
+## Table of Contents
 
-1. [前提条件](#1-前提条件)
-2. [创建OSS-Fuzz项目](#2-创建oss-fuzz项目)
-3. [构建项目并生成FI数据](#3-构建项目并生成fi数据)
-4. [导入FI数据库](#4-导入fi数据库)
-5. [创建Benchmark配置](#5-创建benchmark配置)
-6. [运行LogicFuzz](#6-运行logicfuzz)
+1. [Prerequisites](#1-prerequisites)
+2. [Creating an OSS-Fuzz Project](#2-creating-an-oss-fuzz-project)
+3. [Building the Project and Generating FI Data](#3-building-the-project-and-generating-fi-data)
+4. [Importing the FI Database](#4-importing-the-fi-database)
+5. [Creating Benchmark Configuration](#5-creating-benchmark-configuration)
+6. [Running LogicFuzz](#6-running-logicfuzz)
 
 ---
 
-## 1. 前提条件
+## 1. Prerequisites
 
-### 1.1 环境要求
+### 1.1 Environment Requirements
 
-- Docker 已安装并运行
+- Docker installed and running
 - Python 3.10+
-- LogicFuzz 仓库已克隆
+- LogicFuzz repository cloned
 - Git
-- LLM API 密钥（DeepSeek、OpenAI 或 Claude）
+- LLM API key (DeepSeek, OpenAI, or Claude)
 
-### 1.2 目录结构
+### 1.2 Directory Structure
 
 ```
 logicfuzz/
-├── oss-fuzz/                # 需要克隆完整的 OSS-Fuzz 仓库
-│   ├── infra/               # OSS-Fuzz 构建基础设施（必需）
+├── oss-fuzz/                # Full OSS-Fuzz repository needs to be cloned
+│   ├── infra/               # OSS-Fuzz build infrastructure (required)
 │   ├── projects/
-│   │   └── your-project/    # 新项目放这里
-│   └── build/out/           # 构建输出目录
+│   │   └── your-project/    # New projects go here
+│   └── build/out/           # Build output directory
 ├── conti-benchmark/
-│   └── your-project.yaml    # benchmark配置
-└── fuzz-introspector/       # 需要单独克隆
+│   └── your-project.yaml    # Benchmark configuration
+└── fuzz-introspector/       # Needs to be cloned separately
     └── tools/web-fuzzing-introspection/app/static/assets/db/
         ├── all-functions-db-your-project.json
         ├── all-constructors-db-your-project.json
@@ -45,41 +45,41 @@ logicfuzz/
         └── db-timestamps.json
 ```
 
-### 1.3 克隆 OSS-Fuzz（首次使用，必需）
+### 1.3 Clone OSS-Fuzz (First-time Setup, Required)
 
-**重要**：必须克隆完整的 OSS-Fuzz 仓库，因为需要 `infra/helper.py` 等构建工具。
+**Important**: You must clone the complete OSS-Fuzz repository, as build tools like `infra/helper.py` are required.
 
 ```bash
 cd /path/to/logicfuzz
 
-# 如果 oss-fuzz 目录为空或只有 projects 子目录，需要重新克隆
+# If the oss-fuzz directory is empty or only has the projects subdirectory, re-clone it
 rm -rf oss-fuzz
 git clone --depth 1 https://github.com/google/oss-fuzz.git oss-fuzz
 
-# 验证克隆成功
-ls oss-fuzz/infra/helper.py  # 应该存在此文件
+# Verify the clone was successful
+ls oss-fuzz/infra/helper.py  # This file should exist
 ```
 
-### 1.4 克隆 FuzzIntrospector（首次使用）
+### 1.4 Clone FuzzIntrospector (First-time Setup)
 
-如果 `fuzz-introspector/` 目录为空或不存在，需要先克隆：
+If the `fuzz-introspector/` directory is empty or doesn't exist, clone it first:
 
 ```bash
 cd /path/to/logicfuzz
 git clone https://github.com/ossf/fuzz-introspector fuzz-introspector
 
-# 安装依赖
+# Install dependencies
 cd fuzz-introspector/tools/web-fuzzing-introspection
 pip install -r requirements.txt
 ```
 
 ---
 
-## 2. 创建OSS-Fuzz项目
+## 2. Creating an OSS-Fuzz Project
 
-本节以实际的 `gejingquan-project` 项目为例，展示如何创建一个完整的OSS-Fuzz项目。
+This section uses the `gejingquan-project` as an example to demonstrate how to create a complete OSS-Fuzz project.
 
-### 2.1 创建项目目录
+### 2.1 Create Project Directory
 
 ```bash
 cd /path/to/logicfuzz
@@ -87,9 +87,9 @@ mkdir -p oss-fuzz/projects/gejingquan-project
 cd oss-fuzz/projects/gejingquan-project
 ```
 
-### 2.2 创建源代码文件
+### 2.2 Create Source Code Files
 
-以 `gejingquan-project` 字符串解析库为例，该库提供了多种字符串解析功能：hex解码、URL解码、整数列表解析、字符串分割、键值对解析等。
+Using the `gejingquan-project` string parsing library as an example, this library provides various string parsing functions: hex decoding, URL decoding, integer list parsing, string splitting, key-value pair parsing, etc.
 
 **strparser.h**
 ```c
@@ -432,7 +432,7 @@ int strparser_hex_decode(const char *input, size_t input_len,
 }
 ```
 
-### 2.3 创建Dockerfile
+### 2.3 Create Dockerfile
 
 ```dockerfile
 FROM gcr.io/oss-fuzz-base/base-builder
@@ -449,9 +449,9 @@ WORKDIR $SRC/gejingquan-project
 COPY build.sh $SRC/
 ```
 
-### 2.4 创建build.sh
+### 2.4 Create build.sh
 
-**重要**：build.sh必须创建一个调用库函数的fuzzer，否则FuzzIntrospector无法捕获函数信息。
+**Important**: build.sh must create a fuzzer that calls library functions, otherwise FuzzIntrospector cannot capture function information.
 
 ```bash
 #!/bin/bash -eu
@@ -524,22 +524,22 @@ cp $SRC/gejingquan-project/strparser.h $OUT/
 cp $SRC/gejingquan-project/strparser.c $OUT/
 ```
 
-**注意**：创建后需要添加执行权限：
+**Note**: Add execute permission after creation:
 ```bash
 chmod +x build.sh
 ```
 
-#### 2.4.1 理解桩 Fuzzer（fuzzer.c）的作用
+#### 2.4.1 Understanding the Stub Fuzzer (fuzzer.c)
 
-build.sh 中创建的 `fuzzer.c` 是一个**桩 Fuzzer（Stub Fuzzer）**，它有两个关键作用：
+The `fuzzer.c` created in build.sh is a **Stub Fuzzer** that serves two key purposes:
 
-**1. 让 FuzzIntrospector 捕获函数信息（必需）**
+**1. Enabling FuzzIntrospector to Capture Function Information (Required)**
 
-FuzzIntrospector 通过分析 fuzzer 的调用关系来发现库中的函数。如果没有一个 fuzzer 调用库函数，FuzzIntrospector 就**无法捕获**这些函数的信息。
+FuzzIntrospector discovers library functions by analyzing the call relationships of the fuzzer. Without a fuzzer calling the library functions, FuzzIntrospector **cannot capture** information about these functions.
 
-桩 fuzzer 必须调用所有需要被 LogicFuzz 分析的目标函数，如上例中：
+The stub fuzzer must call all target functions that need to be analyzed by LogicFuzz, as shown in the example above:
 ```c
-// 在 fuzzer.c 中调用所有目标函数
+// Call all target functions in fuzzer.c
 strparser_hex_decode(...);
 strparser_url_decode(...);
 strparser_parse_int_list(...);
@@ -548,28 +548,28 @@ strparser_parse_kv(...);
 strparser_parse_kv_list(...);
 ```
 
-这样 FuzzIntrospector 在使用 `--sanitizer introspector` 构建时，就能捕获到这些函数的签名、参数类型、源代码位置等信息，并生成 `all-fuzz-introspector-functions.json` 数据库。
+This allows FuzzIntrospector to capture function signatures, parameter types, source code locations, and other information when building with `--sanitizer introspector`, generating the `all-fuzz-introspector-functions.json` database.
 
-**2. 提供基础的 fuzzing 能力**
+**2. Providing Basic Fuzzing Capability**
 
-这个 fuzzer 也是一个可以实际运行的 libFuzzer target，它会：
-- 接收随机输入数据 (`data`, `size`)
-- 将数据传递给各个库函数进行测试
-- 可以发现库中的崩溃和漏洞
+This fuzzer is also a functional libFuzzer target that:
+- Receives random input data (`data`, `size`)
+- Passes data to various library functions for testing
+- Can discover crashes and vulnerabilities in the library
 
-**桩 Fuzzer vs LogicFuzz 生成的 Fuzz Target**
+**Stub Fuzzer vs LogicFuzz-generated Fuzz Target**
 
-| 特性 | fuzzer.c (桩 Fuzzer) | LogicFuzz 生成的 Fuzz Target |
-|------|---------------------|------------------------------|
-| **目的** | 让 FI 捕获函数信息 | 针对特定函数深度测试 |
-| **输入构造** | 简单（直接传递原始数据） | 智能（使用 FuzzedDataProvider） |
-| **参数处理** | 固定缓冲区大小 | 动态分配，边界检查 |
-| **覆盖函数** | 一个 fuzzer 覆盖所有函数 | 每个函数一个专门的 fuzzer |
-| **代码质量** | 手写，较简单 | LLM 生成，考虑前置条件 |
+| Feature | fuzzer.c (Stub Fuzzer) | LogicFuzz-generated Fuzz Target |
+|---------|------------------------|--------------------------------|
+| **Purpose** | Enable FI to capture function info | Deep testing of specific functions |
+| **Input Construction** | Simple (passes raw data directly) | Smart (uses FuzzedDataProvider) |
+| **Parameter Handling** | Fixed buffer sizes | Dynamic allocation, boundary checks |
+| **Function Coverage** | One fuzzer covers all functions | Dedicated fuzzer for each function |
+| **Code Quality** | Hand-written, simpler | LLM-generated, considers preconditions |
 
-> **重要**：`fuzzer.c` 是 FuzzIntrospector 数据收集的**必要条件**，没有它就无法生成函数数据库，LogicFuzz 也就无法工作。
+> **Important**: `fuzzer.c` is a **prerequisite** for FuzzIntrospector data collection. Without it, the function database cannot be generated, and LogicFuzz will not work.
 
-### 2.5 创建project.yaml
+### 2.5 Create project.yaml
 
 ```yaml
 homepage: "https://github.com/gejingquan/gejingquan-project"
@@ -585,28 +585,28 @@ sanitizers:
 
 ---
 
-## 3. 构建项目并生成FI数据
+## 3. Building the Project and Generating FI Data
 
-### 3.1 使用introspector sanitizer构建
+### 3.1 Build with Introspector Sanitizer
 
 ```bash
 cd /path/to/logicfuzz/oss-fuzz
 
-# 构建Docker镜像（输入 'n' 跳过拉取基础镜像）
+# Build Docker image (enter 'n' to skip pulling base image)
 echo "n" | python infra/helper.py build_image gejingquan-project
 
-# 使用introspector sanitizer构建（生成FI数据）
+# Build with introspector sanitizer (generates FI data)
 python infra/helper.py build_fuzzers --sanitizer introspector gejingquan-project
 ```
 
-### 3.2 验证构建结果
+### 3.2 Verify Build Results
 
 ```bash
-# 检查生成的fuzzer和inspector数据
+# Check the generated fuzzer and inspector data
 ls -la build/out/gejingquan-project/
 ls -la build/out/gejingquan-project/inspector/
 
-# 应该看到类似文件：
+# You should see files like:
 # build/out/gejingquan-project/
 #   gejingquan_project_fuzzer
 #   strparser.c
@@ -616,42 +616,42 @@ ls -la build/out/gejingquan-project/inspector/
 #   source-code/
 ```
 
-### 3.3 验证捕获的函数
+### 3.3 Verify Captured Functions
 
 ```bash
-# 查看捕获的函数
+# View captured functions
 cat build/out/gejingquan-project/inspector/all-fuzz-introspector-functions.json | python3 -m json.tool | head -50
 ```
 
 ---
 
-## 4. 导入FI数据库
+## 4. Importing the FI Database
 
-### 4.1 创建数据库目录
+### 4.1 Create Database Directory
 
 ```bash
 mkdir -p fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
 cd fuzz-introspector/tools/web-fuzzing-introspection/app/static/assets/db
 ```
 
-### 4.2 转换FI数据为webapp格式
+### 4.2 Convert FI Data to Webapp Format
 
 ```bash
 python3 << 'EOF'
 import json
 import os
 
-PROJECT = "gejingquan-project"  # 修改为你的项目名
-OSS_FUZZ_DIR = "/path/to/logicfuzz/oss-fuzz"  # 修改为实际路径
+PROJECT = "gejingquan-project"  # Change to your project name
+OSS_FUZZ_DIR = "/path/to/logicfuzz/oss-fuzz"  # Change to actual path
 
-# 读取introspector生成的函数数据
+# Read function data generated by introspector
 inspector_dir = os.path.join(OSS_FUZZ_DIR, "build", "out", PROJECT, "inspector")
 functions_file = os.path.join(inspector_dir, "all-fuzz-introspector-functions.json")
 
 with open(functions_file, 'r') as f:
     functions_data = json.load(f)
 
-# 转换为FI webapp格式（注意：字段名与原始数据不同）
+# Convert to FI webapp format (note: field names differ from original data)
 converted = []
 for func in functions_data:
     converted.append({
@@ -677,11 +677,11 @@ for func in functions_data:
         "asserts": func.get("asserts", [])
     })
 
-# 写入数据库文件
+# Write database file
 with open(f"all-functions-db-{PROJECT}.json", "w") as f:
     json.dump(converted, f, indent=2)
 
-# 创建空的constructors数据库
+# Create empty constructors database
 with open(f"all-constructors-db-{PROJECT}.json", "w") as f:
     json.dump([], f)
 
@@ -689,9 +689,9 @@ print(f"Created all-functions-db-{PROJECT}.json with {len(converted)} functions"
 EOF
 ```
 
-### 4.3 注册项目到FI数据库
+### 4.3 Register Project in FI Database
 
-**重要**：新项目必须添加到FI的项目配置文件中，否则FI无法识别该项目。
+**Important**: New projects must be added to FI's project configuration files, otherwise FI cannot recognize the project.
 
 ```bash
 python3 << 'EOF'
@@ -699,17 +699,17 @@ import json
 import os
 from datetime import date
 
-PROJECT_NAME = "gejingquan-project"  # 修改为你的项目名
-FUNCTION_COUNT = 9  # 修改为实际函数数量
+PROJECT_NAME = "gejingquan-project"  # Change to your project name
+FUNCTION_COUNT = 9  # Change to actual function count
 
 def load_or_create(filename, default_content):
-    """加载文件或创建新文件"""
+    """Load file or create new file"""
     if os.path.exists(filename):
         with open(filename, 'r') as f:
             return json.load(f)
     return default_content
 
-# 添加到 all-project-current.json
+# Add to all-project-current.json
 projects = load_or_create('all-project-current.json', [])
 
 if not any(p.get('project_name') == PROJECT_NAME for p in projects):
@@ -743,7 +743,7 @@ if not any(p.get('project_name') == PROJECT_NAME for p in projects):
 else:
     print(f"{PROJECT_NAME} already exists in all-project-current.json")
 
-# 添加到 all-project-timestamps.json
+# Add to all-project-timestamps.json
 timestamps = load_or_create('all-project-timestamps.json', [])
 
 if not any(p.get('project_name') == PROJECT_NAME for p in timestamps):
@@ -768,9 +768,9 @@ print("Done!")
 EOF
 ```
 
-### 4.4 创建db-timestamps.json（必需）
+### 4.4 Create db-timestamps.json (Required)
 
-**重要**：FI webapp 需要此文件才能启动。
+**Important**: The FI webapp requires this file to start.
 
 ```bash
 cat > db-timestamps.json << 'EOF'
@@ -788,56 +788,56 @@ cat > db-timestamps.json << 'EOF'
 EOF
 ```
 
-### 4.5 启动FI本地服务
+### 4.5 Start FI Local Service
 
-**关键**：必须设置 `FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ` 环境变量，指向OSS-Fuzz目录，这样FI才能读取本地构建的源代码。
+**Key**: You must set the `FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ` environment variable pointing to the OSS-Fuzz directory, so FI can read the locally built source code.
 
 ```bash
 cd /path/to/logicfuzz/fuzz-introspector/tools/web-fuzzing-introspection/app
 
-# 设置本地模式环境变量（重要！）
+# Set local mode environment variable (important!)
 export FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ=/path/to/logicfuzz/oss-fuzz
 
-# 启动Flask应用（前台运行）
+# Start Flask application (foreground)
 python3 main.py
 
-# 或者后台运行
+# Or run in background
 nohup python3 main.py > /tmp/fi_server.log 2>&1 &
 ```
 
-服务启动后应该显示：
+After the service starts, you should see:
 ```
 Local webapp is set
 Loading db
  * Running on http://0.0.0.0:8080
 ```
 
-**注意**：如果没有看到 "Local webapp is set"，说明环境变量没有正确设置，源代码查找功能将无法工作。
+**Note**: If you don't see "Local webapp is set", the environment variable was not set correctly, and source code lookup will not work.
 
-### 4.6 验证API
+### 4.6 Verify API
 
 ```bash
-# 获取项目的所有函数
+# Get all functions for the project
 curl -s "http://localhost:8080/api/all-functions?project=gejingquan-project" | python3 -m json.tool | head -30
 
-# 获取特定函数签名
+# Get specific function signature
 curl -s "http://localhost:8080/api/function-signature?project=gejingquan-project&function=strparser_hex_decode" | python3 -m json.tool
 
-# 测试源代码获取（关键测试）
+# Test source code retrieval (key test)
 curl -s "http://localhost:8080/api/function-source-code?project=gejingquan-project&function_signature=int%20strparser_hex_decode(const%20char%20*,%20size_t,%20uint8_t%20*,%20size_t,%20size_t%20*)" | python3 -m json.tool
 ```
 
-如果服务正常运行，会返回JSON数据。如果返回 `{"msg":"No source code","result":"error"}`，说明：
-1. 环境变量 `FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ` 没有正确设置
-2. 或者项目没有添加到 `all-project-current.json`
+If the service is running properly, it will return JSON data. If it returns `{"msg":"No source code","result":"error"}`, it means:
+1. The `FUZZ_INTROSPECTOR_LOCAL_OSS_FUZZ` environment variable was not set correctly
+2. Or the project was not added to `all-project-current.json`
 
 ---
 
-## 5. 创建Benchmark配置
+## 5. Creating Benchmark Configuration
 
-在 `conti-benchmark/` 目录下创建 `gejingquan-project.yaml`：
+Create `gejingquan-project.yaml` in the `conti-benchmark/` directory:
 
-**重要**：`signature` 字段中的类型必须使用空格分隔（如 `const char *` 而不是 `const char*`），需要与FI API返回的签名格式一致。
+**Important**: Types in the `signature` field must use space separation (e.g., `const char *` instead of `const char*`), matching the signature format returned by the FI API.
 
 ```yaml
 "functions":
@@ -862,28 +862,28 @@ curl -s "http://localhost:8080/api/function-source-code?project=gejingquan-proje
 "target_path": "/src/gejingquan-project/fuzzer.c"
 ```
 
-**提示**：可以通过FI API获取正确的签名格式：
+**Tip**: You can get the correct signature format via FI API:
 ```bash
 curl -s "http://localhost:8080/api/function-signature?project=gejingquan-project&function=strparser_hex_decode" | python3 -c "import sys,json; print(json.load(sys.stdin)['signature'])"
 ```
 
 ---
 
-## 6. 运行LogicFuzz
+## 6. Running LogicFuzz
 
-### 6.1 设置环境变量
+### 6.1 Set Environment Variables
 
 ```bash
-# 禁用OSS-Fuzz清理（防止自定义项目被删除）
+# Disable OSS-Fuzz cleanup (prevents custom projects from being deleted)
 export OFG_CLEAN_UP_OSS_FUZZ=0
 
-# 设置LLM API密钥（根据使用的模型选择）
+# Set LLM API key (choose based on model used)
 export DEEPSEEK_API_KEY=your-api-key
-# 或
+# Or
 export OPENAI_API_KEY=your-api-key
 ```
 
-### 6.2 运行LogicFuzz
+### 6.2 Run LogicFuzz
 
 ```bash
 cd /path/to/logicfuzz
@@ -897,23 +897,23 @@ python run_logicfuzz.py \
   -of oss-fuzz
 ```
 
-### 6.3 参数说明
+### 6.3 Parameter Description
 
-| 参数 | 说明 |
-|------|------|
-| `-y` | benchmark YAML配置文件路径 |
-| `--model` | LLM模型（deepseek-chat, gpt-4o, claude-3-5-sonnet等） |
-| `-n` | 试验次数 |
-| `--run-timeout` | fuzzer运行超时时间（秒） |
-| `-e` | FuzzIntrospector API端点 |
-| `-of` | OSS-Fuzz目录路径 |
-| `--enable-source-filter` | 启用源代码过滤 |
-| `--source-filter-min-lines` | 源代码最小行数过滤阈值 |
+| Parameter | Description |
+|-----------|-------------|
+| `-y` | Benchmark YAML configuration file path |
+| `--model` | LLM model (deepseek-chat, gpt-4o, claude-3-5-sonnet, etc.) |
+| `-n` | Number of trials |
+| `--run-timeout` | Fuzzer run timeout in seconds |
+| `-e` | FuzzIntrospector API endpoint |
+| `-of` | OSS-Fuzz directory path |
+| `--enable-source-filter` | Enable source code filtering |
+| `--source-filter-min-lines` | Minimum lines threshold for source code filtering |
 
-### 6.4 运行示例
+### 6.4 Run Example
 
 ```bash
-# 带源代码过滤的完整命令
+# Complete command with source code filtering
 python run_logicfuzz.py \
   -y conti-benchmark/gejingquan-project.yaml \
   --model deepseek-chat \
@@ -925,25 +925,25 @@ python run_logicfuzz.py \
   --source-filter-min-lines 50
 ```
 
-### 6.5 查看结果
+### 6.5 View Results
 
 ```bash
-# 生成的fuzz target
+# Generated fuzz target
 cat results/output-gejingquan-project-strparser_hex_decode/fuzz_targets/01.fuzz_target
 
-# 覆盖率报告
+# Coverage report
 ls results/output-gejingquan-project-strparser_hex_decode/code-coverage-reports/
 
-# 日志文件
+# Log files
 ls results/output-gejingquan-project-strparser_hex_decode/logs/
 
-# benchmark配置
+# Benchmark configuration
 cat results/output-gejingquan-project-strparser_hex_decode/benchmark.yaml
 ```
 
-### 6.6 预期输出
+### 6.6 Expected Output
 
-成功运行后，日志末尾应显示类似：
+After a successful run, the log should show something like:
 ```
 **** FINAL RESULTS: ****
 
@@ -955,11 +955,11 @@ build success rate: 1.0, crash rate: 0.0, found bug: 0, max coverage: 0.68807339
 *gejingquan-project: 0.9941176470588236
 ```
 
-**关键指标说明**：
-| 指标 | 说明 | 理想值 |
-|------|------|--------|
-| build success rate | 构建成功率 | 1.0 (100%) |
-| crash rate | 崩溃率 | 0.0 (0%) |
-| max coverage | 最大代码覆盖率 | > 0.5 |
-| max line coverage diff | 最大行覆盖率增量 | > 0.8 |
-| TOTAL COVERAGE GAIN | 总覆盖率增益 | > 0.9 |
+**Key Metrics Description**:
+| Metric | Description | Ideal Value |
+|--------|-------------|-------------|
+| build success rate | Build success rate | 1.0 (100%) |
+| crash rate | Crash rate | 0.0 (0%) |
+| max coverage | Maximum code coverage | > 0.5 |
+| max line coverage diff | Maximum line coverage increase | > 0.8 |
+| TOTAL COVERAGE GAIN | Total coverage gain | > 0.9 |
