@@ -102,6 +102,11 @@ class FuzzingWorkflowState(TypedDict):
     # When disabled, agents won't see consensus constraints from previous iterations
     use_session_memory: NotRequired[bool]
 
+    # === Fake Definition Detection ===
+    # Result of fake definition check (LLM-hallucinated functions)
+    # Set by supervisor when build fails with undefined reference errors
+    fake_definition_result: NotRequired[Dict[str, Any]]
+
 class WorkerState(TypedDict):
     """State for worker nodes in parallel execution."""
     

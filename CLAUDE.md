@@ -1,48 +1,93 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 LogicFuzz: LLM-powered fuzz driver generation using LangGraph agents for C/C++ libraries.
 
-## Quick Start
+## Commands
 
 ```bash
+# Setup
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Run
+# Run on a benchmark
 python3 run_logicfuzz.py --benchmark-yaml comparison/cjson.yaml
+
+# Run with specific model
+python3 run_logicfuzz.py -y comparison/cjson.yaml -l gpt-4o
+
+# Extract APIs only (no LLM calls)
+python3 run_logicfuzz.py -y comparison/cjson.yaml --extract-only
+
+# Generate drivers with CBFactory
+python3 run_logicfuzz.py -y comparison/cjson.yaml --generate-drivers --num-drivers 10
+
+# Control parallelism (default: 10 experiments, 6 evaluations each)
+LLM_NUM_EXP=5 python3 run_logicfuzz.py -y comparison/cjson.yaml
+
+# Disable session memory (cross-agent consensus sharing)
+python3 run_logicfuzz.py -y comparison/cjson.yaml --no-session-memory
+
+# Code quality
+pylint src/
+pyright src/
+yapf -i src/**/*.py  # Format code
 ```
 
-Environment: `DASHSCOPE_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` in `logicfuzz.env`
-
----
+Environment variables in `logicfuzz.env`: `DASHSCOPE_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`
 
 ## Architecture
-
-### Agents (all use ToolCallingMixin for ReAct-style tool calling)
-
-| Agent | File | Tools |
-|-------|------|-------|
-| Prototyper | `src/agents/prototyper.py` | FI tools (source, xrefs, signature, tests) |
-| Improver | `src/agents/improver.py` | FI tools |
-| CoverageAnalyzer | `src/agents/coverage_analyzer.py` | Bash |
-| CrashAnalyzer | `src/agents/crash_analyzer.py` | GDB, Bash |
-| CrashFeasibilityAnalyzer | `src/agents/crash_feasibility_analyzer.py` | FI + Bash |
-| Fixer | `src/agents/fixer.py` | Bash |
 
 ### Data Flow
 
 ```
-ProjectDriverGenerator → FuzzingContext → CBFactory (Z3-guided) → Prototyper → FuzzTarget
+run_logicfuzz.py
+    ↓
+_prepare_shared_data_for_benchmark()  # Once per benchmark
+    ├── ProjectDriverGenerator (Liberator static analysis)
+    ├── Extract all APIs via Clang/LLVM
+    ├── Build type dependency graph
+    └── Generate API sequences
+    ↓
+FuzzingContext (immutable, SSOT)
+    ↓
+FuzzingWorkflow (LangGraph)
+    ├── Prototyper → generates driver
+    ├── Fixer → fixes compilation errors
+    ├── CoverageAnalyzer → analyzes coverage gaps
+    ├── CrashAnalyzer → diagnoses crashes
+    └── Supervisor → routes between agents
+    ↓
+Evaluation (build, coverage, crash detection)
 ```
 
-### Key Design: LLM Active Query
+### Agent System
 
-Prototyper/Improver **actively query** FuzzIntrospector instead of receiving static analysis conclusions:
-- `get_function_implementation` - understand buffer/var-len logic
-- `get_sample_cross_references` - learn API patterns
-- Tool calls are **optional** - LLM decides when needed
+All agents inherit from `LangGraphAgent` + `ToolCallingMixin` (ReAct-style tool calling):
 
----
+| Agent | File | Tools | Purpose |
+|-------|------|-------|---------|
+| Prototyper | `src/agents/prototyper.py` | FI (source, xrefs, signature, tests) | Generate initial driver |
+| Improver | `src/agents/improver.py` | FI tools | Improve driver quality |
+| Fixer | `src/agents/fixer.py` | Bash | Fix compilation errors |
+| CoverageAnalyzer | `src/agents/coverage_analyzer.py` | Bash | Analyze coverage gaps |
+| CrashAnalyzer | `src/agents/crash_analyzer.py` | GDB, Bash | Diagnose root causes |
+| CrashFeasibilityAnalyzer | `src/agents/crash_feasibility_analyzer.py` | FI + Bash | Assess crash severity |
+
+### Key Components
+
+- **FuzzingContext** (`src/context/data_context.py`): Immutable singleton with all static analysis results. No fallbacks - missing data raises ValueError.
+- **FuzzingWorkflowState** (`src/workflow/state.py`): LangGraph TypedDict with build results, coverage, crashes, node visit counts.
+- **ToolCallingMixin** (`src/agents/tool_calling_mixin.py`): ReAct loop - LLM generates tool calls → tools execute (parallel) → results returned → repeat until done.
+- **Supervisor** (`src/workflow/nodes/supervisor.py`): Routes between agents based on state, manages phases (compilation vs optimization).
+
+### Liberator Integration (`liberator_adapter/`)
+
+- **Extractors** (`extractors/`): `ClangAPIExtractor` (headers), `LLVMAPIExtractor` (bitcode flags/sizes)
+- **CBFactory** (`driver/factory/constraint_based/`): Z3-guided synthesis with `IncrementalZ3Solver`, `UnsatCoreDiagnoser`
+- **ConditionManager** (`constraints/`): Source/sink/init API classification
+- **Grammar** (`grammar/`): CFG-based API sequence generation
 
 ## Static Analysis Bottlenecks (Liberator)
 
@@ -56,8 +101,6 @@ Prototyper/Improver **actively query** FuzzIntrospector instead of receiving sta
 | L6 | Lifecycle | LLM validation | `sequence_filter.py` |
 | L7 | Guard conditions | Deferred | - |
 
----
-
 ## CBFactory (Z3-Guided Synthesis)
 
 **Location**: `liberator_adapter/driver/factory/constraint_based/CBFactory.py`
@@ -68,19 +111,12 @@ Z3 as **core decision participant** (not post-hoc validator):
 3. Incremental validation per API → early conflict detection
 4. UNSAT core analysis → intelligent backtrack
 
-**Components**: `IncrementalZ3Solver`, `Z3GuidedSynthesisController`, `UnsatCoreDiagnoser` in `z3_guided_synthesis.py`
+## Key Design Decisions
 
----
-
-## Out of Scope
-
-- Cross-thread/global state protocols
-- Complex ownership (refcount, borrowed pointers)
-- Async/reentrant callbacks
-- Macro expansion
-- Deep alias precision
-
----
+- **LLM Active Query**: Hard constraints (symbolic via Z3) vs soft constraints (LLM reference). Avoid blurring symbolic/neural responsibilities.
+- **SSOT (Single Source of Truth)**: FuzzingContext prepared once, immutable. No fallbacks - explicit failures prevent hidden bugs.
+- **Lazy Initialization**: Agents lazy-load `_chat_model` and `fi_tool` on first use to reduce memory in parallel execution.
+- **Session Memory**: Optional cross-agent consensus sharing via `session_memory` field (enabled by default).
 
 ## TODO
 
@@ -94,8 +130,11 @@ Z3 as **core decision participant** (not post-hoc validator):
 - [ ] VarLen boundary seeds: generate edge-case seeds based on buffer-size relations (size=0, size=1, size=boundary)
 - [ ] Loop iteration seeds: leverage `LoopPatternInfo.max_iterations` for iteration-boundary testing
 
-### Scheduzz-inspired Improvements (from ScheDuzz)
-- [ ] **P0: Dual Scheduling Framework** - Group Scheduler (similarity, coverage, group length, entropy) + Driver Scheduler (energy, cov/time score)
+### Scheduzz-inspired Improvements
+- [ ] **P0: Fake Definition Check** - Detect LLM-generated fake function definitions in validation phase
 - [ ] **P1: Imply/Conflict Constraints** - Extract explicit `imply(api1, api2)` and `conflict(api1, api2)` relations via LLM, integrate with Z3
+- [ ] **P1: Structure Init/Destroy Discovery** - Auto-discover struct initialization/destruction functions
+- [ ] **P1: Compilation Error Triage** - Distinguish link error / inclusion error / missing header, handle separately
 - [ ] **P2: Early Crash Detection** - 15s short-term fuzzing to filter irrational drivers before full execution
+- [ ] **P2: Driver Example Feedback** - Provide project's existing drivers as reference context in fixing phase
 - [ ] **P3: Group Entropy** - Ensure API coverage diversity, avoid always selecting same high-coverage APIs

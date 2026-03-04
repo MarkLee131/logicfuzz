@@ -52,6 +52,7 @@ from typing import Dict, Any
 from langchain_core.runnables import RunnableConfig
 import logger
 from src.workflow.state import FuzzingWorkflowState, consolidate_session_memory
+from src.utils.fake_definition_validator import should_terminate_on_fake_definitions
 
 
 # ==================== Configuration Constants ====================
@@ -164,6 +165,13 @@ def _handle_compilation_phase(state: FuzzingWorkflowState, trial: int) -> str:
         return "build"
 
     if not compile_success:
+        # === NEW: Check for fake definitions before retrying ===
+        # If LLM invented non-existent functions, retrying is pointless
+        should_terminate, reason = should_terminate_on_fake_definitions(state)
+        if should_terminate:
+            logger.error(f'Fake definition detected: {reason}', trial=trial)
+            return "END"
+
         compilation_retry_count = state.get("compilation_retry_count", 0)
         if compilation_retry_count < MAX_COMPILATION_RETRIES:
             logger.info(f'Compilation failed (attempt {compilation_retry_count + 1}/{MAX_COMPILATION_RETRIES}), '
@@ -190,6 +198,12 @@ def _handle_optimization_phase(state: FuzzingWorkflowState, trial: int) -> str:
 
     # Build failed in optimization phase → fixer
     if not compile_success:
+        # === Check for fake definitions before retrying ===
+        should_terminate, reason = should_terminate_on_fake_definitions(state)
+        if should_terminate:
+            logger.error(f'Fake definition detected in optimization phase: {reason}', trial=trial)
+            return "END"
+
         compilation_retry_count = state.get("compilation_retry_count", 0)
         if compilation_retry_count < MAX_COMPILATION_RETRIES:
             logger.info(f'Build failed in optimization phase (attempt {compilation_retry_count + 1}), '
