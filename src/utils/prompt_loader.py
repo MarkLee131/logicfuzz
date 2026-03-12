@@ -12,7 +12,6 @@ Directory structure:
 import os
 from typing import Dict, Optional
 
-
 # Base directory for agent prompts (root/prompts/, not src/prompts/)
 PROMPT_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -76,7 +75,9 @@ class PromptManager:
             self._cache[filename] = load_prompt_file(filename)
         return self._cache[filename]
 
-    def get_user_prompt_template(self, agent_name: str, language: Optional[str] = None) -> str:
+    def get_user_prompt_template(self,
+                                 agent_name: str,
+                                 language: Optional[str] = None) -> str:
         """
         Get user prompt template for an agent, optionally language-specific.
 
@@ -96,7 +97,8 @@ class PromptManager:
                 lang_filepath = os.path.join(PROMPT_DIR, lang_filename)
                 if os.path.exists(lang_filepath):
                     if lang_filename not in self._cache:
-                        self._cache[lang_filename] = load_prompt_file(lang_filename)
+                        self._cache[lang_filename] = load_prompt_file(
+                            lang_filename)
                     return self._cache[lang_filename]
 
         # Fall back to default prompt
@@ -114,7 +116,10 @@ class PromptManager:
             self._cache[filename] = load_prompt_file(filename)
         return self._cache[filename]
 
-    def build_user_prompt(self, agent_name: str, language: Optional[str] = None, **kwargs) -> str:
+    def build_user_prompt(self,
+                          agent_name: str,
+                          language: Optional[str] = None,
+                          **kwargs) -> str:
         """
         Build a user prompt by loading template and formatting it.
 

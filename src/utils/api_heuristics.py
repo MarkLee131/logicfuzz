@@ -11,25 +11,12 @@ to avoid code duplication and ensure consistency.
 # ==============================================================================
 
 # Initialization function suffixes (used to identify constructor/init functions)
-INIT_SUFFIXES = [
-    '_init',
-    '_create', 
-    '_new',
-    '_alloc',
-    '_setup',
-    '_open'
-]
+INIT_SUFFIXES = ['_init', '_create', '_new', '_alloc', '_setup', '_open']
 
 # Cleanup function suffixes (used to identify destructor/cleanup functions)
 CLEANUP_SUFFIXES = [
-    '_destroy',
-    '_free',
-    '_delete',
-    '_cleanup',
-    '_close',
-    '_release',
-    '_deinit',
-    '_fini'
+    '_destroy', '_free', '_delete', '_cleanup', '_close', '_release',
+    '_deinit', '_fini'
 ]
 
 # ==============================================================================
@@ -39,28 +26,21 @@ CLEANUP_SUFFIXES = [
 # Type name keywords that typically require initialization
 # (e.g., "igraph_storage_t", "http_context", "buffer_state")
 INIT_REQUIRED_KEYWORDS = [
-    'storage',
-    'context',
-    'state',
-    'buffer',
-    'data',
-    'cache',
-    'pool',
-    'arena'
+    'storage', 'context', 'state', 'buffer', 'data', 'cache', 'pool', 'arena'
 ]
 
 # Primitive types (no initialization needed)
 PRIMITIVE_TYPES = {
-    'int', 'char', 'short', 'long', 'float', 'double',
-    'void', 'bool', 'size_t', 'ssize_t',
-    'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
-    'int8_t', 'int16_t', 'int32_t', 'int64_t',
-    'uintptr_t', 'intptr_t', 'ptrdiff_t'
+    'int', 'char', 'short', 'long', 'float', 'double', 'void', 'bool',
+    'size_t', 'ssize_t', 'uint8_t', 'uint16_t', 'uint32_t', 'uint64_t',
+    'int8_t', 'int16_t', 'int32_t', 'int64_t', 'uintptr_t', 'intptr_t',
+    'ptrdiff_t'
 }
 
 # ==============================================================================
 # Utility Functions
 # ==============================================================================
+
 
 def is_primitive_type(type_name: str) -> bool:
     """
@@ -98,14 +78,14 @@ def clean_type_name(type_str: str) -> str:
         'my_struct'
     """
     import re
-    
+
     # Remove const, volatile, *, &
     cleaned = type_str.replace('const', '').replace('volatile', '')
     cleaned = cleaned.replace('*', '').replace('&', '').strip()
-    
+
     # Remove struct/enum/union prefix
     cleaned = re.sub(r'^(struct|enum|union)\s+', '', cleaned)
-    
+
     return cleaned
 
 
@@ -130,12 +110,12 @@ def requires_initialization(param_type: str, param: dict) -> bool:
     type_lower = param_type.lower()
     if any(kw in type_lower for kw in INIT_REQUIRED_KEYWORDS):
         return True
-    
+
     # Rule 2: Output parameter (pointer type, not const) + non-primitive type
     if '*' in param['type'] and 'const' not in param['type']:
         if not is_primitive_type(param_type):
             return True
-    
+
     return False
 
 
@@ -157,9 +137,10 @@ def get_base_name_from_type(param_type: str) -> str:
     """
     # Remove _t suffix (common in C)
     base_name = param_type.replace('_t', '')
-    
-    # Remove struct/enum/union prefix
-    base_name = base_name.replace('struct ', '').replace('enum ', '').replace('union ', '')
-    
-    return base_name.strip()
 
+    # Remove struct/enum/union prefix
+    base_name = base_name.replace('struct ',
+                                  '').replace('enum ',
+                                              '').replace('union ', '')
+
+    return base_name.strip()

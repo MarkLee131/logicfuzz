@@ -11,11 +11,9 @@ from src.workflow.state import FuzzingWorkflowState, format_session_memory_for_p
 from src.utils.prompt_loader import get_prompt_manager
 
 
-def build_prompt_with_session_memory(
-    state: FuzzingWorkflowState,
-    agent_specific_prompt: str,
-    agent_name: str = "unknown"
-) -> str:
+def build_prompt_with_session_memory(state: FuzzingWorkflowState,
+                                     agent_specific_prompt: str,
+                                     agent_name: str = "unknown") -> str:
     """
     Build complete prompt with session_memory included.
 
@@ -60,10 +58,8 @@ def build_prompt_with_session_memory(
 
 
 def extract_session_memory_updates_from_response(
-    response: str,
-    agent_name: str,
-    current_iteration: int
-) -> Dict[str, Any]:
+        response: str, agent_name: str,
+        current_iteration: int) -> Dict[str, Any]:
     """
     Extract session_memory updates from agent response.
     
@@ -78,14 +74,14 @@ def extract_session_memory_updates_from_response(
         Dictionary containing session_memory updates
     """
     import re
-    
+
     updates = {
         "api_constraints": [],
         "known_fixes": [],
         "decisions": [],
         "coverage_strategies": []
     }
-    
+
     # 1. Extract API constraints
     api_constraint_pattern = r'<api_constraint>(.*?)</api_constraint>'
     for match in re.finditer(api_constraint_pattern, response, re.DOTALL):
@@ -94,10 +90,11 @@ def extract_session_memory_updates_from_response(
             updates["api_constraints"].append({
                 "constraint": constraint_text,
                 "source": agent_name,
-                "confidence": "medium",  # Default medium, can be adjusted based on keywords
+                "confidence":
+                "medium",  # Default medium, can be adjusted based on keywords
                 "iteration": current_iteration
             })
-    
+
     # 2. Extract known fixes
     known_fix_pattern = r'<known_fix error="([^"]+)">(.*?)</known_fix>'
     for match in re.finditer(known_fix_pattern, response, re.DOTALL):
@@ -110,7 +107,7 @@ def extract_session_memory_updates_from_response(
                 "source": agent_name,
                 "iteration": current_iteration
             })
-    
+
     # 3. Extract decisions
     decision_pattern = r'<decision reason="([^"]+)">(.*?)</decision>'
     for match in re.finditer(decision_pattern, response, re.DOTALL):
@@ -123,7 +120,7 @@ def extract_session_memory_updates_from_response(
                 "source": agent_name,
                 "iteration": current_iteration
             })
-    
+
     # 4. Extract coverage strategies
     strategy_pattern = r'<coverage_strategy target="([^"]+)">(.*?)</coverage_strategy>'
     for match in re.finditer(strategy_pattern, response, re.DOTALL):
@@ -131,19 +128,21 @@ def extract_session_memory_updates_from_response(
         strategy = match.group(2).strip()
         if target and strategy:
             updates["coverage_strategies"].append({
-                "strategy": strategy,
-                "target": target,
-                "source": agent_name,
-                "iteration": current_iteration
+                "strategy":
+                strategy,
+                "target":
+                target,
+                "source":
+                agent_name,
+                "iteration":
+                current_iteration
             })
-    
+
     return updates
 
 
-def merge_session_memory_updates(
-    state: FuzzingWorkflowState,
-    updates: Dict[str, Any]
-) -> Dict[str, Any]:
+def merge_session_memory_updates(state: FuzzingWorkflowState,
+                                 updates: Dict[str, Any]) -> Dict[str, Any]:
     """
     Merge extracted updates into session_memory.
 
@@ -160,52 +159,29 @@ def merge_session_memory_updates(
         # Session memory disabled - return empty dict without updating
         return state.get("session_memory", {})
 
-    from src.workflow.state import (
-        add_api_constraint,
-        add_known_fix,
-        add_decision,
-        add_coverage_strategy
-    )
-    
+    from src.workflow.state import (add_api_constraint, add_known_fix,
+                                    add_decision, add_coverage_strategy)
+
     # Add API constraints
     for constraint in updates.get("api_constraints", []):
-        add_api_constraint(
-            state,
-            constraint["constraint"],
-            constraint["source"],
-            constraint.get("confidence", "medium"),
-            constraint.get("iteration")
-        )
-    
+        add_api_constraint(state, constraint["constraint"],
+                           constraint["source"],
+                           constraint.get("confidence", "medium"),
+                           constraint.get("iteration"))
+
     # Add known fixes
     for fix in updates.get("known_fixes", []):
-        add_known_fix(
-            state,
-            fix["error_pattern"],
-            fix["solution"],
-            fix["source"],
-            fix.get("iteration")
-        )
-    
+        add_known_fix(state, fix["error_pattern"], fix["solution"],
+                      fix["source"], fix.get("iteration"))
+
     # Add decisions
     for decision in updates.get("decisions", []):
-        add_decision(
-            state,
-            decision["decision"],
-            decision["reason"],
-            decision["source"],
-            decision.get("iteration")
-        )
-    
+        add_decision(state, decision["decision"], decision["reason"],
+                     decision["source"], decision.get("iteration"))
+
     # Add coverage strategies
     for strategy in updates.get("coverage_strategies", []):
-        add_coverage_strategy(
-            state,
-            strategy["strategy"],
-            strategy["target"],
-            strategy["source"],
-            strategy.get("iteration")
-        )
-    
-    return state.get("session_memory", {})
+        add_coverage_strategy(state, strategy["strategy"], strategy["target"],
+                              strategy["source"], strategy.get("iteration"))
 
+    return state.get("session_memory", {})

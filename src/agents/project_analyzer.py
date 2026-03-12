@@ -39,13 +39,11 @@ You think step-by-step and provide clear, actionable insights.
 """
 
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
-        super().__init__(
-            name="project_analyzer",
-            model_name=model_name,
-            trial=trial,
-            args=args,
-            system_message=self.SYSTEM_MESSAGE
-        )
+        super().__init__(name="project_analyzer",
+                         model_name=model_name,
+                         trial=trial,
+                         args=args,
+                         system_message=self.SYSTEM_MESSAGE)
 
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         """
@@ -69,20 +67,17 @@ You think step-by-step and provide clear, actionable insights.
             f'{len(api_classification.mutators)} mutators, '
             f'{len(api_classification.destructors)} destructors, '
             f'{len(api_classification.serializers)} serializers',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         # Step 2: Ask LLM to understand the project
-        prompt = self._build_analysis_prompt(
-            project_name,
-            project_apis,
-            api_classification
-        )
+        prompt = self._build_analysis_prompt(project_name, project_apis,
+                                             api_classification)
 
         response = self.chat_llm(state, prompt)
 
         # Step 3: Parse LLM response
-        project_understanding = self._parse_understanding(response, api_classification)
+        project_understanding = self._parse_understanding(
+            response, api_classification)
 
         # Log the understanding
         logger.info(
@@ -91,8 +86,7 @@ You think step-by-step and provide clear, actionable insights.
             f'  Input Format: {project_understanding.get("input_format", "unknown")}\n'
             f'  Core APIs: {project_understanding.get("core_apis", [])[:5]}\n'
             f'  Data Flow: {project_understanding.get("data_flow", "unknown")}',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         self._langgraph_logger.flush_agent_logs(self.name)
 
@@ -101,19 +95,16 @@ You think step-by-step and provide clear, actionable insights.
             "api_classification": api_classification.to_dict(),
         }
 
-    def _build_analysis_prompt(
-        self,
-        project_name: str,
-        apis: List[Dict],
-        classification: APIClassificationResult
-    ) -> str:
+    def _build_analysis_prompt(self, project_name: str, apis: List[Dict],
+                               classification: APIClassificationResult) -> str:
         """Build prompt for project analysis."""
 
         # Format classified APIs
         classified_summary = []
 
         if classification.parsers:
-            classified_summary.append("**Parser APIs** (consume external input):")
+            classified_summary.append(
+                "**Parser APIs** (consume external input):")
             for api in classification.parsers[:5]:
                 classified_summary.append(f"  - {api.name}")
 
@@ -224,10 +215,8 @@ e.g., "For HasObjectItem, pre-populate objects with known keys"
 """
 
     def _parse_understanding(
-        self,
-        response: str,
-        classification: APIClassificationResult
-    ) -> Dict[str, Any]:
+            self, response: str,
+            classification: APIClassificationResult) -> Dict[str, Any]:
         """Parse LLM response into structured understanding."""
 
         understanding = {
@@ -243,8 +232,10 @@ e.g., "For HasObjectItem, pre-populate objects with known keys"
                 "creators": [api.name for api in classification.creators],
                 "accessors": [api.name for api in classification.accessors],
                 "mutators": [api.name for api in classification.mutators],
-                "serializers": [api.name for api in classification.serializers],
-                "destructors": [api.name for api in classification.destructors],
+                "serializers":
+                [api.name for api in classification.serializers],
+                "destructors":
+                [api.name for api in classification.destructors],
             }
         }
 
@@ -277,7 +268,8 @@ e.g., "For HasObjectItem, pre-populate objects with known keys"
         core_apis_block = parse_tag(response, 'core_apis')
         if core_apis_block:
             import re
-            api_matches = re.findall(r'<api[^>]*>([^<]+)</api>', core_apis_block)
+            api_matches = re.findall(r'<api[^>]*>([^<]+)</api>',
+                                     core_apis_block)
             understanding["core_apis"] = [api.strip() for api in api_matches]
 
         # Fallback: use classification-based priority if LLM didn't provide
@@ -351,14 +343,17 @@ def format_understanding_for_prototyper(understanding: Dict[str, Any]) -> str:
     classification = understanding.get('api_classification_summary', {})
     parsers = classification.get('parsers', [])
     if parsers:
-        lines.append("**Parser APIs** (should receive structured input, not random strings):")
+        lines.append(
+            "**Parser APIs** (should receive structured input, not random strings):"
+        )
         for api in parsers[:3]:
             lines.append(f"  - {api}")
         lines.append("")
 
     accessors = classification.get('accessors', [])
     if accessors:
-        lines.append("**Accessor APIs** (need to hit both found/not-found branches):")
+        lines.append(
+            "**Accessor APIs** (need to hit both found/not-found branches):")
         for api in accessors[:3]:
             lines.append(f"  - {api}")
         lines.append("")

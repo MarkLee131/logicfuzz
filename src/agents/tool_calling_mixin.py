@@ -57,13 +57,8 @@ class ToolCallingMixin:
         """Parse the final LLM response into structured result."""
         pass
 
-    def _execute_single_tool(
-        self,
-        tool: BaseTool,
-        tool_call: Dict[str, Any],
-        log_prefix: str,
-        trial: int
-    ) -> ToolMessage:
+    def _execute_single_tool(self, tool: BaseTool, tool_call: Dict[str, Any],
+                             log_prefix: str, trial: int) -> ToolMessage:
         """
         Execute a single tool with timing and error handling.
 
@@ -81,41 +76,33 @@ class ToolCallingMixin:
         args = tool_call.get("args", {})
 
         start_time = time.time()
-        logger.debug(f"<{log_prefix}> Executing tool: {tool_name}", trial=trial)
+        logger.debug(f"<{log_prefix}> Executing tool: {tool_name}",
+                     trial=trial)
 
         try:
             result = tool.invoke(args)
             elapsed = time.time() - start_time
             logger.debug(
                 f"<{log_prefix}> Tool '{tool_name}' completed in {elapsed:.2f}s",
-                trial=trial
-            )
-            return ToolMessage(
-                content=str(result),
-                tool_call_id=tool_call_id,
-                name=tool_name
-            )
+                trial=trial)
+            return ToolMessage(content=str(result),
+                               tool_call_id=tool_call_id,
+                               name=tool_name)
         except Exception as e:
             elapsed = time.time() - start_time
             exc_type = type(e).__name__
             error_msg = f"Tool execution failed with {exc_type}: {e}"
             logger.warning(
                 f"<{log_prefix}> Tool '{tool_name}' failed after {elapsed:.2f}s: {e}",
-                trial=trial
-            )
-            return ToolMessage(
-                content=error_msg,
-                tool_call_id=tool_call_id,
-                name=tool_name
-            )
+                trial=trial)
+            return ToolMessage(content=error_msg,
+                               tool_call_id=tool_call_id,
+                               name=tool_name)
 
-    def _execute_tools_parallel(
-        self,
-        tools_by_name: Dict[str, BaseTool],
-        tool_calls: List[Dict[str, Any]],
-        log_prefix: str,
-        trial: int
-    ) -> List[ToolMessage]:
+    def _execute_tools_parallel(self, tools_by_name: Dict[str, BaseTool],
+                                tool_calls: List[Dict[str,
+                                                      Any]], log_prefix: str,
+                                trial: int) -> List[ToolMessage]:
         """
         Execute multiple tools in parallel.
 
@@ -135,32 +122,32 @@ class ToolCallingMixin:
             if tool:
                 return [self._execute_single_tool(tool, tc, log_prefix, trial)]
             else:
-                return [ToolMessage(
-                    content=f"Unknown tool: {tc.get('name', 'unknown')}",
-                    tool_call_id=tc.get("id", ""),
-                    name=tc.get("name", "unknown")
-                )]
+                return [
+                    ToolMessage(
+                        content=f"Unknown tool: {tc.get('name', 'unknown')}",
+                        tool_call_id=tc.get("id", ""),
+                        name=tc.get("name", "unknown"))
+                ]
 
         # Multiple tools - execute in parallel
         results: Dict[str, ToolMessage] = {}
 
-        with ThreadPoolExecutor(max_workers=min(len(tool_calls), 4)) as executor:
+        with ThreadPoolExecutor(
+                max_workers=min(len(tool_calls), 4)) as executor:
             futures = {}
             for tc in tool_calls:
                 tool_name = tc.get("name", "")
                 tool = tools_by_name.get(tool_name)
                 if tool:
-                    future = executor.submit(
-                        self._execute_single_tool, tool, tc, log_prefix, trial
-                    )
+                    future = executor.submit(self._execute_single_tool, tool,
+                                             tc, log_prefix, trial)
                     futures[future] = tc.get("id", "")
                 else:
                     # Unknown tool - create error message immediately
                     results[tc.get("id", "")] = ToolMessage(
                         content=f"Unknown tool: {tool_name}",
                         tool_call_id=tc.get("id", ""),
-                        name=tool_name
-                    )
+                        name=tool_name)
 
             for future in as_completed(futures):
                 tool_call_id = futures[future]
@@ -168,18 +155,16 @@ class ToolCallingMixin:
 
         # Return results in order of original tool_calls
         return [
-            results[tc.get("id", "")]
-            for tc in tool_calls
+            results[tc.get("id", "")] for tc in tool_calls
             if tc.get("id", "") in results
         ]
 
     def run_tool_calling_loop(
-        self,
-        initial_prompt: str,
-        state: Any,
-        max_rounds: int = 10,
-        log_prefix: str = "REACT"
-    ) -> Tuple[Dict[str, Any], List[str]]:
+            self,
+            initial_prompt: str,
+            state: Any,
+            max_rounds: int = 10,
+            log_prefix: str = "REACT") -> Tuple[Dict[str, Any], List[str]]:
         """
         Execute ReAct-style tool-calling loop using LangChain.
 
@@ -216,19 +201,17 @@ class ToolCallingMixin:
 
         for cur_round in range(max_rounds):
             # Call LLM with tools
-            response: AIMessage = model_with_tools.invoke(messages)  # type: ignore
+            response: AIMessage = model_with_tools.invoke(
+                messages)  # type: ignore
             messages.append(response)
 
             # Track token usage
             token_usage = self._extract_token_usage_from_response(response)
             if token_usage and state is not None:
-                update_token_usage(
-                    state,
-                    agent_name,
-                    token_usage.get('prompt_tokens', 0),
-                    token_usage.get('completion_tokens', 0),
-                    token_usage.get('total_tokens', 0)
-                )
+                update_token_usage(state, agent_name,
+                                   token_usage.get('prompt_tokens', 0),
+                                   token_usage.get('completion_tokens', 0),
+                                   token_usage.get('total_tokens', 0))
 
             content = response.content or ""
             if isinstance(content, list):
@@ -241,40 +224,36 @@ class ToolCallingMixin:
 
             logger.info(
                 f'<{log_prefix} R{cur_round}> tools={len(tool_calls)} content={len(content)} chars',
-                trial=trial
-            )
+                trial=trial)
 
             # ReAct termination: no tool calls = done
             if not tool_calls:
                 return self.parse_response(content), all_responses
 
             # Convert LangChain tool calls to our format
-            parsed_tool_calls = [
-                {
-                    "id": tc.get("id", ""),
-                    "name": tc.get("name", ""),
-                    "args": tc.get("args", {})
-                }
-                for tc in tool_calls
-            ]
+            parsed_tool_calls = [{
+                "id": tc.get("id", ""),
+                "name": tc.get("name", ""),
+                "args": tc.get("args", {})
+            } for tc in tool_calls]
 
             # Execute tools in parallel
             tool_messages = self._execute_tools_parallel(
-                tools_by_name, parsed_tool_calls, log_prefix, trial
-            )
+                tools_by_name, parsed_tool_calls, log_prefix, trial)
 
             # Truncate tool results and add to messages
             for tool_msg in tool_messages:
                 truncated_content = self._truncate(tool_msg.content)
-                messages.append(ToolMessage(
-                    content=truncated_content,
-                    tool_call_id=tool_msg.tool_call_id,
-                    name=tool_msg.name
-                ))
+                messages.append(
+                    ToolMessage(content=truncated_content,
+                                tool_call_id=tool_msg.tool_call_id,
+                                name=tool_msg.name))
 
         # Max rounds reached
-        logger.warning(f"{log_prefix}: max rounds ({max_rounds}) reached", trial=trial)
-        return self.parse_response(all_responses[-1] if all_responses else ""), all_responses
+        logger.warning(f"{log_prefix}: max rounds ({max_rounds}) reached",
+                       trial=trial)
+        return self.parse_response(
+            all_responses[-1] if all_responses else ""), all_responses
 
     def _truncate(self, text: Any, max_len: int = 10000) -> str:
         """Truncate tool output to avoid context overflow."""
@@ -283,7 +262,8 @@ class ToolCallingMixin:
             return s[:max_len] + f"...[truncated {len(s) - max_len} chars]"
         return s
 
-    def _extract_token_usage_from_response(self, response: AIMessage) -> Optional[Dict[str, int]]:
+    def _extract_token_usage_from_response(
+            self, response: AIMessage) -> Optional[Dict[str, int]]:
         """
         Extract token usage from LangChain response if available.
 
@@ -293,12 +273,19 @@ class ToolCallingMixin:
         Returns:
             Dict with prompt_tokens, completion_tokens, total_tokens or None
         """
-        if hasattr(response, 'response_metadata') and response.response_metadata:
-            usage = response.response_metadata.get('token_usage') or response.response_metadata.get('usage')
+        if hasattr(response,
+                   'response_metadata') and response.response_metadata:
+            usage = response.response_metadata.get(
+                'token_usage') or response.response_metadata.get('usage')
             if usage:
                 return {
-                    'prompt_tokens': usage.get('prompt_tokens', 0) or usage.get('input_tokens', 0),
-                    'completion_tokens': usage.get('completion_tokens', 0) or usage.get('output_tokens', 0),
-                    'total_tokens': usage.get('total_tokens', 0)
+                    'prompt_tokens':
+                    usage.get('prompt_tokens', 0)
+                    or usage.get('input_tokens', 0),
+                    'completion_tokens':
+                    usage.get('completion_tokens', 0)
+                    or usage.get('output_tokens', 0),
+                    'total_tokens':
+                    usage.get('total_tokens', 0)
                 }
         return None

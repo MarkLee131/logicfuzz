@@ -77,11 +77,9 @@ class LangGraphAgent(ABC):
         if hasattr(args, 'work_dirs') and args.work_dirs:
             base_dir = str(args.work_dirs.base)
 
-        self._langgraph_logger = (
-            LangGraphLogger.get_logger(workflow_id="fuzzing_workflow", trial=trial, base_dir=base_dir)
-            if enable_detailed_logging
-            else NullLogger()
-        )
+        self._langgraph_logger = (LangGraphLogger.get_logger(
+            workflow_id="fuzzing_workflow", trial=trial, base_dir=base_dir)
+                                  if enable_detailed_logging else NullLogger())
         self._round = 0
         self._tool_system_prompt_logged = False
 
@@ -93,17 +91,13 @@ class LangGraphAgent(ABC):
             BaseChatModel instance
         """
         if self._chat_model is None:
-            self._chat_model = get_chat_model(
-                self.model_name,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens
-            )
+            self._chat_model = get_chat_model(self.model_name,
+                                              temperature=self.temperature,
+                                              max_tokens=self.max_tokens)
         return self._chat_model
 
     def _messages_to_langchain(
-        self,
-        messages: List[Dict[str, str]]
-    ) -> List[BaseMessage]:
+            self, messages: List[Dict[str, str]]) -> List[BaseMessage]:
         """Convert dict messages to LangChain message types."""
         result: List[BaseMessage] = []
         for msg in messages:
@@ -120,11 +114,7 @@ class LangGraphAgent(ABC):
                 result.append(HumanMessage(content=content))
         return result
 
-    def chat_llm(
-        self,
-        state: FuzzingWorkflowState,
-        prompt: str
-    ) -> str:
+    def chat_llm(self, state: FuzzingWorkflowState, prompt: str) -> str:
         """
         Chat with LLM using system message + prompt.
 
@@ -147,8 +137,7 @@ class LangGraphAgent(ABC):
         # Log the prompt
         logger.info(
             f'<AGENT {self.name} PROMPT>\n{prompt}\n</AGENT {self.name} PROMPT>',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         # Detailed logging
         prompt_metadata = {
@@ -156,57 +145,45 @@ class LangGraphAgent(ABC):
             'temperature': self.temperature,
             'num_messages': len(messages)
         }
-        self._langgraph_logger.log_interaction(
-            agent_name=self.name,
-            interaction_type='prompt',
-            content=prompt,
-            round_num=self._round,
-            metadata=prompt_metadata
-        )
+        self._langgraph_logger.log_interaction(agent_name=self.name,
+                                               interaction_type='prompt',
+                                               content=prompt,
+                                               round_num=self._round,
+                                               metadata=prompt_metadata)
 
         # Call LLM
         model = self.get_chat_model()
         response = model.invoke(messages)
-        response_text = response.content if isinstance(response.content, str) else str(response.content)
+        response_text = response.content if isinstance(
+            response.content, str) else str(response.content)
 
         # Track token usage (if available via callbacks)
         token_usage = self._extract_token_usage(response)
         if token_usage:
             from src.workflow.state import update_token_usage
-            update_token_usage(
-                state,
-                self.name,
-                token_usage.get('prompt_tokens', 0),
-                token_usage.get('completion_tokens', 0),
-                token_usage.get('total_tokens', 0)
-            )
+            update_token_usage(state, self.name,
+                               token_usage.get('prompt_tokens', 0),
+                               token_usage.get('completion_tokens', 0),
+                               token_usage.get('total_tokens', 0))
 
         # Log the response
         logger.info(
             f'<AGENT {self.name} RESPONSE>\n{response_text}\n</AGENT {self.name} RESPONSE>',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         # Detailed logging
-        response_metadata = {
-            'model': self.model_name,
-            'tokens': token_usage
-        }
-        self._langgraph_logger.log_interaction(
-            agent_name=self.name,
-            interaction_type='response',
-            content=response_text,
-            round_num=self._round,
-            metadata=response_metadata
-        )
+        response_metadata = {'model': self.model_name, 'tokens': token_usage}
+        self._langgraph_logger.log_interaction(agent_name=self.name,
+                                               interaction_type='response',
+                                               content=response_text,
+                                               round_num=self._round,
+                                               metadata=response_metadata)
 
         return response_text
 
-    def ask_llm(
-        self,
-        prompt: str,
-        state: Optional[FuzzingWorkflowState] = None
-    ) -> str:
+    def ask_llm(self,
+                prompt: str,
+                state: Optional[FuzzingWorkflowState] = None) -> str:
         """
         Ask LLM a one-off question without system message.
 
@@ -223,8 +200,7 @@ class LangGraphAgent(ABC):
 
         logger.info(
             f'<AGENT {self.name} ONEOFF>\n{prompt}\n</AGENT {self.name} ONEOFF>',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         # Detailed logging
         prompt_metadata = {
@@ -232,29 +208,25 @@ class LangGraphAgent(ABC):
             'temperature': self.temperature,
             'type': 'one-off (no history)'
         }
-        self._langgraph_logger.log_interaction(
-            agent_name=self.name,
-            interaction_type='prompt',
-            content=prompt,
-            round_num=self._round,
-            metadata=prompt_metadata
-        )
+        self._langgraph_logger.log_interaction(agent_name=self.name,
+                                               interaction_type='prompt',
+                                               content=prompt,
+                                               round_num=self._round,
+                                               metadata=prompt_metadata)
 
         model = self.get_chat_model()
         response = model.invoke(messages)
-        response_text = response.content if isinstance(response.content, str) else str(response.content)
+        response_text = response.content if isinstance(
+            response.content, str) else str(response.content)
 
         # Track token usage
         token_usage = self._extract_token_usage(response)
         if state and token_usage:
             from src.workflow.state import update_token_usage
-            update_token_usage(
-                state,
-                self.name,
-                token_usage.get('prompt_tokens', 0),
-                token_usage.get('completion_tokens', 0),
-                token_usage.get('total_tokens', 0)
-            )
+            update_token_usage(state, self.name,
+                               token_usage.get('prompt_tokens', 0),
+                               token_usage.get('completion_tokens', 0),
+                               token_usage.get('total_tokens', 0))
 
         # Detailed logging
         response_metadata = {
@@ -262,27 +234,22 @@ class LangGraphAgent(ABC):
             'tokens': token_usage,
             'type': 'one-off (no history)'
         }
-        self._langgraph_logger.log_interaction(
-            agent_name=self.name,
-            interaction_type='response',
-            content=response_text,
-            round_num=self._round,
-            metadata=response_metadata
-        )
+        self._langgraph_logger.log_interaction(agent_name=self.name,
+                                               interaction_type='response',
+                                               content=response_text,
+                                               round_num=self._round,
+                                               metadata=response_metadata)
 
         logger.info(
             f'<AGENT {self.name} ONEOFF RESPONSE>\n{response_text}\n</AGENT {self.name} ONEOFF RESPONSE>',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         return response_text
 
-    def call_llm_stateless(
-        self,
-        prompt: str,
-        state: Optional[FuzzingWorkflowState] = None,
-        log_prefix: str = "STATELESS"
-    ) -> str:
+    def call_llm_stateless(self,
+                           prompt: str,
+                           state: Optional[FuzzingWorkflowState] = None,
+                           log_prefix: str = "STATELESS") -> str:
         """
         Call LLM without conversation history (system + prompt only).
 
@@ -303,8 +270,7 @@ class LangGraphAgent(ABC):
 
         logger.debug(
             f'<AGENT {self.name} {log_prefix}>\n{prompt[:500]}...\n</AGENT {self.name} {log_prefix}>',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         # Detailed logging
         if self._langgraph_logger:
@@ -314,29 +280,25 @@ class LangGraphAgent(ABC):
                 'type': 'stateless (no conversation history)',
                 'prompt_length': len(prompt)
             }
-            self._langgraph_logger.log_interaction(
-                agent_name=self.name,
-                interaction_type='prompt',
-                content=prompt,
-                round_num=self._round,
-                metadata=prompt_metadata
-            )
+            self._langgraph_logger.log_interaction(agent_name=self.name,
+                                                   interaction_type='prompt',
+                                                   content=prompt,
+                                                   round_num=self._round,
+                                                   metadata=prompt_metadata)
 
         model = self.get_chat_model()
         response = model.invoke(messages)
-        response_text = response.content if isinstance(response.content, str) else str(response.content)
+        response_text = response.content if isinstance(
+            response.content, str) else str(response.content)
 
         # Track token usage
         token_usage = self._extract_token_usage(response)
         if state and token_usage:
             from src.workflow.state import update_token_usage
-            update_token_usage(
-                state,
-                self.name,
-                token_usage.get('prompt_tokens', 0),
-                token_usage.get('completion_tokens', 0),
-                token_usage.get('total_tokens', 0)
-            )
+            update_token_usage(state, self.name,
+                               token_usage.get('prompt_tokens', 0),
+                               token_usage.get('completion_tokens', 0),
+                               token_usage.get('total_tokens', 0))
 
         # Detailed logging
         if self._langgraph_logger:
@@ -346,31 +308,36 @@ class LangGraphAgent(ABC):
                 'type': 'stateless (no conversation history)',
                 'response_length': len(response_text)
             }
-            self._langgraph_logger.log_interaction(
-                agent_name=self.name,
-                interaction_type='response',
-                content=response_text,
-                round_num=self._round,
-                metadata=response_metadata
-            )
+            self._langgraph_logger.log_interaction(agent_name=self.name,
+                                                   interaction_type='response',
+                                                   content=response_text,
+                                                   round_num=self._round,
+                                                   metadata=response_metadata)
 
         logger.debug(
             f'<AGENT {self.name} {log_prefix} RESPONSE>\n{response_text[:500]}...\n</AGENT {self.name} {log_prefix} RESPONSE>',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         return response_text
 
-    def _extract_token_usage(self, response: AIMessage) -> Optional[Dict[str, int]]:
+    def _extract_token_usage(self,
+                             response: AIMessage) -> Optional[Dict[str, int]]:
         """Extract token usage from LangChain response if available."""
         # Token usage may be in response_metadata for some providers
-        if hasattr(response, 'response_metadata') and response.response_metadata:
-            usage = response.response_metadata.get('token_usage') or response.response_metadata.get('usage')
+        if hasattr(response,
+                   'response_metadata') and response.response_metadata:
+            usage = response.response_metadata.get(
+                'token_usage') or response.response_metadata.get('usage')
             if usage:
                 return {
-                    'prompt_tokens': usage.get('prompt_tokens', 0) or usage.get('input_tokens', 0),
-                    'completion_tokens': usage.get('completion_tokens', 0) or usage.get('output_tokens', 0),
-                    'total_tokens': usage.get('total_tokens', 0)
+                    'prompt_tokens':
+                    usage.get('prompt_tokens', 0)
+                    or usage.get('input_tokens', 0),
+                    'completion_tokens':
+                    usage.get('completion_tokens', 0)
+                    or usage.get('output_tokens', 0),
+                    'total_tokens':
+                    usage.get('total_tokens', 0)
                 }
         return None
 

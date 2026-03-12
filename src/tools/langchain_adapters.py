@@ -10,10 +10,10 @@ from typing import Any, Callable, List, Optional, Type
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-
 # =============================================================================
 # Input schemas for tools
 # =============================================================================
+
 
 class CommandInput(BaseModel):
     """Input schema for command-based tools."""
@@ -49,6 +49,7 @@ class EmptyInput(BaseModel):
 # Tool implementations
 # =============================================================================
 
+
 class BashExecuteTool(BaseTool):
     """
     LangChain tool for executing bash commands in a project container.
@@ -60,8 +61,7 @@ class BashExecuteTool(BaseTool):
     description: str = (
         "Run a single bash command inside the project container to read files, "
         "grep for patterns, or inspect build artifacts. Avoid multi-command shells "
-        "or long-running processes."
-    )
+        "or long-running processes.")
     args_schema: Type[BaseModel] = CommandInput
     executor: Callable[[str], str] = Field(exclude=True)
 
@@ -113,8 +113,7 @@ class GetFunctionImplementationTool(BaseTool):
     name: str = "get_function_implementation"
     description: str = (
         "Retrieve the full source implementation of a function by name. "
-        "Returns a C/C++ snippet bounded by ```c fences."
-    )
+        "Returns a C/C++ snippet bounded by ```c fences.")
     args_schema: Type[BaseModel] = FunctionNameInput
     executor: Callable[[str], str] = Field(exclude=True)
 
@@ -138,8 +137,7 @@ class GetFunctionSignatureTool(BaseTool):
     name: str = "get_function_signature"
     description: str = (
         "Get the canonical signature (return type + name + parameters) for a function. "
-        "Use this first when you only know the symbol name."
-    )
+        "Use this first when you only know the symbol name.")
     args_schema: Type[BaseModel] = FunctionNameInput
     executor: Callable[[str], str] = Field(exclude=True)
 
@@ -188,8 +186,7 @@ class GetTypeDefinitionsTool(BaseTool):
     name: str = "get_type_definitions"
     description: str = (
         "List structs/enums/typedefs present in the project. "
-        "Call sparingly - results are truncated to the first 20 definitions."
-    )
+        "Call sparingly - results are truncated to the first 20 definitions.")
     args_schema: Type[BaseModel] = EmptyInput
     executor: Callable[[], str] = Field(exclude=True)
 
@@ -241,13 +238,17 @@ class GetTestsForFunctionsTool(BaseTool):
     args_schema: Type[BaseModel] = FunctionNamesInput
     executor: Callable[[List[str]], str] = Field(exclude=True)
 
-    def _run(self, function_names: Optional[List[str]] = None, **kwargs: Any) -> str:
+    def _run(self,
+             function_names: Optional[List[str]] = None,
+             **kwargs: Any) -> str:
         """Execute via the injected executor."""
         if not function_names:
             return "Error: get_tests_for_functions requires 'function_names' array argument"
         return self.executor(function_names)
 
-    async def _arun(self, function_names: Optional[List[str]] = None, **kwargs: Any) -> str:
+    async def _arun(self,
+                    function_names: Optional[List[str]] = None,
+                    **kwargs: Any) -> str:
         return self._run(function_names)
 
 

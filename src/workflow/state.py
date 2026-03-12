@@ -11,23 +11,28 @@ class FuzzingWorkflowState(TypedDict):
     This state schema is designed to be compatible with the original
     Result object hierarchy while providing structure for LangGraph.
     """
-    
+
     # === Core Information (Required) ===
-    benchmark: Dict[str, Any]  # Benchmark dict (serialized from experiment.benchmark.Benchmark)
+    benchmark: Dict[
+        str,
+        Any]  # Benchmark dict (serialized from experiment.benchmark.Benchmark)
     trial: int  # Trial number
-    work_dirs: Dict[str, Any]  # WorkDirs dict (serialized from experiment.workdir.WorkDirs)
-    
+    work_dirs: Dict[
+        str,
+        Any]  # WorkDirs dict (serialized from experiment.workdir.WorkDirs)
+
     # === Fuzzing Context (Single Source of Truth) ===
     # All data needed for fuzzing, prepared once at the start
     # Philosophy: Nodes read from context, never extract data themselves
-    context: NotRequired[Dict[str, Any]]  # FuzzingContext.to_dict() - immutable data
-    
+    context: NotRequired[Dict[
+        str, Any]]  # FuzzingContext.to_dict() - immutable data
+
     # === Function Analysis (from FunctionAnalyzer) ===
     function_analysis: NotRequired[Dict[str, Any]]
-    
+
     # === Context Analysis (from ContextAnalyzer) ===
     context_analysis: NotRequired[Dict[str, Any]]
-    
+
     # === Build Results (from Prototyper/Fixer) ===
     fuzz_target_source: NotRequired[str]
     build_script_source: NotRequired[str]
@@ -36,10 +41,10 @@ class FuzzingWorkflowState(TypedDict):
     compile_log: NotRequired[str]
     binary_exists: NotRequired[bool]
     is_function_referenced: NotRequired[bool]
-    
+
     validation_error: NotRequired[str]  # Validation error message
     validation_failure_count: NotRequired[int]  # Number of validation failures
-    
+
     # === Execution Results (from ExecutionStage) ===
     run_success: NotRequired[bool]
     run_error: NotRequired[str]
@@ -47,9 +52,11 @@ class FuzzingWorkflowState(TypedDict):
     artifact_path: NotRequired[str]
     crash_func: NotRequired[str]
     crashes: NotRequired[bool]
-    crash_info: NotRequired[Dict[str, Any]]  # Detailed crash information including artifact_path, stack_trace, etc.
+    crash_info: NotRequired[Dict[
+        str,
+        Any]]  # Detailed crash information including artifact_path, stack_trace, etc.
     reproducer_path: NotRequired[str]
-    
+
     # === Coverage Results ===
     coverage_summary: NotRequired[str]
     coverage_percent: NotRequired[float]
@@ -57,26 +64,33 @@ class FuzzingWorkflowState(TypedDict):
     coverage_report_path: NotRequired[str]
     cov_pcs: NotRequired[int]
     total_pcs: NotRequired[int]
-    no_coverage_improvement_count: NotRequired[int]  # Track consecutive iterations without coverage improvement
-    
+    no_coverage_improvement_count: NotRequired[
+        int]  # Track consecutive iterations without coverage improvement
+
     # === Analysis Results (from Analyzers) ===
     analysis_complete: NotRequired[bool]
     crash_analysis: NotRequired[Dict[str, Any]]
     coverage_analysis: NotRequired[Dict[str, Any]]
-    
+
     # === Workflow Control ===
     next_action: NotRequired[str]  # For supervisor routing
-    node_visit_counts: NotRequired[Dict[str, int]]  # Per-node visit counter (loop prevention)
-    workflow_phase: NotRequired[str]  # Current workflow phase: "compilation" or "optimization"
-    compilation_retry_count: NotRequired[int]  # Separate counter for compilation retries
-    total_build_failure_count: NotRequired[int]  # Total build failures across all phases (prevents infinite loops)
-    prototyper_regenerate_count: NotRequired[int]  # Counter for prototyper regenerations
-    previous_fuzz_target_source: NotRequired[str]  # Store previous version for diff generation
-    
+    node_visit_counts: NotRequired[Dict[
+        str, int]]  # Per-node visit counter (loop prevention)
+    workflow_phase: NotRequired[
+        str]  # Current workflow phase: "compilation" or "optimization"
+    compilation_retry_count: NotRequired[
+        int]  # Separate counter for compilation retries
+    total_build_failure_count: NotRequired[
+        int]  # Total build failures across all phases (prevents infinite loops)
+    prototyper_regenerate_count: NotRequired[
+        int]  # Counter for prototyper regenerations
+    previous_fuzz_target_source: NotRequired[
+        str]  # Store previous version for diff generation
+
     # === Error Handling ===
     errors: NotRequired[List[Dict[str, Any]]]
     warnings: NotRequired[List[str]]
-    
+
     # === Configuration (from agent_test.py compatibility) ===
     pipeline: NotRequired[List[str]]  # Agent pipeline
     use_context: NotRequired[bool]  # Whether to use context
@@ -88,10 +102,10 @@ class FuzzingWorkflowState(TypedDict):
     workflow_status: NotRequired[str]  # Workflow status
     active_containers: NotRequired[List[str]]  # Active container list
     crash_results: NotRequired[List[Dict[str, Any]]]  # Crash results list
-    
+
     # === Token Usage Statistics ===
     token_usage: NotRequired[Dict[str, Any]]  # Token consumption statistics
-    
+
     # === Session Memory (Consensus Constraints) ===
     # Current consensus constraints established by agents during this task
     # Supervisor should always inject this consensus to downstream agents instead of full message history
@@ -107,9 +121,10 @@ class FuzzingWorkflowState(TypedDict):
     # Set by supervisor when build fails with undefined reference errors
     fake_definition_result: NotRequired[Dict[str, Any]]
 
+
 class WorkerState(TypedDict):
     """State for worker nodes in parallel execution."""
-    
+
     task_id: str  # Unique task identifier
     task_type: str  # Type of task (compile, analyze, etc.)
     input_data: Dict[str, Any]  # Input data for the task
@@ -119,27 +134,27 @@ class WorkerState(TypedDict):
     start_time: NotRequired[float]  # Task start timestamp
     end_time: NotRequired[float]  # Task completion timestamp
 
+
 def create_initial_state(
-    benchmark,  # experiment.benchmark.Benchmark object
-    work_dirs,  # experiment.workdir.WorkDirs object
-    trial: int = 0,
-    max_round: int = 10,
-    run_timeout: int = 300,
-    pipeline: Optional[List[str]] = None,
-    use_context: bool = False,
-    prompt_file: str = "",
-    additional_files_path: str = "",
-    initial_prompt: str = "",
-    model = None,
-    use_session_memory: bool = True,
-    **kwargs
-) -> FuzzingWorkflowState:
+        benchmark,  # experiment.benchmark.Benchmark object
+        work_dirs,  # experiment.workdir.WorkDirs object
+        trial: int = 0,
+        max_round: int = 10,
+        run_timeout: int = 300,
+        pipeline: Optional[List[str]] = None,
+        use_context: bool = False,
+        prompt_file: str = "",
+        additional_files_path: str = "",
+        initial_prompt: str = "",
+        model=None,
+        use_session_memory: bool = True,
+        **kwargs) -> FuzzingWorkflowState:
     """Create an initial state for the fuzzing workflow with full parameter support."""
-    
+
     # Serialize objects to dicts for msgpack compatibility
     benchmark_dict = benchmark.to_dict()
     work_dirs_dict = work_dirs.to_dict()
-    
+
     return FuzzingWorkflowState(
         benchmark=benchmark_dict,
         trial=trial,
@@ -175,12 +190,12 @@ def create_initial_state(
         },
         # Initialize session memory (consensus constraints storage)
         session_memory={
-            "api_constraints": [],        # API usage constraints list
-            "archetype": None,           # Identified architecture pattern
-            "known_fixes": [],           # Known error fixes
-            "decisions": [],             # Key decision records
-            "coverage_strategies": [],   # Coverage optimization strategies
-            "coverage_attempts": []      # History of coverage improvement attempts
+            "api_constraints": [],  # API usage constraints list
+            "archetype": None,  # Identified architecture pattern
+            "known_fixes": [],  # Known error fixes
+            "decisions": [],  # Key decision records
+            "coverage_strategies": [],  # Coverage optimization strategies
+            "coverage_attempts": []  # History of coverage improvement attempts
         },
         # Project-level mode: No validation fields needed
         validation_error="",
@@ -189,29 +204,31 @@ def create_initial_state(
         use_session_memory=use_session_memory,
     )
 
+
 def is_terminal_state(state: FuzzingWorkflowState) -> bool:
     """Check if the workflow has reached a terminal state."""
-    
+
     # Check termination conditions
     if state.get("termination_reason"):
         return True
-    
+
     # Check maximum iterations
     current_iter = state.get("current_iteration", 0)
     max_iter = state.get("max_iterations", 5)
     if current_iter >= max_iter:
         return True
-    
+
     # Check if we have a successful result
-    if (state.get("compile_success") and 
-        state.get("coverage_results") and 
-        state.get("coverage_results", {}).get("coverage", 0) > 0.8):
+    if (state.get("compile_success") and state.get("coverage_results")
+            and state.get("coverage_results", {}).get("coverage", 0) > 0.8):
         return True
-    
+
     return False
 
-def update_token_usage(state: FuzzingWorkflowState, agent_name: str, 
-                       prompt_tokens: int, completion_tokens: int, total_tokens: int) -> None:
+
+def update_token_usage(state: FuzzingWorkflowState, agent_name: str,
+                       prompt_tokens: int, completion_tokens: int,
+                       total_tokens: int) -> None:
     """
     Update token usage statistics in state.
     
@@ -229,12 +246,12 @@ def update_token_usage(state: FuzzingWorkflowState, agent_name: str,
             "total_tokens": 0,
             "by_agent": {}
         }
-    
+
     # Update totals
     state["token_usage"]["total_prompt_tokens"] += prompt_tokens
     state["token_usage"]["total_completion_tokens"] += completion_tokens
     state["token_usage"]["total_tokens"] += total_tokens
-    
+
     # Update per-agent statistics
     if agent_name not in state["token_usage"]["by_agent"]:
         state["token_usage"]["by_agent"][agent_name] = {
@@ -243,7 +260,7 @@ def update_token_usage(state: FuzzingWorkflowState, agent_name: str,
             "total_tokens": 0,
             "call_count": 0
         }
-    
+
     agent_stats = state["token_usage"]["by_agent"][agent_name]
     agent_stats["prompt_tokens"] += prompt_tokens
     agent_stats["completion_tokens"] += completion_tokens
@@ -256,14 +273,14 @@ def get_token_usage_summary(state: FuzzingWorkflowState) -> str:
     token_usage = state.get("token_usage", {})
     if not token_usage:
         return "No token usage data available"
-    
+
     summary = f"\n{'='*60}\n"
     summary += "Token Usage Summary\n"
     summary += f"{'='*60}\n"
     summary += f"Total Prompt Tokens:     {token_usage.get('total_prompt_tokens', 0):,}\n"
     summary += f"Total Completion Tokens: {token_usage.get('total_completion_tokens', 0):,}\n"
     summary += f"Total Tokens:            {token_usage.get('total_tokens', 0):,}\n"
-    
+
     by_agent = token_usage.get("by_agent", {})
     if by_agent:
         summary += f"\n{'-'*60}\n"
@@ -275,7 +292,7 @@ def get_token_usage_summary(state: FuzzingWorkflowState) -> str:
             summary += f"  Prompt Tokens:     {stats.get('prompt_tokens', 0):,}\n"
             summary += f"  Completion Tokens: {stats.get('completion_tokens', 0):,}\n"
             summary += f"  Total Tokens:      {stats.get('total_tokens', 0):,}\n"
-    
+
     summary += f"{'='*60}\n"
     return summary
 
@@ -289,39 +306,38 @@ def get_state_summary(state: FuzzingWorkflowState) -> str:
     status = state.get("workflow_status", "unknown")
 
     summary = f"Fuzzing workflow for {project} (iteration {iteration}, status: {status})"
-    
+
     # Add build status
     if state.get("compile_success") is not None:
         build_status = "successful" if state["compile_success"] else "failed"
         summary += f"\n  Build: {build_status}"
-    
+
     # Add coverage info
     coverage = state.get("coverage_results", {}).get("coverage")
     if coverage is not None:
         summary += f"\n  Coverage: {coverage:.2%}"
-    
+
     # Add crash info
     crashes = len(state.get("crash_results", []))
     if crashes > 0:
         summary += f"\n  Crashes: {crashes} found"
-    
+
     # Add error info
     errors = len(state.get("errors", []))
     if errors > 0:
         summary += f"\n  Errors: {errors} recorded"
-    
+
     return summary
 
 
 # ==================== Session Memory Management ====================
 
-def add_api_constraint(
-    state: FuzzingWorkflowState,
-    constraint: str,
-    source: str,
-    confidence: str = "medium",
-    iteration: int = None
-) -> None:
+
+def add_api_constraint(state: FuzzingWorkflowState,
+                       constraint: str,
+                       source: str,
+                       confidence: str = "medium",
+                       iteration: int = None) -> None:
     """
     Add API constraint to session_memory.
     
@@ -340,9 +356,9 @@ def add_api_constraint(
             "decisions": [],
             "coverage_strategies": []
         }
-    
+
     api_constraints = state["session_memory"].get("api_constraints", [])
-    
+
     # Deduplication: Check if the same constraint already exists
     for existing in api_constraints:
         if existing["constraint"] == constraint:
@@ -351,25 +367,28 @@ def add_api_constraint(
                 existing["confidence"] = "high"
                 existing["source"] = source
             return
-    
+
     # Add new constraint
     api_constraints.append({
-        "constraint": constraint,
-        "source": source,
-        "confidence": confidence,
-        "iteration": iteration if iteration is not None else state.get("current_iteration", 0)
+        "constraint":
+        constraint,
+        "source":
+        source,
+        "confidence":
+        confidence,
+        "iteration":
+        iteration if iteration is not None else state.get(
+            "current_iteration", 0)
     })
-    
+
     state["session_memory"]["api_constraints"] = api_constraints
 
 
-def add_known_fix(
-    state: FuzzingWorkflowState,
-    error_pattern: str,
-    solution: str,
-    source: str,
-    iteration: int = None
-) -> None:
+def add_known_fix(state: FuzzingWorkflowState,
+                  error_pattern: str,
+                  solution: str,
+                  source: str,
+                  iteration: int = None) -> None:
     """
     Add known error fix to session_memory.
     
@@ -389,9 +408,9 @@ def add_known_fix(
             "coverage_strategies": [],
             "coverage_attempts": []
         }
-    
+
     known_fixes = state["session_memory"].get("known_fixes", [])
-    
+
     # Deduplication
     for existing in known_fixes:
         if existing["error_pattern"] == error_pattern:
@@ -400,25 +419,28 @@ def add_known_fix(
                 existing["solution"] = solution
                 existing["source"] = source
             return
-    
+
     # Add new fix
     known_fixes.append({
-        "error_pattern": error_pattern,
-        "solution": solution,
-        "source": source,
-        "iteration": iteration if iteration is not None else state.get("current_iteration", 0)
+        "error_pattern":
+        error_pattern,
+        "solution":
+        solution,
+        "source":
+        source,
+        "iteration":
+        iteration if iteration is not None else state.get(
+            "current_iteration", 0)
     })
-    
+
     state["session_memory"]["known_fixes"] = known_fixes
 
 
-def add_decision(
-    state: FuzzingWorkflowState,
-    decision: str,
-    reason: str,
-    source: str,
-    iteration: int = None
-) -> None:
+def add_decision(state: FuzzingWorkflowState,
+                 decision: str,
+                 reason: str,
+                 source: str,
+                 iteration: int = None) -> None:
     """
     Add key decision to session_memory.
     
@@ -438,27 +460,30 @@ def add_decision(
             "coverage_strategies": [],
             "coverage_attempts": []
         }
-    
+
     decisions = state["session_memory"].get("decisions", [])
-    
+
     decisions.append({
-        "decision": decision,
-        "reason": reason,
-        "source": source,
-        "iteration": iteration if iteration is not None else state.get("current_iteration", 0)
+        "decision":
+        decision,
+        "reason":
+        reason,
+        "source":
+        source,
+        "iteration":
+        iteration if iteration is not None else state.get(
+            "current_iteration", 0)
     })
-    
+
     # Limit decisions to keep only the most recent 10
     state["session_memory"]["decisions"] = decisions[-10:]
 
 
-def set_archetype(
-    state: FuzzingWorkflowState,
-    archetype_type: str,
-    lifecycle_phases: List[str],
-    source: str,
-    iteration: int = None
-) -> None:
+def set_archetype(state: FuzzingWorkflowState,
+                  archetype_type: str,
+                  lifecycle_phases: List[str],
+                  source: str,
+                  iteration: int = None) -> None:
     """
     Set the identified API archetype pattern.
     
@@ -478,22 +503,25 @@ def set_archetype(
             "coverage_strategies": [],
             "coverage_attempts": []
         }
-    
+
     state["session_memory"]["archetype"] = {
-        "type": archetype_type,
-        "lifecycle_phases": lifecycle_phases,
-        "source": source,
-        "iteration": iteration if iteration is not None else state.get("current_iteration", 0)
+        "type":
+        archetype_type,
+        "lifecycle_phases":
+        lifecycle_phases,
+        "source":
+        source,
+        "iteration":
+        iteration if iteration is not None else state.get(
+            "current_iteration", 0)
     }
 
 
-def add_coverage_strategy(
-    state: FuzzingWorkflowState,
-    strategy: str,
-    target: str,
-    source: str,
-    iteration: int = None
-) -> None:
+def add_coverage_strategy(state: FuzzingWorkflowState,
+                          strategy: str,
+                          target: str,
+                          source: str,
+                          iteration: int = None) -> None:
     """
     Add coverage optimization strategy to session_memory.
     
@@ -513,35 +541,38 @@ def add_coverage_strategy(
             "coverage_strategies": [],
             "coverage_attempts": []
         }
-    
+
     strategies = state["session_memory"].get("coverage_strategies", [])
-    
+
     # Deduplication
     for existing in strategies:
         if existing["strategy"] == strategy:
             return
-    
+
     strategies.append({
-        "strategy": strategy,
-        "target": target,
-        "source": source,
-        "iteration": iteration if iteration is not None else state.get("current_iteration", 0)
+        "strategy":
+        strategy,
+        "target":
+        target,
+        "source":
+        source,
+        "iteration":
+        iteration if iteration is not None else state.get(
+            "current_iteration", 0)
     })
-    
+
     # Limit strategies to keep only the most recent 10
     state["session_memory"]["coverage_strategies"] = strategies[-10:]
 
 
-def add_coverage_attempt(
-    state: FuzzingWorkflowState,
-    attempt_type: str,
-    outcome: str,
-    coverage_percent: float,
-    line_coverage_diff: float,
-    no_improvement_count: int,
-    iteration: int = None,
-    notes: str = ""
-) -> None:
+def add_coverage_attempt(state: FuzzingWorkflowState,
+                         attempt_type: str,
+                         outcome: str,
+                         coverage_percent: float,
+                         line_coverage_diff: float,
+                         no_improvement_count: int,
+                         iteration: int = None,
+                         notes: str = "") -> None:
     """
     Add a coverage improvement attempt record to session_memory.
     
@@ -568,27 +599,37 @@ def add_coverage_attempt(
             "coverage_strategies": [],
             "coverage_attempts": []
         }
-    
+
     attempts = state["session_memory"].get("coverage_attempts", [])
-    
+
     attempt_record = {
-        "attempt_type": attempt_type,
-        "outcome": outcome,
-        "coverage_percent": float(coverage_percent or 0.0),
-        "line_coverage_diff": float(line_coverage_diff or 0.0),
-        "no_improvement_count": int(no_improvement_count or 0),
-        "iteration": iteration if iteration is not None else state.get("current_iteration", 0),
-        "index": len(attempts) + 1,
-        "notes": notes,
+        "attempt_type":
+        attempt_type,
+        "outcome":
+        outcome,
+        "coverage_percent":
+        float(coverage_percent or 0.0),
+        "line_coverage_diff":
+        float(line_coverage_diff or 0.0),
+        "no_improvement_count":
+        int(no_improvement_count or 0),
+        "iteration":
+        iteration if iteration is not None else state.get(
+            "current_iteration", 0),
+        "index":
+        len(attempts) + 1,
+        "notes":
+        notes,
     }
-    
+
     attempts.append(attempt_record)
-    
+
     # Keep only the most recent 20 attempts to avoid unbounded growth
     state["session_memory"]["coverage_attempts"] = attempts[-20:]
 
 
-def format_session_memory_for_prompt(state: FuzzingWorkflowState, max_items_per_category: int = 3) -> str:
+def format_session_memory_for_prompt(state: FuzzingWorkflowState,
+                                     max_items_per_category: int = 3) -> str:
     """
     Format session_memory as readable text for injection into agent prompts.
         
@@ -600,44 +641,51 @@ def format_session_memory_for_prompt(state: FuzzingWorkflowState, max_items_per_
         Formatted session_memory text
     """
     session_memory = state.get("session_memory", {})
-    
+
     if not session_memory:
         return "*No consensus constraints for this task yet*"
-    
+
     parts = []
-    
+
     # Helper function to prioritize and limit items
     def get_top_items(items, max_count):
         """Get top items based on priority (HIGH > MEDIUM > LOW) and recency."""
         if not items:
             return []
-        
+
         # Sort by confidence/priority (if exists) and iteration (recency)
         def sort_key(item):
             confidence = item.get('confidence', 'medium').lower()
-            priority_score = {'high': 3, 'medium': 2, 'low': 1}.get(confidence, 2)
+            priority_score = {
+                'high': 3,
+                'medium': 2,
+                'low': 1
+            }.get(confidence, 2)
             iteration = item.get('iteration', 0)
-            return (-priority_score, -iteration)  # Negative for descending order
-        
+            return (-priority_score, -iteration
+                    )  # Negative for descending order
+
         sorted_items = sorted(items, key=sort_key)
         return sorted_items[:max_count]
-    
+
     # 1. Format API constraints (top N by priority)
     if api_constraints := session_memory.get("api_constraints", []):
-        top_constraints = get_top_items(api_constraints, max_items_per_category)
+        top_constraints = get_top_items(api_constraints,
+                                        max_items_per_category)
         if top_constraints:
             parts.append("## API Usage Constraints")
             for c in top_constraints:
                 confidence_level = c.get("confidence", "medium").upper()
                 # Compact format: one line per constraint
                 parts.append(f"- [{confidence_level}] {c['constraint']}")
-    
+
     # 2. Format archetype pattern (always show if exists)
     if archetype := session_memory.get("archetype"):
         parts.append("\n## Identified Architecture Pattern")
         parts.append(f"- **Type**: {archetype['type']}")
-        parts.append(f"- **Lifecycle**: {' → '.join(archetype['lifecycle_phases'])}")
-    
+        parts.append(
+            f"- **Lifecycle**: {' → '.join(archetype['lifecycle_phases'])}")
+
     # 3. Format known fixes (top N most recent)
     if known_fixes := session_memory.get("known_fixes", []):
         top_fixes = known_fixes[-max_items_per_category:]  # Most recent N
@@ -647,7 +695,7 @@ def format_session_memory_for_prompt(state: FuzzingWorkflowState, max_items_per_
                 # Compact format: combine error and solution on fewer lines
                 parts.append(f"- **Error**: {fix['error_pattern']}")
                 parts.append(f"  **Solution**: {fix['solution']}")
-    
+
     # 4. Format decision records (top N most recent)
     if decisions := session_memory.get("decisions", []):
         top_decisions = decisions[-max_items_per_category:]  # Most recent N
@@ -656,7 +704,7 @@ def format_session_memory_for_prompt(state: FuzzingWorkflowState, max_items_per_
             for d in top_decisions:
                 # Compact format: one line per decision
                 parts.append(f"- {d['decision']} (Reason: {d['reason']})")
-    
+
     # 5. Format coverage strategies (top N most recent)
     if strategies := session_memory.get("coverage_strategies", []):
         top_strategies = strategies[-max_items_per_category:]  # Most recent N
@@ -665,7 +713,7 @@ def format_session_memory_for_prompt(state: FuzzingWorkflowState, max_items_per_
             for s in top_strategies:
                 # Compact format: one line per strategy
                 parts.append(f"- {s['strategy']}")
-    
+
     # 6. Format coverage attempts history (top N most recent)
     if attempts := session_memory.get("coverage_attempts", []):
         total_attempts = len(attempts)
@@ -679,15 +727,13 @@ def format_session_memory_for_prompt(state: FuzzingWorkflowState, max_items_per_
             cov = a.get("coverage_percent", 0.0)
             diff = a.get("line_coverage_diff", 0.0)
             no_imp = a.get("no_improvement_count", 0)
-            parts.append(
-                f"- Iteration {iter_no} | Type={attempt_type} | "
-                f"PC_coverage={cov:.2%} | line_diff={diff:.2%} | "
-                f"no_improve_count={no_imp} | outcome={outcome}"
-            )
-    
+            parts.append(f"- Iteration {iter_no} | Type={attempt_type} | "
+                         f"PC_coverage={cov:.2%} | line_diff={diff:.2%} | "
+                         f"no_improve_count={no_imp} | outcome={outcome}")
+
     if not parts:
         return "*No consensus constraints for this task yet*"
-    
+
     return "\n".join(parts)
 
 
@@ -704,7 +750,7 @@ def consolidate_session_memory(state: FuzzingWorkflowState) -> Dict[str, Any]:
         Cleaned session_memory
     """
     session_memory = state.get("session_memory", {}).copy()
-    
+
     if not session_memory:
         return {
             "api_constraints": [],
@@ -714,7 +760,7 @@ def consolidate_session_memory(state: FuzzingWorkflowState) -> Dict[str, Any]:
             "coverage_strategies": [],
             "coverage_attempts": []
         }
-    
+
     # 1. Deduplicate API constraints
     if api_constraints := session_memory.get("api_constraints", []):
         # Deduplicate by constraint content, keep the one with highest confidence
@@ -723,33 +769,36 @@ def consolidate_session_memory(state: FuzzingWorkflowState) -> Dict[str, Any]:
             key = c["constraint"]
             if key not in unique_constraints:
                 unique_constraints[key] = c
-            elif c["confidence"] == "high" and unique_constraints[key]["confidence"] != "high":
+            elif c["confidence"] == "high" and unique_constraints[key][
+                    "confidence"] != "high":
                 unique_constraints[key] = c
         session_memory["api_constraints"] = list(unique_constraints.values())
-    
+
     # 2. Deduplicate known_fixes
     if known_fixes := session_memory.get("known_fixes", []):
         unique_fixes = {}
         for fix in known_fixes:
             key = fix["error_pattern"]
             unique_fixes[key] = fix  # Later ones override earlier ones
-        session_memory["known_fixes"] = list(unique_fixes.values())[-10:]  # Keep only the most recent 10
-    
+        session_memory["known_fixes"] = list(
+            unique_fixes.values())[-10:]  # Keep only the most recent 10
+
     # 3. Limit decisions length
     if decisions := session_memory.get("decisions", []):
         session_memory["decisions"] = decisions[-10:]
-    
+
     # 4. Deduplicate coverage_strategies
     if strategies := session_memory.get("coverage_strategies", []):
         unique_strategies = {}
         for s in strategies:
             key = s["strategy"]
             unique_strategies[key] = s
-        session_memory["coverage_strategies"] = list(unique_strategies.values())[-10:]
-    
+        session_memory["coverage_strategies"] = list(
+            unique_strategies.values())[-10:]
+
     # 5. Limit coverage_attempts length (keep chronological order)
     if attempts := session_memory.get("coverage_attempts", []):
         # No deduplication here – history is meaningful. Just trim to last 20.
         session_memory["coverage_attempts"] = attempts[-20:]
-    
+
     return session_memory

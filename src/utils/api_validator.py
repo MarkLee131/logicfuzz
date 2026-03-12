@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class APIValidator:
     """Validates that generated code uses only public APIs."""
-    
+
     # Pattern categories
     INTERNAL_FUNCTION_PATTERNS = [
         # Functions with internal/impl/detail suffixes
@@ -23,20 +23,20 @@ class APIValidator:
         r'\b\w+_impl\s*\(',
         r'\b\w+_detail\s*\(',
         r'\b\w+_private\s*\(',
-        
+
         # Functions starting with underscore (C convention)
         r'\b_[a-z]\w+\s*\(',
-        
+
         # Common internal helper patterns
         r'\b\w+_get_default\s*\(',
         r'\b\w+_default\s*\(',
         r'\bdefault_\w+\s*\(',
-        
+
         # Internal state/context getters
         r'\bget_internal_\w+\s*\(',
         r'\bset_internal_\w+\s*\(',
     ]
-    
+
     INTERNAL_HEADER_PATTERNS = [
         # Internal directories
         r'#include\s*[<"].*internal/',
@@ -44,17 +44,17 @@ class APIValidator:
         r'#include\s*[<"].*detail/',
         r'#include\s*[<"].*impl/',
         r'#include\s*[<"].*implementation/',
-        
+
         # Internal suffixes
         r'#include\s*[<"].*_impl\.h[">]',
         r'#include\s*[<"].*_detail\.h[">]',
         r'#include\s*[<"].*_internal\.h[">]',
         r'#include\s*[<"].*_private\.h[">]',
-        
+
         # Deep relative paths (likely internal)
         r'#include\s*"\.\.\/\.\.\/\.\.+/',
     ]
-    
+
     THIRD_PARTY_HEADER_PATTERNS = [
         # Known third-party libraries
         r'#include\s*<cs/cs\.h>',
@@ -62,48 +62,61 @@ class APIValidator:
         r'#include\s*<suitesparse/',
         r'#include\s*<boost/',
         r'#include\s*<eigen/',
-        
+
         # Testing frameworks
         r'#include\s*<gtest/',
         r'#include\s*<gmock/',
         r'#include\s*<catch2/',
         r'#include\s*<doctest/',
-        
+
         # Benchmarking
         r'#include\s*<benchmark/',
-        
+
         # Configuration headers
         r'#include\s*[<"]config\.h[">]',
         r'#include\s*[<"]version\.h[">]',
     ]
-    
+
     DIRECT_STRUCT_ACCESS_PATTERNS = [
         # Direct member access (may be private)
         r'\w+\s*->\s*\w+\s*=',  # obj->member = value
-        r'\w+\.\w+\s*=',         # obj.member = value
+        r'\w+\.\w+\s*=',  # obj.member = value
     ]
-    
+
     def __init__(self):
         """Initialize the validator."""
         # Compile regex patterns for efficiency
-        self.internal_func_re = [re.compile(p) for p in self.INTERNAL_FUNCTION_PATTERNS]
-        self.internal_header_re = [re.compile(p) for p in self.INTERNAL_HEADER_PATTERNS]
-        self.third_party_header_re = [re.compile(p) for p in self.THIRD_PARTY_HEADER_PATTERNS]
-        self.struct_access_re = [re.compile(p) for p in self.DIRECT_STRUCT_ACCESS_PATTERNS]
-        
+        self.internal_func_re = [
+            re.compile(p) for p in self.INTERNAL_FUNCTION_PATTERNS
+        ]
+        self.internal_header_re = [
+            re.compile(p) for p in self.INTERNAL_HEADER_PATTERNS
+        ]
+        self.third_party_header_re = [
+            re.compile(p) for p in self.THIRD_PARTY_HEADER_PATTERNS
+        ]
+        self.struct_access_re = [
+            re.compile(p) for p in self.DIRECT_STRUCT_ACCESS_PATTERNS
+        ]
+
         # Whitelist: common patterns that are actually OK
         self.function_whitelist = {
             '__attribute__',
             '_Generic',  # C11 generic macro
         }
-        
+
         self.struct_access_whitelist = {
-            'data', 'size',  # Common fuzzer input variables
-            'length', 'len',
-            'ptr', 'buf',
+            'data',
+            'size',  # Common fuzzer input variables
+            'length',
+            'len',
+            'ptr',
+            'buf',
         }
-    
-    def validate_code(self, code: str, project_name: str = None) -> Dict[str, List[Dict]]:
+
+    def validate_code(self,
+                      code: str,
+                      project_name: str = None) -> Dict[str, List[Dict]]:
         """Validate generated fuzz target code.
         
         Args:
@@ -129,93 +142,111 @@ class APIValidator:
         """
         issues = []
         lines = code.split('\n')
-        
+
         # Check for internal function calls
         issues.extend(self._check_internal_functions(lines))
-        
+
         # Check for internal headers
         issues.extend(self._check_internal_headers(lines))
-        
+
         # Check for third-party headers
         issues.extend(self._check_third_party_headers(lines))
-        
+
         # Check for direct struct access (less strict, just warnings)
         issues.extend(self._check_struct_access(lines))
-        
+
         return {
             'issues': issues,
             'clean': len([i for i in issues if i['severity'] == 'high']) == 0
         }
-    
+
     def _check_internal_functions(self, lines: List[str]) -> List[Dict]:
         """Check for internal function calls."""
         issues = []
-        
+
         for line_num, line in enumerate(lines, 1):
             # Skip comments
             if line.strip().startswith('//') or line.strip().startswith('/*'):
                 continue
-            
+
             for pattern_re in self.internal_func_re:
                 matches = pattern_re.finditer(line)
                 for match in matches:
                     func_name = match.group(0).strip('( ')
-                    
+
                     # Check whitelist
                     if func_name in self.function_whitelist:
                         continue
-                    
+
                     issues.append({
-                        'category': 'internal_function',
-                        'severity': 'high',
-                        'pattern': func_name,
-                        'line_number': line_num,
-                        'line': line.strip(),
-                        'suggestion': self._suggest_function_fix(func_name)
+                        'category':
+                        'internal_function',
+                        'severity':
+                        'high',
+                        'pattern':
+                        func_name,
+                        'line_number':
+                        line_num,
+                        'line':
+                        line.strip(),
+                        'suggestion':
+                        self._suggest_function_fix(func_name)
                     })
-        
+
         return issues
-    
+
     def _check_internal_headers(self, lines: List[str]) -> List[Dict]:
         """Check for internal header includes."""
         issues = []
-        
+
         for line_num, line in enumerate(lines, 1):
             for pattern_re in self.internal_header_re:
                 if pattern_re.search(line):
                     issues.append({
-                        'category': 'internal_header',
-                        'severity': 'high',
-                        'pattern': line.strip(),
-                        'line_number': line_num,
-                        'line': line.strip(),
-                        'suggestion': 'Remove this header and use public API headers instead'
+                        'category':
+                        'internal_header',
+                        'severity':
+                        'high',
+                        'pattern':
+                        line.strip(),
+                        'line_number':
+                        line_num,
+                        'line':
+                        line.strip(),
+                        'suggestion':
+                        'Remove this header and use public API headers instead'
                     })
-        
+
         return issues
-    
+
     def _check_third_party_headers(self, lines: List[str]) -> List[Dict]:
         """Check for third-party dependency headers."""
         issues = []
-        
+
         for line_num, line in enumerate(lines, 1):
             for pattern_re in self.third_party_header_re:
                 if pattern_re.search(line):
                     issues.append({
-                        'category': 'third_party_header',
-                        'severity': 'high',
-                        'pattern': line.strip(),
-                        'line_number': line_num,
-                        'line': line.strip(),
-                        'suggestion': 'Remove third-party dependency header - not available in OSS-Fuzz'
+                        'category':
+                        'third_party_header',
+                        'severity':
+                        'high',
+                        'pattern':
+                        line.strip(),
+                        'line_number':
+                        line_num,
+                        'line':
+                        line.strip(),
+                        'suggestion':
+                        'Remove third-party dependency header - not available in OSS-Fuzz'
                     })
-        
+
         return issues
-    
+
     def _check_struct_access(self, lines: List[str]) -> List[Dict]:
         """Check for direct struct member access (may access private members)."""
         issues = []
-        
+
         for line_num, line in enumerate(lines, 1):
             # Skip comments and type declarations
             if line.strip().startswith('//') or \
@@ -223,7 +254,7 @@ class APIValidator:
                'typedef' in line or \
                'struct' in line:
                 continue
-            
+
             for pattern_re in self.struct_access_re:
                 matches = pattern_re.finditer(line)
                 for match in matches:
@@ -231,22 +262,28 @@ class APIValidator:
                     member_match = re.search(r'(\w+)\s*=', match.group(0))
                     if member_match:
                         member_name = member_match.group(1)
-                        
+
                         # Check whitelist
                         if member_name in self.struct_access_whitelist:
                             continue
-                        
+
                         issues.append({
-                            'category': 'direct_struct_access',
-                            'severity': 'medium',  # Less severe, may be OK
-                            'pattern': match.group(0).strip(),
-                            'line_number': line_num,
-                            'line': line.strip(),
-                            'suggestion': f'Consider using public setter/getter for member "{member_name}"'
+                            'category':
+                            'direct_struct_access',
+                            'severity':
+                            'medium',  # Less severe, may be OK
+                            'pattern':
+                            match.group(0).strip(),
+                            'line_number':
+                            line_num,
+                            'line':
+                            line.strip(),
+                            'suggestion':
+                            f'Consider using public setter/getter for member "{member_name}"'
                         })
-        
+
         return issues
-    
+
     def _suggest_function_fix(self, func_name: str) -> str:
         """Suggest a fix for internal function usage."""
         if '_get_default' in func_name:
@@ -260,7 +297,7 @@ class APIValidator:
             return 'This is an internal implementation - use public API from existing fuzzers'
         else:
             return 'Replace with public API function from existing fuzzers or headers'
-    
+
     def format_validation_report(self, validation_result: Dict) -> str:
         """Format validation results as a human-readable report.
         
@@ -271,51 +308,47 @@ class APIValidator:
             Formatted string report
         """
         issues = validation_result['issues']
-        
+
         if not issues:
             return "✅ Code validation passed - no internal API usage detected"
-        
+
         # Group issues by severity
         high_severity = [i for i in issues if i['severity'] == 'high']
         medium_severity = [i for i in issues if i['severity'] == 'medium']
-        
-        lines = [
-            "⚠️  Code Validation Issues Detected",
-            ""
-        ]
-        
+
+        lines = ["⚠️  Code Validation Issues Detected", ""]
+
         if high_severity:
             lines.extend([
-                f"## 🔴 HIGH SEVERITY ({len(high_severity)} issues)",
-                "",
-                "These MUST be fixed - they will cause compilation errors:",
-                ""
+                f"## 🔴 HIGH SEVERITY ({len(high_severity)} issues)", "",
+                "These MUST be fixed - they will cause compilation errors:", ""
             ])
-            
+
             for issue in high_severity[:10]:  # Limit to 10
-                lines.append(f"**Line {issue['line_number']}**: {issue['category']}")
+                lines.append(
+                    f"**Line {issue['line_number']}**: {issue['category']}")
                 lines.append(f"  ❌ `{issue['pattern']}`")
                 lines.append(f"  💡 {issue['suggestion']}")
                 lines.append("")
-        
+
         if medium_severity:
             lines.extend([
-                f"## 🟡 MEDIUM SEVERITY ({len(medium_severity)} issues)",
-                "",
-                "These may cause issues - review carefully:",
-                ""
+                f"## 🟡 MEDIUM SEVERITY ({len(medium_severity)} issues)", "",
+                "These may cause issues - review carefully:", ""
             ])
-            
+
             for issue in medium_severity[:5]:  # Limit to 5
-                lines.append(f"**Line {issue['line_number']}**: {issue['category']}")
+                lines.append(
+                    f"**Line {issue['line_number']}**: {issue['category']}")
                 lines.append(f"  ⚠️  `{issue['pattern']}`")
                 lines.append(f"  💡 {issue['suggestion']}")
                 lines.append("")
-        
+
         return '\n'.join(lines)
 
 
-def validate_fuzz_target(code: str, project_name: str = None) -> Tuple[bool, str]:
+def validate_fuzz_target(code: str,
+                         project_name: str = None) -> Tuple[bool, str]:
     """Convenience function to validate fuzz target code.
 
     Args:
@@ -342,7 +375,8 @@ class LanguageMismatchValidator:
 
     # C++ features that should not appear in pure C code
     CPP_INCLUDE_PATTERNS = [
-        (r'#include\s*<fuzzer/FuzzedDataProvider\.h>', 'FuzzedDataProvider is C++ only'),
+        (r'#include\s*<fuzzer/FuzzedDataProvider\.h>',
+         'FuzzedDataProvider is C++ only'),
         (r'#include\s*<algorithm>', 'algorithm is a C++ header'),
         (r'#include\s*<string>', 'string is a C++ header'),
         (r'#include\s*<vector>', 'vector is a C++ header'),
@@ -373,8 +407,10 @@ class LanguageMismatchValidator:
 
     def __init__(self):
         """Initialize the validator."""
-        self.include_patterns = [(re.compile(p), msg) for p, msg in self.CPP_INCLUDE_PATTERNS]
-        self.syntax_patterns = [(re.compile(p), msg) for p, msg in self.CPP_SYNTAX_PATTERNS]
+        self.include_patterns = [(re.compile(p), msg)
+                                 for p, msg in self.CPP_INCLUDE_PATTERNS]
+        self.syntax_patterns = [(re.compile(p), msg)
+                                for p, msg in self.CPP_SYNTAX_PATTERNS]
 
     def validate_for_c_target(self, code: str) -> Dict[str, Any]:
         """
@@ -443,8 +479,7 @@ class LanguageMismatchValidator:
 
         features = validation_result['cpp_features']
         lines = [
-            f"❌ C++ FEATURES DETECTED IN C CODE ({len(features)} issues)",
-            "",
+            f"❌ C++ FEATURES DETECTED IN C CODE ({len(features)} issues)", "",
             "The following C++ features will cause compilation errors in a C project:",
             ""
         ]
@@ -454,7 +489,8 @@ class LanguageMismatchValidator:
         for feature in features[:10]:  # Limit to first 10
             reason_key = feature['reason']
             if reason_key not in seen_reasons:
-                lines.append(f"  • Line {feature['line_number']}: {feature['reason']}")
+                lines.append(
+                    f"  • Line {feature['line_number']}: {feature['reason']}")
                 lines.append(f"    `{feature['pattern']}`")
                 seen_reasons.add(reason_key)
 
@@ -462,8 +498,7 @@ class LanguageMismatchValidator:
             lines.append(f"  ... and {len(features) - 10} more issues")
 
         lines.extend([
-            "",
-            "💡 FIX: Rewrite using pure C patterns:",
+            "", "💡 FIX: Rewrite using pure C patterns:",
             "  - Use memcpy() to extract integers from fuzz data",
             "  - Use malloc/free instead of new/delete",
             "  - Use raw (data, size) instead of FuzzedDataProvider",
@@ -473,7 +508,8 @@ class LanguageMismatchValidator:
         return '\n'.join(lines)
 
 
-def validate_language_compatibility(code: str, is_c_target: bool) -> Tuple[bool, str]:
+def validate_language_compatibility(code: str,
+                                    is_c_target: bool) -> Tuple[bool, str]:
     """
     Validate that generated code is compatible with target language.
 
@@ -511,8 +547,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     return 0;
 }
 '''
-    
+
     is_valid, report = validate_fuzz_target(test_code, 'igraph')
     print(report)
     print(f"\nValidation result: {'PASS' if is_valid else 'FAIL'}")
-

@@ -26,8 +26,7 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             model_name=model_name,
             trial=trial,
             args=args,
-            system_message=prompt_manager.get_system_prompt("fixer")
-        )
+            system_message=prompt_manager.get_system_prompt("fixer"))
         self.inspect_tool = None
 
     def get_tools(self) -> List[BaseTool]:
@@ -39,8 +38,13 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         if not code:
             # No fallback - if LLM didn't follow format, keep code empty
             # The execute() method will fall back to current_code
-            logger.warning('No <fuzz_target> tag found in fixer response', trial=self.trial)
-        return {'fuzz_target_code': code, 'raw_response': content, 'fixed': bool(code)}
+            logger.warning('No <fuzz_target> tag found in fixer response',
+                           trial=self.trial)
+        return {
+            'fuzz_target_code': code,
+            'raw_response': content,
+            'fixed': bool(code)
+        }
 
     def _execute_bash(self, command: str) -> str:
         result = self.inspect_tool.execute(command)
@@ -59,8 +63,7 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
-            merge_session_memory_updates
-        )
+            merge_session_memory_updates)
 
         benchmark = benchmarklib.Benchmark.from_dict(state["benchmark"])
         current_code = state.get("fuzz_target_source", "")
@@ -68,35 +71,42 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         build_errors = state.get("build_errors", [])
 
         # Setup container
-        self.inspect_tool = ProjectContainerTool(benchmark, name='fixer_inspect')
-        self.inspect_tool.write_to_file(content=current_code, file_path=benchmark.target_path)
+        self.inspect_tool = ProjectContainerTool(benchmark,
+                                                 name='fixer_inspect')
+        self.inspect_tool.write_to_file(content=current_code,
+                                        file_path=benchmark.target_path)
         if build_script_source:
-            self.inspect_tool.write_to_file(content=build_script_source, file_path=self.inspect_tool.build_script_path)
-        self.inspect_tool.compile(extra_commands=' && rm -rf /out/* > /dev/null')
+            self.inspect_tool.write_to_file(
+                content=build_script_source,
+                file_path=self.inspect_tool.build_script_path)
+        self.inspect_tool.compile(
+            extra_commands=' && rm -rf /out/* > /dev/null')
 
         # Build prompt
         error_text = "\n".join(build_errors[:10])
         code_context = self._generate_code_context(current_code, build_errors)
-        additional = self._build_additional_context(benchmark, state, build_errors)
+        additional = self._build_additional_context(benchmark, state,
+                                                    build_errors)
 
         prompt_manager = get_prompt_manager()
         base_prompt = prompt_manager.build_user_prompt(
             "fixer",
             project_name=benchmark.project,
-            language=benchmark.file_type.value if hasattr(benchmark.file_type, 'value') else 'C++',
+            language=benchmark.file_type.value if hasattr(
+                benchmark.file_type, 'value') else 'C++',
             current_code=code_context,
             build_errors=error_text,
-            additional_context=additional
-        )
-        user_prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
+            additional_context=additional)
+        user_prompt = build_prompt_with_session_memory(state,
+                                                       base_prompt,
+                                                       agent_name=self.name)
 
         try:
             result, all_responses = self.run_tool_calling_loop(
                 initial_prompt=user_prompt,
                 state=state,
                 max_rounds=3,
-                log_prefix="FIX"
-            )
+                log_prefix="FIX")
         finally:
             if self.inspect_tool:
                 self.inspect_tool.terminate()
@@ -107,7 +117,8 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
 
         # Session memory
         combined = "\n\n".join(all_responses)
-        updates = extract_session_memory_updates_from_response(combined, self.name, state.get("current_iteration", 0))
+        updates = extract_session_memory_updates_from_response(
+            combined, self.name, state.get("current_iteration", 0))
         session_memory = merge_session_memory_updates(state, updates)
 
         state_update = {
@@ -117,7 +128,8 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             "build_errors": [],
             "session_memory": session_memory,
             # Always increment compilation_retry_count when fixer is called for build errors
-            "compilation_retry_count": state.get("compilation_retry_count", 0) + 1
+            "compilation_retry_count":
+            state.get("compilation_retry_count", 0) + 1
         }
 
         self._langgraph_logger.flush_agent_logs(self.name)
@@ -128,10 +140,11 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             return ""
         error_lines = set()
         for err in errors:
-            for m in re.findall(r':(\d+):', err) or re.findall(r'line (\d+)', err):
+            for m in re.findall(r':(\d+):', err) or re.findall(
+                    r'line (\d+)', err):
                 try:
                     ln = int(m)
-                    error_lines.update(range(max(1, ln-10), ln+11))
+                    error_lines.update(range(max(1, ln - 10), ln + 11))
                 except ValueError:
                     pass
         if error_lines:
@@ -146,18 +159,25 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
                     last = ln
             if relevant:
                 return "```cpp\n" + "\n".join(relevant) + "\n```"
-        return code if len(code) < 5000 else code[:2500] + "\n// ...\n" + code[-2500:]
+        return code if len(
+            code) < 5000 else code[:2500] + "\n// ...\n" + code[-2500:]
 
     def _build_additional_context(self, benchmark, state, errors) -> str:
         parts = []
         if benchmark.target_path:
             parts.append(f"**Target**: `{benchmark.target_path}`")
 
-        header_info = state.get("function_analysis", {}).get("header_information", {})
-        if header_info and any('file not found' in e.lower() or '#include' in e.lower() for e in errors):
-            parts.append("\n**Header hints**: Use `bash_execute` to find headers with `find /src -name '*.h'`")
+        header_info = state.get("function_analysis",
+                                {}).get("header_information", {})
+        if header_info and any(
+                'file not found' in e.lower() or '#include' in e.lower()
+                for e in errors):
+            parts.append(
+                "\n**Header hints**: Use `bash_execute` to find headers with `find /src -name '*.h'`"
+            )
 
         if state.get("api_validation_warnings"):
-            parts.append(f"\n**API warnings**: {state['api_validation_warnings']}")
+            parts.append(
+                f"\n**API warnings**: {state['api_validation_warnings']}")
 
         return "\n".join(parts)

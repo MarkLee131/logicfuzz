@@ -69,7 +69,8 @@ class LLMAdapter:
         return self.query(prompt)
 
 
-def create_llm_adapter(model: Union[BaseChatModel, str, None]) -> Optional[LLMAdapter]:
+def create_llm_adapter(
+        model: Union[BaseChatModel, str, None]) -> Optional[LLMAdapter]:
     """
     Create an LLM adapter from a model.
 

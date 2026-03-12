@@ -45,7 +45,8 @@ class FuzzingContext:
     project_name: str
 
     # === Required data (must be present) ===
-    project_apis: List[Dict[str, Any]]  # List of API information (from Liberator)
+    project_apis: List[Dict[str,
+                            Any]]  # List of API information (from Liberator)
     api_sequences: List[List[str]]  # List of API call sequences (from grammar)
     dependency_graph: Dict[str, Any]  # Type dependency graph
     grammar_info: Dict[str, Any]  # Grammar metadata
@@ -54,14 +55,17 @@ class FuzzingContext:
     condition_info: Dict[str, Any] = field(default_factory=dict)
 
     # === Pattern analysis (P1: DriverEnhancer integration) ===
-    pattern_analysis: Dict[str, Any] = field(default_factory=dict)  # VarLen/Loop/Callback/TLV
+    pattern_analysis: Dict[str, Any] = field(
+        default_factory=dict)  # VarLen/Loop/Callback/TLV
 
     # === Skeleton drivers (P0: SkeletonGenerator integration) ===
-    skeleton_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Pre-generated skeletons
+    skeleton_drivers: List[Dict[str, Any]] = field(
+        default_factory=list)  # Pre-generated skeletons
 
     # === Synthesized drivers (CBFactory program synthesis) ===
     # Note: Synthesis is always enabled - CBFactory generates base drivers, LLM Prototyper refines them
-    synthesized_drivers: List[Dict[str, Any]] = field(default_factory=list)  # Full drivers from CBFactory
+    synthesized_drivers: List[Dict[str, Any]] = field(
+        default_factory=list)  # Full drivers from CBFactory
 
     # === Existing driver knowledge (extracted from OSS-Fuzz fuzzers via LLM) ===
     # Contains patterns, configurations, and fuzzing strategies learned from existing drivers
@@ -69,7 +73,7 @@ class FuzzingContext:
 
     # === Metadata ===
     preparation_time: float = 0.0
-    
+
     def __post_init__(self):
         """Validate required data is not empty."""
         if not self.project_apis:
@@ -80,10 +84,12 @@ class FuzzingContext:
             raise ValueError("dependency_graph cannot be empty")
         if not self.header_info:
             raise ValueError("header_info cannot be empty")
-    
+
     @classmethod
-    def load_from_cache(cls, project_name: str,
-                        logger_instance: logging.Logger = None) -> Optional['FuzzingContext']:
+    def load_from_cache(cls,
+                        project_name: str,
+                        logger_instance: logging.Logger = None
+                        ) -> Optional['FuzzingContext']:
         """
         Try to load static analysis results from cache.
 
@@ -101,10 +107,8 @@ class FuzzingContext:
         cache_dir = Path(f"./results/{project_name}/static_analysis")
 
         required_files = [
-            'project_apis.json',
-            'filtered_sequences.json',
-            'dependency_graph.json',
-            'analysis_summary.json',
+            'project_apis.json', 'filtered_sequences.json',
+            'dependency_graph.json', 'analysis_summary.json',
             'pattern_analysis.json'
         ]
 
@@ -113,7 +117,9 @@ class FuzzingContext:
             log.debug(f'Cache directory not found: {cache_dir}')
             return None
 
-        missing_files = [f for f in required_files if not (cache_dir / f).exists()]
+        missing_files = [
+            f for f in required_files if not (cache_dir / f).exists()
+        ]
         if missing_files:
             log.debug(f'Cache incomplete, missing: {missing_files}')
             return None
@@ -129,7 +135,9 @@ class FuzzingContext:
             # Load filtered sequences
             with open(cache_dir / 'filtered_sequences.json', 'r') as f:
                 seq_data = json.load(f)
-                api_sequences = [s['apis'] for s in seq_data.get('sequences', [])]
+                api_sequences = [
+                    s['apis'] for s in seq_data.get('sequences', [])
+                ]
 
             # Load dependency graph
             with open(cache_dir / 'dependency_graph.json', 'r') as f:
@@ -147,7 +155,8 @@ class FuzzingContext:
 
             # Header info - use minimal set (will be supplemented at runtime if needed)
             header_info = {
-                'standard_headers': ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
+                'standard_headers':
+                ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
                 'project_headers': []
             }
 
@@ -175,7 +184,9 @@ class FuzzingContext:
                 log.warning('Cached api_sequences is empty, cache invalid')
                 return None
 
-            log.info(f'   ✅ Loaded {len(project_apis)} APIs, {len(api_sequences)} sequences from cache')
+            log.info(
+                f'   ✅ Loaded {len(project_apis)} APIs, {len(api_sequences)} sequences from cache'
+            )
 
             return cls(
                 project_name=project_name,
@@ -196,7 +207,9 @@ class FuzzingContext:
             return None
 
     @classmethod
-    def prepare(cls, project_name: str, benchmark: Any = None,
+    def prepare(cls,
+                project_name: str,
+                benchmark: Any = None,
                 logger_instance: logging.Logger = None,
                 num_sequences: int = 24,
                 driver_size: int = 5,
@@ -241,37 +254,53 @@ class FuzzingContext:
         if use_cache:
             cached = cls.load_from_cache(project_name, logger_instance=log)
             if cached:
-                log.info(f'✅ Using cached static analysis for {project_name} (skipping ~60s analysis)')
+                log.info(
+                    f'✅ Using cached static analysis for {project_name} (skipping ~60s analysis)'
+                )
 
                 # Even when loading from cache, extract knowledge from existing drivers
                 # This ensures we always have the latest driver patterns
-                log.info('  📚 Extracting knowledge from existing OSS-Fuzz drivers...')
+                log.info(
+                    '  📚 Extracting knowledge from existing OSS-Fuzz drivers...'
+                )
                 existing_driver_knowledge = {}
                 try:
                     existing_driver_knowledge = _extract_existing_driver_knowledge(
                         project_name=project_name,
                         log=log,
                         llm_client=llm_client,
-                        max_drivers=3
-                    )
+                        max_drivers=3)
                     if existing_driver_knowledge.get('driver_sources'):
-                        num_drivers = len(existing_driver_knowledge['driver_sources'])
-                        has_analysis = bool(existing_driver_knowledge.get('analysis'))
+                        num_drivers = len(
+                            existing_driver_knowledge['driver_sources'])
+                        has_analysis = bool(
+                            existing_driver_knowledge.get('analysis'))
                         extra_str = " (with LLM analysis)" if has_analysis else ""
-                        log.info(f'   ✅ Extracted knowledge from {num_drivers} existing drivers{extra_str}')
+                        log.info(
+                            f'   ✅ Extracted knowledge from {num_drivers} existing drivers{extra_str}'
+                        )
                     else:
-                        log.info('   ℹ️ No existing drivers found for knowledge extraction')
+                        log.info(
+                            '   ℹ️ No existing drivers found for knowledge extraction'
+                        )
                 except Exception as e:
-                    log.warning(f"Driver knowledge extraction failed (non-critical): {e}")
+                    log.warning(
+                        f"Driver knowledge extraction failed (non-critical): {e}"
+                    )
 
                 # Create new context with driver knowledge (FuzzingContext is frozen)
-                return replace(cached, existing_driver_knowledge=existing_driver_knowledge)
-            log.info(f'📦 No valid cache found, running full static analysis for {project_name}')
+                return replace(
+                    cached,
+                    existing_driver_knowledge=existing_driver_knowledge)
+            log.info(
+                f'📦 No valid cache found, running full static analysis for {project_name}'
+            )
 
         start_time = time.time()
-        
-        log.info(f'📦 Preparing project-level fuzzing context for {project_name}')
-        
+
+        log.info(
+            f'📦 Preparing project-level fuzzing context for {project_name}')
+
         # === Step 1: Create ProjectDriverGenerator ===
         log.debug('  1/10 Creating ProjectDriverGenerator...')
         try:
@@ -280,7 +309,7 @@ class FuzzingContext:
                     f"benchmark object is required for project-level modeling. "
                     f"ProjectDriverGenerator needs benchmark for Clang/LLVM extraction."
                 )
-            
+
             generator = ProjectDriverGenerator(
                 project_name=project_name,
                 benchmark=benchmark,
@@ -291,48 +320,48 @@ class FuzzingContext:
         except Exception as e:
             raise RuntimeError(
                 f"Failed to create ProjectDriverGenerator: {e}\n"
-                f"This is required for project-level modeling."
-            ) from e
-        
+                f"This is required for project-level modeling.") from e
+
         # === Step 2: Extract all APIs ===
         log.debug('  2/10 Extracting all APIs from project...')
         try:
             all_apis = generator.extract_all_apis()
             if not all_apis:
-                raise ValueError(f"No APIs extracted from project '{project_name}'")
-            
+                raise ValueError(
+                    f"No APIs extracted from project '{project_name}'")
+
             # Convert Api objects to dictionaries for serialization
             project_apis = []
             for api in all_apis:
                 project_apis.append({
-                    'function_name': api.function_name,
-                    'return_type': api.return_info.type,
-                    'arguments': [
-                        {
-                            'name': arg.name,
-                            'type': arg.type,
-                            'flag': arg.flag,
-                            'size': arg.size,
-                            'is_const': arg.is_const
-                        }
-                        for arg in api.arguments_info
-                    ],
-                    'is_vararg': api.is_vararg,
-                    'namespace': api.namespace
+                    'function_name':
+                    api.function_name,
+                    'return_type':
+                    api.return_info.type,
+                    'arguments': [{
+                        'name': arg.name,
+                        'type': arg.type,
+                        'flag': arg.flag,
+                        'size': arg.size,
+                        'is_const': arg.is_const
+                    } for arg in api.arguments_info],
+                    'is_vararg':
+                    api.is_vararg,
+                    'namespace':
+                    api.namespace
                 })
-            
+
             log.info(f'   ✅ Extracted {len(project_apis)} APIs')
         except Exception as e:
             raise RuntimeError(
                 f"Failed to extract APIs: {e}\n"
-                f"This is an internal error in ProjectDriverGenerator."
-            ) from e
-        
+                f"This is an internal error in ProjectDriverGenerator.") from e
+
         # === Step 3: Build dependency graph ===
         log.debug('  3/10 Building type dependency graph...')
         try:
             dep_graph = generator.build_dependency_graph()
-            
+
             # Convert dependency graph to serializable format
             dep_graph_dict = {
                 'graph': {
@@ -341,13 +370,15 @@ class FuzzingContext:
                 },
                 'num_nodes': len(dep_graph.graph)
             }
-            log.info(f'   ✅ Dependency graph built: {dep_graph_dict["num_nodes"]} nodes')
+            log.info(
+                f'   ✅ Dependency graph built: {dep_graph_dict["num_nodes"]} nodes'
+            )
         except Exception as e:
             raise RuntimeError(
                 f"Failed to build dependency graph: {e}\n"
                 f"This is an internal error in TypeDependencyGraphGenerator."
             ) from e
-        
+
         # === Step 4: Generate grammar (API sequences) ===
         log.debug('  4/10 Generating grammar and API sequences...')
         try:
@@ -358,8 +389,7 @@ class FuzzingContext:
                 grammar=grammar,
                 num_sequences=num_sequences,
                 max_len=driver_size,
-                log=log
-            )
+                log=log)
             api_sequences = _dedup_sequences(api_sequences)
 
             grammar_info = {
@@ -369,26 +399,29 @@ class FuzzingContext:
             }
             # Save raw sequences before any filtering
             raw_api_sequences = list(api_sequences)  # Make a copy
-            log.info(f'   ✅ Grammar generated: {grammar_info["num_symbols"]} symbols, {len(api_sequences)} sequences')
+            log.info(
+                f'   ✅ Grammar generated: {grammar_info["num_symbols"]} symbols, {len(api_sequences)} sequences'
+            )
         except Exception as e:
             raise RuntimeError(
                 f"Failed to generate grammar: {e}\n"
-                f"This is an internal error in GrammarGenerator."
-            ) from e
-        
+                f"This is an internal error in GrammarGenerator.") from e
+
         if not api_sequences:
             raise ValueError(
                 f"No API sequences generated for project '{project_name}'.\n"
                 f"This might indicate the dependency graph is empty or grammar generation failed."
             )
-        
+
         # === Step 5: Build data layout (required for ConditionManager) ===
         log.debug('  5/10 Building data layout...')
         try:
             generator.build_data_layout()
             log.info('   ✅ Data layout built')
         except Exception as e:
-            log.warning(f"Failed to build data layout: {e} (ConditionManager may have reduced precision)")
+            log.warning(
+                f"Failed to build data layout: {e} (ConditionManager may have reduced precision)"
+            )
 
         # === Step 5b: Build condition manager ===
         log.debug('  5b/10 Building condition manager...')
@@ -396,16 +429,26 @@ class FuzzingContext:
             condition_manager = generator.build_condition_manager()
             log.info('   ✅ Condition manager built')
         except Exception as e:
-            log.warning(f"Failed to build condition manager: {e} (non-critical)")
+            log.warning(
+                f"Failed to build condition manager: {e} (non-critical)")
             condition_manager = None
-        
+
         # Condition summary for prompt/LLM
         condition_info = {}
         if condition_manager:
             try:
-                sources = [api.function_name for api in condition_manager.get_source_api()]
-                sinks = [api.function_name for api in condition_manager.get_sink_api()]
-                inits = [api.function_name for api in condition_manager.get_init_api()]
+                sources = [
+                    api.function_name
+                    for api in condition_manager.get_source_api()
+                ]
+                sinks = [
+                    api.function_name
+                    for api in condition_manager.get_sink_api()
+                ]
+                inits = [
+                    api.function_name
+                    for api in condition_manager.get_init_api()
+                ]
                 condition_info = {
                     'sources': sources,
                     'sinks': sinks,
@@ -419,7 +462,7 @@ class FuzzingContext:
             except Exception as e:
                 log.warning(f"Failed to summarize condition manager: {e}")
                 condition_info = {}
-        
+
         # === Step 6: Simple heuristic filtering (no LLM needed) ===
         log.debug('  6/10 Filtering API sequences with heuristics...')
         filter_summary = {}
@@ -429,53 +472,58 @@ class FuzzingContext:
                     api_sequences,
                     condition_info=condition_info,
                     top_k=filter_top_k,
-                    logger_instance=log
-                )
+                    logger_instance=log)
                 if filtered:
                     api_sequences = filtered
-                    log.info(f'   ✅ Heuristic filter applied: {len(api_sequences)} sequences kept')
+                    log.info(
+                        f'   ✅ Heuristic filter applied: {len(api_sequences)} sequences kept'
+                    )
                 else:
-                    log.warning('Filter returned empty set, using raw sequences')
+                    log.warning(
+                        'Filter returned empty set, using raw sequences')
             except Exception as e:
                 log.warning(f"Filtering failed: {e}, using raw sequences")
         else:
             log.warning("No API sequences to filter")
         grammar_info['filter'] = filter_summary
         grammar_info['num_sequences'] = len(api_sequences)
-        
+
         # === Step 7: Extract header information ===
         log.debug('  7/10 Extracting headers...')
         try:
             # For project-level, use existing fuzzer headers as reference
             # This provides headers commonly used in the project
             header_info = _extract_existing_fuzzer_headers(project_name, log)
-            
+
             # If no headers found, create minimal structure
-            if not header_info or (not header_info.get('standard_headers') and not header_info.get('project_headers')):
-                log.warning("No existing fuzzer headers found, using minimal header set")
+            if not header_info or (not header_info.get('standard_headers')
+                                   and not header_info.get('project_headers')):
+                log.warning(
+                    "No existing fuzzer headers found, using minimal header set"
+                )
                 header_info = {
-                    'standard_headers': ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
+                    'standard_headers':
+                    ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
                     'project_headers': []
                 }
         except Exception as e:
             log.warning(f"Failed to extract headers: {e}, using minimal set")
             header_info = {
-                'standard_headers': ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
+                'standard_headers':
+                ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
                 'project_headers': []
             }
-        
+
         if not header_info:
             raise ValueError(
                 f"Header extraction returned empty for project '{project_name}'. "
-                f"This is required for compilation."
-            )
-        
+                f"This is required for compilation.")
+
         # === Step 8: Extract existing fuzzer headers (for reference) ===
         log.debug('  8/10 Extracting existing fuzzer headers...')
         try:
             existing_fuzzer_headers = _extract_existing_fuzzer_headers(
-                project_name, log
-            )
+                project_name, log)
         except Exception as e:
             log.warning(f"Failed to extract existing fuzzer headers: {e}")
             existing_fuzzer_headers = {
@@ -486,7 +534,9 @@ class FuzzingContext:
         # === Step 9: Pattern analysis (P1 - DriverEnhancer integration) ===
         # NOTE: LLM disabled - using heuristics only for pattern analysis
         # Each analyzer (VarLen, Loop, Callback, TLV) has built-in heuristic fallbacks
-        log.debug('  9/10 Analyzing special patterns (VarLen/Loop/Callback/TLV) using heuristics...')
+        log.debug(
+            '  9/10 Analyzing special patterns (VarLen/Loop/Callback/TLV) using heuristics...'
+        )
         pattern_analysis = {}
         try:
             # Analyze special patterns using DriverEnhancer (heuristics only, no LLM)
@@ -500,17 +550,14 @@ class FuzzingContext:
                 # VarLen relations
                 varlen_data = {}
                 for api_name, relations in cache.varlen_relations.items():
-                    varlen_data[api_name] = [
-                        {
-                            'buffer_arg_idx': rel.buffer_arg_idx,
-                            'buffer_arg_name': rel.buffer_arg_name,
-                            'length_arg_idx': rel.length_arg_idx,
-                            'length_arg_name': rel.length_arg_name,
-                            'relationship': rel.relationship,
-                            'confidence': rel.confidence
-                        }
-                        for rel in relations
-                    ]
+                    varlen_data[api_name] = [{
+                        'buffer_arg_idx': rel.buffer_arg_idx,
+                        'buffer_arg_name': rel.buffer_arg_name,
+                        'length_arg_idx': rel.length_arg_idx,
+                        'length_arg_name': rel.length_arg_name,
+                        'relationship': rel.relationship,
+                        'confidence': rel.confidence
+                    } for rel in relations]
 
                 # Loop patterns
                 loop_data = {}
@@ -518,7 +565,8 @@ class FuzzingContext:
                     if info.needs_loop:
                         loop_data[api_name] = {
                             'loop_type': info.loop_type.value,
-                            'termination_condition': info.termination_condition,
+                            'termination_condition':
+                            info.termination_condition,
                             'max_iterations': info.max_iterations,
                             'confidence': info.confidence
                         }
@@ -527,15 +575,16 @@ class FuzzingContext:
                 callback_data = {}
                 for api_name, callbacks in cache.callback_infos.items():
                     if callbacks:
-                        callback_data[api_name] = [
-                            {
-                                'arg_idx': cb.arg_idx,
-                                'arg_name': cb.arg_name,
-                                'callback_type': cb.callback_type.value,
-                                'can_be_null': cb.can_be_null
-                            }
-                            for cb in callbacks
-                        ]
+                        callback_data[api_name] = [{
+                            'arg_idx':
+                            cb.arg_idx,
+                            'arg_name':
+                            cb.arg_name,
+                            'callback_type':
+                            cb.callback_type.value,
+                            'can_be_null':
+                            cb.can_be_null
+                        } for cb in callbacks]
 
                 # TLV/structured parsers
                 tlv_data = {}
@@ -555,13 +604,11 @@ class FuzzingContext:
                 }
 
                 summary = pattern_analysis.get('summary', {})
-                log.info(
-                    f'   ✅ Pattern analysis: '
-                    f'{summary.get("apis_with_varlen", 0)} varlen, '
-                    f'{summary.get("apis_needing_loop", 0)} loop, '
-                    f'{summary.get("apis_with_callbacks", 0)} callback, '
-                    f'{summary.get("structured_parsers", 0)} TLV'
-                )
+                log.info(f'   ✅ Pattern analysis: '
+                         f'{summary.get("apis_with_varlen", 0)} varlen, '
+                         f'{summary.get("apis_needing_loop", 0)} loop, '
+                         f'{summary.get("apis_with_callbacks", 0)} callback, '
+                         f'{summary.get("structured_parsers", 0)} TLV')
         except Exception as e:
             log.warning(f"Pattern analysis failed (non-critical): {e}")
             pattern_analysis = {}
@@ -581,17 +628,23 @@ class FuzzingContext:
                 from liberator_adapter.driver.synthesis.skeleton_generator import render_skeleton
 
                 # Determine if target is C++ from benchmark target_path
-                target_path = benchmark.target_path if hasattr(benchmark, 'target_path') else ''
+                target_path = benchmark.target_path if hasattr(
+                    benchmark, 'target_path') else ''
                 cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
                 is_cpp_target = target_path.lower().endswith(cpp_extensions)
 
                 for skeleton in skeletons:
                     # Get API sequence from target_apis
-                    api_seq = [api.function_name for api in skeleton.target_apis] if skeleton.target_apis else []
+                    api_seq = [
+                        api.function_name for api in skeleton.target_apis
+                    ] if skeleton.target_apis else []
 
                     # Render skeleton code (use extern "C" only for C++ targets)
                     try:
-                        rendered_code = render_skeleton(skeleton, mark_holes=True, is_cpp_target=is_cpp_target)
+                        rendered_code = render_skeleton(
+                            skeleton,
+                            mark_holes=True,
+                            is_cpp_target=is_cpp_target)
                     except Exception:
                         rendered_code = str(skeleton)
 
@@ -599,12 +652,17 @@ class FuzzingContext:
                     holes_info = []
                     if hasattr(skeleton, 'holes') and skeleton.holes:
                         # HoleSet stores holes in .holes dict
-                        holes_dict = skeleton.holes.holes if hasattr(skeleton.holes, 'holes') else {}
+                        holes_dict = skeleton.holes.holes if hasattr(
+                            skeleton.holes, 'holes') else {}
                         for hole in holes_dict.values():
                             holes_info.append({
-                                'hole_type': hole.kind.value if hasattr(hole.kind, 'value') else str(hole.kind),
-                                'name': hole.name,
-                                'filled': hole.is_filled
+                                'hole_type':
+                                hole.kind.value if hasattr(hole.kind, 'value')
+                                else str(hole.kind),
+                                'name':
+                                hole.name,
+                                'filled':
+                                hole.is_filled
                             })
 
                     skeleton_drivers.append({
@@ -613,7 +671,8 @@ class FuzzingContext:
                         'code': rendered_code,
                         'holes': holes_info
                     })
-                log.info(f'   ✅ Generated {len(skeleton_drivers)} skeleton drivers')
+                log.info(
+                    f'   ✅ Generated {len(skeleton_drivers)} skeleton drivers')
         except Exception as e:
             log.warning(f"Skeleton generation failed (non-critical): {e}")
             skeleton_drivers = []
@@ -628,12 +687,14 @@ class FuzzingContext:
                 num_drivers=num_synthesis_drivers,
                 driver_size=driver_size,
                 project_name=project_name,
-                log=log
-            )
+                log=log)
             if synthesized_drivers:
-                log.info(f'   ✅ Generated {len(synthesized_drivers)} synthesized drivers with CBFactory')
+                log.info(
+                    f'   ✅ Generated {len(synthesized_drivers)} synthesized drivers with CBFactory'
+                )
             else:
-                log.warning('   ⚠️ No drivers synthesized (CBFactory returned empty)')
+                log.warning(
+                    '   ⚠️ No drivers synthesized (CBFactory returned empty)')
         except Exception as e:
             log.warning(f"CBFactory synthesis failed: {e}")
             import traceback
@@ -648,17 +709,19 @@ class FuzzingContext:
                 project_name=project_name,
                 log=log,
                 llm_client=llm_client,
-                max_drivers=3
-            )
+                max_drivers=3)
             if existing_driver_knowledge.get('driver_sources'):
                 num_drivers = len(existing_driver_knowledge['driver_sources'])
                 has_analysis = bool(existing_driver_knowledge.get('analysis'))
-                log.info(f'   ✅ Extracted knowledge from {num_drivers} existing drivers'
-                        f'{" (with LLM analysis)" if has_analysis else ""}')
+                log.info(
+                    f'   ✅ Extracted knowledge from {num_drivers} existing drivers'
+                    f'{" (with LLM analysis)" if has_analysis else ""}')
             else:
-                log.info('   ℹ️ No existing drivers found for knowledge extraction')
+                log.info(
+                    '   ℹ️ No existing drivers found for knowledge extraction')
         except Exception as e:
-            log.warning(f"Driver knowledge extraction failed (non-critical): {e}")
+            log.warning(
+                f"Driver knowledge extraction failed (non-critical): {e}")
             existing_driver_knowledge = {}
 
         # === Create context ===
@@ -673,37 +736,34 @@ class FuzzingContext:
 
         # === Save intermediate results to results folder ===
         results_dir = f"./results/{project_name}"
-        log.info(f'📁 Saving intermediate results to {results_dir}/static_analysis/')
-        save_intermediate_results(
-            project_name=project_name,
-            results_dir=results_dir,
-            dependency_graph=dep_graph_dict,
-            raw_sequences=raw_api_sequences,
-            filtered_sequences=api_sequences,
-            pattern_analysis=pattern_analysis,
-            project_apis=project_apis,
-            grammar_info=grammar_info,
-            condition_info=condition_info,
-            skeleton_drivers=skeleton_drivers,
-            log=log
-        )
+        log.info(
+            f'📁 Saving intermediate results to {results_dir}/static_analysis/')
+        save_intermediate_results(project_name=project_name,
+                                  results_dir=results_dir,
+                                  dependency_graph=dep_graph_dict,
+                                  raw_sequences=raw_api_sequences,
+                                  filtered_sequences=api_sequences,
+                                  pattern_analysis=pattern_analysis,
+                                  project_apis=project_apis,
+                                  grammar_info=grammar_info,
+                                  condition_info=condition_info,
+                                  skeleton_drivers=skeleton_drivers,
+                                  log=log)
 
-        return cls(
-            project_name=project_name,
-            project_apis=project_apis,
-            api_sequences=api_sequences,
-            dependency_graph=dep_graph_dict,
-            grammar_info=grammar_info,
-            header_info=header_info,
-            existing_fuzzer_headers=existing_fuzzer_headers,
-            condition_info=condition_info,
-            pattern_analysis=pattern_analysis,
-            skeleton_drivers=skeleton_drivers,
-            synthesized_drivers=synthesized_drivers,
-            existing_driver_knowledge=existing_driver_knowledge,
-            preparation_time=elapsed
-        )
-    
+        return cls(project_name=project_name,
+                   project_apis=project_apis,
+                   api_sequences=api_sequences,
+                   dependency_graph=dep_graph_dict,
+                   grammar_info=grammar_info,
+                   header_info=header_info,
+                   existing_fuzzer_headers=existing_fuzzer_headers,
+                   condition_info=condition_info,
+                   pattern_analysis=pattern_analysis,
+                   skeleton_drivers=skeleton_drivers,
+                   synthesized_drivers=synthesized_drivers,
+                   existing_driver_knowledge=existing_driver_knowledge,
+                   preparation_time=elapsed)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for state storage."""
         return {
@@ -721,15 +781,15 @@ class FuzzingContext:
             'existing_driver_knowledge': self.existing_driver_knowledge,
             'preparation_time': self.preparation_time,
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'FuzzingContext':
         """Reconstruct from dictionary."""
         return cls(**data)
 
 
-def _extract_existing_fuzzer_headers(project_name: str,
-                                     log: logging.Logger) -> Dict[str, List[str]]:
+def _extract_existing_fuzzer_headers(
+        project_name: str, log: logging.Logger) -> Dict[str, List[str]]:
     """
     Extract headers from existing fuzzers for reference.
 
@@ -738,14 +798,12 @@ def _extract_existing_fuzzer_headers(project_name: str,
     from data_prep import introspector
     import re
 
-    result = {
-        'standard_headers': [],
-        'project_headers': []
-    }
+    result = {'standard_headers': [], 'project_headers': []}
 
     try:
         # Get all fuzzer files
-        harness_data = introspector.query_introspector_for_harness_intrinsics(project_name)
+        harness_data = introspector.query_introspector_for_harness_intrinsics(
+            project_name)
         fuzzers = [item['source'] for item in harness_data if 'source' in item]
         if not fuzzers:
             return result
@@ -757,14 +815,14 @@ def _extract_existing_fuzzer_headers(project_name: str,
         for fuzzer_path in fuzzers[:5]:
             try:
                 fuzzer_source = introspector.query_introspector_file_source(
-                    project_name, fuzzer_path
-                )
+                    project_name, fuzzer_path)
                 if not fuzzer_source:
                     continue
 
                 # Extract #include statements from top of file
                 for line in fuzzer_source.split('\n')[:50]:
-                    include_match = re.match(r'^\s*#include\s+[<"]([^>"]+)[>"]', line)
+                    include_match = re.match(
+                        r'^\s*#include\s+[<"]([^>"]+)[>"]', line)
                     if include_match:
                         header = include_match.group(1)
                         if header.startswith(project_name) or '/' in header:
@@ -828,14 +886,18 @@ def _strip_license_header(source: str) -> str:
         if stripped.startswith('//'):
             # Check if this looks like license/copyright
             lower = stripped.lower()
-            if any(kw in lower for kw in ['copyright', 'license', 'permission',
-                                          'redistribution', 'disclaimer', 'warranty',
-                                          'use of this source', 'apache', 'mit', 'bsd']):
+            if any(kw in lower for kw in [
+                    'copyright', 'license', 'permission', 'redistribution',
+                    'disclaimer', 'warranty', 'use of this source', 'apache',
+                    'mit', 'bsd'
+            ]):
                 code_start_index = i + 1
                 continue
             # Stop if we see actual code comments (not license)
-            if not any(kw in lower for kw in ['copyright', 'license', 'permission',
-                                              'redistribution', 'http://', 'https://']):
+            if not any(kw in lower for kw in [
+                    'copyright', 'license', 'permission', 'redistribution',
+                    'http://', 'https://'
+            ]):
                 break
 
         # Empty lines at the start - keep scanning
@@ -853,12 +915,10 @@ def _strip_license_header(source: str) -> str:
     return result.lstrip('\n')
 
 
-def _extract_existing_driver_knowledge(
-    project_name: str,
-    log: logging.Logger,
-    llm_client: Any = None,
-    max_drivers: int = 3
-) -> Dict[str, Any]:
+def _extract_existing_driver_knowledge(project_name: str,
+                                       log: logging.Logger,
+                                       llm_client: Any = None,
+                                       max_drivers: int = 3) -> Dict[str, Any]:
     """
     Extract fuzzing knowledge from existing OSS-Fuzz drivers.
 
@@ -876,7 +936,8 @@ def _extract_existing_driver_knowledge(
 
     try:
         # Fetch existing fuzzer source code
-        harness_data = introspector.query_introspector_for_harness_intrinsics(project_name)
+        harness_data = introspector.query_introspector_for_harness_intrinsics(
+            project_name)
         fuzzers = [item['source'] for item in harness_data if 'source' in item]
         if not fuzzers:
             log.info(f'No existing fuzzers found for {project_name}')
@@ -888,8 +949,7 @@ def _extract_existing_driver_knowledge(
         for fuzzer_path in fuzzers[:max_drivers]:
             try:
                 fuzzer_source = introspector.query_introspector_file_source(
-                    project_name, fuzzer_path
-                )
+                    project_name, fuzzer_path)
                 if fuzzer_source:
                     driver_sources.append({
                         'path': fuzzer_path,
@@ -908,8 +968,7 @@ def _extract_existing_driver_knowledge(
         # LLM analysis: extract core functionality and setup/teardown patterns
         if llm_client and driver_sources:
             result['analysis'] = _analyze_driver_patterns(
-                driver_sources, project_name, llm_client, log
-            )
+                driver_sources, project_name, llm_client, log)
 
     except Exception as e:
         log.warning(f"Failed to extract driver knowledge: {e}")
@@ -917,12 +976,9 @@ def _extract_existing_driver_knowledge(
     return result
 
 
-def _analyze_driver_patterns(
-    driver_sources: List[Dict[str, str]],
-    project_name: str,
-    llm_client: Any,
-    log: logging.Logger
-) -> Dict[str, str]:
+def _analyze_driver_patterns(driver_sources: List[Dict[str, str]],
+                             project_name: str, llm_client: Any,
+                             log: logging.Logger) -> Dict[str, str]:
     """
     Analyze existing drivers to extract reusable patterns using XML tag format.
 
@@ -939,12 +995,17 @@ def _analyze_driver_patterns(
 
     # Load prompt from file
     try:
-        prompt_template = load_prompt_file('driver_pattern_analyzer_prompt.txt')
+        prompt_template = load_prompt_file(
+            'driver_pattern_analyzer_prompt.txt')
         prompt = prompt_template.replace('{PROJECT_NAME}', project_name)
         prompt = prompt.replace('{DRIVERS_TEXT}', drivers_text)
     except FileNotFoundError:
         log.warning("driver_pattern_analyzer_prompt.txt not found")
-        return {'core_functionality': '', 'setup_teardown': '', 'code_patterns': ''}
+        return {
+            'core_functionality': '',
+            'setup_teardown': '',
+            'code_patterns': ''
+        }
 
     try:
         response = llm_client.query(prompt)
@@ -960,13 +1021,18 @@ def _analyze_driver_patterns(
         # Log if any tags are missing
         for key, value in result.items():
             if not value:
-                log.debug(f"Missing <{key}> tag in driver pattern analysis response")
+                log.debug(
+                    f"Missing <{key}> tag in driver pattern analysis response")
 
         return result
 
     except Exception as e:
         log.warning(f"Driver pattern analysis failed: {e}")
-        return {'core_functionality': '', 'setup_teardown': '', 'code_patterns': ''}
+        return {
+            'core_functionality': '',
+            'setup_teardown': '',
+            'code_patterns': ''
+        }
 
 
 def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:
@@ -1015,12 +1081,15 @@ def _heuristic_filter_sequences(
     internal_api_count = 0
     for seq in api_sequences:
         filtered_seq = _filter_internal_apis(seq)
-        if len(filtered_seq) >= 2:  # Keep sequences with at least 2 public APIs
+        if len(filtered_seq
+               ) >= 2:  # Keep sequences with at least 2 public APIs
             filtered_sequences.append(filtered_seq)
             internal_api_count += len(seq) - len(filtered_seq)
 
     if internal_api_count > 0:
-        log.info(f'   🔒 Filtered {internal_api_count} internal APIs (starting with _)')
+        log.info(
+            f'   🔒 Filtered {internal_api_count} internal APIs (starting with _)'
+        )
 
     api_sequences = filtered_sequences if filtered_sequences else api_sequences
 
@@ -1029,10 +1098,17 @@ def _heuristic_filter_sequences(
     sinks = set(condition_info.get('sinks', []))
 
     # Common init/cleanup patterns
-    init_patterns = {'create', 'new', 'init', 'open', 'alloc', 'start', 'begin'}
-    cleanup_patterns = {'free', 'delete', 'destroy', 'close', 'cleanup', 'end', 'finish', 'release'}
+    init_patterns = {
+        'create', 'new', 'init', 'open', 'alloc', 'start', 'begin'
+    }
+    cleanup_patterns = {
+        'free', 'delete', 'destroy', 'close', 'cleanup', 'end', 'finish',
+        'release'
+    }
     # Parser patterns - these consume external input and have highest fuzzing value
-    parser_patterns = {'parse', 'read', 'load', 'decode', 'deserialize', 'unmarshal', 'from'}
+    parser_patterns = {
+        'parse', 'read', 'load', 'decode', 'deserialize', 'unmarshal', 'from'
+    }
 
     def score_sequence(seq: List[str]) -> float:
         """Score a sequence based on heuristics."""
@@ -1084,17 +1160,15 @@ def _heuristic_filter_sequences(
         'top_scores': [s for s, _ in scored[:5]]
     }
 
-    log.info(f'   📊 Heuristic filter: {len(api_sequences)} -> {len(filtered)} sequences')
+    log.info(
+        f'   📊 Heuristic filter: {len(api_sequences)} -> {len(filtered)} sequences'
+    )
 
     return filtered, summary
 
 
-def _generate_sequences_from_grammar(
-    grammar,
-    num_sequences: int,
-    max_len: int,
-    log: logging.Logger
-) -> List[List[str]]:
+def _generate_sequences_from_grammar(grammar, num_sequences: int, max_len: int,
+                                     log: logging.Logger) -> List[List[str]]:
     """
     Generate API sequences directly from grammar expansion.
 
@@ -1126,9 +1200,12 @@ def _generate_sequences_from_grammar(
             max_expansion_trials = 50
 
             # Expand non-terminals until we have only terminals or reach max_len
-            while any(isinstance(s, NonTerminal) for s in symbols) and len(symbols) <= max_len:
+            while any(isinstance(s, NonTerminal)
+                      for s in symbols) and len(symbols) <= max_len:
                 # Find non-terminals to expand
-                nonterminals = [s for s in symbols if isinstance(s, NonTerminal)]
+                nonterminals = [
+                    s for s in symbols if isinstance(s, NonTerminal)
+                ]
                 if not nonterminals:
                     break
 
@@ -1178,33 +1255,36 @@ def _generate_sequences_from_grammar(
             continue
 
     if not sequences:
-        log.warning("No sequences generated from grammar, falling back to simple API list")
+        log.warning(
+            "No sequences generated from grammar, falling back to simple API list"
+        )
         # Fallback: just list all APIs from grammar terminals
         all_apis = []
         try:
             for symbol in grammar.symbols():
-                if isinstance(symbol, Terminal) and symbol.name not in ('start', 'end', ''):
+                if isinstance(
+                        symbol,
+                        Terminal) and symbol.name not in ('start', 'end', ''):
                     all_apis.append(symbol.name)
             if all_apis:
                 # Create simple sequences of random API combinations
                 for _ in range(min(num_sequences, 10)):
                     if len(all_apis) >= 2:
-                        seq = random.sample(all_apis, min(max_len, len(all_apis)))
+                        seq = random.sample(all_apis,
+                                            min(max_len, len(all_apis)))
                         sequences.append(seq)
         except Exception as e:
             log.warning(f"Fallback sequence generation failed: {e}")
 
-    log.debug(f"Generated {len(sequences)} sequences from grammar (requested {num_sequences})")
+    log.debug(
+        f"Generated {len(sequences)} sequences from grammar (requested {num_sequences})"
+    )
     return sequences
 
 
-def _generate_cbfactory_drivers(
-    generator,
-    num_drivers: int,
-    driver_size: int,
-    project_name: str,
-    log: logging.Logger
-) -> List[Dict[str, Any]]:
+def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
+                                project_name: str,
+                                log: logging.Logger) -> List[Dict[str, Any]]:
     """
     Generate full fuzz drivers using CBFactory (traditional program synthesis).
 
@@ -1235,12 +1315,18 @@ def _generate_cbfactory_drivers(
 
     # Check prerequisites
     if not generator.condition_manager:
-        log.warning("ConditionManager not available - CBFactory requires LLVM extraction")
-        log.warning("Ensure LLVM extraction is enabled (not --disable-llvm-extraction)")
+        log.warning(
+            "ConditionManager not available - CBFactory requires LLVM extraction"
+        )
+        log.warning(
+            "Ensure LLVM extraction is enabled (not --disable-llvm-extraction)"
+        )
         return []
 
     if not generator.function_conditions:
-        log.warning("FunctionConditions not available - CBFactory requires conditions.json")
+        log.warning(
+            "FunctionConditions not available - CBFactory requires conditions.json"
+        )
         return []
 
     if not generator.all_apis:
@@ -1251,18 +1337,27 @@ def _generate_cbfactory_drivers(
         log.warning("Dependency graph not available")
         return []
 
-    log.info(f"   🔧 CBFactory synthesis: {num_drivers} drivers, {driver_size} API calls each")
+    log.info(
+        f"   🔧 CBFactory synthesis: {num_drivers} drivers, {driver_size} API calls each"
+    )
 
     try:
         # Filter APIs to those with conditions
-        available_conditions = set(generator.function_conditions.fun_cond_set.keys())
-        filtered_apis = {api for api in generator.all_apis if api.function_name in available_conditions}
+        available_conditions = set(
+            generator.function_conditions.fun_cond_set.keys())
+        filtered_apis = {
+            api
+            for api in generator.all_apis
+            if api.function_name in available_conditions
+        }
 
         if not filtered_apis:
             log.warning("No APIs have conditions available")
             return []
 
-        log.debug(f"   Using {len(filtered_apis)}/{len(generator.all_apis)} APIs with conditions")
+        log.debug(
+            f"   Using {len(filtered_apis)}/{len(generator.all_apis)} APIs with conditions"
+        )
 
         # Create CBFactory with Z3 validation enabled
         bias = Bias()
@@ -1289,8 +1384,8 @@ def _generate_cbfactory_drivers(
                         seeds_dir=seeds_dir,
                         num_seeds=1,
                         headers_dir=generator.headers_dir,
-                        public_headers=getattr(generator, 'public_headers_path', None)
-                    )
+                        public_headers=getattr(generator,
+                                               'public_headers_path', None))
                 except Exception as e:
                     log.debug(f"Backend setup failed (will use fallback): {e}")
 
@@ -1310,30 +1405,42 @@ def _generate_cbfactory_drivers(
                         driver_name = f"fuzz_driver_{i}"
                         try:
                             backend.emit_driver(driver_ir, driver_name)
-                            driver_path = os.path.join(tmpdir, f"{driver_name}.cc")
+                            driver_path = os.path.join(tmpdir,
+                                                       f"{driver_name}.cc")
                             if os.path.exists(driver_path):
                                 with open(driver_path, 'r') as f:
                                     driver_code = f.read()
                             else:
-                                driver_code = _render_driver_fallback(driver_ir, project_name)
+                                driver_code = _render_driver_fallback(
+                                    driver_ir, project_name)
                         except Exception as e:
-                            log.debug(f"Backend render failed: {e}, using fallback")
-                            driver_code = _render_driver_fallback(driver_ir, project_name)
+                            log.debug(
+                                f"Backend render failed: {e}, using fallback")
+                            driver_code = _render_driver_fallback(
+                                driver_ir, project_name)
                     else:
-                        driver_code = _render_driver_fallback(driver_ir, project_name)
+                        driver_code = _render_driver_fallback(
+                            driver_ir, project_name)
 
                     synthesized_drivers.append({
                         'name': f'cbfactory_driver_{i}',
                         'code': driver_code,
                         'api_sequence': api_sequence,
                         'synthesis_info': {
-                            'method': 'CBFactory',
-                            'driver_size': driver_size,
-                            'num_apis_used': len(api_sequence),
-                            'has_cleanup': hasattr(driver_ir, 'clean_up') and bool(driver_ir.clean_up),
+                            'method':
+                            'CBFactory',
+                            'driver_size':
+                            driver_size,
+                            'num_apis_used':
+                            len(api_sequence),
+                            'has_cleanup':
+                            hasattr(driver_ir, 'clean_up')
+                            and bool(driver_ir.clean_up),
                         }
                     })
-                    log.debug(f"   Generated driver {i+1}/{num_drivers}: {len(api_sequence)} API calls")
+                    log.debug(
+                        f"   Generated driver {i+1}/{num_drivers}: {len(api_sequence)} API calls"
+                    )
 
                 except Exception as e:
                     log.warning(f"   Failed to generate driver {i+1}: {e}")
@@ -1377,7 +1484,9 @@ def _render_driver_fallback(driver_ir, project_name: str) -> str:
         lines.append("")
 
     # Main fuzzer function
-    lines.append("extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
+    lines.append(
+        "extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {"
+    )
     lines.append("    if (size == 0) return 0;")
     lines.append("")
 
@@ -1403,19 +1512,17 @@ def _render_driver_fallback(driver_ir, project_name: str) -> str:
     return "\n".join(lines)
 
 
-def save_intermediate_results(
-    project_name: str,
-    results_dir: str,
-    dependency_graph: Dict[str, Any],
-    raw_sequences: List[List[str]],
-    filtered_sequences: List[List[str]],
-    pattern_analysis: Dict[str, Any],
-    project_apis: List[Dict[str, Any]],
-    grammar_info: Dict[str, Any],
-    condition_info: Dict[str, Any],
-    skeleton_drivers: List[Dict[str, Any]] = None,
-    log: logging.Logger = None
-) -> None:
+def save_intermediate_results(project_name: str,
+                              results_dir: str,
+                              dependency_graph: Dict[str, Any],
+                              raw_sequences: List[List[str]],
+                              filtered_sequences: List[List[str]],
+                              pattern_analysis: Dict[str, Any],
+                              project_apis: List[Dict[str, Any]],
+                              grammar_info: Dict[str, Any],
+                              condition_info: Dict[str, Any],
+                              skeleton_drivers: List[Dict[str, Any]] = None,
+                              log: logging.Logger = None) -> None:
     """
     Save all intermediate static analysis results to the results folder.
 
@@ -1442,40 +1549,63 @@ def save_intermediate_results(
         # Save raw sequences (before LLM filtering)
         raw_seq_path = results_path / "raw_sequences.json"
         with open(raw_seq_path, 'w') as f:
-            json.dump({
-                'num_sequences': len(raw_sequences),
-                'sequences': [
-                    {'index': i, 'apis': seq, 'length': len(seq)}
-                    for i, seq in enumerate(raw_sequences)
-                ]
-            }, f, indent=2)
-        log.info(f"   📄 Saved raw sequences ({len(raw_sequences)}): {raw_seq_path}")
+            json.dump(
+                {
+                    'num_sequences':
+                    len(raw_sequences),
+                    'sequences': [{
+                        'index': i,
+                        'apis': seq,
+                        'length': len(seq)
+                    } for i, seq in enumerate(raw_sequences)]
+                },
+                f,
+                indent=2)
+        log.info(
+            f"   📄 Saved raw sequences ({len(raw_sequences)}): {raw_seq_path}")
 
         # Save filtered sequences (after LLM filtering)
         filtered_seq_path = results_path / "filtered_sequences.json"
         with open(filtered_seq_path, 'w') as f:
-            json.dump({
-                'num_sequences': len(filtered_sequences),
-                'sequences': [
-                    {'index': i, 'apis': seq, 'length': len(seq)}
-                    for i, seq in enumerate(filtered_sequences)
-                ]
-            }, f, indent=2)
-        log.info(f"   📄 Saved filtered sequences ({len(filtered_sequences)}): {filtered_seq_path}")
+            json.dump(
+                {
+                    'num_sequences':
+                    len(filtered_sequences),
+                    'sequences': [{
+                        'index': i,
+                        'apis': seq,
+                        'length': len(seq)
+                    } for i, seq in enumerate(filtered_sequences)]
+                },
+                f,
+                indent=2)
+        log.info(
+            f"   📄 Saved filtered sequences ({len(filtered_sequences)}): {filtered_seq_path}"
+        )
 
         # Save detailed LLM filter results (if available)
         llm_filter_info = grammar_info.get('llm_filter', {})
-        if llm_filter_info and llm_filter_info.get('mode') == 'llm_sequence_filter':
+        if llm_filter_info and llm_filter_info.get(
+                'mode') == 'llm_sequence_filter':
             filter_details_path = results_path / "llm_filter_details.json"
             with open(filter_details_path, 'w') as f:
-                json.dump({
-                    'filter_mode': llm_filter_info.get('mode'),
-                    'input_sequences': llm_filter_info.get('input_sequences', 0),
-                    'valid_sequences': llm_filter_info.get('valid_sequences', 0),
-                    'filter_stats': llm_filter_info.get('filter_stats', {}),
-                    'api_lifecycle_cache_size': llm_filter_info.get('api_lifecycle_cache_size', 0),
-                    'sequence_details': llm_filter_info.get('details', [])
-                }, f, indent=2)
+                json.dump(
+                    {
+                        'filter_mode':
+                        llm_filter_info.get('mode'),
+                        'input_sequences':
+                        llm_filter_info.get('input_sequences', 0),
+                        'valid_sequences':
+                        llm_filter_info.get('valid_sequences', 0),
+                        'filter_stats':
+                        llm_filter_info.get('filter_stats', {}),
+                        'api_lifecycle_cache_size':
+                        llm_filter_info.get('api_lifecycle_cache_size', 0),
+                        'sequence_details':
+                        llm_filter_info.get('details', [])
+                    },
+                    f,
+                    indent=2)
             log.info(f"   📄 Saved LLM filter details: {filter_details_path}")
 
         # Save pattern analysis
@@ -1490,7 +1620,9 @@ def save_intermediate_results(
             json.dump({
                 'num_apis': len(project_apis),
                 'apis': project_apis
-            }, f, indent=2)
+            },
+                      f,
+                      indent=2)
         log.info(f"   📄 Saved project APIs ({len(project_apis)}): {apis_path}")
 
         # Save skeleton drivers (for cache loading)
@@ -1498,18 +1630,25 @@ def save_intermediate_results(
             skeleton_path = results_path / "skeleton_drivers.json"
             with open(skeleton_path, 'w') as f:
                 json.dump(skeleton_drivers, f, indent=2)
-            log.info(f"   📄 Saved skeleton drivers ({len(skeleton_drivers)}): {skeleton_path}")
+            log.info(
+                f"   📄 Saved skeleton drivers ({len(skeleton_drivers)}): {skeleton_path}"
+            )
 
         # Save combined summary
         summary_path = results_path / "analysis_summary.json"
         summary = {
             'project_name': project_name,
             'statistics': {
-                'total_apis': len(project_apis),
-                'dependency_graph_nodes': dependency_graph.get('num_nodes', 0),
-                'raw_sequences': len(raw_sequences),
-                'filtered_sequences': len(filtered_sequences),
-                'filter_reduction': f"{(1 - len(filtered_sequences)/max(len(raw_sequences), 1))*100:.1f}%"
+                'total_apis':
+                len(project_apis),
+                'dependency_graph_nodes':
+                dependency_graph.get('num_nodes', 0),
+                'raw_sequences':
+                len(raw_sequences),
+                'filtered_sequences':
+                len(filtered_sequences),
+                'filter_reduction':
+                f"{(1 - len(filtered_sequences)/max(len(raw_sequences), 1))*100:.1f}%"
             },
             'grammar_info': grammar_info,
             'condition_info': condition_info,
@@ -1523,4 +1662,3 @@ def save_intermediate_results(
 
     except Exception as e:
         log.warning(f"Failed to save intermediate results: {e}")
-

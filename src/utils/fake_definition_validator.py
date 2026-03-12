@@ -86,8 +86,15 @@ class FakeDefinitionValidator:
         '__dso_handle',
 
         # Common libc functions that might have linking issues
-        'memcpy', 'memset', 'malloc', 'free', 'printf',
-        'strlen', 'strcpy', 'strncpy', 'strcmp',
+        'memcpy',
+        'memset',
+        'malloc',
+        'free',
+        'printf',
+        'strlen',
+        'strcpy',
+        'strncpy',
+        'strcmp',
 
         # Sanitizer functions
         '__asan_report_load',
@@ -98,10 +105,13 @@ class FakeDefinitionValidator:
 
     def __init__(self):
         """Initialize the validator with compiled regex patterns."""
-        self.undefined_ref_re = [re.compile(p, re.IGNORECASE)
-                                  for p in self.UNDEFINED_REFERENCE_PATTERNS]
-        self.undeclared_re = [re.compile(p, re.IGNORECASE)
-                              for p in self.UNDECLARED_PATTERNS]
+        self.undefined_ref_re = [
+            re.compile(p, re.IGNORECASE)
+            for p in self.UNDEFINED_REFERENCE_PATTERNS
+        ]
+        self.undeclared_re = [
+            re.compile(p, re.IGNORECASE) for p in self.UNDECLARED_PATTERNS
+        ]
 
     def extract_undefined_functions(self, build_errors: List[str]) -> Set[str]:
         """
@@ -115,7 +125,8 @@ class FakeDefinitionValidator:
         """
         undefined_functions = set()
 
-        error_text = '\n'.join(build_errors) if isinstance(build_errors, list) else str(build_errors)
+        error_text = '\n'.join(build_errors) if isinstance(
+            build_errors, list) else str(build_errors)
 
         # Extract from undefined reference patterns
         for pattern_re in self.undefined_ref_re:
@@ -167,18 +178,18 @@ class FakeDefinitionValidator:
             return True
 
         # Prefix match for sanitizer/compiler functions
-        ignore_prefixes = ('__asan', '__ubsan', '__msan', '__tsan', '__cxa', '_Unwind')
+        ignore_prefixes = ('__asan', '__ubsan', '__msan', '__tsan', '__cxa',
+                           '_Unwind')
         if func_name.startswith(ignore_prefixes):
             return True
 
         return False
 
     def validate(
-        self,
-        build_errors: List[str],
-        known_apis: List[Dict[str, Any]],
-        fuzz_target_source: Optional[str] = None
-    ) -> FakeDefinitionResult:
+            self,
+            build_errors: List[str],
+            known_apis: List[Dict[str, Any]],
+            fuzz_target_source: Optional[str] = None) -> FakeDefinitionResult:
         """
         Validate undefined references against known project APIs.
 
@@ -199,8 +210,7 @@ class FakeDefinitionValidator:
                 has_fake_definitions=False,
                 fake_functions=[],
                 real_undefined=[],
-                details={'message': 'No undefined reference errors found'}
-            )
+                details={'message': 'No undefined reference errors found'})
 
         # Build set of known API names
         known_api_names = set()
@@ -222,7 +232,8 @@ class FakeDefinitionValidator:
                 real_undefined.append(func_name)
                 details[func_name] = {
                     'is_fake': False,
-                    'reason': 'Function exists in project APIs but has linking issue',
+                    'reason':
+                    'Function exists in project APIs but has linking issue',
                     'api_info': known_api_map.get(func_name, {}),
                     'recoverable': True
                 }
@@ -230,10 +241,14 @@ class FakeDefinitionValidator:
                 # Function does NOT exist - LLM invented it
                 fake_functions.append(func_name)
                 details[func_name] = {
-                    'is_fake': True,
-                    'reason': f"Function '{func_name}' not found in project APIs - likely LLM hallucination",
-                    'recoverable': False,
-                    'suggestion': self._suggest_similar_api(func_name, known_api_names)
+                    'is_fake':
+                    True,
+                    'reason':
+                    f"Function '{func_name}' not found in project APIs - likely LLM hallucination",
+                    'recoverable':
+                    False,
+                    'suggestion':
+                    self._suggest_similar_api(func_name, known_api_names)
                 }
 
         has_fake = len(fake_functions) > 0
@@ -241,23 +256,20 @@ class FakeDefinitionValidator:
         if has_fake:
             logger.warning(
                 f"Detected {len(fake_functions)} fake function(s): {fake_functions}. "
-                f"These are LLM hallucinations and cannot be fixed."
-            )
+                f"These are LLM hallucinations and cannot be fixed.")
 
         if real_undefined:
             logger.info(
                 f"Found {len(real_undefined)} real undefined reference(s): {real_undefined}. "
-                f"These may be fixable (linking issues)."
-            )
+                f"These may be fixable (linking issues).")
 
-        return FakeDefinitionResult(
-            has_fake_definitions=has_fake,
-            fake_functions=fake_functions,
-            real_undefined=real_undefined,
-            details=details
-        )
+        return FakeDefinitionResult(has_fake_definitions=has_fake,
+                                    fake_functions=fake_functions,
+                                    real_undefined=real_undefined,
+                                    details=details)
 
-    def _suggest_similar_api(self, fake_name: str, known_apis: Set[str]) -> Optional[str]:
+    def _suggest_similar_api(self, fake_name: str,
+                             known_apis: Set[str]) -> Optional[str]:
         """Suggest similar API names that might be what the LLM intended."""
         if not known_apis:
             return None
@@ -296,8 +308,7 @@ class FakeDefinitionValidator:
 
         if result.has_fake_definitions:
             lines.extend([
-                "❌ FAKE FUNCTION DEFINITIONS DETECTED",
-                "",
+                "❌ FAKE FUNCTION DEFINITIONS DETECTED", "",
                 "The following functions were invented by the LLM and do not exist in the project:",
                 ""
             ])
@@ -318,20 +329,21 @@ class FakeDefinitionValidator:
 
         if result.real_undefined:
             lines.extend([
-                "⚠️  REAL UNDEFINED REFERENCES (Potentially Fixable)",
-                "",
-                "The following functions exist but have linking issues:",
-                ""
+                "⚠️  REAL UNDEFINED REFERENCES (Potentially Fixable)", "",
+                "The following functions exist but have linking issues:", ""
             ])
 
             for func in result.real_undefined:
                 detail = result.details.get(func, {})
                 lines.append(f"  • {func}")
                 if api_info := detail.get('api_info'):
-                    lines.append(f"    Return type: {api_info.get('return_type', 'unknown')}")
+                    lines.append(
+                        f"    Return type: {api_info.get('return_type', 'unknown')}"
+                    )
                 lines.append("")
 
-            lines.append("These may be fixable by adding correct library linkage.")
+            lines.append(
+                "These may be fixable by adding correct library linkage.")
 
         return '\n'.join(lines)
 
@@ -383,15 +395,13 @@ def should_terminate_on_fake_definitions(
 
     if not project_apis:
         # No API info available - can't validate
-        logger.warning("No project_apis in context, skipping fake definition check")
+        logger.warning(
+            "No project_apis in context, skipping fake definition check")
         return False, None
 
     # Check for fake definitions
     has_fake, result = check_for_fake_definitions(
-        build_errors,
-        project_apis,
-        state.get('fuzz_target_source')
-    )
+        build_errors, project_apis, state.get('fuzz_target_source'))
 
     if has_fake and len(result.fake_functions) >= min_fake_count:
         reason = (
@@ -415,11 +425,26 @@ if __name__ == '__main__':
 
     # Sample known APIs
     test_apis = [
-        {'function_name': 'cJSON_Parse', 'return_type': 'cJSON*'},
-        {'function_name': 'cJSON_ParseWithOptions', 'return_type': 'cJSON*'},
-        {'function_name': 'cJSON_GetObjectItemCaseSensitive', 'return_type': 'cJSON*'},
-        {'function_name': 'cJSON_Delete', 'return_type': 'void'},
-        {'function_name': 'cJSON_Print', 'return_type': 'char*'},
+        {
+            'function_name': 'cJSON_Parse',
+            'return_type': 'cJSON*'
+        },
+        {
+            'function_name': 'cJSON_ParseWithOptions',
+            'return_type': 'cJSON*'
+        },
+        {
+            'function_name': 'cJSON_GetObjectItemCaseSensitive',
+            'return_type': 'cJSON*'
+        },
+        {
+            'function_name': 'cJSON_Delete',
+            'return_type': 'void'
+        },
+        {
+            'function_name': 'cJSON_Print',
+            'return_type': 'char*'
+        },
     ]
 
     has_fake, result = check_for_fake_definitions(test_errors, test_apis)

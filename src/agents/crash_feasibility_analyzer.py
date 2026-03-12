@@ -38,15 +38,14 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         # Load system prompt from file
         prompt_manager = get_prompt_manager()
-        system_message = prompt_manager.get_system_prompt("crash_feasibility_analyzer")
+        system_message = prompt_manager.get_system_prompt(
+            "crash_feasibility_analyzer")
 
-        super().__init__(
-            name="crash_feasibility_analyzer",
-            model_name=model_name,
-            trial=trial,
-            args=args,
-            system_message=system_message
-        )
+        super().__init__(name="crash_feasibility_analyzer",
+                         model_name=model_name,
+                         trial=trial,
+                         args=args,
+                         system_message=system_message)
         self.inspect_tool = None
         self.fi_tool = None  # FuzzIntrospector tool
         self.benchmark = None  # Store benchmark for FI tool initialization
@@ -60,14 +59,17 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         """Return LangChain tools for crash feasibility analysis."""
         return [
             BashExecuteTool(executor=self._execute_bash),
-            GetFunctionImplementationTool(executor=self._get_function_implementation),
+            GetFunctionImplementationTool(
+                executor=self._get_function_implementation),
             GetFunctionSignatureTool(executor=self._get_function_signature),
-            GetSampleCrossReferencesTool(executor=self._get_sample_cross_references),
+            GetSampleCrossReferencesTool(
+                executor=self._get_sample_cross_references),
             GetTypeDefinitionsTool(executor=self._get_type_definitions),
             GetHeadersForFunctionTool(executor=self._get_headers_for_function),
             GetTestsForFunctionsTool(executor=self._get_tests_for_functions),
             GetFunctionDebugTypesTool(executor=self._get_function_debug_types),
-            GetFunctionsByReturnTypeTool(executor=self._get_functions_by_return_type),
+            GetFunctionsByReturnTypeTool(
+                executor=self._get_functions_by_return_type),
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
@@ -93,21 +95,28 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         content_lower = content.lower()
 
         # XML format: <feasible>true/false</feasible>
-        if m := re.search(r'<feasible>\s*(true|false)\s*</feasible>', content_lower):
+        if m := re.search(r'<feasible>\s*(true|false)\s*</feasible>',
+                          content_lower):
             result['feasible'] = m.group(1) == 'true'
         else:
-            logger.warning('No <feasible> tag found in crash feasibility response', trial=self.trial)
+            logger.warning(
+                'No <feasible> tag found in crash feasibility response',
+                trial=self.trial)
 
         # XML format: <analysis>...</analysis>
-        if m := re.search(r'<analysis>(.*?)</analysis>', content, re.DOTALL | re.IGNORECASE):
+        if m := re.search(r'<analysis>(.*?)</analysis>', content,
+                          re.DOTALL | re.IGNORECASE):
             result['analysis'] = m.group(1).strip()
 
         # XML format: <source_code_evidence>...</source_code_evidence>
-        if m := re.search(r'<source_code_evidence>(.*?)</source_code_evidence>', content, re.DOTALL | re.IGNORECASE):
+        if m := re.search(
+                r'<source_code_evidence>(.*?)</source_code_evidence>', content,
+                re.DOTALL | re.IGNORECASE):
             result['source_code_evidence'] = m.group(1).strip()
 
         # XML format: <recommendations>...</recommendations>
-        if m := re.search(r'<recommendations>(.*?)</recommendations>', content, re.DOTALL | re.IGNORECASE):
+        if m := re.search(r'<recommendations>(.*?)</recommendations>', content,
+                          re.DOTALL | re.IGNORECASE):
             result['recommendations'] = m.group(1).strip()
 
         return result
@@ -148,7 +157,8 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
 
     def _get_function_implementation(self, function_name: str) -> str:
         """Get function implementation via FuzzIntrospector."""
-        impl = self.fi_tool.get_function_implementation(self.project_name, function_name)
+        impl = self.fi_tool.get_function_implementation(
+            self.project_name, function_name)
         if impl:
             return f"Function implementation for '{function_name}':\n```c\n{impl}\n```"
         return f"Error: Could not find implementation for function '{function_name}'"
@@ -162,7 +172,8 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
 
     def _get_sample_cross_references(self, function_signature: str) -> str:
         """Get sample cross references via FuzzIntrospector."""
-        cross_refs = self.fi_tool.get_sample_cross_references(function_signature)
+        cross_refs = self.fi_tool.get_sample_cross_references(
+            function_signature)
         if cross_refs:
             result = f"Sample usage examples for '{function_signature}':\n\n"
             for i, ref in enumerate(cross_refs[:5], 1):  # Limit to 5 examples
@@ -175,7 +186,8 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         type_defs = self.fi_tool.get_type_definitions()
         if type_defs:
             result = "Type definitions in project:\n\n"
-            for typedef in type_defs[:20]:  # Limit to 20 to avoid token overflow
+            for typedef in type_defs[:
+                                     20]:  # Limit to 20 to avoid token overflow
                 name = typedef.get("name", "Unknown")
                 kind = typedef.get("kind", "Unknown")
                 defn = typedef.get("definition", "")
@@ -238,7 +250,9 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         """Initialize FuzzIntrospector tool for the project."""
         if self.fi_tool is None and self.benchmark is not None:
             from tool.fuzz_introspector_tool import FuzzIntrospectorTool
-            logger.info(f"Initializing FuzzIntrospector for project: {self.benchmark.project}", trial=self.trial)
+            logger.info(
+                f"Initializing FuzzIntrospector for project: {self.benchmark.project}",
+                trial=self.trial)
             self.fi_tool = FuzzIntrospectorTool(self.benchmark)
             self.project_name = self.benchmark.project
 
@@ -257,8 +271,7 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
-            merge_session_memory_updates
-        )
+            merge_session_memory_updates)
 
         # Get benchmark object
         benchmark_dict = state["benchmark"]
@@ -276,7 +289,8 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
 
         # Initialize inspect_tool for bash command execution
         self.inspect_tool = ProjectContainerTool(benchmark)
-        self.inspect_tool.compile(extra_commands=' && rm -rf /out/* > /dev/null')
+        self.inspect_tool.compile(
+            extra_commands=' && rm -rf /out/* > /dev/null')
 
         # Initialize FuzzIntrospector tool for API calls
         self._init_fi_tool()
@@ -300,15 +314,13 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
             FUNCTION_REQUIREMENTS=function_requirements,
             CRASH_STACKTRACE=stack_trace,
             CRASH_ANALYSIS=crash_insight,
-            ADDITIONAL_CONTEXT=f"Project directory: {self.inspect_tool.project_dir}"
-        )
+            ADDITIONAL_CONTEXT=
+            f"Project directory: {self.inspect_tool.project_dir}")
 
         # Inject session_memory
-        user_prompt = build_prompt_with_session_memory(
-            state,
-            base_prompt,
-            agent_name=self.name
-        )
+        user_prompt = build_prompt_with_session_memory(state,
+                                                       base_prompt,
+                                                       agent_name=self.name)
 
         try:
             # Use the mixin's tool calling loop
@@ -316,15 +328,12 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
                 initial_prompt=user_prompt,
                 state=state,
                 max_rounds=self.args.max_round,
-                log_prefix="CRASH_FEASIBILITY"
-            )
+                log_prefix="CRASH_FEASIBILITY")
         finally:
             # Cleanup container
             if self.inspect_tool:
-                logger.debug(
-                    'Stopping and removing inspect container',
-                    trial=self.trial
-                )
+                logger.debug('Stopping and removing inspect container',
+                             trial=self.trial)
                 self.inspect_tool.terminate()
 
         # Extract session_memory updates from all responses
@@ -332,11 +341,11 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         session_memory_updates = extract_session_memory_updates_from_response(
             combined_response,
             agent_name=self.name,
-            current_iteration=state.get("current_iteration", 0)
-        )
+            current_iteration=state.get("current_iteration", 0))
 
         # Merge updates to session_memory
-        updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
+        updated_session_memory = merge_session_memory_updates(
+            state, session_memory_updates)
 
         # Flush logs for this agent after completing execution
         self._langgraph_logger.flush_agent_logs(self.name)
@@ -353,7 +362,8 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         requirements_dir = work_dirs_dict.get("requirements", "")
 
         if requirements_dir and os.path.isdir(requirements_dir):
-            requirements_path = os.path.join(requirements_dir, f'{self.trial:02d}.txt')
+            requirements_path = os.path.join(requirements_dir,
+                                             f'{self.trial:02d}.txt')
             if os.path.exists(requirements_path):
                 with open(requirements_path, 'r') as f:
                     return f.read()

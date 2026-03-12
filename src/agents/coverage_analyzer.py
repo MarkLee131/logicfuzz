@@ -19,13 +19,12 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
 
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
-        super().__init__(
-            name="coverage_analyzer",
-            model_name=model_name,
-            trial=trial,
-            args=args,
-            system_message=prompt_manager.get_system_prompt("coverage_analyzer")
-        )
+        super().__init__(name="coverage_analyzer",
+                         model_name=model_name,
+                         trial=trial,
+                         args=args,
+                         system_message=prompt_manager.get_system_prompt(
+                             "coverage_analyzer"))
         self.inspect_tool = None
 
     def get_tools(self) -> List[BaseTool]:
@@ -33,24 +32,34 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
 
     def parse_response(self, content: str) -> Dict[str, Any]:
         """Parse final response to extract coverage analysis result."""
-        result = {'improve_required': False, 'insights': '', 'suggestions': '', 'analyzed': True}
+        result = {
+            'improve_required': False,
+            'insights': '',
+            'suggestions': '',
+            'analyzed': True
+        }
 
         text_lower = content.lower()
 
         # XML format: <conclusion>true/false</conclusion>
-        match = re.search(r'<conclusion>\s*(true|false)\s*</conclusion>', text_lower)
+        match = re.search(r'<conclusion>\s*(true|false)\s*</conclusion>',
+                          text_lower)
         if match:
             result['improve_required'] = match.group(1) == 'true'
         else:
-            logger.warning('No <conclusion> tag found in coverage analyzer response', trial=self.trial)
+            logger.warning(
+                'No <conclusion> tag found in coverage analyzer response',
+                trial=self.trial)
 
         # Extract insights
-        insights_match = re.search(r'<insights?>(.*?)</insights?>', content, re.DOTALL | re.IGNORECASE)
+        insights_match = re.search(r'<insights?>(.*?)</insights?>', content,
+                                   re.DOTALL | re.IGNORECASE)
         if insights_match:
             result['insights'] = insights_match.group(1).strip()
 
         # Extract suggestions
-        suggestions_match = re.search(r'<suggestions?>(.*?)</suggestions?>', content, re.DOTALL | re.IGNORECASE)
+        suggestions_match = re.search(r'<suggestions?>(.*?)</suggestions?>',
+                                      content, re.DOTALL | re.IGNORECASE)
         if suggestions_match:
             result['suggestions'] = suggestions_match.group(1).strip()
 
@@ -73,8 +82,7 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
         from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
-            merge_session_memory_updates
-        )
+            merge_session_memory_updates)
 
         benchmark = benchmarklib.Benchmark.from_dict(state["benchmark"])
         fuzz_target_source = state.get("fuzz_target_source", "")
@@ -82,19 +90,27 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
         fuzzing_log = state.get("run_log", "")
 
         if not fuzzing_log:
-            logger.warning("Missing run_log; skipping coverage analysis", trial=self.trial)
+            logger.warning("Missing run_log; skipping coverage analysis",
+                           trial=self.trial)
             self._langgraph_logger.flush_agent_logs(self.name)
             return {
-                "coverage_analysis": {"status": "skipped", "reason": "Missing fuzzing log"},
+                "coverage_analysis": {
+                    "status": "skipped",
+                    "reason": "Missing fuzzing log"
+                },
                 "session_memory": state.get("session_memory", {})
             }
 
         # Setup container
         self.inspect_tool = ProjectContainerTool(benchmark, name='inspect')
-        self.inspect_tool.write_to_file(content=fuzz_target_source, file_path=benchmark.target_path)
+        self.inspect_tool.write_to_file(content=fuzz_target_source,
+                                        file_path=benchmark.target_path)
         if build_script_source:
-            self.inspect_tool.write_to_file(content=build_script_source, file_path=self.inspect_tool.build_script_path)
-        self.inspect_tool.compile(extra_commands=' && rm -rf /out/* > /dev/null')
+            self.inspect_tool.write_to_file(
+                content=build_script_source,
+                file_path=self.inspect_tool.build_script_path)
+        self.inspect_tool.compile(
+            extra_commands=' && rm -rf /out/* > /dev/null')
 
         # Determine target language from file extension (same logic as prototyper/improver)
         target_path = benchmark.target_path
@@ -111,24 +127,25 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
             fuzz_target=fuzz_target_source,
             fuzzing_log=fuzzing_log,
             function_requirements=self._get_function_requirements(state),
-            additional_context=""
-        )
-        user_prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
+            additional_context="")
+        user_prompt = build_prompt_with_session_memory(state,
+                                                       base_prompt,
+                                                       agent_name=self.name)
 
         try:
             result, all_responses = self.run_tool_calling_loop(
                 initial_prompt=user_prompt,
                 state=state,
                 max_rounds=self.args.max_round,
-                log_prefix="COV"
-            )
+                log_prefix="COV")
         finally:
             if self.inspect_tool:
                 self.inspect_tool.terminate()
 
         # Session memory
         combined = "\n\n".join(all_responses)
-        updates = extract_session_memory_updates_from_response(combined, self.name, state.get("current_iteration", 0))
+        updates = extract_session_memory_updates_from_response(
+            combined, self.name, state.get("current_iteration", 0))
         session_memory = merge_session_memory_updates(state, updates)
 
         # Record attempt
@@ -136,13 +153,14 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
             add_coverage_attempt(
                 state=state,
                 attempt_type="coverage_analysis",
-                outcome="improve_required" if result.get("improve_required") else "no_improvement_needed",
+                outcome="improve_required"
+                if result.get("improve_required") else "no_improvement_needed",
                 coverage_percent=state.get("coverage_percent", 0.0),
                 line_coverage_diff=state.get("line_coverage_diff", 0.0),
-                no_improvement_count=state.get("no_coverage_improvement_count", 0),
+                no_improvement_count=state.get("no_coverage_improvement_count",
+                                               0),
                 iteration=state.get("current_iteration", 0),
-                notes="CoverageAnalyzer completed"
-            )
+                notes="CoverageAnalyzer completed")
             session_memory = state.get("session_memory", session_memory)
         except Exception as e:
             logger.warning(f"Failed to record attempt: {e}", trial=self.trial)

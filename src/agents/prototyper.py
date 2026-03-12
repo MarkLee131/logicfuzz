@@ -38,13 +38,11 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt("prototyper")
-        super().__init__(
-            name="prototyper",
-            model_name=model_name,
-            trial=trial,
-            args=args,
-            system_message=system_message
-        )
+        super().__init__(name="prototyper",
+                         model_name=model_name,
+                         trial=trial,
+                         args=args,
+                         system_message=system_message)
         self.fi_tool = None
         self.project_name = None
         self.benchmark = None
@@ -56,19 +54,18 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     def get_tools(self) -> List[BaseTool]:
         """Return FuzzIntrospector tools for API understanding."""
         return [
-            GetFunctionImplementationTool(executor=self._get_function_implementation),
+            GetFunctionImplementationTool(
+                executor=self._get_function_implementation),
             GetFunctionSignatureTool(executor=self._get_function_signature),
-            GetSampleCrossReferencesTool(executor=self._get_sample_cross_references),
+            GetSampleCrossReferencesTool(
+                executor=self._get_sample_cross_references),
             GetTestsForFunctionsTool(executor=self._get_tests_for_functions),
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
         """Parse final LLM response to extract fuzz target code."""
         fuzz_target_code = parse_tag(content, 'fuzz_target')
-        return {
-            'fuzz_target_code': fuzz_target_code,
-            'raw_response': content
-        }
+        return {'fuzz_target_code': fuzz_target_code, 'raw_response': content}
 
     # =========================================================================
     # Tool Executors
@@ -80,7 +77,9 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
             from tool.fuzz_introspector_tool import FuzzIntrospectorTool
             from experiment import benchmark as benchmarklib
             benchmark_obj = benchmarklib.Benchmark.from_dict(self.benchmark)
-            logger.info(f"Initializing FuzzIntrospector for project: {benchmark_obj.project}", trial=self.trial)
+            logger.info(
+                f"Initializing FuzzIntrospector for project: {benchmark_obj.project}",
+                trial=self.trial)
             self.fi_tool = FuzzIntrospectorTool(benchmark_obj)
             self.project_name = benchmark_obj.project
 
@@ -89,7 +88,8 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         self._init_fi_tool()
         if not self.fi_tool:
             return f"Error: FuzzIntrospector not available"
-        impl = self.fi_tool.get_function_implementation(self.project_name, function_name)
+        impl = self.fi_tool.get_function_implementation(
+            self.project_name, function_name)
         if impl:
             return f"Source code for '{function_name}':\n```c\n{impl}\n```"
         return f"Error: Could not find source code for function '{function_name}'"
@@ -109,7 +109,8 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         self._init_fi_tool()
         if not self.fi_tool:
             return f"Error: FuzzIntrospector not available"
-        cross_refs = self.fi_tool.get_sample_cross_references(function_signature)
+        cross_refs = self.fi_tool.get_sample_cross_references(
+            function_signature)
         if cross_refs:
             result = f"Usage examples for '{function_signature}':\n\n"
             for i, ref in enumerate(cross_refs[:5], 1):
@@ -139,8 +140,7 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
-            merge_session_memory_updates
-        )
+            merge_session_memory_updates)
 
         benchmark = state["benchmark"]
         self.benchmark = benchmark  # Store for FI tool initialization
@@ -156,7 +156,8 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         condition_info = context.get('condition_info', {})
         skeleton_drivers = context.get('skeleton_drivers', [])
         existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
-        existing_driver_knowledge = context.get('existing_driver_knowledge', {})
+        existing_driver_knowledge = context.get('existing_driver_knowledge',
+                                                {})
 
         # Get target path info for include path calculation
         target_path = benchmark.get('target_path', '')
@@ -165,12 +166,13 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         library_language = benchmark.get('language', 'c++').lower()
         cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
         is_cpp_target = target_path.lower().endswith(cpp_extensions)
-        is_c_project = library_language in ('c',)
+        is_c_project = library_language in ('c', )
 
         target_language = 'c++' if is_cpp_target else 'c'
         needs_extern = is_cpp_target and is_c_project
 
-        is_regeneration = state.get("compile_success") == False and state.get("fuzz_target_source", "") != ""
+        is_regeneration = state.get("compile_success") == False and state.get(
+            "fuzz_target_source", "") != ""
 
         prompt_manager = get_prompt_manager()
         additional_context = ""
@@ -187,32 +189,36 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         # === API Classification ===
         project_name = benchmark.get('project', 'unknown')
         api_classification = classify_project_apis(project_name, project_apis)
-        api_understanding_text = self._format_api_understanding(api_classification)
+        api_understanding_text = self._format_api_understanding(
+            api_classification)
 
         logger.info(
             f'API Classification: {len(api_classification.parsers)} parsers, '
             f'{len(api_classification.creators)} creators, '
             f'{len(api_classification.accessors)} accessors, '
             f'{len(api_classification.mutators)} mutators',
-            trial=self.trial
-        )
+            trial=self.trial)
 
         api_sequences_text = self._format_api_sequences(api_sequences, limit=8)
         project_apis_text = self._format_project_apis(project_apis, limit=20)
-        dep_graph_text = self._format_dependency_graph(dependency_graph, limit=12)
+        dep_graph_text = self._format_dependency_graph(dependency_graph,
+                                                       limit=12)
         condition_text = self._format_condition_info(condition_info)
-        skeleton_text = self._format_skeleton_drivers(skeleton_drivers, limit=2)
-        include_path_context = self._format_include_path_context(target_path, existing_fuzzer_headers)
-        driver_knowledge_text = self._format_driver_knowledge(existing_driver_knowledge)
+        skeleton_text = self._format_skeleton_drivers(skeleton_drivers,
+                                                      limit=2)
+        include_path_context = self._format_include_path_context(
+            target_path, existing_fuzzer_headers)
+        driver_knowledge_text = self._format_driver_knowledge(
+            existing_driver_knowledge)
 
         # === Synthesis mode: Format CBFactory base driver for LLM refinement ===
         synthesis_base_text = ""
         if synthesized_drivers:
-            synthesis_base_text = self._format_synthesis_base_driver(synthesized_drivers, state)
+            synthesis_base_text = self._format_synthesis_base_driver(
+                synthesized_drivers, state)
             logger.info(
                 f'[Synthesis Mode] Providing {len(synthesized_drivers)} CBFactory drivers as base for LLM refinement',
-                trial=self.trial
-            )
+                trial=self.trial)
 
         # Add extern "C" guidance if needed
         extern_c_note = ""
@@ -241,8 +247,7 @@ extern "C" {
                 function_signature="",
                 srs_specification=srs_specification,
                 additional_context=additional_context,
-                skeleton_code=skeleton_code
-            )
+                skeleton_code=skeleton_code)
             base_prompt += f"""
 
 <task>
@@ -334,25 +339,31 @@ Output your fuzz driver code inside <fuzz_target> tags.
 </output_format>
 """
         except Exception as e:
-            logger.warning(f"Prompt template may not support project-level mode: {e}", trial=self.trial)
+            logger.warning(
+                f"Prompt template may not support project-level mode: {e}",
+                trial=self.trial)
             base_prompt = self._build_fallback_prompt(
-                benchmark, include_path_context, api_sequences_text, project_apis_text,
-                dep_graph_text, condition_text, skeleton_text, srs_specification,
-                skeleton_code, additional_context
-            )
+                benchmark, include_path_context, api_sequences_text,
+                project_apis_text, dep_graph_text, condition_text,
+                skeleton_text, srs_specification, skeleton_code,
+                additional_context)
 
-        prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
+        prompt = build_prompt_with_session_memory(state,
+                                                  base_prompt,
+                                                  agent_name=self.name)
 
         # Use tool calling loop - LLM can optionally use tools
         try:
             parsed_result, all_responses = self.run_tool_calling_loop(
                 initial_prompt=prompt,
                 state=state,
-                max_rounds=getattr(self.args, 'max_round', 5),  # Allow a few rounds for tool use
-                log_prefix="PROTOTYPER"
-            )
+                max_rounds=getattr(self.args, 'max_round',
+                                   5),  # Allow a few rounds for tool use
+                log_prefix="PROTOTYPER")
         except Exception as e:
-            logger.warning(f"Tool calling loop failed, falling back to direct call: {e}", trial=self.trial)
+            logger.warning(
+                f"Tool calling loop failed, falling back to direct call: {e}",
+                trial=self.trial)
             response = self.chat_llm(state, prompt)
             parsed_result = self.parse_response(response)
             all_responses = [response]
@@ -362,18 +373,17 @@ Output your fuzz driver code inside <fuzz_target> tags.
         session_memory_updates = extract_session_memory_updates_from_response(
             combined_response,
             agent_name=self.name,
-            current_iteration=state.get("current_iteration", 0)
-        )
-        updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
+            current_iteration=state.get("current_iteration", 0))
+        updated_session_memory = merge_session_memory_updates(
+            state, session_memory_updates)
 
         fuzz_target_code = parsed_result.get('fuzz_target_code', '')
         if not fuzz_target_code:
-            logger.error('No <fuzz_target> tag found in prototyper response', trial=self.trial)
+            logger.error('No <fuzz_target> tag found in prototyper response',
+                         trial=self.trial)
 
         validation_warnings = self._validate_api_usage(
-            fuzz_target_code,
-            benchmark.get('project', 'unknown')
-        )
+            fuzz_target_code, benchmark.get('project', 'unknown'))
 
         state_update = {
             "fuzz_target_source": fuzz_target_code,
@@ -384,18 +394,24 @@ Output your fuzz driver code inside <fuzz_target> tags.
         }
 
         if is_regeneration:
-            prototyper_regenerate_count = state.get("prototyper_regenerate_count", 0)
-            state_update["prototyper_regenerate_count"] = prototyper_regenerate_count + 1
+            prototyper_regenerate_count = state.get(
+                "prototyper_regenerate_count", 0)
+            state_update[
+                "prototyper_regenerate_count"] = prototyper_regenerate_count + 1
             state_update["compilation_retry_count"] = 0
-            logger.info(f'Prototyper regeneration #{prototyper_regenerate_count + 1}', trial=self.trial)
+            logger.info(
+                f'Prototyper regeneration #{prototyper_regenerate_count + 1}',
+                trial=self.trial)
 
         self._langgraph_logger.flush_agent_logs(self.name)
 
         return state_update
 
-    def _build_fallback_prompt(self, benchmark, include_path_context, api_sequences_text,
-                               project_apis_text, dep_graph_text, condition_text,
-                               skeleton_text, srs_specification, skeleton_code, additional_context):
+    def _build_fallback_prompt(self, benchmark, include_path_context,
+                               api_sequences_text, project_apis_text,
+                               dep_graph_text, condition_text, skeleton_text,
+                               srs_specification, skeleton_code,
+                               additional_context):
         """Build fallback prompt when template fails."""
         return f"""<task>
 Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown')}.
@@ -461,7 +477,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
     # Formatting helpers (unchanged from original)
     # =========================================================================
 
-    def _format_synthesis_base_driver(self, synthesized_drivers: List[Dict[str, Any]],
+    def _format_synthesis_base_driver(self,
+                                      synthesized_drivers: List[Dict[str,
+                                                                     Any]],
                                       state: FuzzingWorkflowState) -> str:
         """Format CBFactory synthesized drivers as base for LLM refinement."""
         if not synthesized_drivers:
@@ -469,20 +487,34 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
         lines = []
         lines.append("")
-        lines.append("**=== CBFactory SYNTHESIZED DRIVER (Base for Refinement) ===**")
+        lines.append(
+            "**=== CBFactory SYNTHESIZED DRIVER (Base for Refinement) ===**")
         lines.append("")
-        lines.append("The following driver was generated by CBFactory (traditional program synthesis).")
-        lines.append("It is structurally correct and respects API constraints, but needs YOUR refinement:")
+        lines.append(
+            "The following driver was generated by CBFactory (traditional program synthesis)."
+        )
+        lines.append(
+            "It is structurally correct and respects API constraints, but needs YOUR refinement:"
+        )
         lines.append("")
         lines.append("**Your tasks:**")
-        lines.append("1. **Fix compilation issues** - Add missing headers, fix type errors")
-        lines.append("2. **Improve input generation** - Replace basic buffers with structured fuzzer input")
-        lines.append("3. **Add error handling** - Check return values, handle NULL pointers")
+        lines.append(
+            "1. **Fix compilation issues** - Add missing headers, fix type errors"
+        )
+        lines.append(
+            "2. **Improve input generation** - Replace basic buffers with structured fuzzer input"
+        )
+        lines.append(
+            "3. **Add error handling** - Check return values, handle NULL pointers"
+        )
         lines.append("4. **Enhance coverage** - Add branches, test edge cases")
-        lines.append("5. **Keep the API sequence** - The call order is constraint-validated, preserve it")
+        lines.append(
+            "5. **Keep the API sequence** - The call order is constraint-validated, preserve it"
+        )
         lines.append("")
 
-        synthesis_index = state.get("synthesis_driver_index", 0) if state else 0
+        synthesis_index = state.get("synthesis_driver_index",
+                                    0) if state else 0
         if synthesis_index >= len(synthesized_drivers):
             synthesis_index = 0
 
@@ -493,11 +525,15 @@ Output your fuzz driver code inside <fuzz_target> tags.
         synthesis_info = driver.get('synthesis_info', {})
 
         lines.append(f"**Driver: {driver_name}**")
-        lines.append(f"  - API sequence ({len(api_sequence)} calls): {' → '.join(api_sequence[:8])}" +
-                    (" ..." if len(api_sequence) > 8 else ""))
+        lines.append(
+            f"  - API sequence ({len(api_sequence)} calls): {' → '.join(api_sequence[:8])}"
+            + (" ..." if len(api_sequence) > 8 else ""))
         if synthesis_info:
-            lines.append(f"  - Synthesis method: {synthesis_info.get('method', 'CBFactory')}")
-            lines.append(f"  - Has cleanup: {synthesis_info.get('has_cleanup', False)}")
+            lines.append(
+                f"  - Synthesis method: {synthesis_info.get('method', 'CBFactory')}"
+            )
+            lines.append(
+                f"  - Has cleanup: {synthesis_info.get('has_cleanup', False)}")
         lines.append("")
         lines.append("**Base Code (REFINE THIS):**")
         lines.append("```cpp")
@@ -509,12 +545,18 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append(code)
         lines.append("```")
         lines.append("")
-        lines.append("**IMPORTANT:** Use this as your starting point. Keep the API call sequence,")
-        lines.append("but improve the driver to be compilable and achieve high code coverage.")
+        lines.append(
+            "**IMPORTANT:** Use this as your starting point. Keep the API call sequence,"
+        )
+        lines.append(
+            "but improve the driver to be compilable and achieve high code coverage."
+        )
         lines.append("")
 
         if len(synthesized_drivers) > 1:
-            lines.append(f"*({len(synthesized_drivers) - 1} more synthesized drivers available)*")
+            lines.append(
+                f"*({len(synthesized_drivers) - 1} more synthesized drivers available)*"
+            )
             lines.append("")
 
         return "\n".join(lines)
@@ -532,21 +574,26 @@ Output your fuzz driver code inside <fuzz_target> tags.
         lines.append("")
 
         if classification.parsers:
-            lines.append("**🎯 PARSER APIs (PRIORITY - consume external input):**")
+            lines.append(
+                "**🎯 PARSER APIs (PRIORITY - consume external input):**")
             for api in classification.parsers[:5]:
-                lines.append(f"  • {api.name} (confidence: {api.confidence:.0%})")
+                lines.append(
+                    f"  • {api.name} (confidence: {api.confidence:.0%})")
                 if api.signature:
                     lines.append(f"    Signature: {api.signature}")
             if len(classification.parsers) > 5:
-                lines.append(f"  ... and {len(classification.parsers) - 5} more")
+                lines.append(
+                    f"  ... and {len(classification.parsers) - 5} more")
             lines.append("")
 
         if classification.accessors:
-            lines.append("**🔍 ACCESSOR APIs (need both found/not-found branches):**")
+            lines.append(
+                "**🔍 ACCESSOR APIs (need both found/not-found branches):**")
             for api in classification.accessors[:5]:
                 lines.append(f"  • {api.name}")
             if len(classification.accessors) > 5:
-                lines.append(f"  ... and {len(classification.accessors) - 5} more")
+                lines.append(
+                    f"  ... and {len(classification.accessors) - 5} more")
             lines.append("")
 
         if classification.creators:
@@ -554,7 +601,8 @@ Output your fuzz driver code inside <fuzz_target> tags.
             for api in classification.creators[:5]:
                 lines.append(f"  • {api.name}")
             if len(classification.creators) > 5:
-                lines.append(f"  ... and {len(classification.creators) - 5} more")
+                lines.append(
+                    f"  ... and {len(classification.creators) - 5} more")
             lines.append("")
 
         if classification.mutators:
@@ -562,7 +610,8 @@ Output your fuzz driver code inside <fuzz_target> tags.
             for api in classification.mutators[:5]:
                 lines.append(f"  • {api.name}")
             if len(classification.mutators) > 5:
-                lines.append(f"  ... and {len(classification.mutators) - 5} more")
+                lines.append(
+                    f"  ... and {len(classification.mutators) - 5} more")
             lines.append("")
 
         if classification.serializers:
@@ -584,7 +633,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
         return "\n".join(lines)
 
-    def _format_api_sequences(self, api_sequences: List[List[str]], limit: int = 10) -> str:
+    def _format_api_sequences(self,
+                              api_sequences: List[List[str]],
+                              limit: int = 10) -> str:
         if not api_sequences:
             return "  (none)"
         lines = []
@@ -595,7 +646,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append(f"  ... and {len(api_sequences) - limit} more")
         return "\n".join(lines)
 
-    def _format_project_apis(self, project_apis: List[Dict[str, Any]], limit: int = 20) -> str:
+    def _format_project_apis(self,
+                             project_apis: List[Dict[str, Any]],
+                             limit: int = 20) -> str:
         if not project_apis:
             return "  (none)"
         lines = []
@@ -619,16 +672,21 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append(f"  ... and {len(project_apis) - limit} more")
         return "\n".join(lines)
 
-    def _format_dependency_graph(self, dep_graph: Dict[str, Any], limit: int = 12) -> str:
-        graph = dep_graph.get("graph", {}) if isinstance(dep_graph, dict) else {}
+    def _format_dependency_graph(self,
+                                 dep_graph: Dict[str, Any],
+                                 limit: int = 12) -> str:
+        graph = dep_graph.get("graph", {}) if isinstance(dep_graph,
+                                                         dict) else {}
         if not graph:
             return "  (empty)"
         lines = []
-        lines.append(f"  Total nodes: {dep_graph.get('num_nodes', len(graph))}")
+        lines.append(
+            f"  Total nodes: {dep_graph.get('num_nodes', len(graph))}")
         lines.append(f"  Showing up to {limit} dependencies:")
         for api, deps in list(graph.items())[:limit]:
             if deps:
-                deps_str = ", ".join(deps[:5]) + (" ..." if len(deps) > 5 else "")
+                deps_str = ", ".join(
+                    deps[:5]) + (" ..." if len(deps) > 5 else "")
                 lines.append(f"    {api} depends on: {deps_str}")
             else:
                 lines.append(f"    {api} depends on: (none)")
@@ -641,12 +699,17 @@ Output your fuzz driver code inside <fuzz_target> tags.
         sinks = condition_info.get("sinks", [])
         inits = condition_info.get("inits", [])
         lines = []
-        lines.append(f"  Sources ({len(sources)}): {', '.join(sources[:10])}" + (" ..." if len(sources) > 10 else ""))
-        lines.append(f"  Sinks ({len(sinks)}): {', '.join(sinks[:10])}" + (" ..." if len(sinks) > 10 else ""))
-        lines.append(f"  Init ({len(inits)}): {', '.join(inits[:10])}" + (" ..." if len(inits) > 10 else ""))
+        lines.append(f"  Sources ({len(sources)}): {', '.join(sources[:10])}" +
+                     (" ..." if len(sources) > 10 else ""))
+        lines.append(f"  Sinks ({len(sinks)}): {', '.join(sinks[:10])}" +
+                     (" ..." if len(sinks) > 10 else ""))
+        lines.append(f"  Init ({len(inits)}): {', '.join(inits[:10])}" +
+                     (" ..." if len(inits) > 10 else ""))
         return "\n".join(lines)
 
-    def _format_skeleton_drivers(self, skeleton_drivers: List[Dict[str, Any]], limit: int = 2) -> str:
+    def _format_skeleton_drivers(self,
+                                 skeleton_drivers: List[Dict[str, Any]],
+                                 limit: int = 2) -> str:
         """Format pre-generated skeleton drivers for prompt."""
         if not skeleton_drivers:
             return "  (no skeleton drivers available)"
@@ -659,12 +722,15 @@ Output your fuzz driver code inside <fuzz_target> tags.
             code = skeleton.get("code", "")
 
             lines.append(f"\n  **Skeleton {i+1}: {name}**")
-            lines.append(f"    API sequence: {' → '.join(api_seq[:5])}" + (" ..." if len(api_seq) > 5 else ""))
+            lines.append(f"    API sequence: {' → '.join(api_seq[:5])}" +
+                         (" ..." if len(api_seq) > 5 else ""))
 
             if holes:
                 unfilled = [h for h in holes if not h.get("filled", False)]
                 hole_types = [str(h['hole_type']) for h in unfilled[:3]]
-                lines.append(f"    Holes to fill: {len(unfilled)} ({', '.join(hole_types)})")
+                lines.append(
+                    f"    Holes to fill: {len(unfilled)} ({', '.join(hole_types)})"
+                )
 
             if code:
                 code_lines = code.split('\n')[:15]
@@ -677,11 +743,14 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 lines.append("    ```")
 
         if len(skeleton_drivers) > limit:
-            lines.append(f"\n  ... and {len(skeleton_drivers) - limit} more skeleton drivers")
+            lines.append(
+                f"\n  ... and {len(skeleton_drivers) - limit} more skeleton drivers"
+            )
 
         return "\n".join(lines)
 
-    def _format_driver_knowledge(self, driver_knowledge: Dict[str, Any]) -> str:
+    def _format_driver_knowledge(self, driver_knowledge: Dict[str,
+                                                              Any]) -> str:
         """Format knowledge extracted from existing drivers."""
         if not driver_knowledge:
             return ""
@@ -693,7 +762,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
             return ""
 
         lines = ["<existing_driver_knowledge>"]
-        lines.append(f"Learn from {len(driver_sources)} existing OSS-Fuzz fuzz drivers.")
+        lines.append(
+            f"Learn from {len(driver_sources)} existing OSS-Fuzz fuzz drivers."
+        )
         lines.append("")
 
         core_func = analysis.get('core_functionality', '')
@@ -706,7 +777,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
         code_patterns = analysis.get('code_patterns', '')
         if code_patterns:
             lines.append("<code_patterns>")
-            lines.append("IMPORTANT: These patterns show how to effectively use fuzz data.")
+            lines.append(
+                "IMPORTANT: These patterns show how to effectively use fuzz data."
+            )
             lines.append(code_patterns)
             lines.append("</code_patterns>")
             lines.append("")
@@ -725,7 +798,10 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 # Strip license header if present (simple heuristic)
                 if source.startswith('/*') or source.startswith('//'):
                     import re
-                    source = re.sub(r'^(/\*.*?\*/|//.*?\n)+\s*', '', source, flags=re.DOTALL)
+                    source = re.sub(r'^(/\*.*?\*/|//.*?\n)+\s*',
+                                    '',
+                                    source,
+                                    flags=re.DOTALL)
                 lines.append(f"<driver path=\"{d['path']}\">")
                 lines.append(source)
                 lines.append("</driver>")
@@ -734,7 +810,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
         lines.append("</existing_driver_knowledge>")
         return "\n".join(lines)
 
-    def _format_include_path_context(self, target_path: str, existing_fuzzer_headers: Dict[str, Any]) -> str:
+    def _format_include_path_context(
+            self, target_path: str, existing_fuzzer_headers: Dict[str,
+                                                                  Any]) -> str:
         """Format include path context."""
         import os
 
@@ -747,14 +825,18 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append("")
             lines.append("  When writing #include statements, remember:")
             lines.append(f"  - Your code will be saved to `{target_path}`")
-            lines.append("  - Use relative paths from this location to reach header files")
+            lines.append(
+                "  - Use relative paths from this location to reach header files"
+            )
         else:
             lines.append("  (target path not specified)")
 
         project_headers = existing_fuzzer_headers.get('project_headers', [])
         if project_headers:
             lines.append("")
-            lines.append("  **Reference includes from existing fuzzers** (COPY THESE EXACTLY):")
+            lines.append(
+                "  **Reference includes from existing fuzzers** (COPY THESE EXACTLY):"
+            )
             for header in project_headers[:5]:
                 lines.append(f"    #include \"{header}\"")
             if len(project_headers) > 5:
@@ -773,27 +855,33 @@ Output your fuzz driver code inside <fuzz_target> tags.
             is_valid, report = validate_fuzz_target(code, project_name)
 
             if not is_valid:
-                logger.warning('Generated code contains internal API usage', trial=self.trial)
+                logger.warning('Generated code contains internal API usage',
+                               trial=self.trial)
                 return report
             else:
-                logger.info('Generated code passed API validation', trial=self.trial)
+                logger.info('Generated code passed API validation',
+                            trial=self.trial)
                 return ""
         except Exception as e:
-            logger.warning(f'API validation failed with error: {e}', trial=self.trial)
+            logger.warning(f'API validation failed with error: {e}',
+                           trial=self.trial)
             return ""
 
     def _format_analysis_summary(self, function_analysis: dict) -> str:
         """Format analysis summary for the Prototyper prompt."""
         srs_data = function_analysis.get('srs_data')
         if not srs_data:
-            return function_analysis.get('raw_analysis', 'No analysis available')
+            return function_analysis.get('raw_analysis',
+                                         'No analysis available')
 
         # Build formatted SRS specification (kept for backward compatibility)
         output = []
 
         archetype = srs_data.get('archetype', {})
         output.append("### Archetype Pattern")
-        output.append(f"**Primary Pattern**: {archetype.get('primary_pattern', 'Unknown')}")
+        output.append(
+            f"**Primary Pattern**: {archetype.get('primary_pattern', 'Unknown')}"
+        )
         output.append(f"**Reference**: {archetype.get('reference', 'N/A')}")
         output.append("")
 

@@ -41,13 +41,11 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt("improver")
-        super().__init__(
-            name="improver",
-            model_name=model_name,
-            trial=trial,
-            args=args,
-            system_message=system_message
-        )
+        super().__init__(name="improver",
+                         model_name=model_name,
+                         trial=trial,
+                         args=args,
+                         system_message=system_message)
         self.fi_tool = None
         self.project_name = None
         self.benchmark = None
@@ -59,19 +57,18 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
     def get_tools(self) -> List[BaseTool]:
         """Return FuzzIntrospector tools for understanding uncovered code."""
         return [
-            GetFunctionImplementationTool(executor=self._get_function_implementation),
+            GetFunctionImplementationTool(
+                executor=self._get_function_implementation),
             GetFunctionSignatureTool(executor=self._get_function_signature),
-            GetSampleCrossReferencesTool(executor=self._get_sample_cross_references),
+            GetSampleCrossReferencesTool(
+                executor=self._get_sample_cross_references),
             GetTestsForFunctionsTool(executor=self._get_tests_for_functions),
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
         """Parse final LLM response to extract improved fuzz target code."""
         improved_code = parse_tag(content, 'fuzz_target')
-        return {
-            'improved_code': improved_code,
-            'raw_response': content
-        }
+        return {'improved_code': improved_code, 'raw_response': content}
 
     # =========================================================================
     # Tool Executors
@@ -83,7 +80,9 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
             from tool.fuzz_introspector_tool import FuzzIntrospectorTool
             from experiment import benchmark as benchmarklib
             benchmark_obj = benchmarklib.Benchmark.from_dict(self.benchmark)
-            logger.info(f"Initializing FuzzIntrospector for project: {benchmark_obj.project}", trial=self.trial)
+            logger.info(
+                f"Initializing FuzzIntrospector for project: {benchmark_obj.project}",
+                trial=self.trial)
             self.fi_tool = FuzzIntrospectorTool(benchmark_obj)
             self.project_name = benchmark_obj.project
 
@@ -92,7 +91,8 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         self._init_fi_tool()
         if not self.fi_tool or not self.project_name:
             return f"Error: FuzzIntrospector not available"
-        impl = self.fi_tool.get_function_implementation(self.project_name, function_name)
+        impl = self.fi_tool.get_function_implementation(
+            self.project_name, function_name)
         if impl:
             return f"Source code for '{function_name}':\n```c\n{impl}\n```"
         return f"Error: Could not find source code for function '{function_name}'"
@@ -112,7 +112,8 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         self._init_fi_tool()
         if not self.fi_tool or not self.project_name:
             return f"Error: FuzzIntrospector not available"
-        cross_refs = self.fi_tool.get_sample_cross_references(function_signature)
+        cross_refs = self.fi_tool.get_sample_cross_references(
+            function_signature)
         if cross_refs:
             result = f"Usage examples for '{function_signature}':\n\n"
             for i, ref in enumerate(cross_refs[:5], 1):
@@ -142,8 +143,7 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         from src.context.session_memory_injector import (
             build_prompt_with_session_memory,
             extract_session_memory_updates_from_response,
-            merge_session_memory_updates
-        )
+            merge_session_memory_updates)
 
         benchmark = state["benchmark"]
         self.benchmark = benchmark  # Store for FI tool initialization
@@ -152,19 +152,23 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
 
         project_name = benchmark.get('project', 'unknown')
 
-        suggestions = coverage_analysis.get("suggestions", "No specific suggestions provided")
+        suggestions = coverage_analysis.get(
+            "suggestions", "No specific suggestions provided")
         insights = coverage_analysis.get("insights", "")
         improve_required = coverage_analysis.get("improve_required", True)
 
         if not improve_required:
-            logger.info('Coverage analyzer says no improvement required, skipping', trial=self.trial)
+            logger.info(
+                'Coverage analyzer says no improvement required, skipping',
+                trial=self.trial)
             return {"session_memory": state.get("session_memory", {})}
 
         coverage_percent = state.get("coverage_percent", 0.0)
         line_coverage_diff = state.get("line_coverage_diff", 0.0)
 
         compressed_insights = self._compress_coverage_insights(insights)
-        compressed_suggestions = self._compress_coverage_suggestions(suggestions)
+        compressed_suggestions = self._compress_coverage_suggestions(
+            suggestions)
 
         # Determine target language from file extension
         target_path = benchmark.get('target_path', '')
@@ -181,8 +185,7 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
             coverage_percent=f"{coverage_percent:.2%}",
             line_coverage_diff=f"{line_coverage_diff:.2%}",
             coverage_insights=compressed_insights,
-            improvement_suggestions=compressed_suggestions
-        )
+            improvement_suggestions=compressed_suggestions)
 
         # Add tool usage guidance
         base_prompt += """
@@ -212,7 +215,9 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
 </tool_usage_guidance>
 """
 
-        prompt = build_prompt_with_session_memory(state, base_prompt, agent_name=self.name)
+        prompt = build_prompt_with_session_memory(state,
+                                                  base_prompt,
+                                                  agent_name=self.name)
 
         # Use tool calling loop - LLM can optionally use tools
         try:
@@ -220,10 +225,11 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
                 initial_prompt=prompt,
                 state=state,
                 max_rounds=getattr(self.args, 'max_round', 5),
-                log_prefix="IMPROVER"
-            )
+                log_prefix="IMPROVER")
         except Exception as e:
-            logger.warning(f"Tool calling loop failed, falling back to direct call: {e}", trial=self.trial)
+            logger.warning(
+                f"Tool calling loop failed, falling back to direct call: {e}",
+                trial=self.trial)
             response = self.chat_llm(state, prompt)
             parsed_result = self.parse_response(response)
             all_responses = [response]
@@ -233,32 +239,36 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         session_memory_updates = extract_session_memory_updates_from_response(
             combined_response,
             agent_name=self.name,
-            current_iteration=state.get("current_iteration", 0)
-        )
-        updated_session_memory = merge_session_memory_updates(state, session_memory_updates)
+            current_iteration=state.get("current_iteration", 0))
+        updated_session_memory = merge_session_memory_updates(
+            state, session_memory_updates)
 
         improved_code = parsed_result.get('improved_code', '')
         if not improved_code:
             # No fallback - keep current code if LLM didn't follow format
-            logger.warning('No <fuzz_target> tag found in improver response, keeping current code', trial=self.trial)
+            logger.warning(
+                'No <fuzz_target> tag found in improver response, keeping current code',
+                trial=self.trial)
             improved_code = current_code
 
         try:
             improvement_count = state.get("improvement_attempt_count", 0) + 1
             notes = f"Improver attempt #{improvement_count}"
-            add_coverage_attempt(
-                state=state,
-                attempt_type="improver",
-                outcome="driver_rewritten",
-                coverage_percent=coverage_percent,
-                line_coverage_diff=line_coverage_diff,
-                no_improvement_count=state.get("no_coverage_improvement_count", 0),
-                iteration=state.get("current_iteration", 0),
-                notes=notes
-            )
-            updated_session_memory = state.get("session_memory", updated_session_memory)
+            add_coverage_attempt(state=state,
+                                 attempt_type="improver",
+                                 outcome="driver_rewritten",
+                                 coverage_percent=coverage_percent,
+                                 line_coverage_diff=line_coverage_diff,
+                                 no_improvement_count=state.get(
+                                     "no_coverage_improvement_count", 0),
+                                 iteration=state.get("current_iteration", 0),
+                                 notes=notes)
+            updated_session_memory = state.get("session_memory",
+                                               updated_session_memory)
         except Exception as e:
-            logger.warning(f"Failed to record improver coverage attempt in session_memory: {e}", trial=self.trial)
+            logger.warning(
+                f"Failed to record improver coverage attempt in session_memory: {e}",
+                trial=self.trial)
 
         state_update = {
             "fuzz_target_source": improved_code,
@@ -274,7 +284,8 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
 
         improvement_count = state.get("improvement_attempt_count", 0)
         state_update["improvement_attempt_count"] = improvement_count + 1
-        logger.info(f'Improvement attempt count: {improvement_count + 1}', trial=self.trial)
+        logger.info(f'Improvement attempt count: {improvement_count + 1}',
+                    trial=self.trial)
 
         self._langgraph_logger.flush_agent_logs(self.name)
 
@@ -306,14 +317,17 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         if bullet_points:
             compressed = "\n".join(bullet_points[:3])
         else:
-            root_cause_match = re.search(r'##\s*Root Cause[^\n]*\n(.*?)(?=\n##|\n\n\n|$)', insights, re.DOTALL)
+            root_cause_match = re.search(
+                r'##\s*Root Cause[^\n]*\n(.*?)(?=\n##|\n\n\n|$)', insights,
+                re.DOTALL)
             if root_cause_match:
                 root_cause_text = root_cause_match.group(1).strip()
                 compressed = root_cause_text[:500]
                 if len(root_cause_text) > 500:
                     compressed += "..."
             else:
-                compressed = insights[:400] + "..." if len(insights) > 400 else insights
+                compressed = insights[:400] + "..." if len(
+                    insights) > 400 else insights
 
         return compressed
 
@@ -333,8 +347,10 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
 
         import re
 
-        no_code = re.sub(r'```[a-z]*\n.*?\n```', '[code example removed - see main template]',
-                        suggestions, flags=re.DOTALL)
+        no_code = re.sub(r'```[a-z]*\n.*?\n```',
+                         '[code example removed - see main template]',
+                         suggestions,
+                         flags=re.DOTALL)
 
         recommendations = []
         pattern = r'(\d+)\.\s+\*\*([^:]+)\*\*:?\s*([^\n]*(?:\n(?!\d+\.)[^\n]*)*)'
@@ -351,6 +367,7 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         if recommendations:
             compressed = "\n\n".join(recommendations[:3])
         else:
-            compressed = no_code[:600] + "..." if len(no_code) > 600 else no_code
+            compressed = no_code[:600] + "..." if len(
+                no_code) > 600 else no_code
 
         return compressed
