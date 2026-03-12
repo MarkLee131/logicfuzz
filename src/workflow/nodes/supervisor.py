@@ -53,6 +53,8 @@ from langchain_core.runnables import RunnableConfig
 import logger
 from src.workflow.state import FuzzingWorkflowState, consolidate_session_memory
 from src.utils.fake_definition_validator import should_terminate_on_fake_definitions
+from src.utils.compilation_error_triage import (
+    triage_build_errors, ErrorCategory, FixStrategy)
 
 
 # ==================== Configuration Constants ====================
@@ -165,17 +167,33 @@ def _handle_compilation_phase(state: FuzzingWorkflowState, trial: int) -> str:
         return "build"
 
     if not compile_success:
-        # === NEW: Check for fake definitions before retrying ===
-        # If LLM invented non-existent functions, retrying is pointless
-        should_terminate, reason = should_terminate_on_fake_definitions(state)
-        if should_terminate:
-            logger.error(f'Fake definition detected: {reason}', trial=trial)
+        build_errors = state.get("build_errors", [])
+        context = state.get("context", {})
+        project_apis = context.get("project_apis", [])
+
+        # Triage errors for better diagnostics
+        triage_result = triage_build_errors(build_errors, project_apis)
+
+        # Log error category breakdown
+        if triage_result.summary:
+            category_str = ", ".join(
+                f"{cat.name}:{count}" for cat, count in triage_result.summary.items()
+            )
+            logger.info(f'Error triage: {category_str}', trial=trial)
+
+        # Check for unrecoverable errors (fake definitions, language mismatch in C)
+        if triage_result.has_category(ErrorCategory.FAKE_DEFINITION):
+            fake_errors = triage_result.get_errors_by_category(ErrorCategory.FAKE_DEFINITION)
+            fake_funcs = [e.extracted_symbol for e in fake_errors if e.extracted_symbol]
+            logger.error(f'Fake definitions detected: {fake_funcs}. Cannot fix.', trial=trial)
             return "END"
 
         compilation_retry_count = state.get("compilation_retry_count", 0)
         if compilation_retry_count < MAX_COMPILATION_RETRIES:
+            strategy_name = triage_result.recommended_strategy.name if triage_result.recommended_strategy else "UNKNOWN"
             logger.info(f'Compilation failed (attempt {compilation_retry_count + 1}/{MAX_COMPILATION_RETRIES}), '
-                       f'routing to fixer', trial=trial)
+                       f'primary error: {triage_result.primary_category.name if triage_result.primary_category else "UNKNOWN"}, '
+                       f'strategy: {strategy_name}, routing to fixer', trial=trial)
             return "fixer"
         else:
             logger.error(f'Compilation failed after {MAX_COMPILATION_RETRIES} retries. Ending.', trial=trial)
@@ -198,16 +216,25 @@ def _handle_optimization_phase(state: FuzzingWorkflowState, trial: int) -> str:
 
     # Build failed in optimization phase → fixer
     if not compile_success:
-        # === Check for fake definitions before retrying ===
-        should_terminate, reason = should_terminate_on_fake_definitions(state)
-        if should_terminate:
-            logger.error(f'Fake definition detected in optimization phase: {reason}', trial=trial)
+        build_errors = state.get("build_errors", [])
+        context = state.get("context", {})
+        project_apis = context.get("project_apis", [])
+
+        # Triage errors for better diagnostics
+        triage_result = triage_build_errors(build_errors, project_apis)
+
+        # Check for unrecoverable errors
+        if triage_result.has_category(ErrorCategory.FAKE_DEFINITION):
+            fake_errors = triage_result.get_errors_by_category(ErrorCategory.FAKE_DEFINITION)
+            fake_funcs = [e.extracted_symbol for e in fake_errors if e.extracted_symbol]
+            logger.error(f'Fake definitions in optimization phase: {fake_funcs}. Cannot fix.', trial=trial)
             return "END"
 
         compilation_retry_count = state.get("compilation_retry_count", 0)
         if compilation_retry_count < MAX_COMPILATION_RETRIES:
+            primary_cat = triage_result.primary_category.name if triage_result.primary_category else "UNKNOWN"
             logger.info(f'Build failed in optimization phase (attempt {compilation_retry_count + 1}), '
-                       f'routing to fixer', trial=trial)
+                       f'error type: {primary_cat}, routing to fixer', trial=trial)
             return "fixer"
         else:
             logger.error(f'Build failed after {MAX_COMPILATION_RETRIES} retries in optimization. Ending.', trial=trial)

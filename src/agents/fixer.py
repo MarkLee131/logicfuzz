@@ -163,9 +163,22 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             code) < 5000 else code[:2500] + "\n// ...\n" + code[-2500:]
 
     def _build_additional_context(self, benchmark, state, errors) -> str:
+        from src.utils.compilation_error_triage import (
+            triage_build_errors, get_fix_guidance)
+
         parts = []
         if benchmark.target_path:
             parts.append(f"**Target**: `{benchmark.target_path}`")
+
+        # Triage errors for targeted fix guidance
+        context = state.get("context", {})
+        project_apis = context.get("project_apis", [])
+        triage_result = triage_build_errors(errors, project_apis)
+
+        # Add triage-based guidance
+        if triage_result.errors:
+            fix_guidance = get_fix_guidance(triage_result)
+            parts.append(f"\n{fix_guidance}")
 
         header_info = state.get("function_analysis",
                                 {}).get("header_information", {})
@@ -180,4 +193,92 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             parts.append(
                 f"\n**API warnings**: {state['api_validation_warnings']}")
 
+        # Add existing driver knowledge as reference for fixing
+        existing_driver_knowledge = context.get("existing_driver_knowledge", {})
+        driver_ref = self._format_driver_knowledge_for_fixer(
+            existing_driver_knowledge, errors)
+        if driver_ref:
+            parts.append(driver_ref)
+
         return "\n".join(parts)
+
+    def _format_driver_knowledge_for_fixer(self, driver_knowledge: Dict[str, Any],
+                                           errors: List[str]) -> str:
+        """Format existing driver knowledge as reference for fixing errors."""
+        if not driver_knowledge:
+            return ""
+
+        driver_sources = driver_knowledge.get('driver_sources', [])
+        analysis = driver_knowledge.get('analysis', {}) or {}
+
+        if not driver_sources and not analysis:
+            return ""
+
+        # Check if errors are related to headers/includes
+        has_header_errors = any(
+            'file not found' in e.lower() or
+            '#include' in e.lower() or
+            'no such file' in e.lower()
+            for e in errors
+        )
+
+        # Check if errors are related to undefined references (linker)
+        has_linker_errors = any(
+            'undefined reference' in e.lower() or
+            'undefined symbol' in e.lower()
+            for e in errors
+        )
+
+        lines = ["\n<existing_driver_reference>"]
+        lines.append(
+            "The following patterns are from working OSS-Fuzz drivers for this project."
+        )
+        lines.append("Use them as reference for fixing compilation errors.\n")
+
+        # Add setup/teardown patterns if available
+        if analysis.get('setup_teardown'):
+            lines.append("<setup_teardown_patterns>")
+            lines.append(analysis['setup_teardown'])
+            lines.append("</setup_teardown_patterns>\n")
+
+        # Add code patterns if available
+        if analysis.get('code_patterns'):
+            lines.append("<code_patterns>")
+            lines.append(analysis['code_patterns'])
+            lines.append("</code_patterns>\n")
+
+        # For header/include errors, show include patterns from existing drivers
+        if has_header_errors and driver_sources:
+            lines.append("<working_includes>")
+            lines.append("Include patterns from working fuzzers:")
+            for driver in driver_sources[:2]:
+                source = driver.get('source', '')
+                # Extract include lines
+                includes = [
+                    line.strip() for line in source.split('\n')
+                    if line.strip().startswith('#include')
+                ][:10]
+                if includes:
+                    lines.append(f"\n// From {driver.get('path', 'unknown')}:")
+                    lines.extend(includes)
+            lines.append("</working_includes>\n")
+
+        # For linker errors, show full driver as reference
+        if has_linker_errors and driver_sources:
+            lines.append("<linker_reference>")
+            lines.append(
+                "For undefined reference errors, check how existing fuzzers handle linking:"
+            )
+            # Show first driver's approach (truncated)
+            driver = driver_sources[0]
+            source = driver.get('source', '')
+            if len(source) > 1500:
+                source = source[:1500] + "\n// ... (truncated)"
+            lines.append(f"\n// Reference: {driver.get('path', 'unknown')}")
+            lines.append("```cpp")
+            lines.append(source)
+            lines.append("```")
+            lines.append("</linker_reference>")
+
+        lines.append("</existing_driver_reference>")
+        return "\n".join(lines)

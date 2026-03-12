@@ -182,10 +182,10 @@ Results saved to `results/output-{benchmark_id}/`:
 - [ ] Loop iteration seeds: leverage `LoopPatternInfo.max_iterations` for iteration-boundary testing
 
 ### Scheduzz-inspired Improvements
-- [ ] **P0: Fake Definition Check** - Detect LLM-generated fake function definitions in validation phase
+- [x] **P0: Fake Definition Check** - Detect LLM-generated fake function definitions in validation phase (`src/utils/fake_definition_validator.py`)
+- [x] **P1: Compilation Error Triage** - Distinguish link error / inclusion error / missing header, handle separately (`src/utils/compilation_error_triage.py`)
+- [x] **P2: Driver Example Feedback** - Provide project's existing drivers as reference context in fixing phase (`src/agents/fixer.py`)
 - [ ] **P1: Imply/Conflict Constraints** - Extract explicit `imply(api1, api2)` and `conflict(api1, api2)` relations via LLM, integrate with Z3
 - [ ] **P1: Structure Init/Destroy Discovery** - Auto-discover struct initialization/destruction functions
-- [ ] **P1: Compilation Error Triage** - Distinguish link error / inclusion error / missing header, handle separately
 - [ ] **P2: Early Crash Detection** - 15s short-term fuzzing to filter irrational drivers before full execution
-- [ ] **P2: Driver Example Feedback** - Provide project's existing drivers as reference context in fixing phase
 - [ ] **P3: Group Entropy** - Ensure API coverage diversity, avoid always selecting same high-coverage APIs
