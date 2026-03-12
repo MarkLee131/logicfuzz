@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-LogicFuzz: LLM-powered fuzz driver generation using LangGraph agents for C/C++ libraries.
+LogicFuzz: Agentic fuzz driver generation for C/C++ libraries.
 
 ## Commands
 
@@ -35,7 +35,30 @@ pyright src/
 yapf -i src/**/*.py  # Format code
 ```
 
-Environment variables in `logicfuzz.env`: `DASHSCOPE_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`
+## Environment Variables
+
+Configure in `logicfuzz.env`:
+- `OPENAI_API_KEY` - For GPT models (gpt-4o, gpt-4o-mini, gpt-4-turbo)
+- `DEEPSEEK_API_KEY` - For DeepSeek models
+- `ANTHROPIC_API_KEY` - For Claude models (claude-3-5-sonnet, claude-3-opus)
+- `LLM_NUM_EXP` - Parallel experiment count (default: 10)
+
+## Supported Models
+
+All models in `src/llm/models.py` support tool calling:
+- OpenAI: `gpt-4o` (recommended), `gpt-4o-mini`, `gpt-4-turbo`, `gpt-4`
+- DeepSeek: `deepseek-chat`
+- Anthropic: `claude-3-5-sonnet`, `claude-3-opus`, `claude-3-haiku`
+
+## Benchmark YAML Format
+
+```yaml
+"language": "c"
+"project": "cjson"
+"url": "https://github.com/DaveGamble/cJSON.git"
+"target_name": "cjson_read_fuzzer"
+"target_path": "/src/cjson/fuzzing/cjson_read_fuzzer.c"
+```
 
 ## Architecture
 
@@ -62,6 +85,25 @@ FuzzingWorkflow (LangGraph)
 Evaluation (build, coverage, crash detection)
 ```
 
+### Workflow State Machine (`src/workflow/nodes/supervisor.py`)
+
+```
+COMPILATION PHASE:
+prototyper ──► build ──► [success] ──► OPTIMIZATION PHASE
+                  │
+                  └──► [fail] ──► fixer (max 3 retries) ──► build
+                                        └──► [max retries] ──► END
+
+OPTIMIZATION PHASE:
+build ──► execution ──┬──► [crash] ──► crash_analyzer ──► crash_feasibility_analyzer
+                      │                                          │
+                      │                          ┌───────────────┴──────────┐
+                      │                          ▼                          ▼
+                      │                    END (true bug)               fixer ──► build
+                      │
+                      └──► [success] ──► coverage_analyzer (×1) ──► improver (×1) ──► END
+```
+
 ### Agent System
 
 All agents inherit from `LangGraphAgent` + `ToolCallingMixin` (ReAct-style tool calling):
@@ -77,10 +119,10 @@ All agents inherit from `LangGraphAgent` + `ToolCallingMixin` (ReAct-style tool 
 
 ### Key Components
 
-- **FuzzingContext** (`src/context/data_context.py`): Immutable singleton with all static analysis results. No fallbacks - missing data raises ValueError.
-- **FuzzingWorkflowState** (`src/workflow/state.py`): LangGraph TypedDict with build results, coverage, crashes, node visit counts.
-- **ToolCallingMixin** (`src/agents/tool_calling_mixin.py`): ReAct loop - LLM generates tool calls → tools execute (parallel) → results returned → repeat until done.
-- **Supervisor** (`src/workflow/nodes/supervisor.py`): Routes between agents based on state, manages phases (compilation vs optimization).
+- **FuzzingContext** (`src/context/data_context.py`): Immutable dataclass with all static analysis results. No fallbacks - missing data raises ValueError. Supports caching via `load_from_cache()`.
+- **FuzzingWorkflowState** (`src/workflow/state.py`): LangGraph TypedDict with build results, coverage, crashes, node visit counts, session memory for cross-agent consensus.
+- **ToolCallingMixin** (`src/agents/tool_calling_mixin.py`): ReAct loop - LLM generates tool calls → tools execute (parallel via ThreadPoolExecutor) → results returned → repeat until done.
+- **Supervisor** (`src/workflow/nodes/supervisor.py`): Routes between agents based on state, manages phases (compilation vs optimization). Constants: `MAX_COMPILATION_RETRIES=3`, `MAX_NODE_VISITS=10`.
 
 ### Liberator Integration (`liberator_adapter/`)
 
@@ -116,7 +158,16 @@ Z3 as **core decision participant** (not post-hoc validator):
 - **LLM Active Query**: Hard constraints (symbolic via Z3) vs soft constraints (LLM reference). Avoid blurring symbolic/neural responsibilities.
 - **SSOT (Single Source of Truth)**: FuzzingContext prepared once, immutable. No fallbacks - explicit failures prevent hidden bugs.
 - **Lazy Initialization**: Agents lazy-load `_chat_model` and `fi_tool` on first use to reduce memory in parallel execution.
-- **Session Memory**: Optional cross-agent consensus sharing via `session_memory` field (enabled by default).
+- **Session Memory**: Optional cross-agent consensus sharing via `session_memory` field (enabled by default). Stores API constraints, known fixes, coverage strategies.
+- **Token Tracking**: All LLM calls tracked via `update_token_usage()` in state, aggregated in final `report.json`.
+
+## Output Structure
+
+Results saved to `results/output-{benchmark_id}/`:
+- `status/{trial}/result.json` - Per-trial results with token usage
+- `code-coverage-reports/` - Coverage data
+- `benchmark.yaml` - Benchmark configuration used
+- `report.json` - Aggregated statistics
 
 ## TODO
 

@@ -8,7 +8,7 @@ agents while adding dynamic workflow capabilities.
 
 from src.workflow.workflow import FuzzingWorkflow, create_fuzzing_workflow, create_simple_workflow
 from src.workflow.state import FuzzingWorkflowState, create_initial_state
-from src.workflow.adapters import StateAdapter, AgentNodeWrapper, ConfigAdapter
+from src.workflow.adapters import StateAdapter, ConfigAdapter
 
 __all__ = [
     'FuzzingWorkflow',
@@ -17,6 +17,5 @@ __all__ = [
     'FuzzingWorkflowState',
     'create_initial_state',
     'StateAdapter',
-    'AgentNodeWrapper',
     'ConfigAdapter',
 ]

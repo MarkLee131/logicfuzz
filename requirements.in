@@ -2,20 +2,14 @@
 anthropic
 openai
 
-# Code analysis
+# Code analysis (used in experiment/textcov.py)
 chardet
-cxxfilt
 rust-demangler
-tiktoken
 
-# Git operations
-gitpython
-
-# Template rendering
+# Template rendering (used in report/web.py)
 jinja2
 
 # Data processing
-pandas
 pyyaml
 requests
 
@@ -24,21 +18,17 @@ pylint
 pyright
 yapf
 
-# Google Cloud - only storage needed for OSS-Fuzz coverage data access
+# Google Cloud - storage for OSS-Fuzz coverage data access (used in report/)
 google-cloud-storage
 
-# LangGraph for agent workflow
+# LangGraph for agent workflow (TODO: evaluate removal)
 langgraph>=0.2.74
 langgraph-checkpoint>=1.0.0
-langgraph-checkpoint-postgres>=1.0.0
-
-# Tree-sitter for header extraction (Header Fix V2)
-tree-sitter>=0.25.0
-tree-sitter-cpp>=0.23.0
 
 # NetworkX for API dependency graph construction
 networkx>=3.0
 
-# ChromaDB for vector database
-chromadb>=0.4.0
-
+# LangChain for LLM abstraction
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langchain-anthropic>=0.2.0

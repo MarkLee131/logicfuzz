@@ -103,14 +103,6 @@ class PromptManager:
 
         # Fall back to default prompt
         filename = f"{agent_name}_prompt.txt"
-        filepath = os.path.join(PROMPT_DIR, filename)
-
-        # If default doesn't exist, try C++ as fallback (backward compatibility)
-        if not os.path.exists(filepath):
-            cpp_filename = f"{agent_name}_prompt_cpp.txt"
-            cpp_filepath = os.path.join(PROMPT_DIR, cpp_filename)
-            if os.path.exists(cpp_filepath):
-                filename = cpp_filename
 
         if filename not in self._cache:
             self._cache[filename] = load_prompt_file(filename)

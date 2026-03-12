@@ -62,7 +62,7 @@ Determine Root Causes:
 Develop Improvement Solutions:
 - Fine-grained Input Preprocessing: Split raw input into multiple meaningful parameters
 - Test Edge Cases: Empty inputs, very short/long inputs, boundary values
-- Vary API Parameters: Use FuzzedDataProvider for all inputs
+- Vary API Parameters: Extract varied values from fuzz input (use language-appropriate methods)
 - Try Different Sequences: If current sequence saturated, try different API sequence
 </step5>
 
@@ -86,9 +86,9 @@ Root Cause Analysis: [Why the fuzz target achieves low coverage, with specific e
 <suggestions>
 Improvement Recommendations with specific code examples:
 
-1. Use FuzzedDataProvider for All Parameters
-2. Call All APIs in Sequence
-3. Test Edge Cases
+1. Vary All Parameters: Extract different values from fuzz input instead of using constants
+2. Call All APIs in Sequence: Don't skip any API in the validated sequence
+3. Test Edge Cases: Empty, minimal, and boundary inputs
 </suggestions>
 </output_format>
 

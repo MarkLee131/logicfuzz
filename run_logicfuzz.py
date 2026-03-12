@@ -1267,11 +1267,6 @@ def parse_args() -> argparse.Namespace:
                       default=models.DEFAULT_MODEL,
                       help=('Models available: '
                             f'{", ".join(models.get_available_models())}.'))
-  parser.add_argument('-td',
-                      '--template-directory',
-                      type=str,
-                      default='prompts',
-                      help='[DEPRECATED] This argument is kept for backwards compatibility but is not used by LangGraph agents.')
   parser.add_argument('-w', '--work-dir', default=RESULTS_DIR)
   parser.add_argument('--context',
                       action='store_true',
@@ -1477,11 +1472,8 @@ def _print_experiment_results(results: list[Result],
     for project in relevant_cov_gain:
       logger.info('*%s: %s', project, relevant_cov_gain[project]["coverage_diff"])
 
-def _setup_logging(verbose: str = 'info', is_cloud: bool = False) -> None:
+def _setup_logging(verbose: str = 'info') -> None:
   """Set up logging level."""
-  # Note: Google Cloud Logging removed - not needed for local experiments.
-  # If is_cloud is True, logs will still go to stdout/stderr.
-  # TODO: remove this deprecated arg to keep clean.
 
   if verbose == "debug":
     log_level = logging.DEBUG
@@ -1744,7 +1736,7 @@ def main():
   global WORK_DIR
 
   args = parse_args()
-  _setup_logging(args.log_level, is_cloud=args.cloud_experiment_name != '')
+  _setup_logging(args.log_level)
 
   # Capture time at start
   start = time.time()
