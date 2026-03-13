@@ -1284,12 +1284,14 @@ def _generate_sequences_from_grammar(grammar, num_sequences: int, max_len: int,
 
 def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
                                 project_name: str,
-                                log: logging.Logger) -> List[Dict[str, Any]]:
+                                log: logging.Logger,
+                                output_skeleton: bool = False) -> List[Dict[str, Any]]:
     """
-    Generate full fuzz drivers using CBFactory (traditional program synthesis).
+    Generate fuzz drivers using CBFactory (traditional program synthesis).
 
-    This uses Liberator's constraint-based synthesis to generate complete,
-    compilable fuzz driver code without LLM involvement.
+    This uses Liberator's constraint-based synthesis to generate drivers.
+    When output_skeleton=True, generates DriverSkeletons with holes for LLM filling.
+    When output_skeleton=False, generates complete compilable driver code.
 
     Args:
         generator: ProjectDriverGenerator instance (must have condition_manager initialized)
@@ -1297,13 +1299,15 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
         driver_size: Number of API calls per driver
         project_name: Project name (for logging)
         log: Logger instance
+        output_skeleton: If True, return DriverSkeletons with holes instead of complete drivers
 
     Returns:
         List of synthesized driver dictionaries containing:
         - name: Driver name
-        - code: Complete C/C++ driver source code
+        - code: Complete C/C++ driver source code (or skeleton code with hole placeholders)
         - api_sequence: List of API names called
         - synthesis_info: Metadata about the synthesis process
+        - holes: List of hole definitions (only when output_skeleton=True)
     """
     from liberator_adapter.driver.factory.constraint_based import CBFactory
     from liberator_adapter.backend.libfuzz import LFBackendDriver
@@ -1389,58 +1393,83 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
                 except Exception as e:
                     log.debug(f"Backend setup failed (will use fallback): {e}")
 
-            # Generate drivers
+            # Generate drivers (skeleton mode or full driver mode)
             for i in range(num_drivers):
                 try:
-                    driver_ir = factory.create_random_driver()
+                    if output_skeleton:
+                        # Skeleton mode: Generate skeleton with holes
+                        skeleton = factory.create_random_driver_skeleton()
+                        if skeleton is None:
+                            log.warning(f"   Skeleton generation not available for driver {i+1}")
+                            continue
 
-                    # Extract API sequence
-                    api_sequence = []
-                    for stmt in driver_ir.statements:
-                        if hasattr(stmt, 'function_name'):
-                            api_sequence.append(stmt.function_name)
+                        # Use to_dict() for serialization
+                        skeleton_dict = skeleton.to_dict()
+                        skeleton_dict['name'] = f'cbfactory_skeleton_{i}'
+                        skeleton_dict['synthesis_info'] = {
+                            'method': 'CBFactory_Skeleton',
+                            'driver_size': driver_size,
+                            'num_apis_used': len(skeleton_dict.get('api_sequence', [])),
+                            'has_holes': len(skeleton_dict.get('holes', [])) > 0,
+                            'num_holes': len(skeleton_dict.get('holes', [])),
+                        }
+                        synthesized_drivers.append(skeleton_dict)
+                        log.debug(
+                            f"   Generated skeleton {i+1}/{num_drivers}: "
+                            f"{len(skeleton_dict.get('api_sequence', []))} APIs, "
+                            f"{len(skeleton_dict.get('holes', []))} holes"
+                        )
+                    else:
+                        # Full driver mode: Generate complete driver
+                        driver_ir = factory.create_random_driver()
 
-                    # Render to C code
-                    if backend:
-                        driver_name = f"fuzz_driver_{i}"
-                        try:
-                            backend.emit_driver(driver_ir, driver_name)
-                            driver_path = os.path.join(tmpdir,
-                                                       f"{driver_name}.cc")
-                            if os.path.exists(driver_path):
-                                with open(driver_path, 'r') as f:
-                                    driver_code = f.read()
-                            else:
+                        # Extract API sequence
+                        api_sequence = []
+                        for stmt in driver_ir.statements:
+                            if hasattr(stmt, 'function_name'):
+                                api_sequence.append(stmt.function_name)
+
+                        # Render to C code
+                        if backend:
+                            driver_name = f"fuzz_driver_{i}"
+                            try:
+                                backend.emit_driver(driver_ir, driver_name)
+                                driver_path = os.path.join(tmpdir,
+                                                           f"{driver_name}.cc")
+                                if os.path.exists(driver_path):
+                                    with open(driver_path, 'r') as f:
+                                        driver_code = f.read()
+                                else:
+                                    driver_code = _render_driver_fallback(
+                                        driver_ir, project_name)
+                            except Exception as e:
+                                log.debug(
+                                    f"Backend render failed: {e}, using fallback")
                                 driver_code = _render_driver_fallback(
                                     driver_ir, project_name)
-                        except Exception as e:
-                            log.debug(
-                                f"Backend render failed: {e}, using fallback")
+                        else:
                             driver_code = _render_driver_fallback(
                                 driver_ir, project_name)
-                    else:
-                        driver_code = _render_driver_fallback(
-                            driver_ir, project_name)
 
-                    synthesized_drivers.append({
-                        'name': f'cbfactory_driver_{i}',
-                        'code': driver_code,
-                        'api_sequence': api_sequence,
-                        'synthesis_info': {
-                            'method':
-                            'CBFactory',
-                            'driver_size':
-                            driver_size,
-                            'num_apis_used':
-                            len(api_sequence),
-                            'has_cleanup':
-                            hasattr(driver_ir, 'clean_up')
-                            and bool(driver_ir.clean_up),
-                        }
-                    })
-                    log.debug(
-                        f"   Generated driver {i+1}/{num_drivers}: {len(api_sequence)} API calls"
-                    )
+                        synthesized_drivers.append({
+                            'name': f'cbfactory_driver_{i}',
+                            'code': driver_code,
+                            'api_sequence': api_sequence,
+                            'synthesis_info': {
+                                'method':
+                                'CBFactory',
+                                'driver_size':
+                                driver_size,
+                                'num_apis_used':
+                                len(api_sequence),
+                                'has_cleanup':
+                                hasattr(driver_ir, 'clean_up')
+                                and bool(driver_ir.clean_up),
+                            }
+                        })
+                        log.debug(
+                            f"   Generated driver {i+1}/{num_drivers}: {len(api_sequence)} API calls"
+                        )
 
                 except Exception as e:
                     log.warning(f"   Failed to generate driver {i+1}: {e}")

@@ -63,9 +63,137 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
-        """Parse final LLM response to extract fuzz target code."""
+        """Parse final LLM response to extract fuzz target code or hole fillings.
+
+        Supports two output modes:
+        1. Hole-filling mode: JSON hole fillings in <hole_fillings> tags
+        2. Complete code mode: Full code in <fuzz_target> tags
+        """
+        # Try hole-filling mode first (preferred in skeleton template mode)
+        hole_fillings = self._parse_hole_fillings(content)
+        if hole_fillings:
+            return {
+                'hole_fillings': hole_fillings,
+                'mode': 'hole_filling',
+                'raw_response': content
+            }
+
+        # Fallback: complete code mode
         fuzz_target_code = parse_tag(content, 'fuzz_target')
-        return {'fuzz_target_code': fuzz_target_code, 'raw_response': content}
+        return {
+            'fuzz_target_code': fuzz_target_code,
+            'mode': 'complete_code',
+            'raw_response': content
+        }
+
+    def _parse_hole_fillings(self, content: str) -> Dict[str, str]:
+        """Parse JSON hole fillings from LLM response.
+
+        Extracts hole fillings from <hole_fillings> tags containing JSON.
+
+        Args:
+            content: LLM response content
+
+        Returns:
+            Dictionary mapping hole placeholders to their fill values,
+            or empty dict if parsing fails.
+        """
+        import json
+
+        # Try to extract from <hole_fillings> tag
+        fillings_text = parse_tag(content, 'hole_fillings')
+        if not fillings_text:
+            return {}
+
+        # Clean up the JSON text
+        fillings_text = fillings_text.strip()
+
+        # Handle potential markdown code block wrapping
+        if fillings_text.startswith('```'):
+            # Remove markdown code block markers
+            lines = fillings_text.split('\n')
+            if lines[0].startswith('```'):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == '```':
+                lines = lines[:-1]
+            fillings_text = '\n'.join(lines)
+
+        try:
+            fillings = json.loads(fillings_text)
+            if isinstance(fillings, dict):
+                logger.info(f'Parsed {len(fillings)} hole fillings from JSON',
+                           trial=self.trial)
+                return fillings
+            else:
+                logger.warning(
+                    'Hole fillings JSON is not a dictionary',
+                    trial=self.trial)
+                return {}
+        except json.JSONDecodeError as e:
+            logger.warning(
+                f'Failed to parse hole fillings JSON: {e}',
+                trial=self.trial)
+            return {}
+
+    def _merge_holes_into_skeleton(self, skeleton_code: str,
+                                   hole_fillings: Dict[str, str]) -> str:
+        """Merge hole fillings into skeleton code.
+
+        Replaces hole placeholders in the skeleton with their filled values.
+
+        Args:
+            skeleton_code: Skeleton code containing __HOLE_xxx__ placeholders
+            hole_fillings: Dictionary mapping placeholders to fill values
+
+        Returns:
+            Code with holes filled in.
+        """
+        if not skeleton_code:
+            logger.warning('No skeleton code provided for merging',
+                          trial=self.trial)
+            return ""
+
+        result = skeleton_code
+
+        # Replace each hole placeholder with its filling
+        for placeholder, filling in hole_fillings.items():
+            if placeholder in result:
+                result = result.replace(placeholder, filling)
+                logger.debug(
+                    f'Filled hole {placeholder} with: {filling[:50]}...'
+                    if len(filling) > 50 else f'Filled hole {placeholder} with: {filling}',
+                    trial=self.trial)
+            else:
+                # Try to match without the leading/trailing underscores
+                # in case the format differs slightly
+                clean_placeholder = placeholder.strip('_')
+                for pattern in [
+                    f'__{clean_placeholder}__',
+                    f'__HOLE_{clean_placeholder}__',
+                    f'__BUFSIZE_{clean_placeholder}__',
+                    f'__CALLBACK_{clean_placeholder}__',
+                    f'__INIT_{clean_placeholder}__',
+                    f'__LOOPCOND_{clean_placeholder}__',
+                    f'__LOOPBOUND_{clean_placeholder}__',
+                    f'__CLEANUP_{clean_placeholder}__',
+                ]:
+                    if pattern in result:
+                        result = result.replace(pattern, filling)
+                        logger.debug(
+                            f'Filled hole {pattern} with: {filling[:50]}...'
+                            if len(filling) > 50 else f'Filled hole {pattern} with: {filling}',
+                            trial=self.trial)
+                        break
+
+        # Check for unfilled holes
+        import re
+        unfilled = re.findall(r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN)_[^_]+__', result)
+        if unfilled:
+            logger.warning(
+                f'{len(unfilled)} holes remain unfilled: {unfilled[:5]}',
+                trial=self.trial)
+
+        return result
 
     # =========================================================================
     # Tool Executors
@@ -204,6 +332,12 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         dep_graph_text = self._format_dependency_graph(dependency_graph,
                                                        limit=12)
         condition_text = self._format_condition_info(condition_info)
+
+        # Try to get skeleton as mandatory template first
+        skeleton_template_code, holes_description, has_skeleton_template = \
+            self._format_skeleton_as_template(skeleton_drivers, limit=1)
+
+        # Fallback to legacy format if no template available
         skeleton_text = self._format_skeleton_drivers(skeleton_drivers,
                                                       limit=2)
         include_path_context = self._format_include_path_context(
@@ -248,10 +382,22 @@ extern "C" {
                 srs_specification=srs_specification,
                 additional_context=additional_context,
                 skeleton_code=skeleton_code)
+            # Add explicit language guidance
+            lang_guidance = ""
+            if target_language == 'c':
+                lang_guidance = """
+**IMPORTANT - C Language Rules:**
+- This is a C library. You MUST use `struct` keyword: `struct type_name *ptr`
+- Do NOT write C++ style: `type_name *ptr` (this will fail to compile!)
+- Example: `struct ares_mx_reply *mx = NULL;` (correct for C)
+"""
+
             base_prompt += f"""
 
 <task>
 Generate a high-coverage LibFuzzer fuzz driver for the {benchmark.get('project', 'unknown')} project.
+Target language: **{target_language.upper()}**
+{lang_guidance}
 </task>
 
 <step1_understand_project>
@@ -291,7 +437,51 @@ Before writing any code, think about:
 </skeleton_drivers>
 {driver_knowledge_text}
 {synthesis_base_text}
-</reference_information>
+</reference_information>"""
+
+            # Add skeleton template mode section if available
+            if has_skeleton_template:
+                base_prompt += f"""
+
+<skeleton_template_mode>
+**MANDATORY SKELETON MODE ENABLED**
+
+A type-safe skeleton has been generated for you. You MUST use this skeleton as your template.
+Do NOT modify the skeleton structure, API sequence, or variable declarations.
+Your task is to fill the marked holes with appropriate code.
+
+<skeleton_template>
+```c
+{skeleton_template_code}
+```
+</skeleton_template>
+
+<holes_to_fill>
+{holes_description}
+</holes_to_fill>
+
+**IMPORTANT INSTRUCTIONS:**
+1. The skeleton above contains placeholders like __HOLE_xxx__ or __BUFSIZE_xxx__
+2. Replace each placeholder with appropriate code
+3. Keep ALL other code exactly as shown
+4. Do NOT add new API calls or change the API sequence
+5. Do NOT modify variable declarations or types
+
+**OUTPUT FORMAT:**
+You have two options:
+
+**Option 1 (Preferred): JSON Hole Fillings**
+Output your hole fillings as JSON wrapped in <hole_fillings> tags:
+<hole_fillings>
+{{"__HOLE_callback_1__": "int my_callback(void* data) {{ return 0; }}", "__BUFSIZE_bufsize_1__": "size"}}
+</hole_fillings>
+
+**Option 2: Complete Code**
+If JSON mode doesn't work, output the complete filled code in <fuzz_target> tags.
+</skeleton_template_mode>
+"""
+            else:
+                base_prompt += """
 
 <tool_usage_guidance>
 **You have access to tools to query more information about APIs if needed:**
@@ -320,18 +510,28 @@ Before writing any code, think about:
 <generation_rules>
 Generate a fuzz driver following these CRITICAL rules:
 
+**TYPE CORRECTNESS (CRITICAL for C libraries):**
+- For C libraries: ALWAYS use `struct` keyword with struct types: `struct foo_t *ptr`
+- For C++ libraries: struct keyword is optional: `foo_t *ptr`
+- Check the library language and use the correct syntax!
+- If <skeleton_drivers> are provided, FOLLOW their type declarations exactly
+
+**API SELECTION:**
 1. PRIORITY: Focus on PARSER APIs - They consume external input and have highest bug potential
-2. For parsers: Generate STRUCTURED input (not random strings!)
+2. If <skeleton_drivers> show a working API sequence, START from that sequence
+3. For parsers: Generate STRUCTURED input (not random strings!)
    - JSON parsers need valid JSON structure with fuzz-derived values
    - XML parsers need valid XML structure
    - Binary parsers need valid headers/magic bytes
-3. For accessor APIs (Has*, Get*, Is*): Hit BOTH branches
+
+**CODE QUALITY:**
+4. For accessor APIs (Has*, Get*, Is*): Hit BOTH branches
    - Pre-populate objects with known keys to hit "found" path
    - Query with missing keys to hit "not found" path
-4. For type checks (IsArray, IsObject): Test multiple types
-5. Follow the dependency order in sequences
-6. Clean up resources properly
-7. Use correct include paths - the fuzz target will be placed at the location shown above
+5. For type checks (IsArray, IsObject): Test multiple types
+6. Follow the dependency order in sequences
+7. Clean up resources properly
+8. Use correct include paths - the fuzz target will be placed at the location shown above
 </generation_rules>
 
 <output_format>
@@ -377,10 +577,39 @@ Output your fuzz driver code inside <fuzz_target> tags.
         updated_session_memory = merge_session_memory_updates(
             state, session_memory_updates)
 
-        fuzz_target_code = parsed_result.get('fuzz_target_code', '')
-        if not fuzz_target_code:
-            logger.error('No <fuzz_target> tag found in prototyper response',
-                         trial=self.trial)
+        # Handle both hole-filling mode and complete code mode
+        generation_mode = parsed_result.get('mode', 'complete_code')
+
+        if generation_mode == 'hole_filling':
+            # Hole-filling mode: merge hole fillings into skeleton
+            hole_fillings = parsed_result.get('hole_fillings', {})
+            skeleton_code, _, _ = self._get_active_skeleton(state)
+
+            if skeleton_code and hole_fillings:
+                fuzz_target_code = self._merge_holes_into_skeleton(
+                    skeleton_code, hole_fillings)
+                logger.info(
+                    f'Generated code via hole-filling: '
+                    f'{len(hole_fillings)} holes filled',
+                    trial=self.trial)
+            else:
+                # Fallback: try to extract from fuzz_target tag
+                fuzz_target_code = parse_tag(parsed_result.get('raw_response', ''), 'fuzz_target')
+                if fuzz_target_code:
+                    logger.warning(
+                        'Hole-filling mode failed, using fallback fuzz_target extraction',
+                        trial=self.trial)
+                else:
+                    logger.error(
+                        'Hole-filling mode failed: no skeleton or hole fillings',
+                        trial=self.trial)
+                    fuzz_target_code = ''
+        else:
+            # Complete code mode: extract fuzz_target directly
+            fuzz_target_code = parsed_result.get('fuzz_target_code', '')
+            if not fuzz_target_code:
+                logger.error('No <fuzz_target> tag found in prototyper response',
+                             trial=self.trial)
 
         validation_warnings = self._validate_api_usage(
             fuzz_target_code, benchmark.get('project', 'unknown'))
@@ -710,7 +939,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
     def _format_skeleton_drivers(self,
                                  skeleton_drivers: List[Dict[str, Any]],
                                  limit: int = 2) -> str:
-        """Format pre-generated skeleton drivers for prompt."""
+        """Format pre-generated skeleton drivers for prompt (legacy reference mode)."""
         if not skeleton_drivers:
             return "  (no skeleton drivers available)"
 
@@ -748,6 +977,205 @@ Output your fuzz driver code inside <fuzz_target> tags.
             )
 
         return "\n".join(lines)
+
+    def _format_skeleton_as_template(
+            self, skeleton_drivers: List[Dict[str, Any]],
+            limit: int = 1) -> tuple:
+        """Format skeleton as mandatory template with hole markers.
+
+        This method formats the first skeleton as a mandatory template that the LLM
+        must follow, extracting holes that need to be filled with appropriate code.
+
+        Args:
+            skeleton_drivers: List of skeleton driver dictionaries
+            limit: Number of skeletons to use (default 1)
+
+        Returns:
+            Tuple of (skeleton_code, holes_description, has_skeleton)
+            - skeleton_code: The skeleton code with hole placeholders
+            - holes_description: Formatted description of holes to fill
+            - has_skeleton: Whether a valid skeleton was found
+        """
+        if not skeleton_drivers:
+            return "", "", False
+
+        # Use the first skeleton with holes
+        skeleton = None
+        for sk in skeleton_drivers[:limit]:
+            if sk.get('holes') and sk.get('code'):
+                skeleton = sk
+                break
+
+        if skeleton is None:
+            # Fallback to first skeleton even without explicit holes
+            skeleton = skeleton_drivers[0]
+            if not skeleton.get('code'):
+                return "", "", False
+
+        code = skeleton.get('code', '')
+        holes = skeleton.get('holes', [])
+        api_sequence = skeleton.get('api_sequence', [])
+
+        # Format holes as structured list for LLM
+        holes_desc_lines = []
+        holes_desc_lines.append(f"API Sequence: {' → '.join(api_sequence)}")
+        holes_desc_lines.append("")
+        holes_desc_lines.append("Holes to fill:")
+
+        if holes:
+            for i, hole in enumerate(holes, 1):
+                hole_name = hole.get('name', f'HOLE_{i}')
+                hole_type = hole.get('hole_type', 'UNKNOWN')
+                placeholder = hole.get('placeholder', f'__HOLE_{hole_name}__')
+                is_simple = hole.get('is_simple', False)
+
+                # Build description based on hole type
+                desc = self._describe_hole(hole)
+                holes_desc_lines.append(
+                    f"  {i}. {placeholder}")
+                holes_desc_lines.append(f"     Type: {hole_type}")
+                holes_desc_lines.append(f"     {desc}")
+
+                # Add hints for specific hole types
+                if hole_type == 'CALLBACK_IMPL':
+                    sig = hole.get('callback_signature', '')
+                    if sig:
+                        holes_desc_lines.append(f"     Signature: {sig}")
+                elif hole_type == 'BUFFER_SIZE':
+                    buf_idx = hole.get('buffer_arg_idx', -1)
+                    len_idx = hole.get('length_arg_idx', -1)
+                    rel = hole.get('relationship', '>=')
+                    if buf_idx >= 0 and len_idx >= 0:
+                        holes_desc_lines.append(
+                            f"     Constraint: buffer[{buf_idx}] size {rel} param[{len_idx}]"
+                        )
+                holes_desc_lines.append("")
+        else:
+            holes_desc_lines.append(
+                "  (No explicit holes - review code and fill any __HOLE_*__ placeholders)"
+            )
+
+        return code, "\n".join(holes_desc_lines), True
+
+    def _describe_hole(self, hole: Dict[str, Any]) -> str:
+        """Generate a description for a hole to guide LLM filling."""
+        hole_type = hole.get('hole_type', 'UNKNOWN')
+
+        descriptions = {
+            'BUFFER_SIZE':
+            'Fill with buffer size expression (e.g., "size", "data_len")',
+            'ARRAY_LENGTH':
+            'Fill with array length (e.g., "16", "MAX_ITEMS")',
+            'CALLBACK_IMPL':
+            'Fill with callback function implementation',
+            'LOOP_CONDITION':
+            'Fill with loop termination condition',
+            'LOOP_BOUND':
+            'Fill with maximum loop iterations (e.g., "100", "1000")',
+            'INIT_VALUE':
+            'Fill with initialization value (e.g., "0", "NULL", "data")',
+            'RESOURCE_CLEANUP':
+            'Fill with cleanup code for allocated resources',
+            'ERROR_HANDLING':
+            'Fill with error handling code',
+        }
+
+        return descriptions.get(hole_type, 'Fill with appropriate code')
+
+    def _get_active_skeleton(
+            self, state: FuzzingWorkflowState) -> tuple:
+        """Get the active skeleton for the current synthesis attempt.
+
+        Returns:
+            Tuple of (skeleton_code, holes_list, api_sequence) or (None, None, None)
+        """
+        context = state.get('context', {})
+        skeleton_drivers = context.get('skeleton_drivers', [])
+        synthesized_drivers = context.get('synthesized_drivers', [])
+
+        # First try synthesized drivers (from CBFactory skeleton mode)
+        for driver in synthesized_drivers:
+            if driver.get('synthesis_info', {}).get('method') == 'CBFactory_Skeleton':
+                return (driver.get('code', ''),
+                        driver.get('holes', []),
+                        driver.get('api_sequence', []))
+
+        # Fallback to skeleton_drivers
+        if skeleton_drivers:
+            sk = skeleton_drivers[0]
+            return (sk.get('code', ''),
+                    sk.get('holes', []),
+                    sk.get('api_sequence', []))
+
+        return None, None, None
+
+    def _validate_skeleton_adherence(self, generated_code: str,
+                                     skeleton_code: str,
+                                     api_sequence: List[str]) -> bool:
+        """Validate that generated code follows the skeleton structure.
+
+        Checks:
+        1. All APIs from the sequence appear in the generated code
+        2. No unfilled holes remain
+
+        Args:
+            generated_code: The generated/merged code
+            skeleton_code: The original skeleton code
+            api_sequence: Expected API call sequence
+
+        Returns:
+            True if the code adheres to skeleton structure
+        """
+        if not generated_code:
+            return False
+
+        import re
+
+        # Check for unfilled holes
+        unfilled_holes = re.findall(
+            r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN)_[^_]+__',
+            generated_code)
+        if unfilled_holes:
+            logger.warning(
+                f'Generated code has {len(unfilled_holes)} unfilled holes',
+                trial=self.trial)
+            return False
+
+        # Check that all APIs from sequence appear in generated code
+        missing_apis = []
+        for api in api_sequence:
+            if api not in generated_code:
+                missing_apis.append(api)
+
+        if missing_apis:
+            logger.warning(
+                f'Generated code missing {len(missing_apis)} APIs from sequence: {missing_apis[:5]}',
+                trial=self.trial)
+            # Still return True if most APIs are present (>70%)
+            return len(missing_apis) < len(api_sequence) * 0.3
+
+        return True
+
+    def _get_generation_mode(self, state: FuzzingWorkflowState) -> str:
+        """Determine which generation mode to use based on state.
+
+        Returns one of:
+        - 'skeleton_strict': Use skeleton template with hole filling
+        - 'skeleton_reference': Use skeleton as reference (legacy)
+        - 'freeform': No skeleton, generate from scratch
+        """
+        skeleton_code, holes, api_sequence = self._get_active_skeleton(state)
+
+        # Check if we have a valid skeleton with holes
+        if skeleton_code and holes:
+            return 'skeleton_strict'
+
+        # Check if we have skeleton code at all (for reference)
+        if skeleton_code:
+            return 'skeleton_reference'
+
+        # No skeleton available
+        return 'freeform'
 
     def _format_driver_knowledge(self, driver_knowledge: Dict[str,
                                                               Any]) -> str:

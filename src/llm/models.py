@@ -64,6 +64,8 @@ MODEL_REGISTRY: Dict[str, Callable[..., BaseChatModel]] = {
     # OpenAI models (all support tool calling)
     "gpt-5.2":
     lambda **kw: _create_openai_model("gpt-5.2", **kw),
+    "gpt-5-mini":
+    lambda **kw: _create_openai_model("gpt-5-mini", **kw),
     "gpt-4o":
     lambda **kw: _create_openai_model("gpt-4o", **kw),
     "gpt-4o-mini":

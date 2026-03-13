@@ -60,6 +60,31 @@ class TriagedError:
     details: str = ""
     recoverable: bool = True
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to serializable dict."""
+        return {
+            'raw_error': self.raw_error,
+            'category': self.category.name,
+            'fix_strategy': self.fix_strategy.name,
+            'extracted_symbol': self.extracted_symbol,
+            'line_number': self.line_number,
+            'details': self.details,
+            'recoverable': self.recoverable,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TriagedError':
+        """Create from serialized dict."""
+        return cls(
+            raw_error=data['raw_error'],
+            category=ErrorCategory[data['category']],
+            fix_strategy=FixStrategy[data['fix_strategy']],
+            extracted_symbol=data.get('extracted_symbol'),
+            line_number=data.get('line_number'),
+            details=data.get('details', ''),
+            recoverable=data.get('recoverable', True),
+        )
+
 
 @dataclass
 class TriageResult:
@@ -78,6 +103,33 @@ class TriageResult:
     def get_errors_by_category(self, category: ErrorCategory) -> List[TriagedError]:
         """Get all errors of a specific category."""
         return [e for e in self.errors if e.category == category]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to serializable dict for state storage."""
+        return {
+            'errors': [e.to_dict() for e in self.errors],
+            'summary': {cat.name: count for cat, count in self.summary.items()},
+            'primary_category': self.primary_category.name if self.primary_category else None,
+            'recommended_strategy': self.recommended_strategy.name if self.recommended_strategy else None,
+            'recoverable': self.recoverable,
+            'details': self.details,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TriageResult':
+        """Create from serialized dict."""
+        errors = [TriagedError.from_dict(e) for e in data.get('errors', [])]
+        summary = {ErrorCategory[cat]: count for cat, count in data.get('summary', {}).items()}
+        primary_category = ErrorCategory[data['primary_category']] if data.get('primary_category') else None
+        recommended_strategy = FixStrategy[data['recommended_strategy']] if data.get('recommended_strategy') else None
+        return cls(
+            errors=errors,
+            summary=summary,
+            primary_category=primary_category,
+            recommended_strategy=recommended_strategy,
+            recoverable=data.get('recoverable', True),
+            details=data.get('details', {}),
+        )
 
 
 class CompilationErrorTriage:
@@ -131,6 +183,10 @@ class CompilationErrorTriage:
         (r"error:.*expects.*argument.*but.*provided", "argument_mismatch"),
         (r"error: invalid operands", "invalid_operands"),
         (r"error: passing.*to parameter of incompatible type", "incompatible_param"),
+        # C struct keyword requirement (C vs C++ difference)
+        (r"error: must use 'struct' tag to refer to type '(\w+)'", "c_struct_tag_required"),
+        (r"error: must use 'enum' tag to refer to type '(\w+)'", "c_enum_tag_required"),
+        (r"error: must use 'union' tag to refer to type '(\w+)'", "c_union_tag_required"),
     ]
 
     # Syntax errors
@@ -321,11 +377,17 @@ class CompilationErrorTriage:
 
         # 6. Type errors
         for pattern_re, error_type in self.type_re:
-            if pattern_re.search(error):
+            match = pattern_re.search(error)
+            if match:
+                # Extract type name for struct/enum/union tag errors
+                extracted_type = None
+                if error_type in ('c_struct_tag_required', 'c_enum_tag_required', 'c_union_tag_required'):
+                    extracted_type = match.group(1) if match.groups() else None
                 return TriagedError(
                     raw_error=error,
                     category=ErrorCategory.TYPE_ERROR,
                     fix_strategy=FixStrategy.FIX_SIGNATURE,
+                    extracted_symbol=extracted_type,
                     line_number=line_number,
                     details=error_type
                 )
@@ -505,7 +567,20 @@ def get_fix_guidance(result: TriageResult) -> str:
 
     if result.has_category(ErrorCategory.TYPE_ERROR):
         guidance_lines.append("### 🔄 Type Errors")
-        guidance_lines.append("Fix type mismatches, casts, and function signatures.\n")
+        type_errors = result.get_errors_by_category(ErrorCategory.TYPE_ERROR)
+
+        # Check for C struct tag requirement errors
+        struct_tag_errors = [e for e in type_errors if e.details in ('c_struct_tag_required', 'c_enum_tag_required', 'c_union_tag_required')]
+        if struct_tag_errors:
+            guidance_lines.append("**C Language Struct/Enum Tag Requirement**:")
+            guidance_lines.append("In C (unlike C++), you MUST use the 'struct', 'enum', or 'union' keyword:")
+            for err in struct_tag_errors[:5]:
+                if err.extracted_symbol:
+                    tag_type = 'struct' if 'struct' in err.details else ('enum' if 'enum' in err.details else 'union')
+                    guidance_lines.append(f"  - Change `{err.extracted_symbol} *var` → `{tag_type} {err.extracted_symbol} *var`")
+            guidance_lines.append("")
+        else:
+            guidance_lines.append("Fix type mismatches, casts, and function signatures.\n")
 
     return '\n'.join(guidance_lines)
 

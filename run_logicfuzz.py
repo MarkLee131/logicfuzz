@@ -49,8 +49,8 @@ from liberator_adapter.project_driver_generator import ProjectDriverGenerator
 from liberator_adapter.dependency import DependencyGraph
 
 logger = logging.getLogger(__name__)
-# log the debug and info
-logger.setLevel(logging.INFO)
+
+logger.setLevel(logging.WARNING)
 
 # WARN: Avoid large NUM_EXP for local experiments.
 # NUM_EXP controls the number of experiments in parallel, while each experiment

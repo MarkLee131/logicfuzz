@@ -28,6 +28,16 @@ from liberator_adapter.driver.ir import (
 )
 from liberator_adapter.bias import Bias
 
+# Import skeleton generation types
+try:
+    from liberator_adapter.driver.synthesis.skeleton_generator import (
+        DriverSkeleton, SkeletonGenerator
+    )
+    SKELETON_AVAILABLE = True
+except ImportError:
+    SKELETON_AVAILABLE = False
+    DriverSkeleton = None
+
 # DriverEnhancer for enhanced callback generation (optional)
 try:
     from liberator_adapter.driver.driver_enhancer import DriverEnhancer
@@ -69,13 +79,13 @@ logger = logging.getLogger(__name__)
 class CBFactory(Factory):
     """
     Constraint-Based Factory: Constraint-based driver generation
-    
+
     Uses ConditionManager to identify source/sink/init APIs, and uses RunningContext
     to manage variables and constraints, ensuring generated drivers satisfy API call semantic constraints.
     """
-    
+
     MAX_ALLOC_SIZE = 1024
-    
+
     def __init__(self, api_list: Set[Api], driver_size: int,
                  dgraph: DependencyGraph, conditions: FunctionConditionsSet,
                  bias: Bias, enable_z3_validation: bool = False,
@@ -179,11 +189,11 @@ class CBFactory(Factory):
         self._build_type_producer_map()
 
     def try_to_instantiate_api_call(self, api_call: ApiCall,
-                                    conditions: FunctionConditions, 
+                                    conditions: FunctionConditions,
                                     rng_ctx: RunningContext) -> Tuple[Optional[RunningContext], Set]:
         """
         Try to instantiate an API call, satisfying its constraints
-        
+
         Returns:
             (RunningContext, unsat_vars): Returns new context on success, None and unsatisfied variable set on failure
         """
@@ -222,16 +232,16 @@ class CBFactory(Factory):
                 if idx_type.get_token() not in DataLayout.size_types:
                     arg_cond.len_depends_on = ""
                 else:
-                    if (isinstance(arg_type, PointerType) and 
+                    if (isinstance(arg_type, PointerType) and
                         arg_type.get_pointee_type() == rng_ctx.stub_void):
                         arg_var = rng_ctx.create_new_var(
                             rng_ctx.stub_char_array, arg_cond, False)
                     else:
                         arg_var = rng_ctx.create_new_var(
                             arg_type, arg_cond, False)
-                        
+
                     x = arg_var
-                    if (isinstance(arg_var, Variable) and 
+                    if (isinstance(arg_var, Variable) and
                         isinstance(arg_type, PointerType)):
                         arg_var = arg_var.get_address()
                     api_call.set_pos_arg_var(arg_pos, arg_var)
@@ -280,23 +290,23 @@ class CBFactory(Factory):
                     )
                 else:
                     arg_var = rng_ctx.try_to_get_var(api_call, conditions, arg_pos)
-                
-                if (arg_cond.is_malloc_size and 
+
+                if (arg_cond.is_malloc_size and
                     arg_type.token in DataLayout.size_types):
-                    api_call.set_pos_arg_var(arg_pos, arg_var, 
+                    api_call.set_pos_arg_var(arg_pos, arg_var,
                                              CBFactory.MAX_ALLOC_SIZE)
                 else:
                     api_call.set_pos_arg_var(arg_pos, arg_var)
             except ConditionUnsat:
                 unsat_vars.add((arg_pos, arg_cond))
-        
+
         # Handle variadic arguments
         if api_call.is_vararg:
             ats_t = AccessTypeSet()
             cond_t = ValueMetadata(ats_t, False, False, False, "", [])
 
             for i, _ in enumerate(api_call.vararg_var):
-                new_buff = rng_ctx.create_new_var(rng_ctx.stub_char_array, 
+                new_buff = rng_ctx.create_new_var(rng_ctx.stub_char_array,
                                                   cond_t, False)
                 val = new_buff.get_address()
                 var_t = None
@@ -317,7 +327,7 @@ class CBFactory(Factory):
             api_call.set_ret_var(ret_var)
         except ConditionUnsat:
             unsat_vars.add((-1, ret_cond))
-        
+
         if len(unsat_vars) != 0:
             return (None, unsat_vars)
 
@@ -885,11 +895,11 @@ class CBFactory(Factory):
     def get_random_candidate(self, candidate_api):
         """Randomly select one from candidate APIs"""
         apis = [a[2] for a in candidate_api]
-        a = self.bias.get_random_candidate([], apis)         
+        a = self.bias.get_random_candidate([], apis)
         for ca in candidate_api:
             if ca[2] == a:
                 return ca
-        
+
         raise Exception(f"Did not match {a} with the {candidate_api}")
 
     def create_random_driver(self) -> Driver:
@@ -1079,7 +1089,7 @@ class CBFactory(Factory):
                 not isinstance(api_call.ret_var, NullConstant)):
                 var = api_call.ret_var.get_variable()
                 statements_apicall.append(AssertNull(var.get_buffer()))
-            
+
             # Sink APIs need cleanup
             if self.condition_manager.is_sink(api_call):
                 arg = api_call.arg_vars[0]
@@ -1108,3 +1118,208 @@ class CBFactory(Factory):
 
         return d
 
+    # ========== Skeleton Mode Methods ==========
+
+    def create_random_driver_skeleton(self) -> Optional['DriverSkeleton']:
+        """
+        Create a random driver skeleton with holes instead of complete driver.
+
+        This method generates a structurally correct driver skeleton that:
+        - Has the correct API call sequence
+        - Has type-safe variable declarations
+        - Marks uncertain parts (callbacks, buffer sizes, etc.) as holes
+
+        Returns:
+            DriverSkeleton with holes to be filled by LLM, or None if skeleton
+            generation is not available.
+        """
+        if not SKELETON_AVAILABLE:
+            logger.warning("Skeleton generation not available")
+            return None
+
+        # Generate API sequence using existing logic
+        api_sequence = self._generate_api_sequence()
+        if not api_sequence:
+            logger.warning("Failed to generate API sequence for skeleton")
+            return None
+
+        # Create skeleton from sequence
+        return self._create_skeleton_from_sequence(api_sequence)
+
+    def _generate_api_sequence(self) -> List[Api]:
+        """
+        Generate a valid API sequence using constraint-based selection.
+
+        This extracts the sequence generation logic from create_random_driver()
+        to be reusable for skeleton generation.
+
+        Returns:
+            List of Api objects forming a valid sequence.
+        """
+        rng_ctx = RunningContext()
+
+        get_cond = lambda x: self.conditions.get_function_conditions(x.function_name)
+        to_api = lambda x: Factory.api_to_apicall(x)
+
+        if len(self.source_api) == 0:
+            logger.error("No source APIs available")
+            return []
+
+        # Reset Z3 controller for new sequence
+        if self.enable_z3_guidance and self.z3_controller:
+            self.z3_controller.reset()
+
+        api_sequence = []
+        current_position = 0
+
+        # Try all source APIs with backtracking support
+        result = self._try_all_source_apis(rng_ctx)
+        begin_api, call_begin, rng_ctx_1, init_chain_or_unsat = result
+
+        if call_begin is None or rng_ctx_1 is None:
+            logger.error("Cannot instantiate any source API")
+            return []
+
+        # Add init chain APIs first (if any)
+        if init_chain_or_unsat:
+            for init_call, init_ctx in init_chain_or_unsat:
+                init_api = self.api_name_to_api.get(init_call.function_name)
+                if init_api:
+                    api_sequence.append(init_api)
+                current_position += 1
+
+        # Add the source API
+        api_sequence.append(begin_api)
+        current_position += 1
+
+        api_n = begin_api
+        while len(api_sequence) < self.driver_size:
+            candidate_api = []
+
+            if api_n in self.dependency_graph:
+                for next_possible in self.dependency_graph[api_n]:
+                    if next_possible in self.source_api:
+                        continue
+
+                    next_condition = get_cond(next_possible)
+                    call_next = to_api(next_possible)
+
+                    rng_ctx_2, unsat_var_2 = self.try_to_instantiate_api_call(
+                        call_next, next_condition, rng_ctx_1)
+
+                    if len(unsat_var_2) == 0:
+                        candidate_api.append((call_next, rng_ctx_2, next_possible))
+
+            # Avoid repeated single API
+            if len(candidate_api) == 1 and candidate_api[0][2] == api_n:
+                candidate_api = []
+
+            if candidate_api:
+                if self.enable_z3_guidance and self.z3_controller and len(candidate_api) > 1:
+                    scored = self._evaluate_candidates_with_z3(candidate_api, current_position)
+                    api_call, rng_ctx_1, api_n, score = scored[0]
+                else:
+                    (api_call, rng_ctx_1, api_n) = self.get_random_candidate(candidate_api)
+
+                api_sequence.append(api_n)
+                current_position += 1
+            else:
+                # Start new chain
+                result = self._try_all_source_apis(rng_ctx_1)
+                new_api, new_call, new_ctx, chain_or_unsat = result
+
+                if new_call is None or new_ctx is None:
+                    # Simple fallback
+                    for fallback_api in self.source_api:
+                        fallback_cond = get_cond(fallback_api)
+                        fallback_call = to_api(fallback_api)
+                        fallback_ctx, fallback_unsat = self.try_to_instantiate_api_call(
+                            fallback_call, fallback_cond, rng_ctx_1)
+                        if len(fallback_unsat) == 0:
+                            api_n = fallback_api
+                            rng_ctx_1 = fallback_ctx
+                            api_sequence.append(fallback_api)
+                            current_position += 1
+                            break
+                    else:
+                        # No valid continuation, return partial sequence
+                        break
+                else:
+                    # Add init chain APIs
+                    if chain_or_unsat:
+                        for init_call, init_ctx in chain_or_unsat:
+                            init_api = self.api_name_to_api.get(init_call.function_name)
+                            if init_api:
+                                api_sequence.append(init_api)
+                            current_position += 1
+
+                    api_n = new_api
+                    rng_ctx_1 = new_ctx
+                    api_sequence.append(new_api)
+                    current_position += 1
+
+        return api_sequence
+
+    def _create_skeleton_from_sequence(self, api_sequence: List[Api]) -> 'DriverSkeleton':
+        """
+        Convert an API sequence to a skeleton with holes.
+
+        Uses SkeletonGenerator to create a skeleton where uncertain parts
+        (callbacks, buffer sizes, loop conditions) are marked as holes.
+
+        Args:
+            api_sequence: List of Api objects to generate skeleton for
+
+        Returns:
+            DriverSkeleton with holes
+        """
+        # Extract var-len relationships from CBFactory conditions
+        varlen_relations = self._extract_varlen_relations(api_sequence)
+
+        # Use SkeletonGenerator to create skeleton
+        generator = SkeletonGenerator()
+        skeleton = generator.generate(
+            api_sequence=api_sequence,
+            varlen_relations=varlen_relations,
+            driver_name="cbfactory_skeleton"
+        )
+
+        # Add metadata about the generation method
+        skeleton.metadata['synthesis_method'] = 'CBFactory'
+        skeleton.metadata['api_count'] = len(api_sequence)
+        skeleton.metadata['api_names'] = [api.function_name for api in api_sequence]
+
+        return skeleton
+
+    def _extract_varlen_relations(self, api_sequence: List[Api]) -> Dict[str, List[Tuple[int, int, str]]]:
+        """
+        Extract var-len (buffer-size) relationships from CBFactory conditions.
+
+        These relationships indicate which parameters represent buffer pointers
+        and which represent their sizes.
+
+        Args:
+            api_sequence: List of Api objects
+
+        Returns:
+            Dict mapping api_name to list of (buffer_idx, length_idx, relationship) tuples
+        """
+        relations = {}
+
+        for api in api_sequence:
+            api_relations = []
+            cond = self.conditions_map.get(api.function_name)
+
+            if cond:
+                for arg_idx, arg_cond in enumerate(cond.argument_at):
+                    if arg_cond.len_depends_on and arg_cond.len_depends_on != "":
+                        try:
+                            len_idx = int(arg_cond.len_depends_on.replace("param_", ""))
+                            api_relations.append((arg_idx, len_idx, ">="))
+                        except ValueError:
+                            pass
+
+            if api_relations:
+                relations[api.function_name] = api_relations
+
+        return relations

@@ -104,11 +104,23 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
     logger.info(f'Supervisor routing to: {next_action} '
                f'(visits: {node_visit_counts.get(next_action, 0)})', trial=trial)
 
-    return {
+    result = {
         "next_action": next_action,
         "node_visit_counts": node_visit_counts,
         "session_memory": consolidate_session_memory(state),
     }
+
+    # Pass error triage to fixer when routing due to build failure
+    if next_action == "fixer" and state.get("compile_success") is False:
+        build_errors = state.get("build_errors", [])
+        context = state.get("context", {})
+        project_apis = context.get("project_apis", [])
+        triage_result = triage_build_errors(build_errors, project_apis)
+        result["error_triage"] = triage_result.to_dict()
+        logger.debug(f'Passing error triage to fixer: primary={triage_result.primary_category}, '
+                    f'strategy={triage_result.recommended_strategy}', trial=trial)
+
+    return result
 
 
 def _end_workflow(reason: str, message: str, **extra) -> Dict[str, Any]:

@@ -91,6 +91,11 @@ class FuzzingWorkflowState(TypedDict):
     errors: NotRequired[List[Dict[str, Any]]]
     warnings: NotRequired[List[str]]
 
+    # === Error Triage (from Supervisor) ===
+    # Compilation error triage result passed from supervisor to fixer
+    # Contains: primary_category, recommended_strategy, fix_guidance, categorized_errors
+    error_triage: NotRequired[Dict[str, Any]]
+
     # === Configuration (from agent_test.py compatibility) ===
     pipeline: NotRequired[List[str]]  # Agent pipeline
     use_context: NotRequired[bool]  # Whether to use context

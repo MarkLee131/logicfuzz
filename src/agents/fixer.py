@@ -164,21 +164,37 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
 
     def _build_additional_context(self, benchmark, state, errors) -> str:
         from src.utils.compilation_error_triage import (
-            triage_build_errors, get_fix_guidance)
+            triage_build_errors, get_fix_guidance, TriageResult)
 
         parts = []
         if benchmark.target_path:
             parts.append(f"**Target**: `{benchmark.target_path}`")
 
-        # Triage errors for targeted fix guidance
+        # Get context (used for triage fallback and driver knowledge)
         context = state.get("context", {})
-        project_apis = context.get("project_apis", [])
-        triage_result = triage_build_errors(errors, project_apis)
+
+        # Use triage result from state if available (passed from supervisor)
+        # This avoids duplicate triage computation
+        triage_dict = state.get("error_triage")
+        if triage_dict:
+            triage_result = TriageResult.from_dict(triage_dict)
+            logger.info(f'Using triage from supervisor: primary={triage_result.primary_category}, '
+                       f'strategy={triage_result.recommended_strategy}', trial=self.trial)
+        else:
+            # Fallback: compute triage if not provided by supervisor
+            project_apis = context.get("project_apis", [])
+            triage_result = triage_build_errors(errors, project_apis)
 
         # Add triage-based guidance
         if triage_result.errors:
             fix_guidance = get_fix_guidance(triage_result)
             parts.append(f"\n{fix_guidance}")
+
+        # Add strategy-specific hints
+        if triage_result.recommended_strategy:
+            strategy_hints = self._get_strategy_hints(triage_result)
+            if strategy_hints:
+                parts.append(f"\n{strategy_hints}")
 
         header_info = state.get("function_analysis",
                                 {}).get("header_information", {})
@@ -282,3 +298,60 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
 
         lines.append("</existing_driver_reference>")
         return "\n".join(lines)
+
+    def _get_strategy_hints(self, triage_result) -> str:
+        """Get strategy-specific hints based on recommended fix strategy."""
+        from src.utils.compilation_error_triage import FixStrategy
+
+        strategy = triage_result.recommended_strategy
+        if not strategy:
+            return ""
+
+        hints = {
+            FixStrategy.ADD_LIBRARY_LINK: (
+                "### Strategy: Add Library Link\n"
+                "Use `bash_execute` to find the library:\n"
+                "- `find /src -name '*.a' -o -name '*.so'`\n"
+                "- Check build script for existing `-l` flags"
+            ),
+            FixStrategy.INCLUDE_CPP_FILE: (
+                "### Strategy: Include Implementation File\n"
+                "Some libraries require including .cpp files directly:\n"
+                "- Check existing fuzzers for `#include \"*.cpp\"` patterns\n"
+                "- Common pattern: `#include \"impl.cpp\"` or `#include \"library.cpp\"`"
+            ),
+            FixStrategy.FIX_INCLUDE_PATH: (
+                "### Strategy: Fix Include Path\n"
+                "Use `bash_execute` to locate headers:\n"
+                "- `find /src -name 'header_name.h'`\n"
+                "- Check if relative path needs adjustment"
+            ),
+            FixStrategy.ADD_INCLUDE: (
+                "### Strategy: Add Missing Include\n"
+                "Find the header declaring the missing symbol:\n"
+                "- `grep -r 'symbol_name' /src --include='*.h'`\n"
+                "- Check existing fuzzers for include patterns"
+            ),
+            FixStrategy.FIX_SIGNATURE: (
+                "### Strategy: Fix Type/Signature\n"
+                "Common type errors:\n"
+                "- C requires `struct`/`enum`/`union` keywords before type names\n"
+                "- Check parameter types match function declarations\n"
+                "- Verify pointer vs value semantics"
+            ),
+            FixStrategy.USE_C_PATTERNS: (
+                "### Strategy: Use Pure C Patterns\n"
+                "Replace C++ features with C equivalents:\n"
+                "- NO `FuzzedDataProvider` - use raw `data`/`size` directly\n"
+                "- NO `std::` types - use C types (`char*`, `size_t`)\n"
+                "- NO C++ casts - use C-style casts if needed"
+            ),
+            FixStrategy.USE_PUBLIC_API: (
+                "### Strategy: Use Public API\n"
+                "Internal/private headers are not available:\n"
+                "- Replace with public API equivalents\n"
+                "- Check existing fuzzers for correct public includes"
+            ),
+        }
+
+        return hints.get(strategy, "")

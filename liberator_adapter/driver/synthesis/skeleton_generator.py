@@ -19,9 +19,8 @@ from enum import Enum, auto
 
 from liberator_adapter.common.api import Api, Arg
 from liberator_adapter.driver.synthesis.hole import (
-    Hole, HoleSet, HoleKind, HolePriority,
-    BufferSizeHole, ArrayLengthHole, InitValueHole, LoopBoundHole,
-    CallbackImplHole, LoopConditionHole, ErrorHandlingHole, ResourceCleanupHole,
+    Hole, HoleSet, HolePriority,
+    ArrayLengthHole, InitValueHole, LoopBoundHole, ResourceCleanupHole,
     create_buffer_size_hole, create_callback_hole, create_loop_condition_hole,
 )
 
@@ -134,6 +133,64 @@ class DriverSkeleton:
     def is_complete(self) -> bool:
         """Check if skeleton is complete (all holes filled)"""
         return self.holes.all_filled()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serialize skeleton to dictionary for storage and JSON serialization.
+
+        Returns:
+            Dictionary containing:
+            - name: Driver name
+            - code: Rendered code with hole placeholders
+            - holes: List of hole definitions
+            - api_sequence: List of API names in order
+            - metadata: Any additional metadata
+        """
+        # Render code with holes marked
+        try:
+            renderer = SkeletonRenderer()
+            code = renderer.render_with_holes_marked(self)
+        except Exception:
+            code = ""
+
+        # Serialize holes
+        holes_list = []
+        for hole in self.holes:
+            hole_dict = {
+                'name': hole.name,
+                'hole_type': hole.kind.name if hasattr(hole.kind, 'name') else str(hole.kind),
+                'placeholder': hole.get_placeholder(),
+                'is_filled': hole.is_filled,
+                'priority': hole.priority.name if hasattr(hole.priority, 'name') else str(hole.priority),
+                'is_simple': hole.is_simple,
+            }
+
+            # Add type-specific fields
+            if hasattr(hole, 'buffer_arg_idx'):
+                hole_dict['buffer_arg_idx'] = hole.buffer_arg_idx
+                hole_dict['length_arg_idx'] = hole.length_arg_idx
+                hole_dict['relationship'] = hole.relationship
+            if hasattr(hole, 'callback_signature'):
+                hole_dict['callback_signature'] = hole.callback_signature
+                hole_dict['callback_type'] = hole.callback_type
+            if hasattr(hole, 'loop_type'):
+                hole_dict['loop_type'] = hole.loop_type
+            if hasattr(hole, 'target_type'):
+                hole_dict['target_type'] = hole.target_type
+
+            holes_list.append(hole_dict)
+
+        # API sequence
+        api_sequence = [api.function_name for api in self.target_apis] if self.target_apis else []
+
+        return {
+            'name': self.name,
+            'code': code,
+            'holes': holes_list,
+            'api_sequence': api_sequence,
+            'metadata': dict(self.metadata) if self.metadata else {},
+            'includes': list(self.includes) if self.includes else [],
+        }
 
 
 # =============================================================================
