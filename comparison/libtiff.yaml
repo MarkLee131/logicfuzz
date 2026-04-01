@@ -1,0 +1,4 @@
+"language": "c"
+"project": "libtiff"
+"target_name": "tiff_read_rgba_fuzzer"
+"target_path": "/src/libtiff/contrib/oss-fuzz/tiff_read_rgba_fuzzer.cc"

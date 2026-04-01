@@ -1,0 +1,5 @@
+"language": "c"
+"project": "nghttp2"
+"url": "https://github.com/nghttp2/nghttp2.git"
+"target_name": "nghttp2_fuzzer"
+"target_path": "/src/nghttp2/tests/nghttp2_fuzzer.cc"

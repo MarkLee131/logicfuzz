@@ -1,0 +1,4 @@
+"language": "c"
+"project": "libjpeg-turbo"
+"target_name": "libjpeg_turbo_fuzzer"
+"target_path": "/src/libjpeg-turbo/fuzz/libjpeg_turbo_fuzzer.cc"

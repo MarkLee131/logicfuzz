@@ -1,0 +1,4 @@
+"language": "c"
+"project": "libpng"
+"target_name": "libpng_read_fuzzer"
+"target_path": "/src/libpng/contrib/oss-fuzz/libpng_read_fuzzer.cc"

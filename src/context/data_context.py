@@ -71,6 +71,22 @@ class FuzzingContext:
     # Contains patterns, configurations, and fuzzing strategies learned from existing drivers
     existing_driver_knowledge: Dict[str, Any] = field(default_factory=dict)
 
+    # === L1: Entry Point Analysis (Progressive Filter Pipeline) ===
+    # Entry Points are APIs that directly consume fuzzer data without complex initialization
+    entry_point_analysis: Dict[str, Any] = field(default_factory=dict)
+
+    # === L2: Lifecycle Analysis (Progressive Filter Pipeline) ===
+    # Lifecycle pairs: init-destroy relationships (e.g., ares_init -> ares_destroy)
+    lifecycle_analysis: Dict[str, Any] = field(default_factory=dict)
+
+    # === L3: State Machine Analysis (Progressive Filter Pipeline) ===
+    # State machine: API preconditions/postconditions derived from lifecycle
+    state_machine_analysis: Dict[str, Any] = field(default_factory=dict)
+
+    # === L4: Coverage Ranking (Progressive Filter Pipeline) ===
+    # Final ranking and selection of top-k sequences by coverage potential
+    coverage_ranking: Dict[str, Any] = field(default_factory=dict)
+
     # === Metadata ===
     preparation_time: float = 0.0
 
@@ -463,29 +479,216 @@ class FuzzingContext:
                 log.warning(f"Failed to summarize condition manager: {e}")
                 condition_info = {}
 
-        # === Step 6: Simple heuristic filtering (no LLM needed) ===
-        log.debug('  6/10 Filtering API sequences with heuristics...')
-        filter_summary = {}
-        if api_sequences:
-            try:
-                filtered, filter_summary = _heuristic_filter_sequences(
+        # === Step 5c: L1 Entry Point Analysis (Progressive Filter Pipeline) ===
+        log.debug('  5c/10 Analyzing Entry Points (L1 filter)...')
+        entry_point_analysis_result = {}
+        try:
+            from liberator_adapter.constraints import (
+                analyze_entry_points,
+                filter_sequences_by_entry_point
+            )
+
+            # Analyze Entry Points from project APIs
+            ep_analysis = analyze_entry_points(project_apis, logger_instance=log)
+            entry_point_analysis_result = ep_analysis.to_dict()
+
+            ep_stats = ep_analysis.get_stats()
+            log.info(
+                f'   ✅ Entry Point analysis: {ep_stats["entry_point_count"]}/{ep_stats["total_apis"]} '
+                f'({ep_stats["entry_point_ratio"]:.1%}) APIs are Entry Points'
+            )
+
+            # Apply L1 filter: keep only sequences with Entry Points
+            if ep_analysis.entry_point_names:
+                pre_filter_count = len(api_sequences)
+                api_sequences, ep_filter_summary = filter_sequences_by_entry_point(
                     api_sequences,
-                    condition_info=condition_info,
-                    top_k=filter_top_k,
-                    logger_instance=log)
-                if filtered:
-                    api_sequences = filtered
+                    ep_analysis,
+                    strategy="within_first_n",
+                    n=3,
+                    logger_instance=log
+                )
+                entry_point_analysis_result['filter_summary'] = ep_filter_summary
+
+                if api_sequences:
                     log.info(
-                        f'   ✅ Heuristic filter applied: {len(api_sequences)} sequences kept'
+                        f'   ✅ L1 Entry Point filter: {pre_filter_count} -> {len(api_sequences)} sequences '
+                        f'({ep_filter_summary.get("reduction_ratio", 0):.1%} reduction)'
                     )
                 else:
                     log.warning(
-                        'Filter returned empty set, using raw sequences')
-            except Exception as e:
-                log.warning(f"Filtering failed: {e}, using raw sequences")
-        else:
-            log.warning("No API sequences to filter")
-        grammar_info['filter'] = filter_summary
+                        'L1 filter returned empty set, reverting to pre-filter sequences'
+                    )
+                    api_sequences = raw_api_sequences
+            else:
+                log.warning(
+                    'No Entry Points found, skipping L1 filter (all sequences kept)'
+                )
+
+        except ImportError as e:
+            log.warning(f"Entry Point analyzer not available: {e}")
+        except Exception as e:
+            log.warning(f"Entry Point analysis failed (non-critical): {e}")
+
+        # === Step 5d: L2 Lifecycle Analysis (Progressive Filter Pipeline) ===
+        log.debug('  5d/10 Analyzing Lifecycle pairs (L2 filter)...')
+        lifecycle_analysis_result = {}
+        try:
+            from liberator_adapter.constraints import (
+                analyze_lifecycle,
+                filter_sequences_by_lifecycle
+            )
+
+            # Analyze lifecycle pairs from project APIs and condition_info
+            lc_analysis = analyze_lifecycle(
+                project_apis,
+                condition_info=condition_info,
+                logger_instance=log
+            )
+            lifecycle_analysis_result = lc_analysis.to_dict()
+
+            lc_stats = lc_analysis.get_stats()
+            log.info(
+                f'   ✅ Lifecycle analysis: {lc_stats["pair_count"]} pairs found '
+                f'({lc_stats["init_api_count"]} init, {lc_stats["destroy_api_count"]} destroy)'
+            )
+
+            # Apply L2 filter: auto-complete sequences with cleanup APIs
+            if lc_analysis.pairs:
+                pre_filter_count = len(api_sequences)
+                api_sequences, lc_filter_summary = filter_sequences_by_lifecycle(
+                    api_sequences,
+                    lc_analysis,
+                    strategy="auto_complete",
+                    logger_instance=log
+                )
+                lifecycle_analysis_result['filter_summary'] = lc_filter_summary
+
+                if lc_filter_summary.get('auto_completed_count', 0) > 0:
+                    log.info(
+                        f'   ✅ L2 Lifecycle filter: auto-completed {lc_filter_summary["auto_completed_count"]} '
+                        f'sequences with cleanup APIs'
+                    )
+            else:
+                log.info('   ℹ️ No lifecycle pairs found, skipping L2 filter')
+
+        except ImportError as e:
+            log.warning(f"Lifecycle analyzer not available: {e}")
+        except Exception as e:
+            log.warning(f"Lifecycle analysis failed (non-critical): {e}")
+
+        # === Step 5e: L3 State Machine Analysis (Progressive Filter Pipeline) ===
+        log.debug('  5e/10 Analyzing State Machine (L3 filter)...')
+        state_machine_analysis_result = {}
+        try:
+            from liberator_adapter.constraints import (
+                analyze_state_machine,
+                filter_sequences_by_state_machine
+            )
+
+            # Analyze state machine from lifecycle analysis
+            sm_analysis = analyze_state_machine(
+                project_apis,
+                lifecycle_analysis=lifecycle_analysis_result,
+                condition_info=condition_info,
+                logger_instance=log
+            )
+            state_machine_analysis_result = sm_analysis.to_dict()
+
+            sm_stats = sm_analysis.get_stats()
+            log.info(
+                f'   ✅ State Machine analysis: {sm_stats["apis_with_constraints"]} APIs with constraints, '
+                f'{len(sm_stats["resource_types"])} resource types'
+            )
+
+            # Apply L3 filter: remove sequences with critical state violations
+            if sm_analysis.constraints:
+                pre_filter_count = len(api_sequences)
+                api_sequences, sm_filter_summary = filter_sequences_by_state_machine(
+                    api_sequences,
+                    sm_analysis,
+                    strategy="fixable",  # Keep fixable sequences (missing init can be added later)
+                    logger_instance=log
+                )
+                state_machine_analysis_result['filter_summary'] = sm_filter_summary
+
+                if sm_filter_summary.get('invalid_count', 0) > 0:
+                    log.info(
+                        f'   ✅ L3 State Machine filter: removed {sm_filter_summary["invalid_count"]} '
+                        f'sequences with critical violations (use-after-free, double-free)'
+                    )
+            else:
+                log.info('   ℹ️ No state constraints found, skipping L3 filter')
+
+        except ImportError as e:
+            log.warning(f"State Machine analyzer not available: {e}")
+        except Exception as e:
+            log.warning(f"State Machine analysis failed (non-critical): {e}")
+
+        # === Step 5f: L4/L5 Coverage Ranking (Progressive Filter Pipeline) ===
+        # L4: Rank sequences by diversity and entry point position
+        # L5: Coverage-aware filtering to avoid re-testing already covered code
+        log.debug('  5f/10 Ranking sequences by coverage potential (L4/L5)...')
+        coverage_ranking_result = {}
+
+        # Try to fetch existing coverage data for L5 filtering
+        existing_coverage = {}
+        try:
+            from data_prep import introspector
+            all_funcs = introspector.query_introspector_all_functions(project_name)
+            if all_funcs:
+                for func in all_funcs:
+                    func_name = func.get('function_name', '') or func.get('raw-function-name', '')
+                    cov = func.get('code_coverage', func.get('code-coverage', 0))
+                    if func_name and cov is not None:
+                        try:
+                            existing_coverage[func_name] = float(cov)
+                        except (ValueError, TypeError):
+                            pass
+                if existing_coverage:
+                    log.info(f'   ℹ️ Loaded existing coverage for {len(existing_coverage)} functions from FuzzIntrospector')
+        except Exception as e:
+            log.debug(f"Could not fetch existing coverage (non-critical): {e}")
+
+        try:
+            from liberator_adapter.constraints import select_top_k_sequences
+
+            # Rank and select top-k sequences (with optional L5 coverage-aware filtering)
+            pre_rank_count = len(api_sequences)
+            api_sequences, ranking_summary = select_top_k_sequences(
+                api_sequences,
+                entry_point_analysis=entry_point_analysis_result,
+                top_k=filter_top_k,
+                logger_instance=log,
+                existing_coverage=existing_coverage if existing_coverage else None,
+            )
+            coverage_ranking_result = ranking_summary
+
+            log.info(
+                f'   ✅ L4 Coverage Ranking: {pre_rank_count} -> {len(api_sequences)} sequences '
+                f'(covering {ranking_summary.get("api_coverage", 0)} unique APIs)'
+            )
+
+        except ImportError as e:
+            log.warning(f"Coverage ranker not available: {e}, falling back to heuristic filter")
+            # Fallback to old heuristic filter
+            if api_sequences:
+                try:
+                    filtered, filter_summary = _heuristic_filter_sequences(
+                        api_sequences,
+                        condition_info=condition_info,
+                        top_k=filter_top_k,
+                        logger_instance=log)
+                    if filtered:
+                        api_sequences = filtered
+                        log.info(f'   ✅ Heuristic filter applied: {len(api_sequences)} sequences kept')
+                    coverage_ranking_result = {'fallback': 'heuristic', **filter_summary}
+                except Exception as e2:
+                    log.warning(f"Heuristic filter also failed: {e2}")
+        except Exception as e:
+            log.warning(f"Coverage ranking failed (non-critical): {e}")
+
+        grammar_info['filter'] = coverage_ranking_result
         grammar_info['num_sequences'] = len(api_sequences)
 
         # === Step 7: Extract header information ===
@@ -506,6 +709,25 @@ class FuzzingContext:
                     ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
                     'project_headers': []
                 }
+
+            # If project_headers is empty, try to load from generated public_headers.txt
+            # This happens when FuzzIntrospector is unavailable
+            if not header_info.get('project_headers'):
+                try:
+                    # Try to get from generator's extract_metadata
+                    if hasattr(generator, 'extract_metadata') and generator.extract_metadata:
+                        local_meta = generator.extract_metadata.get('local', {})
+                        public_headers_path = local_meta.get('public_headers')
+                        if public_headers_path:
+                            import os
+                            if os.path.exists(public_headers_path):
+                                with open(public_headers_path, 'r') as f:
+                                    public_headers = [h.strip() for h in f.readlines() if h.strip()]
+                                if public_headers:
+                                    header_info['project_headers'] = public_headers
+                                    log.info(f"   ✅ Loaded {len(public_headers)} project headers from {public_headers_path}")
+                except Exception as ph_err:
+                    log.debug(f"Could not load public_headers from generator: {ph_err}")
         except Exception as e:
             log.warning(f"Failed to extract headers: {e}, using minimal set")
             header_info = {
@@ -617,8 +839,26 @@ class FuzzingContext:
         log.debug('  10/10 Generating skeleton drivers...')
         skeleton_drivers = []
         try:
+            # Convert filtered sequences (List[List[str]]) to List[List[Api]]
+            # This ensures skeletons use our L0-L4 filtered sequences, not auto-generated ones
+            api_name_to_obj = {api.function_name: api for api in generator.all_apis}
+            filtered_api_sequences = []
+            for seq in api_sequences[:min(num_sequences, 5)]:
+                api_objs = []
+                for api_name in seq:
+                    if api_name in api_name_to_obj:
+                        api_objs.append(api_name_to_obj[api_name])
+                if api_objs:  # Only include sequences with at least one valid API
+                    filtered_api_sequences.append(api_objs)
+
+            if filtered_api_sequences:
+                log.info(f'   ℹ️ Using {len(filtered_api_sequences)} filtered sequences from L0-L4 pipeline')
+            else:
+                log.warning('   ⚠️ No valid filtered sequences, falling back to auto-generation')
+
             # Generate skeleton drivers using the synthesis module
             skeletons = generator.generate_skeleton_drivers(
+                api_sequences=filtered_api_sequences if filtered_api_sequences else None,
                 num_drivers=min(num_sequences, 5),  # Limit to 5 skeletons
                 driver_size=driver_size,
                 llm_client=None  # LLM filtering moved to Prototyper agent
@@ -762,6 +1002,10 @@ class FuzzingContext:
                    skeleton_drivers=skeleton_drivers,
                    synthesized_drivers=synthesized_drivers,
                    existing_driver_knowledge=existing_driver_knowledge,
+                   entry_point_analysis=entry_point_analysis_result,
+                   lifecycle_analysis=lifecycle_analysis_result,
+                   state_machine_analysis=state_machine_analysis_result,
+                   coverage_ranking=coverage_ranking_result,
                    preparation_time=elapsed)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -779,6 +1023,10 @@ class FuzzingContext:
             'skeleton_drivers': self.skeleton_drivers,
             'synthesized_drivers': self.synthesized_drivers,
             'existing_driver_knowledge': self.existing_driver_knowledge,
+            'entry_point_analysis': self.entry_point_analysis,
+            'lifecycle_analysis': self.lifecycle_analysis,
+            'state_machine_analysis': self.state_machine_analysis,
+            'coverage_ranking': self.coverage_ranking,
             'preparation_time': self.preparation_time,
         }
 

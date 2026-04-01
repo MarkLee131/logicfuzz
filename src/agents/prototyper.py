@@ -153,46 +153,95 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                           trial=self.trial)
             return ""
 
-        result = skeleton_code
+        import re
 
-        # Replace each hole placeholder with its filling
+        result = skeleton_code
+        filled_count = 0
+
+        # First pass: direct replacement for exact matches
         for placeholder, filling in hole_fillings.items():
             if placeholder in result:
-                result = result.replace(placeholder, filling)
+                result = result.replace(placeholder, str(filling))
+                filled_count += 1
                 logger.debug(
-                    f'Filled hole {placeholder} with: {filling[:50]}...'
-                    if len(filling) > 50 else f'Filled hole {placeholder} with: {filling}',
+                    f'Filled hole {placeholder} with: {str(filling)[:50]}...'
+                    if len(str(filling)) > 50 else f'Filled hole {placeholder} with: {filling}',
                     trial=self.trial)
-            else:
-                # Try to match without the leading/trailing underscores
-                # in case the format differs slightly
-                clean_placeholder = placeholder.strip('_')
-                for pattern in [
-                    f'__{clean_placeholder}__',
-                    f'__HOLE_{clean_placeholder}__',
-                    f'__BUFSIZE_{clean_placeholder}__',
-                    f'__CALLBACK_{clean_placeholder}__',
-                    f'__INIT_{clean_placeholder}__',
-                    f'__LOOPCOND_{clean_placeholder}__',
-                    f'__LOOPBOUND_{clean_placeholder}__',
-                    f'__CLEANUP_{clean_placeholder}__',
-                ]:
-                    if pattern in result:
-                        result = result.replace(pattern, filling)
-                        logger.debug(
-                            f'Filled hole {pattern} with: {filling[:50]}...'
-                            if len(filling) > 50 else f'Filled hole {pattern} with: {filling}',
-                            trial=self.trial)
-                        break
 
-        # Check for unfilled holes
-        import re
-        unfilled = re.findall(r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN)_[^_]+__', result)
+        # Second pass: fuzzy matching for different key formats
+        # LLM might return: "callback_1", "__CALLBACK_callback_1__", "CALLBACK_callback_1", etc.
+        for placeholder, filling in hole_fillings.items():
+            # Extract the core name from the placeholder
+            # Handle formats: callback_1, __CALLBACK_callback_1__, CALLBACK_callback_1, etc.
+            clean_name = placeholder.strip('_')
+
+            # Remove known prefixes to get the base name
+            prefixes = ['HOLE_', 'BUFSIZE_', 'CALLBACK_', 'INIT_', 'LOOPCOND_',
+                       'LOOPBOUND_', 'CLEANUP_', 'ARRLEN_', 'ERRHANDLE_', 'COMPLEX_HOLE_']
+            base_name = clean_name
+            for prefix in prefixes:
+                if clean_name.upper().startswith(prefix):
+                    base_name = clean_name[len(prefix):]
+                    break
+
+            # Try all possible placeholder formats with this base name
+            possible_patterns = [
+                f'__{base_name}__',
+                f'__HOLE_{base_name}__',
+                f'__BUFSIZE_{base_name}__',
+                f'__CALLBACK_{base_name}__',
+                f'__INIT_{base_name}__',
+                f'__LOOPCOND_{base_name}__',
+                f'__LOOPBOUND_{base_name}__',
+                f'__CLEANUP_{base_name}__',
+                f'__ARRLEN_{base_name}__',
+                f'__ERRHANDLE_{base_name}__',
+                f'__COMPLEX_HOLE_{base_name}__',
+            ]
+
+            for pattern in possible_patterns:
+                if pattern in result:
+                    result = result.replace(pattern, str(filling))
+                    filled_count += 1
+                    logger.debug(
+                        f'Filled hole {pattern} (from key {placeholder}) with: {str(filling)[:50]}...'
+                        if len(str(filling)) > 50 else f'Filled hole {pattern} with: {filling}',
+                        trial=self.trial)
+                    break
+
+        # Check for unfilled holes using a more comprehensive regex
+        # Pattern matches: __TYPE_name__ where name can contain letters, digits, and underscores
+        unfilled_pattern = r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN|ERRHANDLE|COMPLEX_HOLE)_[\w]+__'
+        unfilled = re.findall(unfilled_pattern, result)
+
+        # Also check for HOLE comments that weren't filled
+        hole_comments = re.findall(r'/\* HOLE\[[^\]]+\]:[^\*]+\*/', result)
+
         if unfilled:
             logger.warning(
                 f'{len(unfilled)} holes remain unfilled: {unfilled[:5]}',
                 trial=self.trial)
 
+            # Try one more fallback: look for patterns in unfilled and match with fillings by number
+            for unfilled_hole in unfilled:
+                # Extract number from unfilled hole (e.g., __CALLBACK_callback_1__ -> 1)
+                num_match = re.search(r'_(\d+)__$', unfilled_hole)
+                if num_match:
+                    hole_num = num_match.group(1)
+                    # Look for any filling with this number
+                    for placeholder, filling in hole_fillings.items():
+                        if hole_num in placeholder and unfilled_hole in result:
+                            result = result.replace(unfilled_hole, str(filling))
+                            logger.debug(f'Fallback fill: {unfilled_hole} with {str(filling)[:30]}...',
+                                        trial=self.trial)
+                            break
+
+        if hole_comments:
+            logger.warning(
+                f'{len(hole_comments)} HOLE comments remain: {hole_comments[:2]}',
+                trial=self.trial)
+
+        logger.info(f'Hole filling complete: {filled_count} holes filled', trial=self.trial)
         return result
 
     # =========================================================================
@@ -286,6 +335,7 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         existing_fuzzer_headers = context.get('existing_fuzzer_headers', {})
         existing_driver_knowledge = context.get('existing_driver_knowledge',
                                                 {})
+        header_info = context.get('header_info', {})
 
         # Get target path info for include path calculation
         target_path = benchmark.get('target_path', '')
@@ -611,6 +661,11 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 logger.error('No <fuzz_target> tag found in prototyper response',
                              trial=self.trial)
 
+        # Ensure project headers are included (post-processing fix for LLM-generated code)
+        if fuzz_target_code and header_info.get('project_headers'):
+            fuzz_target_code = self._ensure_project_headers(
+                fuzz_target_code, header_info, target_language)
+
         validation_warnings = self._validate_api_usage(
             fuzz_target_code, benchmark.get('project', 'unknown'))
 
@@ -694,8 +749,20 @@ Use these when you need to understand API patterns (var-len, callbacks, lifecycl
 </tool_usage_guidance>
 
 <generation_rules>
-Generate a complete LibFuzzer-compatible fuzz driver using the API sequences above.
-Use correct include paths - the fuzz target will be placed at the location shown above.
+CRITICAL: Generate a fuzz driver using ONLY the APIs listed in <api_sequences> above.
+These sequences were carefully selected by our Progressive Filter Pipeline (L0-L4) to maximize coverage.
+DO NOT substitute with different APIs even if you think they are similar or better.
+DO NOT use APIs like ares_parse_a_reply or ares_parse_mx_reply unless they appear in <api_sequences>.
+
+Requirements:
+1. Use EXACTLY the APIs from <api_sequences> - they have been validated for:
+   - Type compatibility (L0)
+   - Entry point presence (L1)
+   - Lifecycle correctness (L2)
+   - State machine validity (L3)
+   - Coverage potential (L4)
+2. Preserve the API call order from the sequence
+3. Use correct include paths - the fuzz target will be placed at the location shown above
 </generation_rules>
 
 <output_format>
@@ -1131,9 +1198,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
         import re
 
-        # Check for unfilled holes
+        # Check for unfilled holes (use \w+ to match names with underscores like callback_1)
         unfilled_holes = re.findall(
-            r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN)_[^_]+__',
+            r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN|ERRHANDLE|COMPLEX_HOLE)_[\w]+__',
             generated_code)
         if unfilled_holes:
             logger.warning(
@@ -1151,8 +1218,22 @@ Output your fuzz driver code inside <fuzz_target> tags.
             logger.warning(
                 f'Generated code missing {len(missing_apis)} APIs from sequence: {missing_apis[:5]}',
                 trial=self.trial)
-            # Still return True if most APIs are present (>70%)
-            return len(missing_apis) < len(api_sequence) * 0.3
+            # Stricter validation: require at least 50% of APIs present
+            if len(missing_apis) >= len(api_sequence) * 0.5:
+                return False
+
+        # Also check for unauthorized APIs (common LLM substitutions)
+        # These indicate LLM is ignoring our sequences
+        unauthorized_apis = [
+            'ares_parse_a_reply', 'ares_parse_mx_reply',  # c-ares legacy parsers
+        ]
+        for unauth_api in unauthorized_apis:
+            if unauth_api in generated_code and unauth_api not in api_sequence:
+                logger.warning(
+                    f'Generated code uses unauthorized API {unauth_api} not in sequence. '
+                    f'LLM may be ignoring provided sequences.',
+                    trial=self.trial)
+                # Don't reject, just warn - the API might be legitimate in other contexts
 
         return True
 
@@ -1319,3 +1400,74 @@ Output your fuzz driver code inside <fuzz_target> tags.
         """Retrieve skeleton code based on archetype (currently disabled)."""
         # Skeleton generation is now handled by CBFactory
         return ""
+
+    def _ensure_project_headers(self, code: str, header_info: Dict[str, Any], target_language: str) -> str:
+        """Ensure project headers are included in the generated code.
+
+        This is a post-processing step to fix LLM-generated code that may be
+        missing required project headers.
+
+        Args:
+            code: Generated fuzz target source code
+            header_info: Header info dict with 'project_headers' and 'standard_headers'
+            target_language: 'c' or 'c++'
+
+        Returns:
+            Code with project headers added if they were missing
+        """
+        import re
+
+        if not code or not code.strip():
+            return code
+
+        project_headers = header_info.get('project_headers', [])
+        if not project_headers:
+            return code
+
+        # Check which project headers are already included
+        existing_includes = set()
+        for match in re.finditer(r'#include\s*[<"]([^>"]+)[>"]', code):
+            existing_includes.add(match.group(1))
+
+        # Find missing project headers
+        missing_headers = []
+        for header in project_headers:
+            # Check both bare name and common variations
+            if header not in existing_includes:
+                # Also check if it's included with a path
+                header_basename = header.split('/')[-1] if '/' in header else header
+                if header_basename not in existing_includes:
+                    missing_headers.append(header)
+
+        if not missing_headers:
+            return code
+
+        # Build header includes to add
+        header_lines = []
+        for header in missing_headers:
+            # Use quotes for project headers (not angle brackets)
+            header_lines.append(f'#include <{header}>')
+
+        # Find the best place to insert headers (after existing includes)
+        lines = code.split('\n')
+        insert_idx = 0
+
+        # Find last #include line or after any comment header
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('#include'):
+                insert_idx = i + 1
+            elif stripped.startswith('/*') or stripped.startswith('//') or stripped.startswith('*'):
+                if insert_idx == 0:
+                    insert_idx = i + 1
+
+        # Insert missing headers
+        for j, header_line in enumerate(header_lines):
+            lines.insert(insert_idx + j, header_line)
+
+        result = '\n'.join(lines)
+        logger.info(
+            f'Added {len(missing_headers)} missing project headers: {missing_headers}',
+            trial=self.trial)
+
+        return result

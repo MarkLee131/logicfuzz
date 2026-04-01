@@ -1,0 +1,5 @@
+"language": "c"
+"project": "mbedtls"
+"url": "https://github.com/Mbed-TLS/mbedtls.git"
+"target_name": "fuzz_x509csr"
+"target_path": "/src/mbedtls/programs/fuzz/fuzz_x509csr.c"

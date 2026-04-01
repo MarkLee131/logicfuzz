@@ -1,0 +1,5 @@
+"language": "c"
+"project": "curl"
+"url": "https://github.com/curl/curl.git"
+"target_name": "curl_fuzzer_http"
+"target_path": "/src/curl/tests/fuzz/curl_fuzzer_http.c"

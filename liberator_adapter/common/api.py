@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 class Arg:
     name: str
     flag: str
@@ -6,13 +6,25 @@ class Arg:
     type: str
     # these are attributes from my perspective
     is_const: List[bool]
+    # Whether the type is incomplete (opaque struct pointer)
+    is_type_incomplete: bool
 
-    def __init__(self, name, flag, size, type, is_const):
+    def __init__(self, name, flag, size, type, is_const, is_type_incomplete: bool = False):
         self.name = name
         self.flag = flag
         self.size = size
         self.type = type
         self.is_const = is_const
+        # Infer incomplete type from LLVM IR struct pointers if not explicitly provided
+        # Types like "%struct.foo*" indicate opaque/incomplete struct pointers
+        if is_type_incomplete:
+            self.is_type_incomplete = True
+        else:
+            # Auto-detect: LLVM IR struct pointers are typically opaque
+            self.is_type_incomplete = (
+                flag == "struct" or
+                (isinstance(type, str) and "%struct." in type and type.endswith("*"))
+            )
 
     def __str__(self):
         return f"Arg(name={self.name})"
