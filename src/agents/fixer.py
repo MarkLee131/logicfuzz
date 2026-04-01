@@ -344,7 +344,17 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
                 "Replace C++ features with C equivalents:\n"
                 "- NO `FuzzedDataProvider` - use raw `data`/`size` directly\n"
                 "- NO `std::` types - use C types (`char*`, `size_t`)\n"
-                "- NO C++ casts - use C-style casts if needed"
+                "- NO C++ casts - use C-style casts if needed\n"
+                "- **If 'undefined reference to LLVMFuzzerTestOneInput'**: Add `extern \"C\"` wrapper:\n"
+                "  ```c\n"
+                "  #ifdef __cplusplus\n"
+                "  extern \"C\" {\n"
+                "  #endif\n"
+                "  int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) { ... }\n"
+                "  #ifdef __cplusplus\n"
+                "  }\n"
+                "  #endif\n"
+                "  ```"
             ),
             FixStrategy.USE_PUBLIC_API: (
                 "### Strategy: Use Public API\n"

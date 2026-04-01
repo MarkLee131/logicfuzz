@@ -347,7 +347,11 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         is_c_project = library_language in ('c', )
 
         target_language = 'c++' if is_cpp_target else 'c'
-        needs_extern = is_cpp_target and is_c_project
+        # OSS-Fuzz ALWAYS uses clang++ ($CXX) to compile fuzz targets, even .c files
+        # When clang++ compiles C code, it applies C++ name mangling to functions
+        # This breaks the linker because libFuzzer expects unmangled 'LLVMFuzzerTestOneInput'
+        # Therefore, C projects always need extern "C" wrapper regardless of file extension
+        needs_extern = is_c_project
 
         is_regeneration = state.get("compile_success") == False and state.get(
             "fuzz_target_source", "") != ""
@@ -408,13 +412,26 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         extern_c_note = ""
         if needs_extern:
             extern_c_note = """
-**IMPORTANT: extern "C" Required**
-This is a C++ fuzz target for a C library. You MUST wrap all C library headers in `extern "C"`:
-```cpp
+**CRITICAL: extern "C" Required for C Projects**
+OSS-Fuzz compiles all fuzz targets with clang++ (C++ compiler), even .c files.
+You MUST declare LLVMFuzzerTestOneInput with extern "C" linkage:
+```c
+#ifdef __cplusplus
 extern "C" {
+#endif
+
 #include "library_header.h"
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    // ... your code ...
+    return 0;
 }
+
+#ifdef __cplusplus
+}
+#endif
 ```
+Without extern "C", the linker will fail with "undefined reference to LLVMFuzzerTestOneInput".
 """
             if additional_context:
                 additional_context = extern_c_note + "\n" + additional_context
@@ -665,6 +682,10 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if fuzz_target_code and header_info.get('project_headers'):
             fuzz_target_code = self._ensure_project_headers(
                 fuzz_target_code, header_info, target_language)
+
+        # Ensure extern "C" wrapper for C projects (OSS-Fuzz always uses clang++)
+        if fuzz_target_code and is_c_project:
+            fuzz_target_code = self._ensure_extern_c_wrapper(fuzz_target_code)
 
         validation_warnings = self._validate_api_usage(
             fuzz_target_code, benchmark.get('project', 'unknown'))
@@ -1400,6 +1421,65 @@ Output your fuzz driver code inside <fuzz_target> tags.
         """Retrieve skeleton code based on archetype (currently disabled)."""
         # Skeleton generation is now handled by CBFactory
         return ""
+
+    def _ensure_extern_c_wrapper(self, code: str) -> str:
+        """Ensure extern "C" wrapper is present for C projects.
+
+        OSS-Fuzz ALWAYS uses clang++ ($CXX) to compile fuzz targets, even .c files.
+        Without extern "C", C++ name mangling will cause linker errors.
+
+        Args:
+            code: Generated fuzz target source code
+
+        Returns:
+            Code with extern "C" wrapper added if missing
+        """
+        import re
+
+        if not code or not code.strip():
+            return code
+
+        # Check if extern "C" is already present
+        if 'extern "C"' in code or "extern 'C'" in code:
+            return code
+
+        # Find the LLVMFuzzerTestOneInput function
+        fuzzer_pattern = r'(int\s+LLVMFuzzerTestOneInput\s*\([^)]*\)\s*\{)'
+        match = re.search(fuzzer_pattern, code)
+        if not match:
+            return code
+
+        # Find include section end
+        lines = code.split('\n')
+        include_end_idx = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith('#include'):
+                include_end_idx = i + 1
+            elif stripped and not stripped.startswith('//') and not stripped.startswith('/*'):
+                # First non-include, non-comment line
+                if include_end_idx > 0:
+                    break
+
+        # Insert extern "C" wrapper after includes
+        new_lines = lines[:include_end_idx]
+        new_lines.append('')
+        new_lines.append('#ifdef __cplusplus')
+        new_lines.append('extern "C" {')
+        new_lines.append('#endif')
+        new_lines.append('')
+
+        # Add remaining code
+        new_lines.extend(lines[include_end_idx:])
+
+        # Add closing brace before end of file
+        # Find the closing brace of LLVMFuzzerTestOneInput
+        result = '\n'.join(new_lines)
+
+        # Add closing extern "C" at the very end
+        result = result.rstrip() + '\n\n#ifdef __cplusplus\n}\n#endif\n'
+
+        return result
 
     def _ensure_project_headers(self, code: str, header_info: Dict[str, Any], target_language: str) -> str:
         """Ensure project headers are included in the generated code.

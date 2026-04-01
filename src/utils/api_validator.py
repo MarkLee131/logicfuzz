@@ -391,7 +391,8 @@ class LanguageMismatchValidator:
 
     CPP_SYNTAX_PATTERNS = [
         (r'\bstd::\w+', 'std:: namespace is C++ only'),
-        (r'\bextern\s+"C"', 'extern "C" is C++ syntax (not needed in pure C)'),
+        # Note: extern "C" is REQUIRED for C projects because OSS-Fuzz compiles with clang++
+        # Do NOT flag extern "C" as an error - it prevents linker errors
         (r'\bFuzzedDataProvider\s+\w+', 'FuzzedDataProvider is a C++ class'),
         (r'\.Consume\w+\s*\(', 'FuzzedDataProvider methods are C++ only'),
         (r'\bfdp\.\w+', 'fdp (FuzzedDataProvider) is C++ only'),
@@ -501,8 +502,7 @@ class LanguageMismatchValidator:
             "", "💡 FIX: Rewrite using pure C patterns:",
             "  - Use memcpy() to extract integers from fuzz data",
             "  - Use malloc/free instead of new/delete",
-            "  - Use raw (data, size) instead of FuzzedDataProvider",
-            "  - Remove extern \"C\" wrapper (not needed in pure C)"
+            "  - Use raw (data, size) instead of FuzzedDataProvider"
         ])
 
         return '\n'.join(lines)

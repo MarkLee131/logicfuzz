@@ -666,11 +666,13 @@ class SkeletonRenderer:
             lines.append("")
 
         # 3. Fuzz function signature
-        # Only use extern "C" for C++ targets; pure C doesn't need it
-        if is_cpp_target:
-            lines.append("extern \"C\" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
-        else:
-            lines.append("int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
+        # OSS-Fuzz ALWAYS uses clang++ ($CXX) even for .c files, so we need extern "C"
+        # to prevent C++ name mangling. Use #ifdef __cplusplus guard for compatibility.
+        lines.append("#ifdef __cplusplus")
+        lines.append("extern \"C\" {")
+        lines.append("#endif")
+        lines.append("")
+        lines.append("int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
 
         # 4. Minimum size check
         lines.append("    if (size < 1) return 0;")
@@ -699,6 +701,12 @@ class SkeletonRenderer:
         # 8. Return
         lines.append("    return 0;")
         lines.append("}")
+
+        # Close extern "C" block
+        lines.append("")
+        lines.append("#ifdef __cplusplus")
+        lines.append("}")
+        lines.append("#endif")
 
         return "\n".join(lines)
 
@@ -744,8 +752,9 @@ def render_skeleton(skeleton: DriverSkeleton, mark_holes: bool = False, is_cpp_t
     Args:
         skeleton: Driver skeleton to render
         mark_holes: Whether to mark unfilled holes with comments
-        is_cpp_target: If True, use 'extern "C"' for C++ fuzz target.
-                      If False, emit pure C code (no extern "C").
+        is_cpp_target: Deprecated - no longer used. The generated code now always
+                      uses #ifdef __cplusplus guard for extern "C" since OSS-Fuzz
+                      always compiles with clang++.
     """
     renderer = SkeletonRenderer()
     if mark_holes:

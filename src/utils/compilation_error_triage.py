@@ -303,7 +303,20 @@ class CompilationErrorTriage:
             match = pattern_re.search(error)
             if match:
                 symbol = match.group(1) if match.groups() else None
-                # Check if this is a fake definition
+                # Special case: LLVMFuzzerTestOneInput undefined reference
+                # This happens when C code is compiled with clang++ without extern "C"
+                # Check this FIRST before fake definition check
+                if symbol == 'LLVMFuzzerTestOneInput':
+                    return TriagedError(
+                        raw_error=error,
+                        category=ErrorCategory.LANGUAGE_MISMATCH,
+                        fix_strategy=FixStrategy.USE_C_PATTERNS,
+                        extracted_symbol=symbol,
+                        line_number=line_number,
+                        details="missing_extern_c",
+                        recoverable=True
+                    )
+                # Check if this is a fake definition (but not for known fuzzer symbols)
                 if known_apis and symbol:
                     known_names = {api.get('function_name', '') for api in known_apis}
                     if symbol not in known_names and not self._is_system_symbol(symbol):
@@ -315,7 +328,7 @@ class CompilationErrorTriage:
                             line_number=line_number,
                             details=f"Function '{symbol}' not found in project APIs",
                             recoverable=False
-                        )
+                    )
                 return TriagedError(
                     raw_error=error,
                     category=ErrorCategory.LINK_ERROR,

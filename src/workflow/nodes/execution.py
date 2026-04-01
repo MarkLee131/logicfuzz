@@ -421,7 +421,7 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
                 "build_errors": [
                     "Language mismatch: C++ features detected in C project code.",
                     "This will cause compilation failure. Please regenerate using pure C patterns.",
-                    "Common issues: FuzzedDataProvider (use memcpy), std::string (use char*), extern \"C\" (remove it)."
+                    "Common issues: FuzzedDataProvider (use memcpy), std::string (use char*)."
                 ],
                 "compile_log": lang_report,
                 "binary_exists": False,
