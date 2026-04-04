@@ -45,7 +45,21 @@ class Arg:
         return hash(self.__key())
 
     def __eq__(self, other):
-        return hash(self) == hash(other) 
+        return hash(self) == hash(other)
+
+    @classmethod
+    def from_clang_data(cls, name: str, flag: str, type_str: str,
+                        is_const: 'List[bool]', size: int = 0,
+                        is_type_incomplete: bool = False) -> 'Arg':
+        """Create Arg from clang data (without LLVM-specific fields)."""
+        return cls(
+            name=name,
+            flag=flag,
+            size=size,
+            type=type_str,
+            is_const=is_const,
+            is_type_incomplete=is_type_incomplete
+        )
 
 class Api:
     function_name: str
@@ -83,5 +97,85 @@ class Api:
         return hash(self.__key())
 
     def __eq__(self, other):
-        return hash(self) == hash(other) 
+        return hash(self) == hash(other)
+
+    @classmethod
+    def from_clang_only(cls, function_name: str, clang_data: dict) -> Optional['Api']:
+        """
+        Create Api object from clang-only data (no LLVM data).
+
+        This is a fallback when LLVM extraction fails. The resulting Api
+        will have limited information (no size, simplified flags).
+
+        Args:
+            function_name: Function name
+            clang_data: Dictionary from apis_clang.json line
+
+        Returns:
+            Api object, or None if parsing fails
+        """
+        try:
+            is_vararg = clang_data.get("is_vararg", False)
+            namespace = clang_data.get("namespace", [])
+
+            # Parse return info
+            return_info_data = clang_data.get("return_info", {})
+            return_type = return_info_data.get("type_clang", "void")
+            return_const = return_info_data.get("const", [False])
+            return_info = Arg(
+                name="return",
+                flag=cls._infer_flag_from_type(return_type),
+                size=0,  # Unknown without LLVM data
+                type=return_type,
+                is_const=return_const if isinstance(return_const, list) else [return_const]
+            )
+
+            # Parse arguments info
+            arguments_info = []
+            for arg_data in clang_data.get("arguments_info", []):
+                arg_name = arg_data.get("name", "")
+                arg_type = arg_data.get("type_clang", "")
+                arg_const = arg_data.get("const", [False])
+                arg = Arg(
+                    name=arg_name,
+                    flag=cls._infer_flag_from_type(arg_type),
+                    size=0,  # Unknown without LLVM data
+                    type=arg_type,
+                    is_const=arg_const if isinstance(arg_const, list) else [arg_const]
+                )
+                arguments_info.append(arg)
+
+            return cls(
+                function_name=function_name,
+                is_vararg=is_vararg,
+                return_info=return_info,
+                arguments_info=arguments_info,
+                namespace=namespace
+            )
+        except Exception:
+            return None
+
+    @staticmethod
+    def _infer_flag_from_type(type_str: str) -> str:
+        """Infer type flag from C type string (simplified heuristic)."""
+        if not type_str:
+            return "other"
+        type_lower = type_str.lower()
+        if "*" in type_str or "[]" in type_str:
+            if "char" in type_lower or "uint8" in type_lower or "int8" in type_lower:
+                return "str"
+            return "ptr"
+        if "struct" in type_lower:
+            return "struct"
+        if "enum" in type_lower:
+            return "enum"
+        if any(t in type_lower for t in ["int", "long", "short", "size_t", "ssize_t"]):
+            return "int"
+        if any(t in type_lower for t in ["float", "double"]):
+            return "float"
+        if "bool" in type_lower or "_Bool" in type_str:
+            return "int"
+        if "void" in type_lower:
+            return "void"
+        return "other"
 

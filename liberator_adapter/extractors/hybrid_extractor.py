@@ -97,35 +97,49 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 public_headers_file=public_headers_file
             )
         
-        # 2. Prepare bitcode file
+        # 2. Prepare bitcode file (with fallback to clang-only mode)
         logger.info("Step 2: Preparing bitcode file...")
+        llvm_extraction_failed = False
         if not bc_file:
             if compile_project:
-                bc_file = self.llvm_extractor.compile_to_bitcode()
+                try:
+                    bc_file = self.llvm_extractor.compile_to_bitcode()
+                except Exception as e:
+                    logger.warning(f"LLVM compilation failed, falling back to clang-only mode: {e}")
+                    llvm_extraction_failed = True
             else:
                 raise ValueError("bc_file not provided and compile_project=False")
 
-        # 3. Extract apis_llvm.json (runs on host)
-        # Note: LLVM extraction runs on HOST, so output goes to a HOST directory
-        logger.info("Step 3: Extracting apis_llvm.json on host...")
+        # 3. Extract apis_llvm.json (runs on host) - skip if LLVM extraction failed
         if not self.local_temp_dir:
             self.local_temp_dir = tempfile.mkdtemp(prefix=f'liberator_extract_{self.benchmark.project}_')
             logger.info(f"Created local temp directory: {self.local_temp_dir}")
 
-        # Extract to local temp dir (HOST path)
-        self.llvm_extractor.extract_apis_llvm_on_host(
-            bc_file=bc_file,
-            apis_clang_path=apis_clang_path,
-            output_dir=self.local_temp_dir  # Use HOST temp dir, not container path
-        )
+        if not llvm_extraction_failed:
+            # Note: LLVM extraction runs on HOST, so output goes to a HOST directory
+            logger.info("Step 3: Extracting apis_llvm.json on host...")
+            try:
+                # Extract to local temp dir (HOST path)
+                self.llvm_extractor.extract_apis_llvm_on_host(
+                    bc_file=bc_file,
+                    apis_clang_path=apis_clang_path,
+                    output_dir=self.local_temp_dir  # Use HOST temp dir, not container path
+                )
+            except Exception as e:
+                logger.warning(f"LLVM extraction failed, falling back to clang-only mode: {e}")
+                llvm_extraction_failed = True
 
-        # 4. Read and merge data
-        logger.info("Step 4: Merging Clang and LLVM data...")
-        apis = self._merge_apis(
-            apis_clang_path=apis_clang_path,  # Container path
-            llvm_output_dir=self.local_temp_dir,  # Host path with LLVM results
-            function_signatures=function_signatures
-        )
+        # 4. Read and merge data (or use clang-only)
+        if llvm_extraction_failed:
+            logger.info("Step 4: Using clang-only extraction (no LLVM data)...")
+            apis = self._clang_only_extraction(apis_clang_path, function_signatures)
+        else:
+            logger.info("Step 4: Merging Clang and LLVM data...")
+            apis = self._merge_apis(
+                apis_clang_path=apis_clang_path,  # Container path
+                llvm_output_dir=self.local_temp_dir,  # Host path with LLVM results
+                function_signatures=function_signatures
+            )
         
         logger.info(f"Successfully extracted {len(apis)} APIs")
         return apis
@@ -260,7 +274,102 @@ class HybridAPIExtractor(BaseAPIExtractor):
             raise
     
     # _copy_from_container is inherited from BaseAPIExtractor
-    
+
+    def _clang_only_extraction(
+        self,
+        apis_clang_path: str,
+        function_signatures: Optional[List[str]] = None
+    ) -> Dict[str, Api]:
+        """
+        Fallback extraction using only Clang data (when LLVM extraction fails).
+
+        This provides basic API information without LLVM-specific data like
+        conditions and detailed data layout analysis.
+
+        Args:
+            apis_clang_path: Path to apis_clang.json (inside container)
+            function_signatures: List of function signatures to extract (optional)
+
+        Returns:
+            Dictionary mapping function names to Api objects
+        """
+        import json
+
+        # Copy apis_clang.json from container
+        local_apis_clang = os.path.join(self.local_temp_dir, 'apis_clang.json')
+        self._copy_from_container(apis_clang_path, local_apis_clang)
+
+        # Read apis_clang.json (line-delimited JSON format)
+        apis_clang_data = {}
+        with open(local_apis_clang, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                try:
+                    api_entry = json.loads(line)
+                    func_name = api_entry.get('function_name', '')
+                    if func_name:
+                        apis_clang_data[func_name] = api_entry
+                except json.JSONDecodeError:
+                    continue
+
+        # Copy optional files from container
+        incomplete_types_path = f'{self.output_dir}/incomplete_types.txt'
+        enum_types_path = f'{self.output_dir}/enum_types.txt'
+        exported_functions_path = f'{self.output_dir}/exported_functions.txt'
+
+        local_incomplete_types = os.path.join(self.local_temp_dir, 'incomplete_types.txt')
+        local_enum_types = os.path.join(self.local_temp_dir, 'enum_types.txt')
+        local_exported_functions = os.path.join(self.local_temp_dir, 'exported_functions.txt')
+
+        # Copy optional files if they exist
+        for container_path, local_path in [
+            (incomplete_types_path, local_incomplete_types),
+            (enum_types_path, local_enum_types),
+            (exported_functions_path, local_exported_functions),
+        ]:
+            if self._file_exists_in_container(container_path):
+                self._copy_from_container(container_path, local_path)
+            else:
+                # Create empty file
+                with open(local_path, 'w') as f:
+                    f.write('')
+
+        # Convert clang data to Api objects
+        apis_dict = {}
+        for func_name, func_data in apis_clang_data.items():
+            try:
+                api = Api.from_clang_only(func_name, func_data)
+                if api:
+                    apis_dict[func_name] = api
+            except Exception as e:
+                logger.debug(f"Failed to create Api for {func_name}: {e}")
+
+        # Record metadata (clang-only mode)
+        self.last_metadata = {
+            "container": {
+                "apis_clang": apis_clang_path,
+                "incomplete_types": incomplete_types_path,
+                "exported_functions": exported_functions_path,
+                "enum_types": enum_types_path,
+            },
+            "local": {
+                "apis_clang": local_apis_clang,
+                "apis_llvm": None,  # No LLVM data
+                "conditions": None,
+                "data_layout": None,
+                "incomplete_types": local_incomplete_types,
+                "exported_functions": local_exported_functions,
+                "enum_types": local_enum_types,
+            },
+            "llvm_output_dir": self.local_temp_dir,
+            "clang_only_mode": True,  # Flag to indicate clang-only mode
+        }
+
+        logger.info(f"Clang-only extraction completed: {len(apis_dict)} APIs extracted")
+        return apis_dict
+
     def _extract_function_name(self, signature: str) -> Optional[str]:
         """Extract function name from function signature"""
         import re

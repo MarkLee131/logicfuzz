@@ -136,6 +136,28 @@ All APIs (N) → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L
 
 ### Future Work
 
+- [ ] **Indirect Entry Point Support** (from libucl case study)
+  - Current L1 filter requires direct `(uint8_t* data, size_t)` consumption
+  - Many libraries use `init() → consume_data()` pattern (e.g., `ucl_parser_new() → ucl_parser_add_chunk()`)
+  - Need to support "indirect entry points" where data consumption requires prior handle creation
+  - Impact: libucl had 70% reachability but only 9.7% coverage diff due to this limitation
+
+- [ ] **Post-Parse Sequence Extension**
+  - Current sequences stop at parse/get_object stage
+  - High-value APIs (emit, compare, merge) require parsed objects as input
+  - Auto-extend sequences: `parse → get_object → emit/compare/merge`
+  - Impact: Would cover `ucl_emit_*` (+109 complexity), `ucl_object_compare` (+44 complexity)
+
+- [ ] **Cross-Project Coverage Analysis** (in progress)
+  - Analyze libaom, re2, sqlite3 results with same framework as libucl
+  - Identify common patterns vs project-specific issues
+  - Avoid local optimization that doesn't generalize
+  - Results: `docs/coverage_analysis_cases.md`
+
+- [ ] Early crash detection (15s fuzzing to filter bad drivers)
+- [ ] TLV-aware seed generation based on format analysis
+- [ ] Coverage feedback loop from execution phase for adaptive ranking
+
 ---
 
 ### L1: Entry Point Analyzer - Detailed Design

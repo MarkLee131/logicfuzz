@@ -6,9 +6,11 @@ import json
 import logging
 import os
 import re
+import socket
 import sys
 import time
 import traceback
+import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -73,6 +75,96 @@ WORK_DIR = ''
 LOG_LEVELS = ['debug', 'info', 'error']
 LOG_FMT = ('%(asctime)s.%(msecs)03d %(levelname)s '
            '%(module)s - %(funcName)s: %(message)s')
+
+# FuzzIntrospector auto-start configuration
+INTROSPECTOR_LAUNCH_SCRIPT = Path(__file__).parent / "report" / "launch_local_introspector.sh"
+INTROSPECTOR_DEFAULT_HOST = "localhost"
+INTROSPECTOR_DEFAULT_PORT = 8080
+
+
+def _check_introspector_running(host: str = INTROSPECTOR_DEFAULT_HOST,
+                                 port: int = INTROSPECTOR_DEFAULT_PORT,
+                                 timeout: float = 2.0) -> bool:
+  """Check if FuzzIntrospector service is running on the specified host:port."""
+  try:
+    url = f"http://{host}:{port}/"
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+      return response.status == 200
+  except (urllib.error.URLError, socket.timeout, ConnectionRefusedError):
+    return False
+
+
+def _ensure_introspector_running(endpoint: str) -> bool:
+  """Ensure FuzzIntrospector is running. Auto-start if not running and using localhost.
+
+  Args:
+    endpoint: The introspector endpoint URL (e.g., 'http://localhost:8080/api')
+
+  Returns:
+    True if introspector is running (or was successfully started), False otherwise.
+  """
+  # Parse endpoint to get host and port
+  # Expected format: http://localhost:8080/api or http://host:port/api
+  import re
+  match = re.match(r'https?://([^:/]+):(\d+)', endpoint)
+  if not match:
+    logger.warning("Could not parse introspector endpoint: %s", endpoint)
+    return True  # Assume it's okay if we can't parse
+
+  host, port = match.group(1), int(match.group(2))
+
+  # Check if already running
+  if _check_introspector_running(host, port):
+    logger.info("FuzzIntrospector is already running at %s:%d", host, port)
+    return True
+
+  # Only auto-start for localhost
+  if host not in ("localhost", "127.0.0.1", "0.0.0.0"):
+    logger.warning("FuzzIntrospector not running at %s:%d (remote host, cannot auto-start)", host, port)
+    return False
+
+  # Check if launch script exists
+  if not INTROSPECTOR_LAUNCH_SCRIPT.exists():
+    logger.warning("FuzzIntrospector launch script not found: %s", INTROSPECTOR_LAUNCH_SCRIPT)
+    return False
+
+  # Auto-start FuzzIntrospector
+  logger.info("FuzzIntrospector not running. Starting via %s ...", INTROSPECTOR_LAUNCH_SCRIPT)
+  print(f"🚀 Starting FuzzIntrospector service (this may take a moment)...")
+
+  try:
+    # Run the launch script
+    result = subprocess.run(
+      ["bash", str(INTROSPECTOR_LAUNCH_SCRIPT)],
+      cwd=Path(__file__).parent,
+      capture_output=True,
+      text=True,
+      timeout=300  # 5 minutes timeout for startup
+    )
+
+    if result.returncode != 0:
+      logger.error("Failed to start FuzzIntrospector: %s", result.stderr)
+      return False
+
+    # Verify it's now running
+    max_retries = 10
+    for i in range(max_retries):
+      if _check_introspector_running(host, port):
+        logger.info("FuzzIntrospector started successfully at %s:%d", host, port)
+        print(f"✅ FuzzIntrospector is now running at http://{host}:{port}")
+        return True
+      time.sleep(2)
+
+    logger.error("FuzzIntrospector failed to start after %d retries", max_retries)
+    return False
+
+  except subprocess.TimeoutExpired:
+    logger.error("Timeout while starting FuzzIntrospector")
+    return False
+  except Exception as e:
+    logger.error("Error starting FuzzIntrospector: %s", e)
+    return False
+
 
 class Result:
   benchmark: benchmarklib.Benchmark
@@ -1744,6 +1836,13 @@ def main():
                      time.strftime(TIME_STAMP_FMT, time.gmtime(start)))
   # Add num_samples to report.json
   add_to_json_report(args.work_dir, 'num_samples', args.num_samples)
+
+  # Ensure FuzzIntrospector is running before proceeding
+  # (auto-start if using localhost and not running)
+  if not _ensure_introspector_running(args.introspector_endpoint):
+    logger.error("FuzzIntrospector is not running and could not be started.")
+    logger.error("Please start it manually: ./report/launch_local_introspector.sh")
+    sys.exit(1)
 
   # Set introspector endpoint before performing any operations to ensure the
   # right API endpoint is used throughout.
