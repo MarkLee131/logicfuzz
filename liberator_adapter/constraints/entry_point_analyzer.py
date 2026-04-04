@@ -1,8 +1,13 @@
 """
 L1: Entry Point Analyzer - Identify APIs that directly consume fuzzer data.
 
-Entry Points are APIs that can directly receive fuzzer input (const uint8_t* data, size_t size)
-without requiring complex initialization (like channel/handle setup).
+Entry Points are APIs that can directly receive fuzzer input without requiring
+complex initialization (like channel/handle setup).
+
+Supports multiple input type categories:
+1. C-style: (const uint8_t* data, size_t size)
+2. C++ view types: (string_view input) - self-contained, no size arg needed
+3. C++ container refs: (const std::vector<uint8_t>& input)
 
 This is the first semantic filter in the Progressive Filter Pipeline:
     L0 (Type) -> L1 (Entry Point) -> L2 (Lifecycle) -> L3 (StateMachine) -> L4 (Ranking)
@@ -10,15 +15,171 @@ This is the first semantic filter in the Progressive Filter Pipeline:
 Design principles:
 1. Pure static analysis - no LLM needed
 2. Pattern-based identification from API signatures
-3. Conservative matching - prefer precision over recall
+3. Extensible type category system - not hardcoded to specific libraries
+4. Conservative matching - prefer precision over recall
 """
 
 import logging
+import re
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Dict, Set, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Input Type Category System
+# =============================================================================
+
+class InputTypeCategory(Enum):
+    """Categories of input types that can consume fuzzer data."""
+
+    # C-style: raw pointer + separate size argument
+    # Examples: (const uint8_t* data, size_t size), (const char* buf, int len)
+    C_BUFFER_WITH_SIZE = "c_buffer"
+
+    # C++ view types: self-contained (pointer + size in one object)
+    # Examples: string_view, span<uint8_t>, StringPiece
+    CPP_VIEW = "cpp_view"
+
+    # C++ container references: dynamic containers passed by reference
+    # Examples: const std::string&, const std::vector<uint8_t>&
+    CPP_CONTAINER_REF = "cpp_container"
+
+    # C-style string: null-terminated, no explicit size
+    # Examples: (const char* str) - parser APIs that accept null-terminated input
+    C_STRING = "c_string"
+
+
+@dataclass
+class InputTypePatterns:
+    """
+    Extensible patterns for identifying input types.
+
+    Each pattern category defines type patterns that match fuzzer-consumable input.
+    Patterns are substring matches (case-insensitive) against the normalized type string.
+    """
+
+    # C-style buffer types (require separate size argument)
+    c_buffer_patterns: Tuple[str, ...] = (
+        "unsigned char *",
+        "uint8_t *",
+        "char *",
+        "void *",
+        "uint8_t*",
+        "char*",
+    )
+
+    # Size argument types (for C_BUFFER_WITH_SIZE category)
+    size_patterns: Tuple[str, ...] = (
+        "size_t",
+        "int",
+        "unsigned long",
+        "long",
+        "unsigned int",
+        "uint32_t",
+        "uint64_t",
+        "ssize_t",
+    )
+
+    # C++ view types (self-contained: contain both data pointer and size)
+    # These are generic patterns that match any library's view types
+    cpp_view_patterns: Tuple[str, ...] = (
+        "string_view",      # std::string_view, absl::string_view
+        "stringpiece",      # StringPiece (Google style)
+        "span<",            # std::span<uint8_t>, gsl::span
+        "array_view",       # Various libraries
+        "string_ref",       # llvm::StringRef, etc.
+        "byte_view",        # Various libraries
+        "bytes_view",       # Various libraries
+    )
+
+    # C++ container reference patterns
+    cpp_container_patterns: Tuple[str, ...] = (
+        "std::string",
+        "std::vector",
+        "std::array",
+        "basic_string",
+        "vector<",
+        "array<",
+    )
+
+    # C-style null-terminated string (no size needed)
+    c_string_patterns: Tuple[str, ...] = (
+        "const char *",
+        "char const *",
+        "const char*",
+    )
+
+    @classmethod
+    def normalize_type(cls, type_str: str) -> str:
+        """
+        Normalize type string for pattern matching.
+
+        Handles variations like:
+        - "const std::string &" vs "std::string const&"
+        - Template spacing: "vector< uint8_t >" vs "vector<uint8_t>"
+        """
+        if not type_str:
+            return ""
+
+        # Convert to lowercase
+        normalized = type_str.lower()
+
+        # Remove extra whitespace around template brackets
+        normalized = re.sub(r'\s*<\s*', '<', normalized)
+        normalized = re.sub(r'\s*>\s*', '>', normalized)
+
+        # Normalize pointer/reference spacing
+        normalized = re.sub(r'\s*\*\s*', ' *', normalized)
+        normalized = re.sub(r'\s*&\s*', ' &', normalized)
+
+        # Collapse multiple spaces
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+        return normalized
+
+    def match_category(self, type_str: str, is_const: bool = False) -> Optional[InputTypeCategory]:
+        """
+        Determine which input category a type belongs to.
+
+        Args:
+            type_str: The type string to check
+            is_const: Whether the type has const qualifier
+
+        Returns:
+            InputTypeCategory if type is a valid input type, None otherwise
+        """
+        normalized = self.normalize_type(type_str)
+        if not normalized:
+            return None
+
+        # Check C++ view types first (most specific)
+        if any(p.lower() in normalized for p in self.cpp_view_patterns):
+            return InputTypeCategory.CPP_VIEW
+
+        # Check C++ container references
+        if any(p.lower() in normalized for p in self.cpp_container_patterns):
+            # Must be a reference for container input
+            if '&' in normalized:
+                return InputTypeCategory.CPP_CONTAINER_REF
+
+        # Check C-style buffer (const pointer + typically needs size)
+        if any(p.lower() in normalized for p in self.c_buffer_patterns):
+            if is_const or 'const' in normalized:
+                return InputTypeCategory.C_BUFFER_WITH_SIZE
+
+        # Check C-style null-terminated string (const char* without size)
+        if any(p.lower() in normalized for p in self.c_string_patterns):
+            return InputTypeCategory.C_STRING
+
+        return None
+
+    def is_size_type(self, type_str: str) -> bool:
+        """Check if type is a valid size type."""
+        normalized = self.normalize_type(type_str)
+        return any(p.lower() in normalized for p in self.size_patterns)
 
 
 # =============================================================================
@@ -46,40 +207,46 @@ class EntryPointType(Enum):
 
 @dataclass
 class EntryPointPattern:
-    """Pattern for identifying Entry Point APIs from signatures."""
+    """
+    Pattern configuration for identifying Entry Point APIs.
 
-    # Buffer argument type keywords (any match)
-    buffer_type_keywords: Tuple[str, ...] = (
-        "unsigned char *",
-        "uint8_t *",
-        "char *",
-        "void *",
-        "const unsigned char *",
-        "const uint8_t *",
-        "const char *",
-        "const void *",
+    Supports multiple input type categories:
+    - C_BUFFER_WITH_SIZE: Traditional (const uint8_t*, size_t) pattern
+    - CPP_VIEW: C++ view types like string_view (no separate size needed)
+    - CPP_CONTAINER_REF: C++ container references like const vector<>&
+    - C_STRING: Null-terminated C strings (const char*)
+    """
+
+    # Type pattern configuration (extensible)
+    type_patterns: InputTypePatterns = field(default_factory=InputTypePatterns)
+
+    # Which input categories to accept
+    # Default: accept all categories for maximum coverage
+    accepted_categories: Tuple[InputTypeCategory, ...] = (
+        InputTypeCategory.C_BUFFER_WITH_SIZE,
+        InputTypeCategory.CPP_VIEW,
+        InputTypeCategory.CPP_CONTAINER_REF,
+        InputTypeCategory.C_STRING,
     )
 
-    # Size argument type keywords (any match)
-    size_type_keywords: Tuple[str, ...] = (
-        "int",
-        "size_t",
-        "unsigned long",
-        "long",
-        "unsigned int",
-        "uint32_t",
-        "uint64_t",
-    )
+    # For C_BUFFER_WITH_SIZE: which argument positions to check
+    # Default: first two arguments (buffer at 0, size at 1)
+    c_buffer_arg_index: int = 0
+    c_size_arg_index: int = 1
 
-    # Expected argument positions
-    buffer_arg_index: int = 0
-    size_arg_index: int = 1
+    # For C++ types: which argument position to check
+    # Default: first argument
+    cpp_input_arg_index: int = 0
 
-    # Whether buffer must be const (indicates input data)
-    buffer_must_be_const: bool = True
+    # Whether C-style buffer must be const (indicates input data)
+    c_buffer_must_be_const: bool = True
 
-    # Whether this pattern requires a size argument
-    requires_size_arg: bool = True
+    # Whether to allow scanning all arguments (not just fixed positions)
+    # If True, will check all arguments for matching input types
+    scan_all_arguments: bool = True
+
+    # Maximum argument position to scan (prevents false positives from output params)
+    max_scan_position: int = 2
 
 
 @dataclass
@@ -94,15 +261,29 @@ class EntryPointInfo:
     # Entry point classification
     entry_type: EntryPointType
 
-    # Buffer/size argument info
-    buffer_arg_index: int
-    buffer_arg_type: str
-    size_arg_index: int  # -1 if no size argument
+    # Input type category
+    input_category: InputTypeCategory
+
+    # Input argument info
+    input_arg_index: int
+    input_arg_type: str
+
+    # Size argument info (only for C_BUFFER_WITH_SIZE category)
+    size_arg_index: int = -1  # -1 if no separate size argument
     size_arg_type: Optional[str] = None
 
     # Matching info
     matched_pattern: Optional[str] = None
     confidence: float = 1.0
+
+    # Legacy aliases for backward compatibility
+    @property
+    def buffer_arg_index(self) -> int:
+        return self.input_arg_index
+
+    @property
+    def buffer_arg_type(self) -> str:
+        return self.input_arg_type
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
@@ -110,8 +291,9 @@ class EntryPointInfo:
             'function_name': self.function_name,
             'return_type': self.return_type,
             'entry_type': self.entry_type.value,
-            'buffer_arg_index': self.buffer_arg_index,
-            'buffer_arg_type': self.buffer_arg_type,
+            'input_category': self.input_category.value,
+            'input_arg_index': self.input_arg_index,
+            'input_arg_type': self.input_arg_type,
             'size_arg_index': self.size_arg_index,
             'size_arg_type': self.size_arg_type,
             'confidence': self.confidence,
@@ -328,80 +510,136 @@ class EntryPointAnalyzer:
         """
         Check if an API is an Entry Point.
 
+        Checks for multiple input type categories:
+        - C_BUFFER_WITH_SIZE: (const uint8_t* data, size_t size)
+        - CPP_VIEW: string_view, span<> (no separate size needed)
+        - CPP_CONTAINER_REF: const std::vector<>&, const std::string&
+        - C_STRING: const char* (null-terminated)
+
         Args:
             api: API dictionary with function_name, arguments, etc.
+                Supports both formats:
+                - Standard: arguments[], type, return_type
+                - Clang: arguments_info[], type_clang, return_info
 
         Returns:
             EntryPointInfo if API is an Entry Point, None otherwise.
         """
         func_name = api.get('function_name', '')
-        args = api.get('arguments', [])
-        return_type = api.get('return_type', '')
-
-        # Need at least 1 argument for buffer (2 for buffer + size)
-        min_args = 2 if self.pattern.requires_size_arg else 1
-        if len(args) < min_args:
-            return None
-
-        # Check buffer argument
-        buffer_idx = self.pattern.buffer_arg_index
-        if buffer_idx >= len(args):
-            return None
-
-        buffer_arg = args[buffer_idx]
-        buffer_type = buffer_arg.get('type', '').lower()
-
-        # Check if buffer type matches
-        if not self._type_matches(buffer_type, self.pattern.buffer_type_keywords):
-            return None
-
-        # Check const requirement
-        if self.pattern.buffer_must_be_const:
-            is_const = buffer_arg.get('is_const', [False])
-            # is_const is a list, first element indicates if base type is const
-            if isinstance(is_const, list):
-                is_const = is_const[0] if is_const else False
-            if not is_const:
-                return None
-
-        # Check size argument (if required)
-        size_idx = self.pattern.size_arg_index
-        size_type = None
-
-        if self.pattern.requires_size_arg:
-            if size_idx >= len(args):
-                return None
-
-            size_arg = args[size_idx]
-            size_type = size_arg.get('type', '').lower()
-
-            if not self._type_matches(size_type, self.pattern.size_type_keywords):
-                return None
+        # Support both 'arguments' and 'arguments_info' keys
+        args = api.get('arguments', api.get('arguments_info', []))
+        # Support both 'return_type' (string) and 'return_info' (dict with type_clang)
+        return_info = api.get('return_info', {})
+        if isinstance(return_info, dict):
+            return_type = return_info.get('type_clang', return_info.get('type', ''))
         else:
-            size_idx = -1
+            return_type = api.get('return_type', '')
 
-        # Classify entry type based on function name
-        entry_type = self._classify_entry_type(func_name)
+        if not args:
+            return None
 
-        return EntryPointInfo(
-            function_name=func_name,
-            return_type=return_type,
-            arguments=args,
-            entry_type=entry_type,
-            buffer_arg_index=buffer_idx,
-            buffer_arg_type=buffer_arg.get('type', ''),
-            size_arg_index=size_idx,
-            size_arg_type=size_type,
-            confidence=1.0,
-        )
+        type_patterns = self.pattern.type_patterns
 
-    def _type_matches(self, actual_type: str, keywords: Tuple[str, ...]) -> bool:
-        """Check if actual type matches any keyword."""
-        actual_lower = actual_type.lower().strip()
-        for keyword in keywords:
-            if keyword.lower() in actual_lower:
-                return True
-        return False
+        # Determine which argument positions to check
+        if self.pattern.scan_all_arguments:
+            positions_to_check = range(min(len(args), self.pattern.max_scan_position + 1))
+        else:
+            positions_to_check = [self.pattern.c_buffer_arg_index, self.pattern.cpp_input_arg_index]
+            positions_to_check = [p for p in positions_to_check if p < len(args)]
+
+        # Try to find a matching input argument
+        for arg_idx in positions_to_check:
+            arg = args[arg_idx]
+            # Support both 'type' and 'type_clang' keys
+            arg_type = arg.get('type', arg.get('type_clang', ''))
+            is_const = self._get_is_const(arg)
+
+            # Determine input category
+            category = type_patterns.match_category(arg_type, is_const)
+
+            if category is None:
+                continue
+
+            if category not in self.pattern.accepted_categories:
+                continue
+
+            # Category-specific validation
+            if category == InputTypeCategory.C_BUFFER_WITH_SIZE:
+                # Need to find a size argument
+                size_info = self._find_size_argument(args, arg_idx)
+                if size_info is None:
+                    continue
+                size_idx, size_type = size_info
+            else:
+                # C++ view/container types don't need separate size
+                size_idx = -1
+                size_type = None
+
+            # Additional validation for C buffer: must be const
+            if category == InputTypeCategory.C_BUFFER_WITH_SIZE:
+                if self.pattern.c_buffer_must_be_const and not is_const:
+                    continue
+
+            # Classify entry type based on function name
+            entry_type = self._classify_entry_type(func_name)
+
+            return EntryPointInfo(
+                function_name=func_name,
+                return_type=return_type,
+                arguments=args,
+                entry_type=entry_type,
+                input_category=category,
+                input_arg_index=arg_idx,
+                input_arg_type=arg_type,
+                size_arg_index=size_idx,
+                size_arg_type=size_type,
+                confidence=1.0,
+            )
+
+        return None
+
+    def _get_is_const(self, arg: Dict[str, Any]) -> bool:
+        """Extract const qualifier from argument.
+
+        Supports both formats:
+        - Standard: is_const (bool or list)
+        - Clang: const (list of bools)
+        """
+        # Try 'is_const' first (standard format), then 'const' (clang format)
+        is_const = arg.get('is_const', arg.get('const', [False]))
+        if isinstance(is_const, list):
+            return is_const[0] if is_const else False
+        return bool(is_const)
+
+    def _find_size_argument(self, args: List[Dict[str, Any]], buffer_idx: int) -> Optional[Tuple[int, str]]:
+        """
+        Find a size argument for a buffer argument.
+
+        Looks for size argument at expected position or nearby.
+        Supports both 'type' and 'type_clang' keys.
+        """
+        type_patterns = self.pattern.type_patterns
+
+        def get_arg_type(arg: Dict[str, Any]) -> str:
+            return arg.get('type', arg.get('type_clang', ''))
+
+        # Check expected position first
+        expected_size_idx = self.pattern.c_size_arg_index
+        if expected_size_idx < len(args) and expected_size_idx != buffer_idx:
+            size_arg = args[expected_size_idx]
+            size_type = get_arg_type(size_arg)
+            if type_patterns.is_size_type(size_type):
+                return (expected_size_idx, size_type)
+
+        # Check argument right after buffer
+        next_idx = buffer_idx + 1
+        if next_idx < len(args):
+            size_arg = args[next_idx]
+            size_type = get_arg_type(size_arg)
+            if type_patterns.is_size_type(size_type):
+                return (next_idx, size_type)
+
+        return None
 
     def _classify_entry_type(self, func_name: str) -> EntryPointType:
         """Classify Entry Point type based on function name patterns."""

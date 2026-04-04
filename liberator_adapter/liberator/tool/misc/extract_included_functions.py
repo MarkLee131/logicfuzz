@@ -28,7 +28,13 @@ def get_argument_info(type):
 
     # this trick expands typedef into their real types
     atd = type.get_declaration()
-    if (atd.kind.is_declaration() and
+    try:
+        atd_is_declaration = atd.kind.is_declaration()
+    except ValueError:
+        # Handle unknown kind IDs from newer C++ features
+        atd_is_declaration = False
+
+    if (atd_is_declaration and
         "::" not in type.spelling and
         atd.underlying_typedef_type.spelling != ""):
         type_str = atd.underlying_typedef_type.spelling
@@ -92,9 +98,13 @@ def get_argument_info(type):
         # Collect all type levels from outer to inner
         type_levels = []
         current_type = type_for_const
-        while current_type.kind == clang.cindex.TypeKind.POINTER:
-            type_levels.append(current_type)
-            current_type = current_type.get_pointee()
+        try:
+            while current_type.kind == clang.cindex.TypeKind.POINTER:
+                type_levels.append(current_type)
+                current_type = current_type.get_pointee()
+        except ValueError:
+            # Handle unknown type kinds from newer C++ features
+            pass
         # Add the base type (innermost)
         type_levels.append(current_type)
 
@@ -145,12 +155,28 @@ def get_api(node, namespace):
     #     print(f"debug {function_name}")
     #     from IPython import embed; embed(); exit(1)
 
+    # Use get_arguments() for better C++ type handling
+    # This method retrieves parameter cursors which have correct type spellings
+    # for template instantiations and namespace-qualified types like absl::string_view
     arguments_info = []
-    for a in nt.argument_types():
-        info = get_argument_info(a)
-        # a_str = a.spelling
-        # info = get_argument_info(a_str)
-        arguments_info.append(copy.deepcopy(info))
+    param_cursors = list(node.get_arguments())
+    arg_types = list(nt.argument_types())
+
+    # Prefer using parameter cursors when available (more accurate for C++)
+    if param_cursors:
+        for param in param_cursors:
+            # Use param.type which preserves the full type spelling
+            info = get_argument_info(param.type)
+            # Add parameter name if available
+            if param.spelling:
+                info["name"] = param.spelling
+            arguments_info.append(copy.deepcopy(info))
+    else:
+        # Fallback to argument_types() for cases where get_arguments() doesn't work
+        for a in arg_types:
+            info = get_argument_info(a)
+            arguments_info.append(copy.deepcopy(info))
+
     api_obj["arguments_info"] = arguments_info
 
     return api_obj
@@ -179,8 +205,14 @@ def get_api(node, namespace):
 
 # Traverse the AST tree
 def traverse(node, include_folder, namespace):
+    # Handle unknown node kinds gracefully (Python bindings may not recognize newer C++ nodes)
+    try:
+        node_kind = node.kind
+    except ValueError:
+        # Skip nodes with unknown kind IDs (e.g., newer C++17/20 features not in bindings)
+        return
 
-    if node.kind == clang.cindex.CursorKind.NAMESPACE:
+    if node_kind == clang.cindex.CursorKind.NAMESPACE:
         namespace += [node.displayname]
 
     # Recurse for children of this node
@@ -188,7 +220,12 @@ def traverse(node, include_folder, namespace):
         traverse(child, include_folder, copy.deepcopy(namespace))
 
     # if node.type.kind == clang.cindex.TypeKind.FUNCTIONPROTO and str(node.location.file).startswith("./include/"):
-    if (node.type.kind == clang.cindex.TypeKind.FUNCTIONPROTO and 
+    try:
+        type_kind = node.type.kind
+    except ValueError:
+        return
+
+    if (type_kind == clang.cindex.TypeKind.FUNCTIONPROTO and
         include_folder in str(node.location.file)):
         function_declarations.append(node)
         api = get_api(node, namespace)
@@ -198,8 +235,8 @@ def traverse(node, include_folder, namespace):
 
     # type of size -2 is a special case for incomplete types
     # from IPython import embed; embed(); exit(1)
-    if (node.kind in 
-        [clang.cindex.CursorKind.TYPEDEF_DECL, 
+    if (node_kind in
+        [clang.cindex.CursorKind.TYPEDEF_DECL,
          clang.cindex.CursorKind.STRUCT_DECL] and
         node.type.get_size() == -2):
         type_incomplete.add("%" + node.type.spelling)
@@ -211,7 +248,7 @@ def traverse(node, include_folder, namespace):
     #     print(f"get_size == -2 {node.spelling}")
     #     from IPython import embed; embed(); exit(1)
 
-    if node.kind == clang.cindex.CursorKind.ENUM_DECL:
+    if node_kind == clang.cindex.CursorKind.ENUM_DECL:
         type_enum.add(node.type.spelling)
     # pass
 
@@ -287,12 +324,16 @@ def _main():
     index = clang.cindex.Index.create()
 
     # Generate AST from filepath passed in the command line
-    include_paths = [f"-I{include_folder}", 
-                     "-I/usr/bin/../lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9", 
-                     "-I/usr/bin/../lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/backward", 
-                     "-I/usr/lib/llvm-12/lib/clang/12.0.0/include", 
-                     "-I/usr/include/x86_64-linux-gnu", 
-                     "-I/usr/include"]
+    # Note: Include paths must cover both system headers and installed libraries (like abseil)
+    include_paths = [f"-I{include_folder}",
+                     "-I/usr/local/include",  # For installed libraries like abseil
+                     "-I/usr/bin/../lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9",
+                     "-I/usr/bin/../lib/gcc/x86_64-linux-gnu/9/../../../../include/c++/9/backward",
+                     "-I/usr/lib/llvm-12/lib/clang/12.0.0/include",
+                     "-I/usr/lib/llvm-10/lib/clang/10.0.0/include",  # For LLVM 10
+                     "-I/usr/include/x86_64-linux-gnu",
+                     "-I/usr/include",
+                     "-std=c++17"]  # C++17 for string_view support
 
 
     tu = index.parse(tmp_file, args=include_paths)

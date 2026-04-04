@@ -49,7 +49,13 @@ class Factory:
                 raise Exception(f"Type '{a_type}' is not a valid pointer")
         elif a_flag == "val":
             if "*" in a_type:
-                raise Exception(f"Type '{a_type}' seems a pointer while expecting a 'val'")
+                # For C++ projects, type aliases or templates may expand to pointer types
+                # but still have 'val' flag from LLVM. Fix the flag to 'ref' instead of crashing.
+                import logging
+                logging.getLogger(__name__).debug(
+                    f"Type '{a_type}' has pointer but flag is 'val', treating as 'ref'"
+                )
+                a_flag = "ref"
 
         if a_flag == "fun" and "(*)" in a_type:
             a_type_core = a_type

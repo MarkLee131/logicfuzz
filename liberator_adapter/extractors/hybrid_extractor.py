@@ -270,7 +270,9 @@ class HybridAPIExtractor(BaseAPIExtractor):
             
             return apis_dict
         except Exception as e:
+            import traceback
             logger.error(f"Failed to merge APIs: {e}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
             raise
     
     # _copy_from_container is inherited from BaseAPIExtractor

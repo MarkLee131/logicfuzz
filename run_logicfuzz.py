@@ -931,7 +931,23 @@ def run_local_extraction_for_benchmark(
       headers_list = headers_result.stdout.strip().split('\n')
       logger.info(f'Found {len(headers_list)} header(s) in include/ directory: {headers_list[:10]}')
   
-  # Priority 2: If no headers in include/, check project root (but exclude internal dirs)
+  # Priority 2: Check {project}/{project}/ directory (common C++ project pattern, e.g., re2/re2/)
+  if not headers_list:
+    project_subdir = f'{project_dir}/{project}'
+    if container.execute(f'test -d "{project_subdir}" && echo "exists"').stdout.strip() == 'exists':
+      find_project_subdir_cmd = (
+        f'find "{project_subdir}" -maxdepth 2 -type f \\( '
+        f'-name "*.h" -o -name "*.hpp" -o -name "*.h++" -o -name "*.hh" '
+        f'\\) ! -path "*/internal/*" ! -path "*/private/*" ! -path "*/detail/*" '
+        f'! -path "*/impl/*" ! -path "*/*_internal.*" ! -path "*/*_private.*" '
+        f'-exec basename {{}} \\; | sort -u'
+      )
+      headers_result = container.execute(find_project_subdir_cmd)
+      if headers_result.returncode == 0 and headers_result.stdout.strip():
+        headers_list = headers_result.stdout.strip().split('\n')
+        logger.info(f'Found {len(headers_list)} header(s) in {project}/ subdirectory: {headers_list[:10]}')
+
+  # Priority 3: If no headers in include/ or project subdir, check project root (but exclude internal dirs)
   if not headers_list:
     find_root_headers_cmd = (
       f'find "{project_dir}" -maxdepth 1 -type f \\( '
@@ -944,7 +960,7 @@ def run_local_extraction_for_benchmark(
       headers_list = headers_result.stdout.strip().split('\n')
       logger.info(f'Found {len(headers_list)} header(s) in project root: {headers_list[:10]}')
   
-  # Priority 3: Fallback to system include directory, but filter by project name
+  # Priority 4: Fallback to system include directory, but filter by project name
   if not headers_list:
     logger.warning(f'No headers found in project directory, trying system include with project filter')
     system_include = '/usr/local/include'

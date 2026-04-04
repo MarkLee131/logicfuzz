@@ -1,11 +1,36 @@
 
-import json, collections, copy, os, random, string, logging
+import json, collections, copy, os, random, string, logging, subprocess
 from typing import List, Set #, Dict, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
 from liberator_adapter.common.api import Api, Arg
 from liberator_adapter.common.conditions import *
+
+
+def demangle_cpp_name(mangled: str) -> str:
+    """Demangle a C++ mangled name to its readable form."""
+    if not mangled.startswith('_Z'):
+        return mangled  # Not mangled
+    try:
+        result = subprocess.run(
+            ['c++filt', '-n', mangled],
+            capture_output=True, text=True, timeout=1
+        )
+        if result.returncode == 0:
+            demangled = result.stdout.strip()
+            # Extract just the function name (before the first '(')
+            if '(' in demangled:
+                # Handle templates and namespaces
+                name_part = demangled.split('(')[0]
+                # Get the last component (function name)
+                if '::' in name_part:
+                    return name_part.split('::')[-1]
+                return name_part
+            return demangled
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return mangled  # Return original if demangling fails
 
 class CoerceArgument:
     def __init__(self, original_type):
@@ -173,6 +198,7 @@ class Utils:
     def get_apis_clang_list(apis_clang):
 
         apis_clang_list = {}
+        duplicate_count = 0
 
         with open(apis_clang) as  f:
             for l in f:
@@ -184,11 +210,23 @@ class Utils:
 
                 function_name = api["function_name"]
 
+                # Handle C++ function overloading: use composite key if duplicate
                 if function_name in apis_clang_list:
-                    raise Exception(f"Function '{function_name}' already extracted!")
+                    # For overloaded functions, append argument signature to make unique key
+                    # This allows keeping both overloads while maintaining backwards compatibility
+                    args_info = api.get("arguments_info", [])
+                    arg_types = "_".join(arg.get("type_clang", arg.get("type", "")).replace(" ", "").replace("*", "p").replace("&", "r") for arg in args_info)
+                    unique_key = f"{function_name}__overload_{arg_types}" if arg_types else f"{function_name}__overload_{duplicate_count}"
+                    if unique_key not in apis_clang_list:
+                        apis_clang_list[unique_key] = copy.deepcopy(api)
+                    duplicate_count += 1
+                else:
+                    apis_clang_list[function_name] = copy.deepcopy(api)
 
-                apis_clang_list[function_name] = copy.deepcopy(api)
-        
+        if duplicate_count > 0:
+            import logging
+            logging.debug(f"Handled {duplicate_count} overloaded C++ functions in apis_clang")
+
         return apis_clang_list
 
     @staticmethod
@@ -216,7 +254,14 @@ class Utils:
 
         apis_clang_list = Utils.get_apis_clang_list(apis_clang)
 
+        # Build a set of demangled function names for matching
+        # This handles C++ name mangling
+        included_functions_set = set(included_functions)
+
         apis_list = set()
+        mangled_count = 0
+        matched_count = 0
+
         with open(apis_llvm) as  f:
             for l in f:
                 if not l.strip():
@@ -225,17 +270,31 @@ class Utils:
                     continue
                 try:
                     api = json.loads(l)
-                except Exception as e: 
-                    from IPython import embed; embed(); exit()
+                except Exception as e:
+                    logger.error(f"Failed to parse JSON line: {l[:100]}...")
+                    continue
                 function_name = api["function_name"]
                 if function_name in blacklist:
                     continue
-                if not function_name in included_functions:
-                    continue
-                apis_list.add(Utils.normalize_coerce_args(api, apis_clang_list, 
+
+                # Handle C++ mangled names
+                if function_name.startswith('_Z'):
+                    mangled_count += 1
+                    demangled = demangle_cpp_name(function_name)
+                    # Check both original mangled and demangled names
+                    if function_name not in included_functions_set and demangled not in included_functions_set:
+                        continue
+                else:
+                    # C-style name, direct match
+                    if function_name not in included_functions_set:
+                        continue
+
+                matched_count += 1
+                apis_list.add(Utils.normalize_coerce_args(api, apis_clang_list,
                                 coerce_info, incomplete_types_list))
-                # print(apis_list)
-                # exit()
+
+        if mangled_count > 0:
+            logger.debug(f"C++ project detected: {mangled_count} mangled names, {matched_count} matched")
 
         return apis_list
 
@@ -248,8 +307,16 @@ class Utils:
         return_info = api["return_info"]
 
         namespace = []
-        if function_name in apis_clang_list:
-            namespace = apis_clang_list[function_name]["namespace"]
+        # Try to find the function in apis_clang_list
+        # For C++ mangled names, also try the demangled name
+        lookup_name = function_name
+        if function_name not in apis_clang_list and function_name.startswith('_Z'):
+            demangled = demangle_cpp_name(function_name)
+            if demangled in apis_clang_list:
+                lookup_name = demangled
+
+        if lookup_name in apis_clang_list:
+            namespace = apis_clang_list[lookup_name]["namespace"]
 
         ret_args = [a for a in arguments_info if a["flag"] == "ret"]
 
@@ -306,8 +373,8 @@ class Utils:
 
             arguments_info = []
             for i, a_json in enumerate(arguments_info_json):
-                is_const = apis_clang_list[function_name]["arguments_info"][i]["const"]
-                a = Arg(a_json["name"], a_json["flag"], 
+                is_const = apis_clang_list[lookup_name]["arguments_info"][i]["const"] if lookup_name in apis_clang_list and i < len(apis_clang_list[lookup_name].get("arguments_info", [])) else [False]
+                a = Arg(a_json["name"], a_json["flag"],
                         a_json["size"], a_json["type"], is_const)
 
                 arguments_info.append(a)
@@ -316,23 +383,25 @@ class Utils:
             arguments_info_json = arguments_info
             arguments_info = []
             for i, a_json in enumerate(arguments_info_json):
-                is_const = apis_clang_list[function_name]["arguments_info"][i]["const"]
-                a = Arg(a_json["name"], a_json["flag"], 
+                is_const = apis_clang_list[lookup_name]["arguments_info"][i]["const"] if lookup_name in apis_clang_list and i < len(apis_clang_list[lookup_name].get("arguments_info", [])) else [False]
+                a = Arg(a_json["name"], a_json["flag"],
                         a_json["size"], a_json["type"], is_const)
 
                 arguments_info.append(a)
 
-        is_const = apis_clang_list[function_name]["return_info"]["const"]
+        is_const = apis_clang_list[lookup_name]["return_info"]["const"] if lookup_name in apis_clang_list else [False]
         return_info = Arg(return_info["name"], return_info["flag"],
                             return_info["size"], return_info["type"], is_const)
 
         # normalize arguments_info and return_info
         if return_info.flag in ["val", "ref", "fun"]:
-            return_info.type = apis_clang_list[function_name]["return_info"]["type_clang"]
-        
+            if lookup_name in apis_clang_list:
+                return_info.type = apis_clang_list[lookup_name]["return_info"]["type_clang"]
+
         for i, arg_info in enumerate(arguments_info):
             if arg_info.flag in ["val", "ref", "fun"]:
-                arg_info.type =  apis_clang_list[function_name]["arguments_info"][i]["type_clang"]
+                if lookup_name in apis_clang_list and i < len(apis_clang_list[lookup_name].get("arguments_info", [])):
+                    arg_info.type = apis_clang_list[lookup_name]["arguments_info"][i]["type_clang"]
                 # {"const": true, "type_clang": "char**"} becomes:
                 # {"const": true, "type_clang": "char const*"}
                 # if ((not function_name.startswith("minijail_") or
