@@ -36,15 +36,36 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         """Extract fixed code from response."""
         code = parse_tag(content, 'fuzz_target')
         if not code:
-            # No fallback - if LLM didn't follow format, keep code empty
-            # The execute() method will fall back to current_code
-            logger.warning('No <fuzz_target> tag found in fixer response',
+            # Fallback: try to extract from markdown code blocks
+            # GPT-4o sometimes outputs ```c ... ``` instead of <fuzz_target>
+            code = self._extract_code_from_markdown(content)
+            if code:
+                logger.info('Extracted code from markdown code block (fallback)',
                            trial=self.trial)
+            else:
+                logger.warning('No <fuzz_target> tag or code block found in fixer response',
+                               trial=self.trial)
         return {
             'fuzz_target_code': code,
             'raw_response': content,
             'fixed': bool(code)
         }
+
+    def _extract_code_from_markdown(self, content: str) -> str:
+        """Extract code from markdown code blocks as fallback."""
+        # Look for ```c, ```cpp, or ``` code blocks
+        patterns = [
+            r'```(?:c|cpp|c\+\+)?\s*\n(.*?)```',  # ```c ... ``` or ```cpp ... ```
+            r'```\s*\n(.*?)```',  # ``` ... ```
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                code = match.group(1).strip()
+                # Validate it looks like a fuzz target
+                if 'LLVMFuzzerTestOneInput' in code:
+                    return code
+        return ''
 
     def _execute_bash(self, command: str) -> str:
         result = self.inspect_tool.execute(command)

@@ -498,28 +498,54 @@ class FuzzingContext:
                 f'({ep_stats["entry_point_ratio"]:.1%}) APIs are Entry Points'
             )
 
-            # Apply L1 filter: keep only sequences with Entry Points
+            # Apply L1 filter: ALWAYS generate Entry Point-focused sequences
+            # Grammar-generated sequences have channel/handle APIs mixed in due to type compatibility,
+            # which causes crashes when these APIs receive NULL (uninitialized handle).
+            # Solution: Generate clean sequences with just Entry Point + proper cleanup.
             if ep_analysis.entry_point_names:
                 pre_filter_count = len(api_sequences)
-                api_sequences, ep_filter_summary = filter_sequences_by_entry_point(
-                    api_sequences,
-                    ep_analysis,
-                    strategy="within_first_n",
-                    n=3,
-                    logger_instance=log
-                )
-                entry_point_analysis_result['filter_summary'] = ep_filter_summary
 
-                if api_sequences:
+                # Get all API names for finding cleanup APIs
+                # project_apis can be list of dicts (with 'function_name') or Api objects
+                all_api_names = set()
+                for api in project_apis:
+                    if isinstance(api, dict):
+                        all_api_names.add(api.get('function_name', ''))
+                    else:
+                        all_api_names.add(api.function_name)
+
+                # Generate Entry Point-focused sequences (replaces grammar sequences)
+                ep_focused = _generate_entry_point_sequences(
+                    ep_analysis.entry_point_names,
+                    all_api_names,
+                    log
+                )
+
+                if ep_focused:
+                    api_sequences = ep_focused
+                    entry_point_analysis_result['filter_summary'] = {
+                        'strategy': 'entry_point_focused',
+                        'input': pre_filter_count,
+                        'output': len(ep_focused),
+                        'entry_points_used': len(ep_analysis.entry_point_names),
+                    }
                     log.info(
-                        f'   ✅ L1 Entry Point filter: {pre_filter_count} -> {len(api_sequences)} sequences '
-                        f'({ep_filter_summary.get("reduction_ratio", 0):.1%} reduction)'
+                        f'   ✅ L1 Entry Point filter: {pre_filter_count} -> {len(ep_focused)} sequences '
+                        f'(generated clean Entry Point-focused sequences)'
                     )
                 else:
-                    log.warning(
-                        'L1 filter returned empty set, reverting to pre-filter sequences'
+                    # Fallback to filtering if generation fails
+                    api_sequences, ep_filter_summary = filter_sequences_by_entry_point(
+                        api_sequences,
+                        ep_analysis,
+                        strategy="first",
+                        n=3,
+                        logger_instance=log
                     )
-                    api_sequences = raw_api_sequences
+                    entry_point_analysis_result['filter_summary'] = ep_filter_summary
+                    log.warning(
+                        f'L1 generation failed, falling back to filter: {pre_filter_count} -> {len(api_sequences)}'
+                    )
             else:
                 log.warning(
                     'No Entry Points found, skipping L1 filter (all sequences kept)'
@@ -1283,6 +1309,119 @@ def _analyze_driver_patterns(driver_sources: List[Dict[str, str]],
         }
 
 
+def _generate_entry_point_sequences(
+    entry_point_names: set,
+    all_api_names: set,
+    log
+) -> List[List[str]]:
+    """
+    Generate Entry Point-focused sequences with proper cleanup APIs.
+
+    Grammar-generated sequences mix Entry Points with channel-dependent APIs
+    due to type compatibility. This function generates clean sequences with just:
+    - Entry Point API (parser that consumes fuzzer input)
+    - Proper cleanup API (matched by naming pattern, not from grammar)
+
+    Args:
+        entry_point_names: Set of Entry Point API names
+        all_api_names: Set of all API names in the project
+        log: Logger instance
+
+    Returns:
+        List of Entry Point-focused sequences
+    """
+    result = []
+
+    # Find common prefix (e.g., "ares" for c-ares)
+    prefix = _find_api_prefix(entry_point_names)
+
+    # Find cleanup APIs by pattern matching
+    cleanup_patterns = [
+        (f'{prefix}_free_data', 'free_data'),      # ares_free_data
+        (f'{prefix}_free_hostent', 'free_hostent'),  # ares_free_hostent
+        (f'{prefix}_dns_record_destroy', 'dns_record_destroy'),  # ares_dns_record_destroy
+    ]
+
+    # Map Entry Point patterns to their cleanup APIs
+    ep_to_cleanup = {}
+    for ep_name in entry_point_names:
+        cleanup_api = _find_cleanup_for_entry_point(ep_name, all_api_names, prefix)
+        if cleanup_api:
+            ep_to_cleanup[ep_name] = cleanup_api
+
+    # Generate sequences
+    for ep_name in sorted(entry_point_names):  # Sort for determinism
+        # Simple sequence: just the Entry Point
+        result.append([ep_name])
+
+        # If we have a proper cleanup API, add it
+        if ep_name in ep_to_cleanup:
+            result.append([ep_name, ep_to_cleanup[ep_name]])
+
+    # Deduplicate
+    seen = set()
+    unique = []
+    for seq in result:
+        key = tuple(seq)
+        if key not in seen:
+            seen.add(key)
+            unique.append(seq)
+
+    log.debug(f"Generated {len(unique)} Entry Point-focused sequences from {len(entry_point_names)} Entry Points")
+    return unique
+
+
+def _find_api_prefix(api_names: set) -> str:
+    """Find common prefix from API names (e.g., 'ares' from ares_parse_*)."""
+    if not api_names:
+        return ''
+
+    # Get first API and find its prefix
+    first_api = next(iter(api_names))
+    parts = first_api.split('_')
+    if parts:
+        return parts[0]
+    return ''
+
+
+def _find_cleanup_for_entry_point(ep_name: str, all_api_names: set, prefix: str) -> str:
+    """
+    Find the proper cleanup API for an Entry Point based on naming patterns.
+
+    Patterns:
+    - {prefix}_parse_*_reply -> {prefix}_free_data or {prefix}_free_hostent
+    - {prefix}_dns_parse -> {prefix}_dns_record_destroy
+    - {prefix}_create_query -> {prefix}_free_string (query buffer)
+    """
+    # Pattern 1: parse_*_reply functions use free_data or free_hostent
+    if '_parse_' in ep_name and '_reply' in ep_name:
+        # Try free_data first (generic cleanup)
+        free_data = f'{prefix}_free_data'
+        if free_data in all_api_names:
+            return free_data
+        # Try free_hostent (for host resolution results)
+        free_hostent = f'{prefix}_free_hostent'
+        if free_hostent in all_api_names:
+            return free_hostent
+
+    # Pattern 2: dns_parse uses dns_record_destroy
+    if '_dns_parse' in ep_name:
+        dns_destroy = f'{prefix}_dns_record_destroy'
+        if dns_destroy in all_api_names:
+            return dns_destroy
+
+    # Pattern 3: create_query needs the query buffer freed
+    if '_create_query' in ep_name or '_mkquery' in ep_name:
+        free_string = f'{prefix}_free_string'
+        if free_string in all_api_names:
+            return free_string
+        # Some libraries use plain free() - return None to let driver handle it
+        return None
+
+    # No specific cleanup found - return None (driver handles cleanup)
+    return None
+
+
 def _dedup_sequences(api_sequences: List[List[str]]) -> List[List[str]]:
     """Deduplicate sequences while preserving order."""
     seen = set()
@@ -1655,7 +1794,7 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
                         skeleton_dict = skeleton.to_dict()
                         skeleton_dict['name'] = f'cbfactory_skeleton_{i}'
                         skeleton_dict['synthesis_info'] = {
-                            'method': 'CBFactory_Skeleton',
+                            'method': 'template_based_synthesis',
                             'driver_size': driver_size,
                             'num_apis_used': len(skeleton_dict.get('api_sequence', [])),
                             'has_holes': len(skeleton_dict.get('holes', [])) > 0,

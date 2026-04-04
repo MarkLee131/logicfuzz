@@ -58,7 +58,8 @@ from src.utils.compilation_error_triage import (
 
 
 # ==================== Configuration Constants ====================
-MAX_COMPILATION_RETRIES = 3          # Max fixer attempts during compilation
+MAX_COMPILATION_RETRIES = 2          # Max fixer attempts during compilation
+MAX_CRASH_FIX_RETRIES = 2            # Max fixer attempts after crash (false positive)
 MAX_TOTAL_BUILD_FAILURES = 10        # Global safety limit
 MAX_NODE_VISITS = 10                 # Loop detection threshold
 MAX_COVERAGE_IMPROVE_ITERATIONS = 1  # coverage_analyzer and improver run at most once
@@ -119,6 +120,12 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
         result["error_triage"] = triage_result.to_dict()
         logger.debug(f'Passing error triage to fixer: primary={triage_result.primary_category}, '
                     f'strategy={triage_result.recommended_strategy}', trial=trial)
+
+    # Increment crash_fix_retry_count when routing to fixer after crash analysis
+    if next_action == "fixer" and state.get("context_analysis") is not None:
+        crash_fix_retry_count = state.get("crash_fix_retry_count", 0) + 1
+        result["crash_fix_retry_count"] = crash_fix_retry_count
+        logger.debug(f'Incrementing crash_fix_retry_count to {crash_fix_retry_count}', trial=trial)
 
     return result
 
@@ -286,7 +293,13 @@ def _handle_execution_failure(state: FuzzingWorkflowState, trial: int) -> str:
             logger.info('Found a feasible crash (true bug)!', trial=trial)
             return "END"
         else:
-            logger.info('Crash is not feasible (false positive), routing to fixer', trial=trial)
+            # Check crash-fix retry limit
+            crash_fix_retry_count = state.get("crash_fix_retry_count", 0)
+            if crash_fix_retry_count >= MAX_CRASH_FIX_RETRIES:
+                logger.error(f'Crash fix failed after {MAX_CRASH_FIX_RETRIES} retries. Ending.', trial=trial)
+                return "END"
+            logger.info(f'Crash is not feasible (false positive), routing to fixer '
+                       f'(attempt {crash_fix_retry_count + 1}/{MAX_CRASH_FIX_RETRIES})', trial=trial)
             return "fixer"
 
     # Execution failed but not a crash

@@ -382,6 +382,7 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
             trial=self.trial)
 
         api_sequences_text = self._format_api_sequences(api_sequences, limit=8)
+        sequence_signatures_text = self._format_sequence_api_signatures(api_sequences, project_apis)
         project_apis_text = self._format_project_apis(project_apis, limit=20)
         dep_graph_text = self._format_dependency_graph(dependency_graph,
                                                        limit=12)
@@ -486,6 +487,10 @@ Before writing any code, think about:
 <api_sequences>
 {api_sequences_text}
 </api_sequences>
+
+<sequence_api_signatures>
+{sequence_signatures_text}
+</sequence_api_signatures>
 
 <project_apis>
 {project_apis_text}
@@ -732,6 +737,10 @@ Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown'
 {api_sequences_text}
 </api_sequences>
 
+<sequence_api_signatures>
+{sequence_signatures_text}
+</sequence_api_signatures>
+
 <project_apis>
 {project_apis_text}
 </project_apis>
@@ -963,6 +972,70 @@ Output your fuzz driver code inside <fuzz_target> tags.
             lines.append(f"  ... and {len(api_sequences) - limit} more")
         return "\n".join(lines)
 
+    def _format_sequence_api_signatures(self,
+                                        api_sequences: List[List[str]],
+                                        project_apis: List[Dict[str, Any]]) -> str:
+        """Format FULL signatures for APIs that appear in sequences.
+
+        This is critical for LLM to understand pointer semantics correctly.
+        Unlike _format_project_apis which truncates at 3 args, this shows ALL args.
+        """
+        if not api_sequences or not project_apis:
+            return "  (none)"
+
+        # Collect unique API names from sequences
+        sequence_apis = set()
+        for seq in api_sequences:
+            sequence_apis.update(seq)
+
+        # Build API name -> full info lookup
+        api_lookup = {}
+        for api in project_apis:
+            fn = api.get("function_name", "")
+            if fn:
+                api_lookup[fn] = api
+
+        lines = []
+        lines.append("**FULL SIGNATURES for APIs in your sequences:**")
+        lines.append("(IMPORTANT: Pay attention to pointer types like `type **` which are output parameters!)")
+        lines.append("")
+
+        for api_name in sorted(sequence_apis):
+            if api_name not in api_lookup:
+                continue
+            api = api_lookup[api_name]
+            rt = api.get("return_type", api.get("return_info", {}).get("type_clang", "void"))
+            args = api.get("arguments", api.get("arguments_info", []))
+
+            # Format ALL arguments with full type info
+            args_formatted = []
+            for i, arg in enumerate(args):
+                if isinstance(arg, dict):
+                    arg_type = arg.get("type", arg.get("type_clang", "unknown"))
+                    arg_const = arg.get("const", [])
+                    # Add const qualifier if present
+                    if arg_const and arg_const[0]:
+                        arg_type = f"const {arg_type}"
+                    arg_name = arg.get("name", f"arg{i}")
+                    args_formatted.append(f"{arg_type} {arg_name}".strip())
+                else:
+                    args_formatted.append(str(arg))
+
+            args_str = ", ".join(args_formatted)
+
+            # Highlight output pointer arguments
+            has_output_ptr = any("* *" in a or "**" in a for a in args_formatted)
+            note = ""
+            if has_output_ptr:
+                note = "  // ⚠️ Has output pointer parameter (type **)"
+
+            lines.append(f"  {rt} {api_name}({args_str});{note}")
+
+        if not lines[3:]:  # No APIs formatted
+            return "  (no matching APIs found)"
+
+        return "\n".join(lines)
+
     def _format_project_apis(self,
                              project_apis: List[Dict[str, Any]],
                              limit: int = 20) -> str:
@@ -1183,7 +1256,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
         # First try synthesized drivers (from CBFactory skeleton mode)
         for driver in synthesized_drivers:
-            if driver.get('synthesis_info', {}).get('method') == 'CBFactory_Skeleton':
+            if driver.get('synthesis_info', {}).get('method') == 'template_based_synthesis':
                 return (driver.get('code', ''),
                         driver.get('holes', []),
                         driver.get('api_sequence', []))
