@@ -1,4 +1,4 @@
-"language": "c"
+"language": "c++"
 "project": "sqlite3"
 "target_name": "ossfuzz"
 "target_path": "/src/sqlite3/test/ossfuzz.c"

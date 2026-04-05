@@ -1,4 +1,4 @@
 "language": "c++"
 "project": "re2"
-"target_name": "fuzzer"
+"target_name": "re2_fuzzer"
 "target_path": "/src/re2/re2/fuzzing/re2_fuzzer.cc"

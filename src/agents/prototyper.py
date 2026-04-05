@@ -683,6 +683,10 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 logger.error('No <fuzz_target> tag found in prototyper response',
                              trial=self.trial)
 
+        # Fix common header issues (FuzzedDataProvider, etc.)
+        if fuzz_target_code:
+            fuzz_target_code = self._fix_common_header_issues(fuzz_target_code)
+
         # Ensure project headers are included (post-processing fix for LLM-generated code)
         if fuzz_target_code and header_info.get('project_headers'):
             fuzz_target_code = self._ensure_project_headers(
@@ -1624,3 +1628,55 @@ Output your fuzz driver code inside <fuzz_target> tags.
             trial=self.trial)
 
         return result
+
+    def _fix_common_header_issues(self, code: str) -> str:
+        """Fix common header issues in LLM-generated code.
+
+        This fixes issues like:
+        - Wrong FuzzedDataProvider include path/case
+        - Missing angle brackets for system headers
+
+        Args:
+            code: Generated fuzz target source code
+
+        Returns:
+            Code with header issues fixed
+        """
+        import re
+
+        if not code or not code.strip():
+            return code
+
+        original_code = code
+        fixes_applied = []
+
+        # Fix FuzzedDataProvider includes - common LLM mistakes:
+        # - "fuzzed_data_provider.h" -> <fuzzer/FuzzedDataProvider.h>
+        # - "FuzzedDataProvider.h" -> <fuzzer/FuzzedDataProvider.h>
+        # - <FuzzedDataProvider.h> -> <fuzzer/FuzzedDataProvider.h>
+        # - "fuzzer/fuzzeddataprovider.h" -> <fuzzer/FuzzedDataProvider.h>
+        fdp_patterns = [
+            (r'#include\s*"fuzzed_data_provider\.h"', '#include <fuzzer/FuzzedDataProvider.h>'),
+            (r'#include\s*"FuzzedDataProvider\.h"', '#include <fuzzer/FuzzedDataProvider.h>'),
+            (r'#include\s*<FuzzedDataProvider\.h>', '#include <fuzzer/FuzzedDataProvider.h>'),
+            (r'#include\s*"fuzzer/fuzzeddataprovider\.h"', '#include <fuzzer/FuzzedDataProvider.h>'),
+            (r'#include\s*"fuzzer/FuzzedDataProvider\.h"', '#include <fuzzer/FuzzedDataProvider.h>'),
+            # Case-insensitive catch-all for fuzzed.*data.*provider patterns
+            (r'#include\s*[<"](?:[^>"]*[/\\])?[Ff]uzzed[_]?[Dd]ata[_]?[Pp]rovider\.h[>"]',
+             '#include <fuzzer/FuzzedDataProvider.h>'),
+        ]
+
+        for pattern, replacement in fdp_patterns:
+            if re.search(pattern, code, re.IGNORECASE):
+                new_code = re.sub(pattern, replacement, code, flags=re.IGNORECASE)
+                if new_code != code:
+                    fixes_applied.append(f'FuzzedDataProvider include')
+                    code = new_code
+                    break  # Only apply one FDP fix
+
+        if fixes_applied:
+            logger.info(
+                f'Fixed common header issues: {fixes_applied}',
+                trial=self.trial)
+
+        return code
