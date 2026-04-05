@@ -121,11 +121,18 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
         logger.debug(f'Passing error triage to fixer: primary={triage_result.primary_category}, '
                     f'strategy={triage_result.recommended_strategy}', trial=trial)
 
-    # Increment crash_fix_retry_count when routing to fixer after crash analysis
+    # When routing to fixer after crash analysis, pass crash info for context
     if next_action == "fixer" and state.get("context_analysis") is not None:
         crash_fix_retry_count = state.get("crash_fix_retry_count", 0) + 1
         result["crash_fix_retry_count"] = crash_fix_retry_count
         logger.debug(f'Incrementing crash_fix_retry_count to {crash_fix_retry_count}', trial=trial)
+
+        # Pass crash analysis info to fixer so it can understand what went wrong
+        result["crash_fix_info"] = {
+            "crash_info": state.get("crash_info"),
+            "crash_analysis": state.get("crash_analysis"),
+            "context_analysis": state.get("context_analysis"),
+        }
 
     return result
 

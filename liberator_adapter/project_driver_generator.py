@@ -970,89 +970,81 @@ class ProjectDriverGenerator:
     
     def _fetch_source_from_oss_fuzz_image(self) -> str:
         """
-        Pull source code out of the OSS-Fuzz style docker image.
+        Extract source code from the project container.
 
+        Uses the existing container from HybridAPIExtractor (same image used for fuzzing).
         Handles cases where the source directory name differs from the project name
         (e.g., libaom project has source in /src/aom).
 
         Returns:
             Path to the extracted source directory.
         """
-        image = f"gcr.io/oss-fuzz/{self.project_name}"
-        logger.info(f"📦 Creating container to fetch sources from {image}")
-        cid = subprocess.check_output(
-            ["docker", "create", image],
-            text=True
-        ).strip()
+        # Use existing container from adapter (same image as fuzzing)
+        if not (self.adapter and self.adapter.use_clang_llvm and
+                self.adapter.hybrid_extractor and self.adapter.hybrid_extractor.container):
+            raise RuntimeError(
+                "No container available for source extraction. "
+                "Ensure HybridAPIExtractor is initialized with use_clang_llvm=True."
+            )
+
+        container = self.adapter.hybrid_extractor.container
+        logger.info(f"📦 Using container {container.container_id} for source extraction")
 
         src_out_parent = Path(self.work_dir) / "src_ossfuzz"
         src_out_parent.mkdir(parents=True, exist_ok=True)
 
-        # Common OSS-Fuzz infrastructure directories to skip
         skip_dirs = {
             'aflplusplus', 'libfuzzer', 'honggfuzz', 'fuzztest', 'centipede',
             'oss-fuzz', 'fuzzer', 'fuzzers'
         }
 
+        cid = container.container_id
+
+        # First, try the project name directly
+        src_container_path = f"/src/{self.project_name}"
         try:
-            # First, try the project name directly
-            src_container_path = f"/src/{self.project_name}"
-            try:
-                subprocess.check_call(
-                    ["docker", "cp", f"{cid}:{src_container_path}", str(src_out_parent)],
-                    stderr=subprocess.DEVNULL
-                )
-                src_out = src_out_parent / self.project_name
-                if src_out.exists():
-                    logger.info(f"📦 Found source at {src_container_path}")
-                    return str(src_out)
-            except subprocess.CalledProcessError:
-                logger.debug(f"Source not at {src_container_path}, searching /src/...")
-
-            # If that fails, list /src/ and find the actual source directory
-            ls_output = subprocess.check_output(
-                ["docker", "exec", cid, "ls", "-1", "/src/"],
-                text=True,
+            subprocess.check_call(
+                ["docker", "cp", f"{cid}:{src_container_path}", str(src_out_parent)],
                 stderr=subprocess.DEVNULL
-            ).strip()
+            )
+            src_out = src_out_parent / self.project_name
+            if src_out.exists():
+                logger.info(f"📦 Found source at {src_container_path}")
+                return str(src_out)
+        except subprocess.CalledProcessError:
+            logger.debug(f"Source not at {src_container_path}, searching /src/...")
 
-            # Recreate container since exec might have issues after cp failure
-            subprocess.call(["docker", "rm", "-f", cid], stderr=subprocess.DEVNULL)
-            cid = subprocess.check_output(
-                ["docker", "create", image],
-                text=True
-            ).strip()
+        # List /src/ to find actual source directory
+        result = container.execute("ls -1 /src/")
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to list /src/ in container: {result.stderr}")
 
-            candidates = [d for d in ls_output.split('\n') if d and d.lower() not in skip_dirs]
-            logger.debug(f"Source directory candidates in /src/: {candidates}")
+        ls_output = result.stdout.strip()
+        candidates = [d for d in ls_output.split('\n') if d and d.lower() not in skip_dirs]
+        logger.debug(f"Source directory candidates in /src/: {candidates}")
 
-            # Try to find a likely match (project name prefix, or first non-infra dir)
-            source_dir = None
-            for candidate in candidates:
-                # Prefer directories that share a prefix with project name
-                if self.project_name.startswith(candidate) or candidate.startswith(self.project_name.replace('lib', '')):
-                    source_dir = candidate
-                    break
+        # Find likely match
+        source_dir = None
+        for candidate in candidates:
+            if self.project_name.startswith(candidate) or candidate.startswith(self.project_name.replace('lib', '')):
+                source_dir = candidate
+                break
 
-            # Fallback: use the first candidate that's not infrastructure
-            if not source_dir and candidates:
-                source_dir = candidates[0]
+        if not source_dir and candidates:
+            source_dir = candidates[0]
 
-            if source_dir:
-                src_container_path = f"/src/{source_dir}"
-                subprocess.check_call(
-                    ["docker", "cp", f"{cid}:{src_container_path}", str(src_out_parent)]
-                )
-                src_out = src_out_parent / source_dir
-                if src_out.exists():
-                    logger.info(f"📦 Found source at {src_container_path} (project: {self.project_name})")
-                    return str(src_out)
+        if source_dir:
+            src_container_path = f"/src/{source_dir}"
+            subprocess.check_call(
+                ["docker", "cp", f"{cid}:{src_container_path}", str(src_out_parent)]
+            )
+            src_out = src_out_parent / source_dir
+            if src_out.exists():
+                logger.info(f"📦 Found source at {src_container_path} (project: {self.project_name})")
+                return str(src_out)
 
-            raise RuntimeError(f"Could not find source directory for {self.project_name} in /src/")
+        raise RuntimeError(f"Could not find source directory for {self.project_name} in /src/")
 
-        finally:
-            subprocess.call(["docker", "rm", "-f", cid])
-    
     def _get_public_headers_from_fi(self) -> Optional[List[str]]:
         """
         Try to get public header files from Fuzz Introspector API.

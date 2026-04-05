@@ -104,7 +104,13 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             extra_commands=' && rm -rf /out/* > /dev/null')
 
         # Build prompt
-        error_text = "\n".join(build_errors[:10])
+        # For crash fixes, build_errors is empty, so provide crash context instead
+        crash_fix_info = state.get("crash_fix_info")
+        if crash_fix_info and not build_errors:
+            crash_info = crash_fix_info.get("crash_info") or {}
+            error_text = f"[RUNTIME CRASH - Driver Bug]\n{crash_info.get('crash_type', 'Unknown crash')}"
+        else:
+            error_text = "\n".join(build_errors[:10])
         code_context = self._generate_code_context(current_code, build_errors)
         additional = self._build_additional_context(benchmark, state,
                                                     build_errors)
@@ -236,6 +242,14 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             existing_driver_knowledge, errors)
         if driver_ref:
             parts.append(driver_ref)
+
+        # Add crash fix context if this is a crash-related fix (not build error)
+        crash_fix_info = state.get("crash_fix_info")
+        if crash_fix_info:
+            crash_context = self._format_crash_fix_context(crash_fix_info,
+                                                           existing_driver_knowledge)
+            if crash_context:
+                parts.append(crash_context)
 
         return "\n".join(parts)
 
@@ -386,3 +400,57 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         }
 
         return hints.get(strategy, "")
+
+    def _format_crash_fix_context(self, crash_fix_info: Dict[str, Any],
+                                   driver_knowledge: Dict[str, Any]) -> str:
+        """Format crash analysis info as context for fixing driver bugs."""
+        if not crash_fix_info:
+            return ""
+
+        lines = ["### Crash Fix Context (Driver Bug)"]
+        lines.append("The fuzz target compiled but crashes during execution.")
+        lines.append("This is a **driver bug** (false positive), not a real bug in the library.\n")
+
+        # Extract crash info
+        crash_info = crash_fix_info.get("crash_info") or {}
+        crash_analysis = crash_fix_info.get("crash_analysis") or {}
+        context_analysis = crash_fix_info.get("context_analysis") or {}
+
+        # Show crash type and location
+        crash_type = crash_info.get("crash_type", "Unknown")
+        if crash_type:
+            lines.append(f"**Crash Type**: {crash_type}")
+
+        # Show stack trace (truncated)
+        stack_trace = crash_info.get("stack_trace", "")
+        if stack_trace:
+            # Extract relevant frames (skip fuzzer internals)
+            relevant_frames = []
+            for line in stack_trace.split('\n'):
+                if 'LLVMFuzzerTestOneInput' in line or '/src/' in line:
+                    relevant_frames.append(line.strip())
+                if len(relevant_frames) >= 5:
+                    break
+            if relevant_frames:
+                lines.append("\n**Relevant Stack Frames**:")
+                lines.append("```")
+                lines.extend(relevant_frames)
+                lines.append("```")
+
+        # Show analysis if available
+        analysis_text = crash_analysis.get("analysis", "")
+        if analysis_text and len(analysis_text) < 500:
+            lines.append(f"\n**Analysis**: {analysis_text}")
+
+        # Add fix guidance
+        lines.append("\n**Fix Guidance**:")
+        lines.append("- Check API return values and handle error cases")
+        lines.append("- Ensure objects are properly initialized before use")
+        lines.append("- Add null checks for pointer returns")
+        lines.append("- Validate input before passing to APIs")
+
+        # Reference existing driver if available
+        if driver_knowledge and driver_knowledge.get('driver_sources'):
+            lines.append("\n**Reference**: Check existing fuzzers for correct API usage patterns.")
+
+        return "\n".join(lines)
