@@ -21,6 +21,9 @@ LLM_NUM_EXP=5 python3 run_logicfuzz.py -y comparison/cjson.yaml
 
 # Code quality
 pylint src/ && pyright src/
+
+# Extended fuzzing evaluation (24h)
+python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz_targets/02.fuzz_target -d 86400
 ```
 
 ## Architecture
@@ -133,6 +136,37 @@ All APIs (N) → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L
   - Calculate novelty score: +2 uncovered, +1 poorly-covered, -0.5 well-covered
   - Keep "important APIs" (parsers, init/destroy) regardless of coverage
   - Filter sequences with >70% overlap with existing coverage
+
+### Evaluation Workflow (High Priority)
+
+- [ ] **24-Hour Fuzzing Evaluation** (HIGH PRIORITY)
+  - Run generated drivers for 24 hours to collect comparable metrics with PromeFuzz
+  - Script exists: `scripts/run_extended_fuzzing.py`
+  - Usage:
+    ```bash
+    # Run 24h fuzzing on a single target
+    python scripts/run_extended_fuzzing.py \
+        --project re2 \
+        --fuzz-target results/output-re2-project/fuzz_targets/02.fuzz_target \
+        --duration 86400 \
+        --output-dir results/extended_fuzzing/re2 \
+        --snapshot-interval 1800
+    ```
+  - Outputs: `results.json` (coverage metrics), `coverage_timeline.csv` (time series)
+  - Next step: Create batch script to run all successful drivers
+
+- [ ] **Harness Merging** (Medium Priority)
+  - PromeFuzz merges multiple harnesses per project, then runs 24h fuzzing on merged harness
+  - Need to implement: merge multiple `fuzz_targets/*.fuzz_target` into single harness
+  - Approach: Combine LLVMFuzzerTestOneInput functions with switch-case on first byte
+  - Reference: PromeFuzz paper Section 5 "For multiple fuzzing harnesses generated for a library, we merged them into a single harness"
+
+- [ ] **Batch Evaluation Script** (High Priority)
+  - Scan `results/output-*-project/fuzz_targets/` for successful builds
+  - Run 24h fuzzing on each
+  - Aggregate coverage metrics into summary table matching PromeFuzz Table 2 format:
+    | Project | #API | #Branch | Lines | Branch% |
+  - Compare with OSS-Fuzz baseline
 
 ### Future Work
 

@@ -398,6 +398,11 @@ class ProjectDriverGenerator:
         if api_sequences is None:
             api_sequences = self._generate_api_sequences(num_drivers, driver_size)
 
+        # Determine if C++ project (for FuzzedDataProvider include)
+        is_cpp = True  # Default to C++ (safer, includes FuzzedDataProvider)
+        if self.adapter and self.adapter.benchmark:
+            is_cpp = self.adapter.benchmark.is_cpp_project
+
         # Create skeleton generator and filler
         skeleton_generator = SkeletonGenerator()
         hole_filler = HoleFiller(llm_client=llm_client)
@@ -411,7 +416,8 @@ class ProjectDriverGenerator:
                     varlen_relations=varlen_relations,
                     loop_patterns=loop_patterns,
                     callback_infos=callback_infos,
-                    driver_name=f"fuzz_driver_{i}"
+                    driver_name=f"fuzz_driver_{i}",
+                    is_cpp=is_cpp
                 )
 
                 # 2. Fill Holes
@@ -1111,33 +1117,66 @@ class ProjectDriverGenerator:
 
         logger.info("FI unavailable, falling back to heuristic header detection")
         header_exts = {".h", ".hpp", ".hxx", ".hh"}
+        # Exclude test/example directories
         exclude_dirs = {'tests', 'test', 'testing', 'examples', 'example',
                         'benchmarks', 'benchmark', 'docs', 'doc', 'unity'}
+        # Internal implementation directories (common patterns for C/C++ libraries)
+        internal_dir_patterns = {'internal', 'private', 'detail', 'impl', 'src',
+                                  '_dsp', '_util', '_mem', '_port', '_scale'}
 
         include_subdir = Path(include_dir) / "include"
         search_dir = str(include_subdir) if include_subdir.exists() else include_dir
 
-        # Normalize project name for matching (e.g., "cjson" -> "cjson.h")
+        # Normalize project name for matching (e.g., "libaom" -> "aom", "cjson" -> "cjson")
         project_name_lower = self.project_name.lower().replace('-', '_').replace(' ', '_')
+        # Also try without "lib" prefix (libaom -> aom, libpng -> png)
+        project_name_core = project_name_lower.lstrip('lib')
+
         project_header_patterns = [
             f"{project_name_lower}.h",
             f"{project_name_lower}.hpp",
+            f"{project_name_core}.h",
+            f"{project_name_core}.hpp",
             f"{self.project_name.lower()}.h",
             f"{self.project_name}.h",
         ]
 
         header_paths = []
         project_header_found = None
+        project_api_dir = None  # Directory containing public API (e.g., "aom/" for libaom)
 
-        def should_exclude(path: str) -> bool:
-            """Check if path should be excluded (test/example directories)"""
+        def should_exclude_dir(dirname: str) -> bool:
+            """Check if directory should be excluded (test/internal directories)"""
+            dirname_lower = dirname.lower()
+            if dirname_lower in exclude_dirs:
+                return True
+            # Exclude internal implementation directories
+            return any(pattern in dirname_lower for pattern in internal_dir_patterns)
+
+        def is_internal_path(path: str) -> bool:
+            """Check if path contains internal directory"""
             parts = Path(path).parts
-            return any(part.lower() in exclude_dirs for part in parts)
+            for part in parts:
+                if should_exclude_dir(part):
+                    return True
+            return False
+
+        # Step 1: Check for a project-related top-level directory (e.g., aom/ for libaom)
+        search_path = Path(search_dir)
+        for item in search_path.iterdir():
+            if item.is_dir():
+                item_lower = item.name.lower()
+                # Check if directory name matches project core name
+                if item_lower == project_name_core or item_lower == project_name_lower:
+                    # Found project API directory! Only use headers from here
+                    project_api_dir = item.name
+                    logger.info(f"Found project API directory: {project_api_dir}/")
+                    break
 
         # Scan for headers
         for root, dirs, files in os.walk(search_dir):
             # Prune excluded directories from traversal
-            dirs[:] = [d for d in dirs if d.lower() not in exclude_dirs]
+            dirs[:] = [d for d in dirs if not should_exclude_dir(d)]
 
             for f in files:
                 if Path(f).suffix.lower() not in header_exts:
@@ -1145,34 +1184,41 @@ class ProjectDriverGenerator:
 
                 rel_path = os.path.relpath(os.path.join(root, f), search_dir)
 
-                # Skip if in excluded directory
-                if should_exclude(rel_path):
+                # Skip if in excluded/internal directory
+                if is_internal_path(rel_path):
                     continue
+
+                # If we found a project API directory, only include headers from there
+                if project_api_dir:
+                    if not rel_path.startswith(project_api_dir + os.sep) and not rel_path.startswith(project_api_dir + "/"):
+                        continue
 
                 # Check if this matches project name
                 f_lower = f.lower()
-                if f_lower in project_header_patterns or f_lower == f"{project_name_lower}.h":
+                if f_lower in project_header_patterns:
                     project_header_found = rel_path
                     logger.info(f"Found project header: {rel_path}")
 
                 header_paths.append(rel_path)
 
-        # Exclude internal/plugin headers
+        # Exclude internal/plugin headers by filename
         internal_header_patterns = {'_plugin', '_internal', '_private', '_impl', '_p.h'}
 
         def is_internal_header(name: str) -> bool:
             name_lower = name.lower()
             return any(p in name_lower for p in internal_header_patterns)
 
+        # Filter out internal headers
+        header_paths = [h for h in header_paths if not is_internal_header(h)]
+
         # If project-named header found, use only that (+ closely related headers)
-        if project_header_found:
+        if project_header_found and not project_api_dir:
             # Also include headers with similar names (e.g., cJSON.h + cJSON_Utils.h)
             # but exclude internal/plugin headers
             base_name = Path(project_header_found).stem.lower()
             related_headers = [
                 h for h in header_paths
                 if Path(h).stem.lower().startswith(base_name)
-                and not is_internal_header(h)
             ]
             if related_headers:
                 header_paths = related_headers

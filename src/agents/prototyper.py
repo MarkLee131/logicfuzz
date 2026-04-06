@@ -1633,6 +1633,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
         """Fix common header issues in LLM-generated code.
 
         This fixes issues like:
+        - Missing FuzzedDataProvider include when the class is used
         - Wrong FuzzedDataProvider include path/case
         - Missing angle brackets for system headers
 
@@ -1647,7 +1648,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if not code or not code.strip():
             return code
 
-        original_code = code
         fixes_applied = []
 
         # Fix FuzzedDataProvider includes - common LLM mistakes:
@@ -1670,9 +1670,33 @@ Output your fuzz driver code inside <fuzz_target> tags.
             if re.search(pattern, code, re.IGNORECASE):
                 new_code = re.sub(pattern, replacement, code, flags=re.IGNORECASE)
                 if new_code != code:
-                    fixes_applied.append(f'FuzzedDataProvider include')
+                    fixes_applied.append('FuzzedDataProvider include path')
                     code = new_code
                     break  # Only apply one FDP fix
+
+        # Check if FuzzedDataProvider is used but no include exists at all
+        # This is the most common issue: LLM uses the class but forgets the include
+        fdp_include_correct = '#include <fuzzer/FuzzedDataProvider.h>'
+        has_fdp_include = re.search(r'#include\s*[<"][^>"]*[Ff]uzzed[_]?[Dd]ata[_]?[Pp]rovider', code)
+        uses_fdp = 'FuzzedDataProvider' in code
+
+        if uses_fdp and not has_fdp_include:
+            # Add the include after the last existing #include line
+            lines = code.split('\n')
+            last_include_idx = -1
+            for i, line in enumerate(lines):
+                if line.strip().startswith('#include'):
+                    last_include_idx = i
+
+            if last_include_idx >= 0:
+                # Insert after the last include
+                lines.insert(last_include_idx + 1, fdp_include_correct)
+            else:
+                # No includes found, add at the beginning
+                lines.insert(0, fdp_include_correct)
+
+            code = '\n'.join(lines)
+            fixes_applied.append('added missing FuzzedDataProvider include')
 
         if fixes_applied:
             logger.info(

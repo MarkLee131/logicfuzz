@@ -47,6 +47,10 @@ extern "C" int LLVMFuzzerTestOneInput(...) {
 DO THIS - simple input, many API calls:
 
 ```cpp
+#include <stdint.h>
+#include <fuzzer/FuzzedDataProvider.h>
+#include "library_header.h"
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   FuzzedDataProvider fdp(data, size);
 

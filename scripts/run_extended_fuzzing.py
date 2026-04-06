@@ -323,9 +323,10 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
                 logger.info(f"No cached image found, building from scratch (this may take 15-30 minutes)...")
 
             # Build the project image (required to pick up Dockerfile changes with our fuzz target)
+            # Use --no-pull to avoid interactive prompt in non-interactive mode
             build_cmd = [
                 "python3", str(helper_py),
-                "build_image", self.generated_project_name
+                "build_image", "--no-pull", self.generated_project_name
             ]
             logger.info(f"Running: {' '.join(build_cmd)}")
             # Increase timeout for full image build (30 minutes)
@@ -403,6 +404,13 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
             "-print_final_stats=1",
             "-detect_leaks=0",
             f"-artifact_prefix={crashes_dir_abs}/",
+            # Continue fuzzing after crashes (standard practice for 24h evaluation)
+            # -fork=1: Run in forked process, auto-restart on crash
+            # -ignore_crashes=1: Save crash but continue fuzzing
+            "-fork=1",
+            "-ignore_crashes=1",
+            "-ignore_timeouts=1",
+            "-ignore_ooms=1",
         ]
 
         logger.info(f"Starting fuzzer: {' '.join(run_cmd)}")

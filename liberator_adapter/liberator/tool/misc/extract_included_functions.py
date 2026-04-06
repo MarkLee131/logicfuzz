@@ -276,9 +276,13 @@ def get_stub_file(include_folder, public_headers):
         for root, _, files in os.walk(include_folder):
             for h in files:
                 # print(f"candidate header {h}: ", end='')
-                if (h.endswith(".h") or h.endswith(".h++") or h.endswith(".hh") 
-                    or h.endswith(".hpp")) and h in public_headers_lst:
-                    h_path = os.path.join(root, h)
+                if not (h.endswith(".h") or h.endswith(".h++") or h.endswith(".hh")
+                    or h.endswith(".hpp")):
+                    continue
+                # Match by filename or relative path
+                h_path = os.path.join(root, h)
+                rel_path = os.path.relpath(h_path, include_folder)
+                if h in public_headers_lst or rel_path in public_headers_lst:
                     tmp.write(f"#include \"{h_path}\"\n")
 
         tmp.write("\n")

@@ -276,11 +276,13 @@ class ClangAPIExtractor(BaseAPIExtractor):
         cmd = self._build_command_with_env(python_cmd)
         
         logger.info(f"Extracting apis_clang.json with command: {cmd}")
+        # Use longer timeout for projects with many headers (e.g., libaom has 448 headers)
         self._execute_with_error_check(
             cmd,
             "Clang extraction failed",
             check_output=True,
-            output_file=apis_clang_path
+            output_file=apis_clang_path,
+            timeout=300  # 5 minutes for clang extraction
         )
         
         logger.info(f"Successfully extracted apis_clang.json to {apis_clang_path}")

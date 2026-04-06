@@ -373,7 +373,7 @@ class RuleBasedSolver:
 
 
 # =============================================================================
-# Z3 Solver Adapter (Optional)
+# Z3 Solver Adapter
 # =============================================================================
 
 class Z3SolverAdapter:
@@ -381,17 +381,12 @@ class Z3SolverAdapter:
     Z3 solver adapter
 
     Converts constraints to Z3-solvable form
-    Note: Requires z3-solver package
     """
 
     def __init__(self):
-        self._z3_available = False
-        try:
-            import z3
-            self._z3_available = True
-            self._z3 = z3
-        except ImportError:
-            logger.warning("Z3 not available, using rule-based solver only")
+        import z3
+        self._z3_available = True
+        self._z3 = z3
 
     @property
     def is_available(self) -> bool:

@@ -44,34 +44,22 @@ try:
 except ImportError:
     DriverEnhancer = None
 
-# Z3 sequence validation (optional)
-try:
-    from liberator_adapter.constraints.z3_solver import (
-        Z3SequenceValidator, is_z3_available
-    )
-    Z3_AVAILABLE = is_z3_available()
-except ImportError:
-    Z3_AVAILABLE = False
-    Z3SequenceValidator = None
+# Z3 sequence validation (required)
+from liberator_adapter.constraints.z3_solver import (
+    Z3SequenceValidator, is_z3_available
+)
+Z3_AVAILABLE = True  # Z3 is now required
 
-# Z3-guided synthesis (optional)
-try:
-    from liberator_adapter.constraints.z3_guided_synthesis import (
-        Z3GuidedSynthesisController,
-        is_z3_guided_available,
-        create_guided_controller,
-        DiagnosisType,
-        RecoveryAction,
-        Z3GuidedSynthesisError,
-    )
-    Z3_GUIDED_AVAILABLE = is_z3_guided_available()
-except ImportError:
-    Z3_GUIDED_AVAILABLE = False
-    Z3GuidedSynthesisController = None
-    create_guided_controller = None
-    DiagnosisType = None
-    RecoveryAction = None
-    Z3GuidedSynthesisError = Exception
+# Z3-guided synthesis (required)
+from liberator_adapter.constraints.z3_guided_synthesis import (
+    Z3GuidedSynthesisController,
+    is_z3_guided_available,
+    create_guided_controller,
+    DiagnosisType,
+    RecoveryAction,
+    Z3GuidedSynthesisError,
+)
+Z3_GUIDED_AVAILABLE = True  # Z3 is now required
 
 logger = logging.getLogger(__name__)
 

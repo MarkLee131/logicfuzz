@@ -15,28 +15,12 @@ from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
-try:
-    from z3 import (
-        Solver, Bool, Int, BitVec, Array, And, Or, Not, Implies,
-        sat, unsat, unknown, IntSort, BitVecSort, ArraySort,
-        Function, ForAll, Exists, If, simplify, Context
-    )
-    Z3_AVAILABLE = True
-except ImportError:
-    Z3_AVAILABLE = False
-    # Provide stubs in case Z3 is unavailable
-    Solver = None
-    Bool = None
-    Int = None
-    BitVec = None
-    Array = None
-    And = None
-    Or = None
-    Not = None
-    Implies = None
-    sat = None
-    unsat = None
-    unknown = None
+from z3 import (
+    Solver, Bool, Int, BitVec, Array, And, Or, Not, Implies,
+    sat, unsat, unknown, IntSort, BitVecSort, ArraySort,
+    Function, ForAll, Exists, If, simplify, Context
+)
+Z3_AVAILABLE = True
 
 from liberator_adapter.common import (
     Api, AccessType, Access, AccessTypeSet, ValueMetadata, FunctionConditions
@@ -81,9 +65,6 @@ class Z3ConstraintBuilder:
     """
 
     def __init__(self):
-        if not Z3_AVAILABLE:
-            raise RuntimeError("Z3 is not available. Please install z3-solver: pip install z3-solver")
-
         self.solver = Solver()
         self.constraints: List[Z3Constraint] = []
 
@@ -415,9 +396,6 @@ class Z3SequenceValidator:
     """
 
     def __init__(self):
-        if not Z3_AVAILABLE:
-            raise RuntimeError("Z3 is not available")
-
         self.builder = Z3ConstraintBuilder()
 
     def validate_sequence(
@@ -516,8 +494,7 @@ class Z3DependencyPruner:
     """
 
     def __init__(self):
-        if not Z3_AVAILABLE:
-            raise RuntimeError("Z3 is not available")
+        pass
 
     def prune_dependency_edge(
         self,
@@ -598,10 +575,6 @@ def validate_api_sequence(
     Returns:
         (is_valid, violations)
     """
-    if not Z3_AVAILABLE:
-        logger.warning("Z3 not available, skipping validation")
-        return True, []
-
     validator = Z3SequenceValidator()
     return validator.validate_sequence(api_sequence, function_conditions)
 
@@ -615,9 +588,6 @@ def should_prune_dependency(
     """
     Convenience function: Check if dependency edge should be pruned
     """
-    if not Z3_AVAILABLE:
-        return False
-
     pruner = Z3DependencyPruner()
     should_prune, _ = pruner.prune_dependency_edge(
         source_api, target_api, source_cond, target_cond

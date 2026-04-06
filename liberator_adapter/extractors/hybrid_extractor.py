@@ -80,9 +80,22 @@ class HybridAPIExtractor(BaseAPIExtractor):
             dictionary of function names to Api objects
         """
         logger.info(f"Starting hybrid API extraction for project: {self.benchmark.project}")
-        
-        # 1. Extract apis_clang.json
-        logger.info("Step 1: Extracting apis_clang.json...")
+
+        # 1. Compile project first (generates headers for amalgamation projects like sqlite3)
+        logger.info("Step 1: Compiling project to bitcode...")
+        llvm_extraction_failed = False
+        if not bc_file:
+            if compile_project:
+                try:
+                    bc_file = self.llvm_extractor.compile_to_bitcode()
+                except Exception as e:
+                    logger.warning(f"LLVM compilation failed, falling back to clang-only mode: {e}")
+                    llvm_extraction_failed = True
+            else:
+                raise ValueError("bc_file not provided and compile_project=False")
+
+        # 2. Extract apis_clang.json (after compile, so generated headers are available)
+        logger.info("Step 2: Extracting apis_clang.json...")
         if include_dir:
             apis_clang_path = self.clang_extractor.extract_apis_clang(
                 include_dir=include_dir,
@@ -96,19 +109,6 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 project_name=self.benchmark.project,
                 public_headers_file=public_headers_file
             )
-        
-        # 2. Prepare bitcode file (with fallback to clang-only mode)
-        logger.info("Step 2: Preparing bitcode file...")
-        llvm_extraction_failed = False
-        if not bc_file:
-            if compile_project:
-                try:
-                    bc_file = self.llvm_extractor.compile_to_bitcode()
-                except Exception as e:
-                    logger.warning(f"LLVM compilation failed, falling back to clang-only mode: {e}")
-                    llvm_extraction_failed = True
-            else:
-                raise ValueError("bc_file not provided and compile_project=False")
 
         # 3. Extract apis_llvm.json (runs on host) - skip if LLVM extraction failed
         if not self.local_temp_dir:

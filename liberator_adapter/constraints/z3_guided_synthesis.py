@@ -18,18 +18,8 @@ from typing import Dict, List, Optional, Set, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-try:
-    from z3 import Solver, Bool, Int, And, Implies, sat, unsat
-    Z3_AVAILABLE = True
-except ImportError:
-    Z3_AVAILABLE = False
-    Solver = None
-    Bool = None
-    Int = None
-    And = None
-    Implies = None
-    sat = None
-    unsat = None
+from z3 import Solver, Bool, Int, And, Implies, sat, unsat
+Z3_AVAILABLE = True
 
 logger = logging.getLogger(__name__)
 
@@ -155,9 +145,6 @@ class IncrementalZ3Solver:
         Args:
             timeout_ms: Z3 solving timeout in milliseconds
         """
-        if not Z3_AVAILABLE:
-            raise RuntimeError("Z3 is not available. Please install z3-solver: pip install z3-solver")
-
         self.solver = Solver()
         self.solver.set("timeout", timeout_ms)
         self.solver.set("unsat_core", True)
@@ -820,10 +807,6 @@ def create_guided_controller(timeout_ms: int = 1000,
         strict_mode: If True, raise errors on failures
 
     Returns:
-        Controller instance or None if Z3 unavailable
+        Controller instance
     """
-    if not Z3_AVAILABLE:
-        logger.warning("[Z3Guided] Z3 not available, returning None")
-        return None
-
     return Z3GuidedSynthesisController(timeout_ms=timeout_ms, strict_mode=strict_mode)

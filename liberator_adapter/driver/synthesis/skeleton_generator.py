@@ -234,7 +234,8 @@ class SkeletonGenerator:
                  varlen_relations: Optional[Dict[str, List[Tuple[int, int, str]]]] = None,
                  loop_patterns: Optional[Dict[str, Dict]] = None,
                  callback_infos: Optional[Dict[str, List[Dict]]] = None,
-                 driver_name: str = "fuzz_driver") -> DriverSkeleton:
+                 driver_name: str = "fuzz_driver",
+                 is_cpp: bool = True) -> DriverSkeleton:
         """
         Generate driver skeleton
 
@@ -244,6 +245,7 @@ class SkeletonGenerator:
             loop_patterns: API loop patterns {api_name: {needs_loop, loop_type, ...}}
             callback_infos: API callback information {api_name: [{arg_idx, type, ...}, ...]}
             driver_name: Generated driver name
+            is_cpp: If True, generate C++ skeleton with FuzzedDataProvider
 
         Returns:
             DriverSkeleton: Skeleton with holes
@@ -256,8 +258,8 @@ class SkeletonGenerator:
             target_apis=api_sequence
         )
 
-        # 1. Generate includes
-        skeleton.includes = self._generate_includes(api_sequence)
+        # 1. Generate includes (with FuzzedDataProvider for C++)
+        skeleton.includes = self._generate_includes(api_sequence, is_cpp=is_cpp)
 
         # 2. Analyze variable requirements
         var_requirements = self._analyze_variable_requirements(
@@ -280,14 +282,24 @@ class SkeletonGenerator:
 
         return skeleton
 
-    def _generate_includes(self, apis: List[Api]) -> List[str]:
-        """Generate include list"""
+    def _generate_includes(self, apis: List[Api], is_cpp: bool = True) -> List[str]:
+        """Generate include list
+
+        Args:
+            apis: List of APIs (for future header detection)
+            is_cpp: If True, include C++ headers like FuzzedDataProvider
+        """
         includes = [
             "#include <stdint.h>",
             "#include <stddef.h>",
             "#include <stdlib.h>",
             "#include <string.h>",
         ]
+
+        # C++ projects use FuzzedDataProvider for structured fuzzing
+        if is_cpp:
+            includes.append("#include <fuzzer/FuzzedDataProvider.h>")
+
         return includes
 
     def _analyze_variable_requirements(
@@ -733,16 +745,27 @@ def generate_skeleton_for_sequence(
     varlen_relations: Optional[Dict] = None,
     loop_patterns: Optional[Dict] = None,
     callback_infos: Optional[Dict] = None,
-    driver_name: str = "fuzz_driver"
+    driver_name: str = "fuzz_driver",
+    is_cpp: bool = True
 ) -> DriverSkeleton:
-    """Convenience function: generate skeleton for API sequence"""
+    """Convenience function: generate skeleton for API sequence
+
+    Args:
+        api_sequence: API call sequence
+        varlen_relations: Variable-length parameter relationships
+        loop_patterns: Loop patterns for APIs
+        callback_infos: Callback information
+        driver_name: Name for the generated driver
+        is_cpp: If True, include C++ headers (FuzzedDataProvider)
+    """
     generator = SkeletonGenerator()
     return generator.generate(
         api_sequence,
         varlen_relations,
         loop_patterns,
         callback_infos,
-        driver_name
+        driver_name,
+        is_cpp=is_cpp
     )
 
 

@@ -224,25 +224,27 @@ class BaseAPIExtractor:
         cmd: str,
         error_msg: str,
         check_output: bool = False,
-        output_file: Optional[str] = None
+        output_file: Optional[str] = None,
+        timeout: int = 60
     ) -> subprocess.CompletedProcess:
         """
         Execute command and check for errors
-        
+
         Args:
             cmd: Command to execute
             error_msg: Error message prefix
             check_output: Whether to check output file
             output_file: Output file path (if check_output=True)
-        
+            timeout: Command execution timeout in seconds (default: 60)
+
         Returns:
             Command execution result
-        
+
         Raises:
             RuntimeError: If command execution fails or output file doesn't exist
         """
         logger.debug(f"Executing command: {cmd}")
-        result = self.container.execute(cmd)
+        result = self.container.execute(cmd, timeout=timeout)
         
         if result.returncode != 0:
             full_error = f"{error_msg}: {result.stderr}"
