@@ -13,7 +13,7 @@ from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.agents.utils import parse_tag
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.langchain_adapters import BashExecuteTool
+from src.tools.execution import BashExecuteTool
 
 
 class LangGraphFixer(LangGraphAgent, ToolCallingMixin):

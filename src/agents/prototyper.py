@@ -1,7 +1,7 @@
 """
 LangGraphPrototyper agent for LangGraph workflow.
 
-Refactored to use ToolCallingMixin for FuzzIntrospector tool access.
+Refactored to use consolidated tools for reduced token usage.
 LLM can query function source code and usage examples when needed.
 """
 from typing import Any, Dict, List
@@ -14,12 +14,7 @@ from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.agents.utils import parse_tag
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.langchain_adapters import (
-    GetFunctionImplementationTool,
-    GetFunctionSignatureTool,
-    GetSampleCrossReferencesTool,
-    GetTestsForFunctionsTool,
-)
+from src.tools.introspector import FuzzIntrospectorQueryTool, QueryType
 from data_prep.api_classifier import classify_project_apis
 
 
@@ -52,14 +47,21 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     # =========================================================================
 
     def get_tools(self) -> List[BaseTool]:
-        """Return FuzzIntrospector tools for API understanding."""
+        """Return consolidated FuzzIntrospector tool for API understanding.
+
+        Uses 1 unified tool instead of 4 separate tools.
+        """
         return [
-            GetFunctionImplementationTool(
-                executor=self._get_function_implementation),
-            GetFunctionSignatureTool(executor=self._get_function_signature),
-            GetSampleCrossReferencesTool(
-                executor=self._get_sample_cross_references),
-            GetTestsForFunctionsTool(executor=self._get_tests_for_functions),
+            FuzzIntrospectorQueryTool(
+                get_implementation=self._get_function_implementation,
+                get_signature=self._get_function_signature,
+                get_cross_refs=self._get_sample_cross_references,
+                get_type_defs=lambda: "Not available in prototyper",
+                get_headers=lambda _: "Not available in prototyper",
+                get_tests=self._get_tests_for_functions,
+                get_debug_types=lambda _: "Not available in prototyper",
+                get_by_return_type=lambda _: "Not available in prototyper",
+            ),
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
@@ -625,20 +627,11 @@ Output your fuzz driver code inside <fuzz_target> tags.
                                                   agent_name=self.name)
 
         # Use tool calling loop - LLM can optionally use tools
-        try:
-            parsed_result, all_responses = self.run_tool_calling_loop(
-                initial_prompt=prompt,
-                state=state,
-                max_rounds=getattr(self.args, 'max_round',
-                                   5),  # Allow a few rounds for tool use
-                log_prefix="PROTOTYPER")
-        except Exception as e:
-            logger.warning(
-                f"Tool calling loop failed, falling back to direct call: {e}",
-                trial=self.trial)
-            response = self.chat_llm(state, prompt)
-            parsed_result = self.parse_response(response)
-            all_responses = [response]
+        parsed_result, all_responses = self.run_tool_calling_loop(
+            initial_prompt=prompt,
+            state=state,
+            max_rounds=getattr(self.args, 'max_round', 5),
+            log_prefix="PROTOTYPER")
 
         # Extract session memory updates
         combined_response = "\n\n".join(all_responses)

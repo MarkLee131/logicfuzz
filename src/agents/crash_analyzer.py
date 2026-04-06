@@ -12,7 +12,7 @@ from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.langchain_adapters import BashExecuteTool, GDBExecuteTool
+from src.tools.execution import BashExecuteTool, GDBExecuteTool
 from experiment.workdir import WorkDirs
 
 

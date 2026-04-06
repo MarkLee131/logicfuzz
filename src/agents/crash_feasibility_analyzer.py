@@ -2,7 +2,7 @@
 LangGraphCrashFeasibilityAnalyzer agent for LangGraph workflow.
 
 This agent analyzes whether a crash is reachable from the project's external entry points.
-Refactored to use ToolCallingMixin for reduced code duplication.
+Refactored to use consolidated tools for reduced token usage.
 """
 import argparse
 import os
@@ -14,17 +14,8 @@ from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.langchain_adapters import (
-    BashExecuteTool,
-    GetFunctionImplementationTool,
-    GetFunctionSignatureTool,
-    GetSampleCrossReferencesTool,
-    GetTypeDefinitionsTool,
-    GetHeadersForFunctionTool,
-    GetTestsForFunctionsTool,
-    GetFunctionDebugTypesTool,
-    GetFunctionsByReturnTypeTool,
-)
+from src.tools.execution import BashExecuteTool
+from src.tools.introspector import FuzzIntrospectorQueryTool, QueryType
 
 
 class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
@@ -32,7 +23,7 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
     Crash feasibility analyzer agent for LangGraph - analyzes crash reachability.
 
     Uses ToolCallingMixin for standardized multi-round tool interaction.
-    Provides 9 tools for deep project analysis: functions, types, headers, tests, etc.
+    Provides 2 consolidated tools: bash execution and FuzzIntrospector queries.
     """
 
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
@@ -56,20 +47,24 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
     # =========================================================================
 
     def get_tools(self) -> List[BaseTool]:
-        """Return LangChain tools for crash feasibility analysis."""
+        """Return consolidated tools for crash feasibility analysis.
+
+        Uses 2 tools instead of 9:
+        - BashExecuteTool: For container command execution
+        - FuzzIntrospectorQueryTool: Unified tool for all FI queries
+        """
         return [
             BashExecuteTool(executor=self._execute_bash),
-            GetFunctionImplementationTool(
-                executor=self._get_function_implementation),
-            GetFunctionSignatureTool(executor=self._get_function_signature),
-            GetSampleCrossReferencesTool(
-                executor=self._get_sample_cross_references),
-            GetTypeDefinitionsTool(executor=self._get_type_definitions),
-            GetHeadersForFunctionTool(executor=self._get_headers_for_function),
-            GetTestsForFunctionsTool(executor=self._get_tests_for_functions),
-            GetFunctionDebugTypesTool(executor=self._get_function_debug_types),
-            GetFunctionsByReturnTypeTool(
-                executor=self._get_functions_by_return_type),
+            FuzzIntrospectorQueryTool(
+                get_implementation=self._get_function_implementation,
+                get_signature=self._get_function_signature,
+                get_cross_refs=self._get_sample_cross_references,
+                get_type_defs=self._get_type_definitions,
+                get_headers=self._get_headers_for_function,
+                get_tests=self._get_tests_for_functions,
+                get_debug_types=self._get_function_debug_types,
+                get_by_return_type=self._get_functions_by_return_type,
+            ),
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:

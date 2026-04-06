@@ -14,26 +14,18 @@ from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.agents.utils import parse_tag
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.langchain_adapters import (
-    GetFunctionImplementationTool,
-    GetFunctionSignatureTool,
-    GetSampleCrossReferencesTool,
-    GetTestsForFunctionsTool,
-)
+from src.tools.introspector import FuzzIntrospectorQueryTool, QueryType
 
 
 class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
     """
-    Improver agent for LangGraph.
+    Improver agent for LangGraph - improves fuzz drivers based on coverage analysis.
 
-    This agent is responsible for improving fuzz driver quality based on
-    coverage analysis recommendations. Unlike fixer (which fixes compilation errors),
-    improver rewrites the driver to increase code coverage.
-
-    Now supports FuzzIntrospector tool access for querying:
-    - Function source code (to understand uncovered code paths)
-    - Usage examples (to learn correct API patterns for better coverage)
-    - Function signatures (to verify parameter types)
+    Uses consolidated FuzzIntrospectorQueryTool (1 tool instead of 4) for querying:
+    - function_implementation: Get source code to understand uncovered code paths
+    - function_signature: Verify parameter types for new API calls
+    - cross_references: Learn correct API patterns from usage examples
+    - tests_for_functions: See test code for exercising specific functionality
 
     LLM can decide when to use tools based on coverage analysis suggestions.
     """
@@ -55,14 +47,23 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
     # =========================================================================
 
     def get_tools(self) -> List[BaseTool]:
-        """Return FuzzIntrospector tools for understanding uncovered code."""
+        """Return consolidated FuzzIntrospector tool for querying API information.
+
+        Uses 1 unified tool instead of 4 separate tools.
+        Supported query types: function_implementation, function_signature,
+        cross_references, tests_for_functions
+        """
         return [
-            GetFunctionImplementationTool(
-                executor=self._get_function_implementation),
-            GetFunctionSignatureTool(executor=self._get_function_signature),
-            GetSampleCrossReferencesTool(
-                executor=self._get_sample_cross_references),
-            GetTestsForFunctionsTool(executor=self._get_tests_for_functions),
+            FuzzIntrospectorQueryTool(
+                get_implementation=self._get_function_implementation,
+                get_signature=self._get_function_signature,
+                get_cross_refs=self._get_sample_cross_references,
+                get_type_defs=lambda: "Not supported in improver",
+                get_headers=lambda x: "Not supported in improver",
+                get_tests=self._get_tests_for_functions,
+                get_debug_types=lambda x: "Not supported in improver",
+                get_by_return_type=lambda x: "Not supported in improver",
+            ),
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
@@ -191,27 +192,23 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         base_prompt += """
 
 <tool_usage_guidance>
-**You have access to tools to query more information about APIs if needed:**
+**You have access to fuzz_introspector_query tool for querying API information:**
 
-- **get_function_implementation**: Get the source code of any API function
-  Use when: Coverage analysis mentions uncovered code paths - query the source to understand the logic
+Query types:
+- function_implementation: Get source code for a function (target=function_name)
+- function_signature: Get full signature for a function (target=function_name)
+- cross_references: Get usage examples (target=function_signature)
+- tests_for_functions: Get test examples (use function_names list)
 
-- **get_function_signature**: Get the exact signature of a function
-  Use when: You want to call additional APIs but need to verify parameter types
+Example: fuzz_introspector_query(query_type="function_implementation", target="parse_data")
 
-- **get_sample_cross_references**: Get real usage examples from the codebase
-  Use when: You want to see how to properly use an API to hit specific code paths
+**When to use:**
+- Coverage mentions uncovered branches → query source code to understand the logic
+- Want to add new API calls → query signatures and cross_references
+- Unsure how to trigger a code path → query usage examples
+- Straightforward improvement → no need to query, just improve the code
 
-- **get_tests_for_functions**: Get test code that uses these functions
-  Use when: You want to learn from tests how to exercise specific functionality
-
-**When to use tools:**
-- If coverage analysis mentions uncovered branches in a function → query its source code
-- If you want to add new API calls for coverage → query signatures and examples
-- If you're unsure how to trigger a specific code path → query usage examples
-- If the improvement is straightforward → no need to query, just improve the code
-
-**Tool calls are optional** - use them only when you need more information to improve coverage.
+**Tool calls are optional** - use only when you need more information.
 </tool_usage_guidance>
 """
 
@@ -220,19 +217,11 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
                                                   agent_name=self.name)
 
         # Use tool calling loop - LLM can optionally use tools
-        try:
-            parsed_result, all_responses = self.run_tool_calling_loop(
-                initial_prompt=prompt,
-                state=state,
-                max_rounds=getattr(self.args, 'max_round', 5),
-                log_prefix="IMPROVER")
-        except Exception as e:
-            logger.warning(
-                f"Tool calling loop failed, falling back to direct call: {e}",
-                trial=self.trial)
-            response = self.chat_llm(state, prompt)
-            parsed_result = self.parse_response(response)
-            all_responses = [response]
+        parsed_result, all_responses = self.run_tool_calling_loop(
+            initial_prompt=prompt,
+            state=state,
+            max_rounds=getattr(self.args, 'max_round', 5),
+            log_prefix="IMPROVER")
 
         # Extract session memory updates
         combined_response = "\n\n".join(all_responses)
@@ -251,24 +240,19 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
                 trial=self.trial)
             improved_code = current_code
 
-        try:
-            improvement_count = state.get("improvement_attempt_count", 0) + 1
-            notes = f"Improver attempt #{improvement_count}"
-            add_coverage_attempt(state=state,
-                                 attempt_type="improver",
-                                 outcome="driver_rewritten",
-                                 coverage_percent=coverage_percent,
-                                 line_coverage_diff=line_coverage_diff,
-                                 no_improvement_count=state.get(
-                                     "no_coverage_improvement_count", 0),
-                                 iteration=state.get("current_iteration", 0),
-                                 notes=notes)
-            updated_session_memory = state.get("session_memory",
-                                               updated_session_memory)
-        except Exception as e:
-            logger.warning(
-                f"Failed to record improver coverage attempt in session_memory: {e}",
-                trial=self.trial)
+        improvement_count = state.get("improvement_attempt_count", 0) + 1
+        notes = f"Improver attempt #{improvement_count}"
+        add_coverage_attempt(state=state,
+                             attempt_type="improver",
+                             outcome="driver_rewritten",
+                             coverage_percent=coverage_percent,
+                             line_coverage_diff=line_coverage_diff,
+                             no_improvement_count=state.get(
+                                 "no_coverage_improvement_count", 0),
+                             iteration=state.get("current_iteration", 0),
+                             notes=notes)
+        updated_session_memory = state.get("session_memory",
+                                           updated_session_memory)
 
         state_update = {
             "fuzz_target_source": improved_code,
@@ -279,12 +263,10 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
             "coverage_analysis": None,
             "session_memory": updated_session_memory,
             "no_coverage_improvement_count": 0,
-            # Note: compilation_retry_count is NOT reset - it's a global limit across the workflow
+            "improvement_attempt_count": improvement_count,
         }
 
-        improvement_count = state.get("improvement_attempt_count", 0)
-        state_update["improvement_attempt_count"] = improvement_count + 1
-        logger.info(f'Improvement attempt count: {improvement_count + 1}',
+        logger.info(f'Improvement attempt count: {improvement_count}',
                     trial=self.trial)
 
         self._langgraph_logger.flush_agent_logs(self.name)

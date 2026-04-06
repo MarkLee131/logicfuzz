@@ -11,7 +11,7 @@ from src.workflow.state import FuzzingWorkflowState, add_coverage_attempt
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.langchain_adapters import BashExecuteTool
+from src.tools.execution import BashExecuteTool
 
 
 class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
@@ -149,21 +149,17 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
         session_memory = merge_session_memory_updates(state, updates)
 
         # Record attempt
-        try:
-            add_coverage_attempt(
-                state=state,
-                attempt_type="coverage_analysis",
-                outcome="improve_required"
-                if result.get("improve_required") else "no_improvement_needed",
-                coverage_percent=state.get("coverage_percent", 0.0),
-                line_coverage_diff=state.get("line_coverage_diff", 0.0),
-                no_improvement_count=state.get("no_coverage_improvement_count",
-                                               0),
-                iteration=state.get("current_iteration", 0),
-                notes="CoverageAnalyzer completed")
-            session_memory = state.get("session_memory", session_memory)
-        except Exception as e:
-            logger.warning(f"Failed to record attempt: {e}", trial=self.trial)
+        add_coverage_attempt(
+            state=state,
+            attempt_type="coverage_analysis",
+            outcome="improve_required"
+            if result.get("improve_required") else "no_improvement_needed",
+            coverage_percent=state.get("coverage_percent", 0.0),
+            line_coverage_diff=state.get("line_coverage_diff", 0.0),
+            no_improvement_count=state.get("no_coverage_improvement_count", 0),
+            iteration=state.get("current_iteration", 0),
+            notes="CoverageAnalyzer completed")
+        session_memory = state.get("session_memory", session_memory)
 
         self._langgraph_logger.flush_agent_logs(self.name)
         return {"coverage_analysis": result, "session_memory": session_memory}

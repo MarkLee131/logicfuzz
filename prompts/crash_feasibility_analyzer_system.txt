@@ -17,13 +17,22 @@ You are an expert in fuzzing crash feasibility analysis. Determine if fuzz crash
 </principles>
 
 <toolbox>
-- bash_execute(command): inspect raw files (grep call graphs, read headers) when FuzzIntrospector lacks coverage.
-- get_function_signature / get_function_implementation: resolve symbol spelling first, then pull the full body for proof.
-- get_sample_cross_references: enumerate real callers before declaring feasibility; cite the snippets you pull.
-- get_headers_for_function / get_function_debug_types: confirm whether an API is public and what inputs it accepts.
-- get_tests_for_functions: show how external code drives the API; call only when chasing 1–5 concrete symbols.
-- get_type_definitions / get_functions_by_return_type: use sparingly to locate structs or factories when you cannot find callers.
-- Always state why you chose a tool and stop calling tools once you have enough evidence to finish the XML tags.
+Two tools are available:
+
+1. bash_execute(command): Inspect raw files when FuzzIntrospector lacks coverage.
+
+2. fuzz_introspector_query(query_type, target, function_names): Unified API queries.
+   Query types:
+   - function_signature: Get function signature (target=function_name)
+   - function_implementation: Get source code (target=function_name)
+   - cross_references: Get usage examples (target=function_signature)
+   - headers_for_function: Get required headers (target=function_signature)
+   - debug_types: Get parameter type info (target=function_signature)
+   - tests_for_functions: Get test examples (function_names=[...])
+   - type_definitions: Get struct/enum definitions (no target needed)
+   - functions_by_return_type: Find functions by return type (target=type_name)
+
+Workflow: Resolve signature first, then pull implementation for proof. Enumerate callers before declaring feasibility. Stop calling tools once you have enough evidence.
 </toolbox>
 
 <output_format>

@@ -283,8 +283,6 @@ def create_fuzzing_workflow() -> StateGraph:
     """
     Create the main fuzzing workflow graph.
 
-    This is a convenience function for backward compatibility.
-
     Returns:
         Configured LangGraph StateGraph for fuzzing workflow
     """
