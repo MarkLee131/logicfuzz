@@ -48,10 +48,16 @@ OPTIMIZATION: execution → [crash] → crash_analyzer → feasibility → END/f
 
 | Agent | Tools | Purpose |
 |-------|-------|---------|
-| Prototyper | FuzzIntrospector | Generate initial driver from API sequence |
-| Fixer | Bash | Fix compilation errors with error triage |
-| CoverageAnalyzer | Bash | Diagnose low coverage, suggest improvements |
-| CrashAnalyzer | GDB, Bash | Determine if crash is driver bug or real bug |
+| Prototyper | FuzzIntrospectorQueryTool | Generate initial driver from API sequence |
+| Fixer | BashExecuteTool | Fix compilation errors with error triage |
+| CoverageAnalyzer | BashExecuteTool | Diagnose low coverage, suggest improvements |
+| CrashAnalyzer | BashExecuteTool | Determine if crash is driver bug or real bug |
+| Improver | FuzzIntrospectorQueryTool | Improve coverage based on analyzer suggestions |
+| CrashFeasibilityAnalyzer | - | Determine if crash is feasible/real |
+
+**Tool Consolidation**: Tools are consolidated for token efficiency:
+- `FuzzIntrospectorQueryTool`: Unified tool for function impl, signatures, cross-refs, type defs, headers, tests, debug types
+- `BashExecuteTool`: Unified bash execution with 8KB output truncation
 
 ### Key Files
 
@@ -61,6 +67,46 @@ OPTIMIZATION: execution → [crash] → crash_analyzer → feasibility → END/f
 | Supervisor | `src/workflow/nodes/supervisor.py` | Route between agents, manage phases |
 | ToolCallingMixin | `src/agents/tool_calling_mixin.py` | ReAct loop for agent tool use |
 | CBFactory | `liberator_adapter/driver/factory/constraint_based/` | Z3-guided driver synthesis |
+| FuzzIntrospectorQueryTool | `src/tools/introspector.py` | Unified FuzzIntrospector query interface |
+
+### Progressive Filter Pipeline (`liberator_adapter/constraints/`)
+
+Multi-layer filtering: **Type compatibility ≠ Semantic validity ≠ High coverage**
+
+```
+All APIs (N) → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L4 Ranking → L5 Coverage-Aware → Top-K
+              (~1000)    (~100)      (~30)          (~10)            (K=12)       (prioritize uncovered)
+```
+
+| Layer | File | Constraint |
+|-------|------|------------|
+| L0 | (implicit in grammar) | `API_A.arg.type == API_B.return_type` |
+| L1 | `entry_point_analyzer.py` | Contains API consuming `(uint8_t* data, size_t size)` |
+| L2 | `lifecycle_analyzer.py` | Resources have matching init/destroy pairs |
+| L3 | `state_machine_analyzer.py` | API calls satisfy precondition/postcondition |
+| L4 | `coverage_ranker.py` | Prioritize by diversity, greedy selection |
+| L5 | `coverage_aware_filter.py` | Deprioritize APIs already well-covered |
+
+**Entry Point Categories** (L1):
+- `C_BUFFER_WITH_SIZE`: (const uint8_t* data, size_t size)
+- `CPP_VIEW`: string_view, span<>, StringRef
+- `CPP_CONTAINER_REF`: std::string&, std::vector&
+- `C_STRING`: (const char*) null-terminated
+
+**Lifecycle Discovery** (L2):
+- NAME_PATTERN: xxx_init ↔ xxx_destroy, xxx_create ↔ xxx_delete
+- TYPE_PATTERN: Type-based matching on return/parameter types
+- SEMANTIC_PATTERN: Library-specific (e.g., all ares parsers → ares_free_data)
+
+**State Machine Violations** (L3): USE_BEFORE_INIT, DESTROY_BEFORE_INIT, DOUBLE_DESTROY, USE_AFTER_DESTROY, REINIT_WITHOUT_DESTROY
+
+### Z3-Guided Synthesis (`liberator_adapter/driver/factory/constraint_based/`)
+
+| Component | Purpose |
+|-----------|---------|
+| `z3_solver.py` | IncrementalZ3Solver with push/pop for decision guidance |
+| `z3_guided_synthesis.py` | Extended constraints: TYPE_MATCH, PROVENANCE, RESOURCE_LIFECYCLE, VARIABLE_AVAILABILITY |
+| UnsatCoreDiagnoser | Intelligent failure diagnosis with unsat core analysis |
 
 ### Liberator Static Analysis (`liberator_adapter/`)
 
@@ -70,6 +116,7 @@ OPTIMIZATION: execution → [crash] → crash_analyzer → feasibility → END/f
 | Var-len params | `VarLenAnalyzer` in `special_patterns.py` |
 | Callbacks | `CallbackAnalyzer` + stub templates |
 | API lifecycle | `LLMLifecycleValidator` in `sequence_filter.py` |
+| Type classification | `ConditionManager.py` (SOURCE/SINK/INIT/SETBY) |
 
 ## Design Principles
 
@@ -77,6 +124,7 @@ OPTIMIZATION: execution → [crash] → crash_analyzer → feasibility → END/f
 - **Symbolic vs Neural**: Z3 handles hard constraints, LLM handles soft constraints.
 - **Error Triage**: Categorize build errors (link/header/type) for targeted fixing.
 - **Driver Knowledge**: Extract patterns from existing OSS-Fuzz drivers as reference.
+- **Token Efficiency**: Consolidated tools, context prefetching, 8KB output truncation.
 
 ## Validation Pipeline
 
@@ -87,285 +135,126 @@ Build errors pass through multiple validators before reaching Fixer:
 3. **LanguageMismatchValidator** - Detect C++ in C code
 4. **APIValidator** - Detect internal/private API usage
 
+## Supervisor Configuration
+
+```python
+MAX_COMPILATION_RETRIES = 2
+MAX_CRASH_FIX_RETRIES = 2
+MAX_TOTAL_BUILD_FAILURES = 10
+MAX_NODE_VISITS = 10  # Loop detection
+MAX_COVERAGE_IMPROVE_ITERATIONS = 1
+```
+
 ## TODO
-
-### Progressive Filter Pipeline (Core Enhancement)
-
-The key insight: **Type compatibility ≠ Semantic validity ≠ High coverage**.
-Current grammar-based sequence generation produces syntactically valid but semantically meaningless sequences.
-
-**Solution**: Multi-layer progressive filtering that incrementally tightens constraints.
-
-```
-All APIs (N) → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L4 Ranking → L5 Coverage-Aware → Top-K
-              (~1000)    (~100)      (~30)          (~10)            (K=12)       (prioritize uncovered)
-```
-
-| Layer | Filter | Constraint | Status |
-|-------|--------|------------|--------|
-| L0 | Type Compatibility | `API_A.arg.type == API_B.return_type` | ✅ Done |
-| L1 | Entry Point | Sequence contains API that directly consumes `(uint8_t* data, size_t size)` | ✅ Done |
-| L2 | Lifecycle | Resources have matching init/destroy pairs | ✅ Done |
-| L3 | State Machine | API calls satisfy precondition/postcondition constraints | ✅ Done |
-| L4 | Coverage Ranking | Prioritize by coverage potential (diversity, greedy selection) | ✅ Done |
-| L5 | Coverage-Aware | Deprioritize APIs already well-covered by existing fuzzers | ✅ Done |
-
-### Completed
-
-- [x] **L1: Entry Point Analyzer** (`liberator_adapter/constraints/entry_point_analyzer.py`)
-  - Pattern match: `(const unsigned char*, int/size_t)` as first two args
-  - Strategies: ANY_POSITION, MUST_BE_FIRST, WITHIN_FIRST_N
-
-- [x] **L2: Lifecycle Discovery** (`liberator_adapter/constraints/lifecycle_analyzer.py`)
-  - Name matching: `xxx_init` ↔ `xxx_destroy`, `xxx_create` ↔ `xxx_delete`
-  - Semantic patterns: `ares_parse_*_reply` -> `ares_free_data`
-  - Auto-complete sequences with missing cleanup APIs
-
-- [x] **L3: State Machine Extraction** (`liberator_adapter/constraints/state_machine_analyzer.py`)
-  - Derive from lifecycle: init produces INITIALIZED, destroy requires INITIALIZED
-  - Detect violations: use-before-init, use-after-free, double-free
-  - Filter strategies: strict, fixable, permissive
-
-- [x] **L4: Coverage Ranking** (`liberator_adapter/constraints/coverage_ranker.py`)
-  - Hierarchical sorting: diversity -> entry point position -> length
-  - Greedy selection: maximize marginal API coverage
-  - No empirical weights - all rules deterministic and explainable
-
-- [x] **L5: Coverage-Aware Filter** (`liberator_adapter/constraints/coverage_aware_filter.py`)
-  - Fetch existing coverage from FuzzIntrospector API
-  - Calculate novelty score: +2 uncovered, +1 poorly-covered, -0.5 well-covered
-  - Keep "important APIs" (parsers, init/destroy) regardless of coverage
-  - Filter sequences with >70% overlap with existing coverage
 
 ### Evaluation Workflow (High Priority)
 
-- [ ] **24-Hour Fuzzing Evaluation** (HIGH PRIORITY)
-  - Run generated drivers for 24 hours to collect comparable metrics with PromeFuzz
-  - Script exists: `scripts/run_extended_fuzzing.py`
-  - Usage:
-    ```bash
-    # Run 24h fuzzing on a single target
-    python scripts/run_extended_fuzzing.py \
-        --project re2 \
-        --fuzz-target results/output-re2-project/fuzz_targets/02.fuzz_target \
-        --duration 86400 \
-        --output-dir results/extended_fuzzing/re2 \
-        --snapshot-interval 1800
-    ```
-  - Outputs: `results.json` (coverage metrics), `coverage_timeline.csv` (time series)
-  - Next step: Create batch script to run all successful drivers
+- [ ] **24-Hour Fuzzing Evaluation**
+  - Script: `scripts/run_extended_fuzzing.py`
+  - Outputs: `results.json`, `coverage_timeline.csv`
 
-- [ ] **Harness Merging** (Medium Priority)
-  - PromeFuzz merges multiple harnesses per project, then runs 24h fuzzing on merged harness
-  - Need to implement: merge multiple `fuzz_targets/*.fuzz_target` into single harness
-  - Approach: Combine LLVMFuzzerTestOneInput functions with switch-case on first byte
-  - Reference: PromeFuzz paper Section 5 "For multiple fuzzing harnesses generated for a library, we merged them into a single harness"
-
-- [ ] **Batch Evaluation Script** (High Priority)
+- [ ] **Batch Evaluation Script**
   - Scan `results/output-*-project/fuzz_targets/` for successful builds
-  - Run 24h fuzzing on each
-  - Aggregate coverage metrics into summary table matching PromeFuzz Table 2 format:
-    | Project | #API | #Branch | Lines | Branch% |
-  - Compare with OSS-Fuzz baseline
+  - Run 24h fuzzing, aggregate metrics into PromeFuzz Table 2 format
 
-### Future Work
+- [ ] **Harness Merging**
+  - Merge multiple `fuzz_targets/*.fuzz_target` into single harness
+  - Approach: Combine LLVMFuzzerTestOneInput with switch-case on first byte
 
-- [ ] **Indirect Entry Point Support** (from libucl case study)
-  - Current L1 filter requires direct `(uint8_t* data, size_t)` consumption
-  - Many libraries use `init() → consume_data()` pattern (e.g., `ucl_parser_new() → ucl_parser_add_chunk()`)
-  - Need to support "indirect entry points" where data consumption requires prior handle creation
-  - Impact: libucl had 70% reachability but only 9.7% coverage diff due to this limitation
+### Future Enhancements
+
+- [ ] **Indirect Entry Point Support**
+  - Support `init() → consume_data()` pattern (e.g., ucl_parser_new() → ucl_parser_add_chunk())
+  - Current L1 only supports direct `(uint8_t*, size_t)` consumption
 
 - [ ] **Post-Parse Sequence Extension**
-  - Current sequences stop at parse/get_object stage
-  - High-value APIs (emit, compare, merge) require parsed objects as input
-  - Auto-extend sequences: `parse → get_object → emit/compare/merge`
-  - Impact: Would cover `ucl_emit_*` (+109 complexity), `ucl_object_compare` (+44 complexity)
-
-- [ ] **Cross-Project Coverage Analysis** (in progress)
-  - Analyze libaom, re2, sqlite3 results with same framework as libucl
-  - Identify common patterns vs project-specific issues
-  - Avoid local optimization that doesn't generalize
-  - Results: `docs/coverage_analysis_cases.md`
+  - Auto-extend: `parse → get_object → emit/compare/merge`
+  - Cover high-value APIs requiring parsed objects
 
 - [ ] Early crash detection (15s fuzzing to filter bad drivers)
 - [ ] TLV-aware seed generation based on format analysis
-- [ ] Coverage feedback loop from execution phase for adaptive ranking
+- [ ] Coverage feedback loop from execution phase
 
----
-
-### L1: Entry Point Analyzer - Detailed Design
-
-#### Definition
-
-**Entry Point** = API that directly consumes fuzzer input `(const uint8_t* data, size_t size)` without requiring complex initialization (like channel/handle).
-
-```
-Entry Point Types:
-├── PARSER   - Parse external data into internal structure (ares_dns_parse, cJSON_Parse)
-├── CREATOR  - Create object from external data (ares_create_query)
-└── VALIDATOR - Validate external data format (json_validate)
-```
-
-#### Identification Rules
+## Implementation Flow
 
 ```python
-# Entry Point signature patterns
-ENTRY_POINT_PATTERNS = [
-    # Pattern 1: (const unsigned char*, int/size_t) - most common
-    {
-        "arg0_types": ["unsigned char *", "uint8_t *", "char *", "void *"],
-        "arg1_types": ["int", "size_t", "unsigned long", "long"],
-        "arg0_must_be_const": True,
-    },
-    # Pattern 2: (const char*) - string input (no explicit size)
-    # Note: requires null-termination of fuzzer data
-    {
-        "arg0_types": ["char *"],
-        "arg0_must_be_const": True,
-        "no_size_arg": True,
-    },
-]
-
-def is_entry_point(api: Api) -> bool:
-    if len(api.args) < 2:
-        return False
-    arg0_type = api.args[0].type.lower()
-    arg1_type = api.args[1].type.lower()
-    arg0_const = api.args[0].is_const[0]
-
-    is_buffer = any(t in arg0_type for t in ["unsigned char *", "char *", "void *"])
-    is_size = any(t in arg1_type for t in ["int", "size_t", "unsigned long"])
-
-    return is_buffer and is_size and arg0_const
-```
-
-#### Example: c-ares Project
-
-| Total APIs | Entry Points | Ratio |
-|------------|--------------|-------|
-| 138 | 15 | 10.9% |
-
-```
-Entry Points found:
-├── ares_dns_parse          (unsigned char*, unsigned long)  ← Modern unified parser
-├── ares_parse_mx_reply     (unsigned char*, int)            ← Legacy parsers
-├── ares_parse_txt_reply    (unsigned char*, int)
-├── ares_parse_srv_reply    (unsigned char*, int)
-├── ares_parse_soa_reply    (unsigned char*, int)
-├── ares_parse_a_reply      (unsigned char*, int)
-├── ares_parse_aaaa_reply   (unsigned char*, int)
-├── ares_parse_ptr_reply    (unsigned char*, int)
-├── ares_parse_ns_reply     (unsigned char*, int)
-├── ares_parse_uri_reply    (unsigned char*, int)
-├── ares_parse_caa_reply    (unsigned char*, int)
-├── ares_parse_naptr_reply  (unsigned char*, int)
-├── ares_parse_txt_reply_ext(unsigned char*, int)
-├── ares_create_query       (char*, int)                     ← Query creators
-└── ares_mkquery            (char*, int)
-```
-
-#### Filter Strategies
-
-```python
-class EntryPointFilterStrategy(Enum):
-    ANY_POSITION = "any"       # At least one Entry Point anywhere in sequence
-    MUST_BE_FIRST = "first"    # Entry Point must be first API in sequence
-    WITHIN_FIRST_N = "within"  # Entry Point within first N positions (default: N=3)
-```
-
-**Recommended**: `WITHIN_FIRST_N` with N=3 (balanced between strictness and flexibility)
-
-#### Sequence Filter Logic
-
-```python
-def filter_sequences_by_entry_point(sequences, entry_point_names, strategy="within", n=3):
-    filtered = []
-    for seq in sequences:
-        if strategy == "any":
-            ok = any(api in entry_point_names for api in seq)
-        elif strategy == "first":
-            ok = seq[0] in entry_point_names if seq else False
-        elif strategy == "within":
-            ok = any(api in entry_point_names for api in seq[:n])
-
-        if ok:
-            filtered.append(seq)
-    return filtered
-```
-
-#### Output Data Structure
-
-```python
-@dataclass
-class EntryPointAnalysis:
-    entry_points: List[EntryPointInfo]    # List of Entry Point APIs with metadata
-    entry_point_names: Set[str]           # Set of Entry Point function names
-    non_entry_points: List[Api]           # APIs that are not Entry Points
-
-@dataclass
-class EntryPointInfo:
-    api: Api                    # Original API info
-    entry_type: str             # "parser" | "creator" | "validator"
-    buffer_arg_index: int       # Index of buffer argument (usually 0)
-    size_arg_index: int         # Index of size argument (usually 1, -1 if none)
-```
-
-#### Integration Point
-
-```python
-# In FuzzingContext.prepare() - after L0, before L2
-
-def _analyze_entry_points(self) -> EntryPointAnalysis:
-    """L1: Identify Entry Point APIs"""
-    analyzer = EntryPointAnalyzer(patterns=ENTRY_POINT_PATTERNS)
-    return analyzer.analyze(self.project_apis)
-
-def _filter_by_entry_point(self, sequences, analysis, strategy="within", n=3):
-    """L1: Filter sequences to keep only those with Entry Points"""
-    return [
-        seq for seq in sequences
-        if any(api in analysis.entry_point_names for api in seq[:n])
-    ]
-```
-
-#### Expected Filtering Effect
-
-| Stage | Sequences | Reduction |
-|-------|-----------|-----------|
-| L0 output | ~1000 | - |
-| L1 filtered | ~100-200 | 80-90% |
-
-**Key value**: Eliminates sequences that only call APIs requiring channel/handle (like `ares_getnameinfo`, `ares_query`) which would need complex initialization and produce low coverage.
-
-#### Open Questions
-
-1. **String-only Entry Points** (e.g., `cJSON_Parse(const char*)`)
-   - Requires null-terminating fuzzer data
-   - Handle in driver template or filter out?
-
-2. **Entry Point priority within L1**
-   - `ares_dns_parse` (modern) vs `ares_parse_*_reply` (legacy)
-   - Defer to L4 ranking or pre-sort here?
-
-### Planned
-
-- [ ] Early crash detection (15s fuzzing to filter bad drivers)
-- [ ] TLV-aware seed generation based on format analysis
-- [ ] Coverage feedback loop from execution phase for adaptive ranking
-
-### Implementation Notes
-
-Integration point: `src/context/data_context.py` in `FuzzingContext.prepare()`
-
-```python
-# Current flow (L0-L4 fully implemented):
+# In FuzzingContext.prepare():
 Step 1-4: _build_dependency_graph() → _generate_sequences()  # L0: Type compatibility
 Step 5c:  analyze_entry_points() → filter_sequences_by_entry_point()  # L1: Entry Point
 Step 5d:  analyze_lifecycle() → filter_sequences_by_lifecycle()  # L2: Lifecycle
 Step 5e:  analyze_state_machine() → filter_sequences_by_state_machine()  # L3: State Machine
-Step 5f:  select_top_k_sequences()  # L4: Coverage Ranking (replaces old heuristic filter)
+Step 5f:  select_top_k_sequences()  # L4: Coverage Ranking
+# L5: Coverage-Aware applied during ranking
 ```
 
+---
 
+## Coverage Analysis Cases
 
+记录各项目的 coverage diff 分析，识别跨项目共性问题，避免局部最优设计。
+
+### Case 1: libucl (完整分析)
+
+**OSS-Fuzz Baseline**: Line 14.35% (1,117/7,785), Function 5.67% (17/300), Reachability 70.1%
+
+**LogicFuzz Result**: Coverage Diff **~9.7%**, Final ~20.76%, Sequences **5** (from 134 APIs)
+
+**高价值未覆盖 APIs**:
+
+| API | 潜在复杂度 | 未覆盖原因 |
+|-----|-----------|-----------|
+| `ucl_emit_yaml_start_array` | +109 | 需要 `ucl_object_t*` 输入 |
+| `ucl_hash_sort` | +81 | 需要 hash 对象 |
+| `ucl_object_merge` | +55 | 需要两个 `ucl_object_t*` |
+| `ucl_object_compare` | +44 | 需要两个 `ucl_object_t*` |
+
+**瓶颈识别**:
+
+| 瓶颈 | 影响 | 说明 |
+|------|-----|------|
+| **L1 Entry Point 过严** | 高 | 不支持间接入口点模式 |
+| **Post-parse 操作缺失** | 高 | Sequences 止步于 `get_object`，未延伸到 emit/compare/merge |
+| **Sequence 数量受限** | 中 | Top-K 选择后仅 5 个 |
+
+**理论 vs 实际 Gap**: 可达覆盖率 70.1% vs 实际 20.76% = **49.3% gap**
+
+**根因**: libucl 使用间接入口点模式：
+```c
+ucl_parser *parser = ucl_parser_new(0);      // 先创建 handle
+ucl_parser_add_chunk(parser, data, size);    // 再消费 fuzzer data
+```
+当前 L1 filter 要求直接消费 `(uint8_t* data, size_t)`，导致大量 sequences 被过滤。
+
+### Case 2: re2 (待完成)
+
+**OSS-Fuzz Baseline**: Line 30.77% (10,071/32,725), Function ~0.78% (36/4,615), Reachability 52.99%
+
+**特点**: 函数覆盖率极低，潜力大
+
+**高复杂度未覆盖**: `Compiler::PostVisit()` (4,997), `Prefilter::DebugString()` (4,046)
+
+### Case 3: sqlite3 (待完成)
+
+**OSS-Fuzz Baseline**: Line 79.27% (66,467/83,850), Function ~79%
+
+**特点**: 覆盖率已高，提升空间有限
+
+**高复杂度未覆盖**: `jsonExtractFunc` (838), `resolveExprStep` (501), `strftimeFunc` (245)
+
+### Case 4: libaom (待完成)
+
+**OSS-Fuzz Baseline**: Line 61.36% (48,101/78,392)
+
+### 项目特征分类
+
+| 类型 | 特征 | 代表项目 | 优化策略 |
+|------|------|---------|---------|
+| 间接入口点 | 需先创建 handle | libucl | 支持 init→consume 模式 |
+| 低基线高潜力 | 覆盖率<30%，可达性>50% | re2 | 待分析 |
+| 高基线低潜力 | 覆盖率>70% | sqlite3 | 待分析 |
+
+### 跨项目共性问题 (待验证)
+
+1. **L1 过滤过严**: 间接入口点模式被错误过滤
+2. **Post-parse 缺失**: 高价值 API (emit/merge/compare) 需要 parsed object
+3. **Sequence 多样性不足**: Top-K 选择可能丢失重要功能模块覆盖
