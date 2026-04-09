@@ -126,6 +126,12 @@ class FuzzingWorkflowState(TypedDict):
     # Set by supervisor when build fails with undefined reference errors
     fake_definition_result: NotRequired[Dict[str, Any]]
 
+    # === Target API Validation (AST-based) ===
+    # Result of AST-based validation checking if driver actually calls target APIs
+    # Set by build_node after successful compilation
+    # Contains: success, actual_called_apis, missing_apis, coverage_ratio, validation_method, report
+    target_api_validation: NotRequired[Dict[str, Any]]
+
 
 class WorkerState(TypedDict):
     """State for worker nodes in parallel execution."""

@@ -1450,14 +1450,15 @@ Output your fuzz driver code inside <fuzz_target> tags.
     def _validate_api_usage(self, code: str, project_name: str) -> str:
         """Validate generated code for internal/private API usage."""
         try:
-            from src.utils.api_validator import validate_fuzz_target
+            from src.utils.unified_validator import UnifiedCodeValidator, format_validation_report
 
-            is_valid, report = validate_fuzz_target(code, project_name)
+            validator = UnifiedCodeValidator()
+            result = validator.validate(code=code, project_name=project_name)
 
-            if not is_valid:
+            if not result.success:
                 logger.warning('Generated code contains internal API usage',
                                trial=self.trial)
-                return report
+                return format_validation_report(result)
             else:
                 logger.info('Generated code passed API validation',
                             trial=self.trial)

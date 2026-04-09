@@ -52,7 +52,6 @@ from typing import Dict, Any
 from langchain_core.runnables import RunnableConfig
 import logger
 from src.workflow.state import FuzzingWorkflowState, consolidate_session_memory
-from src.utils.fake_definition_validator import should_terminate_on_fake_definitions
 from src.utils.compilation_error_triage import (
     triage_build_errors, ErrorCategory, FixStrategy)
 

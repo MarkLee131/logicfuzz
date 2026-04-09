@@ -6,18 +6,106 @@ ExecutionStage functionality.
 """
 import os
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from langchain_core.runnables import RunnableConfig
 import logger
 from src.workflow.adapters import StateAdapter
 from src.workflow.state import FuzzingWorkflowState
+from src.utils.unified_validator import UnifiedCodeValidator, format_validation_report
 from experiment import builder_runner as builder_runner_lib
 from experiment import evaluator as evaluator_lib
 from experiment import oss_fuzz_checkout
 from experiment.benchmark import Benchmark
 from experiment.evaluator import Evaluator
 from experiment.workdir import WorkDirs
+
+
+def validate_target_api_calls(
+    fuzz_target_source: str,
+    context: Dict[str, Any],
+    language: str = "c++",
+    cgprocessor_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Validate that the fuzz target actually calls the expected target APIs.
+
+    Uses UnifiedCodeValidator with PromeFuzz's CGProcessor (Clang AST-based)
+    for accurate validation, with fallback to naive string matching.
+
+    Args:
+        fuzz_target_source: Source code of the fuzz target
+        context: FuzzingContext dict containing api_sequences and header_info
+        language: Target language ("c" or "c++")
+        cgprocessor_path: Optional path to CGProcessor binary
+
+    Returns:
+        Dict with validation results
+    """
+    # Extract target APIs from api_sequences in context
+    api_sequences = context.get("api_sequences", [])
+    if not api_sequences:
+        logger.warning("No api_sequences in context, skipping target API validation")
+        return {
+            "success": True,
+            "actual_called_apis": [],
+            "missing_apis": [],
+            "coverage_ratio": 1.0,
+            "validation_method": "skipped",
+            "report": "No target API sequences to validate"
+        }
+
+    # Flatten all API names from sequences (first sequence is the target)
+    target_apis = []
+    if api_sequences:
+        target_apis = list(api_sequences[0]) if api_sequences[0] else []
+
+    if not target_apis:
+        return {
+            "success": True,
+            "actual_called_apis": [],
+            "missing_apis": [],
+            "coverage_ratio": 1.0,
+            "validation_method": "skipped",
+            "report": "No target APIs in sequence"
+        }
+
+    # Extract include paths from header_info
+    header_info = context.get("header_info", {})
+    include_paths = []
+
+    if "project_headers" in header_info:
+        for header in header_info["project_headers"]:
+            header_dir = os.path.dirname(header)
+            if header_dir and header_dir not in include_paths:
+                include_paths.append(header_dir)
+
+    if "include_dirs" in header_info:
+        include_paths.extend(header_info["include_dirs"])
+
+    # Use UnifiedCodeValidator
+    from pathlib import Path
+    validator = UnifiedCodeValidator(
+        cgprocessor_path=Path(cgprocessor_path) if cgprocessor_path else None
+    )
+
+    result = validator.validate(
+        code=fuzz_target_source,
+        target_apis=target_apis,
+        include_paths=include_paths if include_paths else None,
+        is_c_target=(language == "c")
+    )
+
+    report = format_validation_report(result)
+
+    return {
+        "success": True,
+        "actual_called_apis": result.actual_called_apis,
+        "missing_apis": result.missing_apis,
+        "coverage_ratio": result.target_api_coverage,
+        "validation_method": result.validation_methods_used[-1] if result.validation_methods_used else "unknown",
+        "report": report
+    }
 
 
 def extract_fuzzing_summary(raw_log: str) -> str:
@@ -406,16 +494,15 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
     is_c_target = not target_path.lower().endswith(cpp_extensions)
 
     if is_c_target:
-        from src.utils.api_validator import validate_language_compatibility
-        is_compatible, lang_report = validate_language_compatibility(fuzz_target_source, is_c_target=True)
+        validator = UnifiedCodeValidator()
+        result = validator.validate(code=fuzz_target_source, is_c_target=True)
 
-        if not is_compatible:
-            # C++ features detected in C code - fail fast with useful error
+        if not result.is_language_compatible:
+            lang_report = format_validation_report(result)
             logger.warning(
                 f"Language mismatch detected: C++ features in C target. {lang_report}",
                 trial=trial
             )
-            # Return early with validation error - saves build time
             return {
                 "compile_success": False,
                 "build_errors": [
@@ -497,9 +584,43 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
         logger.info('Compilation successful, switching workflow_phase to optimization', trial=trial)
         state_update["workflow_phase"] = "optimization"
         state_update["compilation_retry_count"] = 0  # Reset for potential future use
-    
+
+        # === Target API Validation (AST-based) ===
+        # Validate that the driver actually calls the expected target APIs
+        context = state.get("context", {})
+        if context:
+            target_language = "c" if is_c_target else "c++"
+            api_validation = validate_target_api_calls(
+                fuzz_target_source,
+                context,
+                language=target_language
+            )
+
+            state_update["target_api_validation"] = api_validation
+
+            if api_validation["success"]:
+                coverage_ratio = api_validation["coverage_ratio"]
+                missing_count = len(api_validation["missing_apis"])
+
+                if coverage_ratio < 1.0:
+                    logger.warning(
+                        f'Target API validation: {coverage_ratio:.1%} coverage, '
+                        f'{missing_count} APIs missing: {api_validation["missing_apis"]}',
+                        trial=trial
+                    )
+                else:
+                    logger.info(
+                        f'Target API validation: 100% coverage, all target APIs called',
+                        trial=trial
+                    )
+            else:
+                logger.warning(
+                    f'Target API validation failed: {api_validation.get("report", "unknown error")}',
+                    trial=trial
+                )
+
     logger.info('Build node completed', trial=trial)
-    
+
     return state_update
 
 __all__ = ['execution_node', 'build_node']
