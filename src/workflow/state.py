@@ -37,7 +37,7 @@ class FuzzingWorkflowState(TypedDict):
     fuzz_target_source: NotRequired[str]
     build_script_source: NotRequired[str]
     compile_success: NotRequired[bool]
-    build_errors: NotRequired[List[str]]  # Keep simple for compatibility
+    build_errors: NotRequired[List[str]]
     compile_log: NotRequired[str]
     binary_exists: NotRequired[bool]
     is_function_referenced: NotRequired[bool]

@@ -40,9 +40,16 @@ class SequenceScore:
     # Tertiary: Sequence length
     length: int
 
+    # Quaternary (optional, project-adaptive): automaton acceptance.
+    # 1.0 = sequence is a fully accepted path through the project's learned
+    # protocol automaton; 0.0 = automaton has the sequence labels but breaks
+    # on at least one transition; -1.0 = no automaton available (signal off).
+    # Defaults keep behavior unchanged when no automaton is provided.
+    automaton_acceptance: float = -1.0
+
     # Metadata
-    unique_api_count: int
-    has_entry_point: bool
+    unique_api_count: int = 0
+    has_entry_point: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -52,6 +59,7 @@ class SequenceScore:
             'length': self.length,
             'unique_api_count': self.unique_api_count,
             'has_entry_point': self.has_entry_point,
+            'automaton_acceptance': self.automaton_acceptance,
         }
 
 
@@ -124,7 +132,11 @@ class CoverageRanker:
         self,
         sequences: List[List[str]],
         entry_point_names: Optional[Set[str]] = None,
-        top_k: int = 10
+        top_k: int = 10,
+        automaton_acceptance_fn: Optional[Any] = None,
+        automaton_graft_fn: Optional[Any] = None,
+        automaton_sample_paths: Optional[List[List[str]]] = None,
+        length_floor_safe_apis: Optional[Set[str]] = None,
     ) -> CoverageRankingResult:
         """
         Rank sequences and select top-k with maximum coverage.
@@ -133,28 +145,118 @@ class CoverageRanker:
             sequences: List of API name sequences (after L1-L3 filtering).
             entry_point_names: Set of entry point API names (from L1).
             top_k: Number of sequences to select.
+            automaton_acceptance_fn: Optional ``Callable[[List[str]], float]``
+                returning an acceptance score in ``[0.0, 1.0]`` from the
+                project-adaptive automaton.
+            automaton_graft_fn: Optional ``Callable[[List[str]], Optional[List[str]]]``
+                that returns a creator-prefix-grafted version of an
+                unaccepted candidate (or ``None``). Used to *ground*
+                candidates whose first call USEs a handle without an
+                upstream DEF; reuses the project's existing creator lookup.
+            automaton_sample_paths: Optional list of paths sampled directly
+                from the merged automaton. These are guaranteed acc=1.0
+                accepting paths (often EDSM-merged combinations not in any
+                single trace) and are mixed into the candidate pool to
+                augment L0–L4 synthesis with project-witnessed protocols.
+            length_floor_safe_apis: Optional set of API names that are
+                *safe* to appear as a length-1 sequence — typically the
+                APIs whose ``APIEffect.use`` is empty (no upstream handle
+                required). When supplied, length-1 sequences whose API is
+                NOT in this set are dropped before scoring. This is the
+                "method B" defensive guard: even if an upstream stage
+                accidentally emits ``[ucl_parser_add_chunk]`` (an indirect
+                consumer with empty creator-prefix), L4 will not pick it.
+
+        When ``automaton_acceptance_fn`` is supplied the sort key promotes
+        acceptance to a *secondary* axis (right after diversity), so
+        high-acceptance grafted candidates beat type-only-feasible ones at
+        equal diversity. When unset, the secondary axis is the legacy
+        entry_point_position so this stays a strict superset of historical
+        behaviour.
 
         Returns:
             CoverageRankingResult with ranked and selected sequences.
         """
-        if not sequences:
+        if not sequences and not automaton_sample_paths:
             return CoverageRankingResult()
 
         entry_points = entry_point_names or set()
 
-        # Step 1: Score all sequences
-        scored = [self._score_sequence(seq, entry_points) for seq in sequences]
+        # Step 0: defensive length-floor on the *input* candidate pool.
+        # A length-1 sequence is only meaningful when its single API can
+        # accept fuzzer data without upstream handle setup (i.e. it's a
+        # genuine direct entry point with no USE'd handles). Anything else
+        # — typically indirect consumers slipping through L1 because their
+        # name happened to land in entry_point_names — would NULL-deref at
+        # runtime. We drop such sequences here before scoring.
+        if length_floor_safe_apis is not None and sequences:
+            kept: List[List[str]] = []
+            n_dropped = 0
+            for s in sequences:
+                if len(s) == 1 and s[0] not in length_floor_safe_apis:
+                    n_dropped += 1
+                    continue
+                kept.append(s)
+            if n_dropped:
+                self.log.debug(
+                    "Length-floor dropped %d/%d length-1 sequences whose API "
+                    "is not in the safe direct-EP set",
+                    n_dropped, len(sequences),
+                )
+            sequences = kept
 
-        # Step 2: Hierarchical sort
-        # Sort by: diversity (desc), entry_point_position (asc, -1 last), length (desc)
-        ranked = sorted(
-            scored,
-            key=lambda s: (
-                -s.diversity_score,  # Higher diversity first
-                s.entry_point_position if s.entry_point_position >= 0 else float('inf'),  # Earlier EP first
-                -s.length,  # Longer sequence first
+        # Step 1a: candidate pool augmentation.
+        # Two augmentations: automaton-sampled paths (high-precision seeds)
+        # and creator-grafted versions of unaccepted L0–L4 candidates. We
+        # dedupe so we don't double-count an L0–L4 sequence that happens to
+        # equal one of the automaton's sampled paths.
+        augmented: List[List[str]] = list(sequences)
+        seen = {tuple(s) for s in augmented}
+        if automaton_sample_paths:
+            for p in automaton_sample_paths:
+                key = tuple(p)
+                if key not in seen:
+                    augmented.append(list(p))
+                    seen.add(key)
+        if automaton_graft_fn is not None and automaton_acceptance_fn is not None:
+            for s in list(sequences):
+                try:
+                    if automaton_acceptance_fn(s) >= 0.999:
+                        continue  # already accepted, no graft needed
+                    grafted = automaton_graft_fn(s)
+                except Exception:
+                    grafted = None
+                if grafted is None:
+                    continue
+                key = tuple(grafted)
+                if key not in seen:
+                    augmented.append(grafted)
+                    seen.add(key)
+
+        # Step 1b: Score all (augmented) sequences.
+        scored = [
+            self._score_sequence(seq, entry_points, automaton_acceptance_fn)
+            for seq in augmented
+        ]
+
+        # Step 2: Hierarchical sort.
+        # When automaton is provided, acceptance becomes the secondary axis
+        # right after diversity (high-acceptance wins at equal diversity).
+        # When no automaton, secondary stays entry_point_position (legacy).
+        if automaton_acceptance_fn is not None:
+            sort_key = lambda s: (
+                -s.diversity_score,
+                -s.automaton_acceptance,
+                s.entry_point_position if s.entry_point_position >= 0 else float('inf'),
+                -s.length,
             )
-        )
+        else:
+            sort_key = lambda s: (
+                -s.diversity_score,
+                s.entry_point_position if s.entry_point_position >= 0 else float('inf'),
+                -s.length,
+            )
+        ranked = sorted(scored, key=sort_key)
 
         # Step 3: Greedy selection for maximum coverage
         selected, coverage, selection_stats = self._greedy_select(ranked, top_k)
@@ -176,7 +278,8 @@ class CoverageRanker:
     def _score_sequence(
         self,
         sequence: List[str],
-        entry_points: Set[str]
+        entry_points: Set[str],
+        automaton_acceptance_fn: Optional[Any] = None,
     ) -> SequenceScore:
         """
         Score a single sequence.
@@ -184,6 +287,9 @@ class CoverageRanker:
         Args:
             sequence: List of API names.
             entry_points: Set of entry point API names.
+            automaton_acceptance_fn: Optional fn returning an acceptance score
+                in ``[0.0, 1.0]``. If unset, the score field is left at -1.0
+                (sentinel = signal disabled).
 
         Returns:
             SequenceScore with all metrics.
@@ -203,6 +309,15 @@ class CoverageRanker:
                 has_entry_point = True
                 break
 
+        automaton_acceptance = -1.0
+        if automaton_acceptance_fn is not None:
+            try:
+                v = automaton_acceptance_fn(sequence)
+                if isinstance(v, (int, float)):
+                    automaton_acceptance = max(0.0, min(1.0, float(v)))
+            except Exception:
+                automaton_acceptance = -1.0
+
         return SequenceScore(
             sequence=sequence,
             diversity_score=diversity_score,
@@ -210,6 +325,7 @@ class CoverageRanker:
             length=length,
             unique_api_count=len(unique_apis),
             has_entry_point=has_entry_point,
+            automaton_acceptance=automaton_acceptance,
         )
 
     def _greedy_select(
@@ -230,19 +346,24 @@ class CoverageRanker:
         Returns:
             Tuple of (selected_sequences, covered_apis, stats).
         """
-        selected = []
+        selected: List[List[str]] = []
         covered_apis: Set[str] = set()
-        marginal_contributions = []
+        marginal_contributions: List[int] = []
 
+        # Pure greedy max-API-coverage. Diversity (per-step new API count)
+        # is the *only* objective inside the selection step; ranking already
+        # reflects diversity_score / entry_point / acceptance / length, so
+        # the order encodes those preferences. Going greedy on top of this
+        # ranking gives the budgeted-max-coverage approximation
+        # (Khuller/Moss/Naor 1999, ratio 1-1/e).
         for score in ranked_sequences:
             if len(selected) >= top_k:
                 break
-
-            # Calculate marginal contribution
             seq_apis = set(score.sequence)
             new_apis = seq_apis - covered_apis
-
-            # Select if contributes at least 1 new API, or if we haven't selected enough
+            # Accept any sequence that contributes at least one new API; or
+            # any of the first three picks unconditionally so we never end
+            # up with an empty result on tiny pools.
             if len(new_apis) > 0 or len(selected) < min(3, top_k):
                 selected.append(score.sequence)
                 covered_apis.update(seq_apis)
@@ -293,6 +414,9 @@ def select_top_k_sequences(
     logger_instance: Optional[logging.Logger] = None,
     existing_coverage: Optional[Dict[str, float]] = None,
     important_apis: Optional[Set[str]] = None,
+    automaton_artifact: Optional[Any] = None,
+    automaton_n_sample_paths: int = 8,
+    length_floor_safe_apis: Optional[Set[str]] = None,
 ) -> Tuple[List[List[str]], Dict[str, Any]]:
     """
     Convenience function matching the filter interface of L1-L3.
@@ -306,6 +430,19 @@ def select_top_k_sequences(
                           Used for coverage-aware filtering to prioritize
                           sequences targeting uncovered code.
         important_apis: Set of API names that should be kept regardless of coverage.
+        automaton_artifact: Optional ``AutomatonArtifact`` from
+            ``learn_project_automaton``. When supplied, three signals plug
+            into the ranker:
+              1. ``acceptance_score`` becomes the secondary sort axis
+              2. ``graft_creator_prefix`` augments unaccepted candidates
+                 with creator-prefixed grounded versions
+              3. ``sample_accepting_paths`` injects high-precision protocol
+                 paths into the candidate pool
+            All three are signals, none is a hard filter — the underlying
+            greedy max-coverage selection still runs.
+        automaton_n_sample_paths: How many automaton-sampled paths to
+            mix into the candidate pool. Default 8 ≈ ⌊K/2⌋ for K=12; the
+            sampler dedupes against L0–L4 to avoid double counting.
 
     Returns:
         Tuple of (selected_sequences, selection_summary).
@@ -359,7 +496,38 @@ def select_top_k_sequences(
             coverage_aware_stats = {'coverage_aware_enabled': False, 'error': str(e)}
 
     ranker = CoverageRanker(logger_instance=logger_instance)
-    result = ranker.rank_and_select(sequences, entry_point_names, top_k)
+    automaton_acceptance_fn = None
+    automaton_graft_fn = None
+    automaton_sample_paths: List[List[str]] = []
+    automaton_stats: Dict[str, Any] = {'enabled': False}
+    if automaton_artifact is not None:
+        try:
+            automaton_acceptance_fn = automaton_artifact.acceptance_score
+            automaton_graft_fn = automaton_artifact.graft_creator_prefix
+            automaton_sample_paths = automaton_artifact.sample_accepting_paths(
+                n=automaton_n_sample_paths,
+            )
+            observed = automaton_artifact.observed_apis()
+            automaton_stats = {
+                'enabled': True,
+                'merged_states': automaton_artifact.n_merged_states,
+                'observed_apis': len(observed),
+                'sample_paths': len(automaton_sample_paths),
+            }
+        except Exception as exc:
+            log.warning("automaton signal unavailable (%s); falling back", exc)
+            automaton_acceptance_fn = None
+            automaton_graft_fn = None
+            automaton_sample_paths = []
+            automaton_stats = {'enabled': False, 'error': str(exc)}
+
+    result = ranker.rank_and_select(
+        sequences, entry_point_names, top_k,
+        automaton_acceptance_fn=automaton_acceptance_fn,
+        automaton_graft_fn=automaton_graft_fn,
+        automaton_sample_paths=automaton_sample_paths,
+        length_floor_safe_apis=length_floor_safe_apis,
+    )
 
     summary = {
         'input': len(sequences),
@@ -367,6 +535,7 @@ def select_top_k_sequences(
         'api_coverage': len(result.total_api_coverage),
         'stats': result.get_stats(),
         'coverage_aware': coverage_aware_stats,
+        'automaton': automaton_stats,
     }
 
     return result.selected_sequences, summary

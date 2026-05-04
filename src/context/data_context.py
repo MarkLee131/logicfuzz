@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 import logging
 import json
+import os
 import re
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,24 @@ class FuzzingContext:
     # === L4: Coverage Ranking (Progressive Filter Pipeline) ===
     # Final ranking and selection of top-k sequences by coverage potential
     coverage_ranking: Dict[str, Any] = field(default_factory=dict)
+
+    # === Knowledge layer (comprehender) ===
+    # comprehension: per-API usage notes + library purpose. Comprehender-A.
+    #   Shape: {"purpose": str, "functions": {api_name: usage_text}}
+    # sequence_semantics: per-sequence semantic verdict from Comprehender-B.
+    #   Shape: list of {"sequence", "semantic_status", "diagnosis", "repair", "invariants_for_prototyper"}
+    comprehension: Dict[str, Any] = field(default_factory=dict)
+    sequence_semantics: List[Dict[str, Any]] = field(default_factory=list)
+
+    # === Project-adaptive automaton (P3) ===
+    # Lightweight summary; the live ``AutomatonArtifact`` (with PTA + EDSM
+    # + UseDefGraph) is too heavy to keep in the immutable context. We carry
+    # only:
+    #   - "summary": ``artifact.to_summary()`` for telemetry / inspection
+    #   - "sample_paths": K accepting paths sampled at prepare-time, used
+    #     by the prototyper as protocol templates
+    # Set to {} when automaton learning failed or was skipped.
+    automaton: Dict[str, Any] = field(default_factory=dict)
 
     # === Metadata ===
     preparation_time: float = 0.0
@@ -329,8 +348,7 @@ class FuzzingContext:
             generator = ProjectDriverGenerator(
                 project_name=project_name,
                 benchmark=benchmark,
-                use_clang_llvm=True,  # Use Clang/LLVM for accurate extraction
-                work_dir=None  # Use default work dir
+                work_dir=None
             )
             log.info('   ✅ ProjectDriverGenerator created')
         except Exception as e:
@@ -514,11 +532,30 @@ class FuzzingContext:
                     else:
                         all_api_names.add(api.function_name)
 
-                # Generate Entry Point-focused sequences (replaces grammar sequences)
+                # Pre-compute lifecycle pairs so the seeder can append the
+                # canonical destroyer to each ``[creator, consumer]`` pattern.
+                # This is the same call Step 5d makes; running it here too
+                # is idempotent (pure analysis over project_apis) and keeps
+                # the seeder a single source of truth for cleanup APIs
+                # (i.e. uses L2 facts, not ad-hoc naming heuristics).
+                from liberator_adapter.constraints import analyze_lifecycle as _early_lc
+                try:
+                    _early_lc_pairs = [p.to_dict() for p in _early_lc(project_apis).pairs]
+                except Exception as _exc:
+                    log.debug('Early lifecycle analysis failed (non-critical): %s', _exc)
+                    _early_lc_pairs = []
+
+                # Generate Entry Point-focused sequences (replaces grammar sequences).
+                # Pass indirect-pair info so consumer-only names like
+                # `ucl_parser_add_chunk` get prefixed with their creator
+                # (`ucl_parser_new`) instead of being emitted bare.
                 ep_focused = _generate_entry_point_sequences(
                     ep_analysis.entry_point_names,
                     all_api_names,
-                    log
+                    log,
+                    indirect_consumer_names=ep_analysis.indirect_consumer_names,
+                    indirect_creators_for_consumer=ep_analysis.indirect_creators_for_consumer,
+                    lifecycle_pairs=_early_lc_pairs,
                 )
 
                 if ep_focused:
@@ -657,29 +694,89 @@ class FuzzingContext:
         log.debug('  5f/10 Ranking sequences by coverage potential (L4/L5)...')
         coverage_ranking_result = {}
 
-        # Try to fetch existing coverage data for L5 filtering
-        existing_coverage = {}
+        # Fetch the only OSS-Fuzz-specific input we still need: per-function
+        # coverage from the cloud Fuzz Introspector. This is the single FI call
+        # site in the project; everything else now uses local static analysis.
+        existing_coverage = _fetch_oss_fuzz_function_coverage(project_name, log)
+
+        # === Step 5e2: Learn project-adaptive automaton (P3) ===
+        # Built from the project's own tests/examples via libclang AST walk;
+        # produces a typestate automaton whose accepted language reflects how
+        # the library is *actually* used in practice. Used by L4 / L5 below
+        # as a soft signal (acceptance score, creator-prefix grafting,
+        # accepting-path sample injection). Optional — if learning fails,
+        # ranker degrades to pre-automaton behaviour.
+        automaton_artifact = None
         try:
-            from data_prep import introspector
-            all_funcs = introspector.query_introspector_all_functions(project_name)
-            if all_funcs:
-                for func in all_funcs:
-                    func_name = func.get('function_name', '') or func.get('raw-function-name', '')
-                    cov = func.get('code_coverage', func.get('code-coverage', 0))
-                    if func_name and cov is not None:
-                        try:
-                            existing_coverage[func_name] = float(cov)
-                        except (ValueError, TypeError):
-                            pass
-                if existing_coverage:
-                    log.info(f'   ℹ️ Loaded existing coverage for {len(existing_coverage)} functions from FuzzIntrospector')
-        except Exception as e:
-            log.debug(f"Could not fetch existing coverage (non-critical): {e}")
+            from liberator_adapter.analysis import learn_project_automaton
+            project_root_dir = Path(f"./results/{project_name}")
+            src_candidates = [
+                project_root_dir / "src_ossfuzz" / project_name,
+                project_root_dir / "src_ossfuzz",
+            ]
+            src_root = next((p for p in src_candidates if p.exists()), None)
+            if src_root and src_root.is_dir():
+                # If we landed on the parent, descend into the first project-name dir.
+                if src_root.name != project_name:
+                    sub = src_root / project_name
+                    if sub.exists():
+                        src_root = sub
+                # Probe common consumer path names and keep what exists.
+                consumer_candidates = ['tests', 'test', 'examples', 'example',
+                                       'samples', 'unittests', 'unit', 'testbed']
+                consumer_paths = [
+                    p for p in consumer_candidates
+                    if (src_root / p).exists() and (src_root / p).is_dir()
+                ]
+                if not consumer_paths:
+                    log.debug('  5e2/10 No consumer-path dirs under %s; skipping automaton', src_root)
+                else:
+                    log.debug('  5e2/10 Learning project-adaptive automaton (consumer_paths=%s)...',
+                              consumer_paths)
+                    output_dir = project_root_dir / "automaton"
+                    automaton_artifact = learn_project_automaton(
+                        project=project_name,
+                        source_root=src_root,
+                        consumer_paths=consumer_paths,
+                        project_apis=project_apis,
+                        output_dir=output_dir,
+                        # Default include dirs that almost every C/C++ project has.
+                        include_dirs=[
+                            (src_root / d).resolve()
+                            for d in ('include', 'src', 'lib', '.')
+                            if (src_root / d).exists()
+                        ],
+                        enable_llm_oracle=False,  # P2 work; oracle off in production for now
+                    )
+                    log.info(
+                        '   ✅ Automaton learned: %d traces → %d merged states '
+                        '(observed %d unique APIs)',
+                        automaton_artifact.n_traces,
+                        automaton_artifact.n_merged_states,
+                        len(automaton_artifact.observed_apis()),
+                    )
+            else:
+                log.debug('  5e2/10 No src_ossfuzz/%s; skipping automaton learning', project_name)
+        except Exception as exc:
+            log.warning('Automaton learning failed (non-critical): %s', exc)
+            automaton_artifact = None
 
         try:
             from liberator_adapter.constraints import select_top_k_sequences
 
-            # Rank and select top-k sequences (with optional L5 coverage-aware filtering)
+            # Compute the length-1-safe API set: an API can legitimately
+            # appear as a single-call sequence iff its USE set is empty
+            # (no upstream handle required). The use-def graph gives this
+            # exactly. ``automaton_artifact.graph.effect(api).use`` is the
+            # single source of truth — same notion downstream uses.
+            length_floor_safe: Set[str] = set()
+            if automaton_artifact is not None and automaton_artifact.graph is not None:
+                for eff in automaton_artifact.graph.all_effects():
+                    if not eff.use:
+                        length_floor_safe.add(eff.name)
+
+            # Rank and select top-k sequences (with L5 coverage-aware filtering
+            # + automaton signal + length-floor defensive guard when available)
             pre_rank_count = len(api_sequences)
             api_sequences, ranking_summary = select_top_k_sequences(
                 api_sequences,
@@ -687,6 +784,8 @@ class FuzzingContext:
                 top_k=filter_top_k,
                 logger_instance=log,
                 existing_coverage=existing_coverage if existing_coverage else None,
+                automaton_artifact=automaton_artifact,
+                length_floor_safe_apis=length_floor_safe or None,
             )
             coverage_ranking_result = ranking_summary
 
@@ -694,6 +793,11 @@ class FuzzingContext:
                 f'   ✅ L4 Coverage Ranking: {pre_rank_count} -> {len(api_sequences)} sequences '
                 f'(covering {ranking_summary.get("api_coverage", 0)} unique APIs)'
             )
+            if ranking_summary.get('automaton', {}).get('enabled'):
+                log.info(
+                    '   ✅ Automaton signal active: %s',
+                    ranking_summary['automaton'],
+                )
 
         except ImportError as e:
             log.warning(f"Coverage ranker not available: {e}, falling back to heuristic filter")
@@ -717,6 +821,61 @@ class FuzzingContext:
         grammar_info['filter'] = coverage_ranking_result
         grammar_info['num_sequences'] = len(api_sequences)
 
+        # === Step 6b: Knowledge comprehension (comprehender-A + B) ===
+        # Runs only on the unique APIs / sequences that survived L0-L4 filtering.
+        # All LLM calls are fail-soft: if the model is unreachable, we keep the
+        # deterministic facts (ConditionManager + lifecycle pairs) and continue.
+        comprehension_dict: Dict[str, Any] = {}
+        sequence_semantics_dicts: List[Dict[str, Any]] = []
+        try:
+            from src.knowledge import Comprehender, LibraryComprehension
+
+            unique_apis_in_sequences = sorted({
+                api for seq in api_sequences for api in seq if api
+            })
+            log.debug(
+                '  6b/10 Comprehending %d unique APIs across %d sequences...',
+                len(unique_apis_in_sequences), len(api_sequences))
+
+            comprehender = Comprehender(project_name)
+            purpose = comprehender.comprehend_purpose(library_name=project_name)
+
+            api_usages = comprehender.comprehend_apis(
+                api_names=unique_apis_in_sequences,
+                project_apis=project_apis,
+                purpose=purpose,
+                condition_info=condition_info,
+                lifecycle_analysis=lifecycle_analysis_result,
+            )
+            comprehension = LibraryComprehension(purpose=purpose, functions=api_usages)
+            comprehension_dict = comprehension.to_dict()
+            log.info(
+                f'   ✅ Comprehender-A: {len(api_usages)}/{len(unique_apis_in_sequences)} APIs annotated'
+            )
+
+            sequence_semantics = comprehender.comprehend_sequences(
+                sequences=api_sequences,
+                api_usages=api_usages,
+                purpose=purpose,
+                allowed_apis=unique_apis_in_sequences,
+                condition_info=condition_info,
+                lifecycle_analysis=lifecycle_analysis_result,
+                automaton_acceptance_fn=(
+                    automaton_artifact.acceptance_score
+                    if automaton_artifact is not None else None
+                ),
+            )
+            sequence_semantics_dicts = [s.to_dict() for s in sequence_semantics]
+
+            invalid = sum(1 for s in sequence_semantics if s.semantic_status == "INVALID")
+            suboptimal = sum(1 for s in sequence_semantics if s.semantic_status == "SUBOPTIMAL")
+            log.info(
+                f'   ✅ Comprehender-B: {len(sequence_semantics)} sequences judged '
+                f'({invalid} INVALID, {suboptimal} SUBOPTIMAL)'
+            )
+        except Exception as e:
+            log.warning(f"Knowledge comprehension failed (non-critical): {e}")
+
         # === Step 7: Extract header information ===
         log.debug('  7/10 Extracting headers...')
         try:
@@ -737,7 +896,7 @@ class FuzzingContext:
                 }
 
             # If project_headers is empty, try to load from generated public_headers.txt
-            # This happens when FuzzIntrospector is unavailable
+            # produced by the Clang/LLVM hybrid extractor.
             if not header_info.get('project_headers'):
                 try:
                     # Try to get from generator's extract_metadata
@@ -1032,6 +1191,16 @@ class FuzzingContext:
                    lifecycle_analysis=lifecycle_analysis_result,
                    state_machine_analysis=state_machine_analysis_result,
                    coverage_ranking=coverage_ranking_result,
+                   comprehension=comprehension_dict,
+                   sequence_semantics=sequence_semantics_dicts,
+                   automaton=(
+                       {
+                           'summary': automaton_artifact.to_summary(),
+                           'sample_paths': automaton_artifact.sample_accepting_paths(n=8),
+                           'observed_apis': sorted(automaton_artifact.observed_apis()),
+                       }
+                       if automaton_artifact is not None else {}
+                   ),
                    preparation_time=elapsed)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1053,6 +1222,9 @@ class FuzzingContext:
             'lifecycle_analysis': self.lifecycle_analysis,
             'state_machine_analysis': self.state_machine_analysis,
             'coverage_ranking': self.coverage_ranking,
+            'comprehension': self.comprehension,
+            'sequence_semantics': self.sequence_semantics,
+            'automaton': self.automaton,
             'preparation_time': self.preparation_time,
         }
 
@@ -1062,57 +1234,57 @@ class FuzzingContext:
         return cls(**data)
 
 
-def _extract_existing_fuzzer_headers(
-        project_name: str, log: logging.Logger) -> Dict[str, List[str]]:
-    """
-    Extract headers from existing fuzzers for reference.
+def _fetch_oss_fuzz_function_coverage(
+        project_name: str,
+        log: logging.Logger) -> Dict[str, float]:
+    """Single Fuzz Introspector call site for the whole project.
 
-    This is not critical data - if it fails, we just return empty.
+    Returns ``{function_name: code_coverage_percent}`` from the cloud OSS-Fuzz
+    introspector (or ``{}`` on any failure). Endpoint can be overridden by
+    setting ``LOGICFUZZ_FI_ENDPOINT`` in the environment.
     """
-    from data_prep import introspector
-    import re
+    try:
+        from data_prep import introspector
+    except ImportError as e:
+        log.debug(f"FI client unavailable: {e}")
+        return {}
 
-    result = {'standard_headers': [], 'project_headers': []}
+    endpoint = os.environ.get('LOGICFUZZ_FI_ENDPOINT')
+    if endpoint:
+        introspector.set_introspector_endpoints(endpoint)
 
     try:
-        # Get all fuzzer files
-        harness_data = introspector.query_introspector_for_harness_intrinsics(
-            project_name)
-        fuzzers = [item['source'] for item in harness_data if 'source' in item]
-        if not fuzzers:
-            return result
-
-        standard_headers = set()
-        project_headers = set()
-
-        # Extract headers from first few fuzzers
-        for fuzzer_path in fuzzers[:5]:
-            try:
-                fuzzer_source = introspector.query_introspector_file_source(
-                    project_name, fuzzer_path)
-                if not fuzzer_source:
-                    continue
-
-                # Extract #include statements from top of file
-                for line in fuzzer_source.split('\n')[:50]:
-                    include_match = re.match(
-                        r'^\s*#include\s+[<"]([^>"]+)[>"]', line)
-                    if include_match:
-                        header = include_match.group(1)
-                        if header.startswith(project_name) or '/' in header:
-                            project_headers.add(header)
-                        else:
-                            standard_headers.add(header)
-            except Exception:
-                continue  # Skip this fuzzer if extraction fails
-
-        result['standard_headers'] = sorted(standard_headers)
-        result['project_headers'] = sorted(project_headers)
-
+        all_funcs = introspector.query_introspector_all_functions(project_name)
     except Exception as e:
-        log.warning(f"Failed to extract existing fuzzer headers: {e}")
+        log.debug(f"Could not fetch existing coverage (non-critical): {e}")
+        return {}
 
-    return result
+    coverage: Dict[str, float] = {}
+    for func in all_funcs or []:
+        name = func.get('function_name') or func.get('raw-function-name', '')
+        cov = func.get('code_coverage', func.get('code-coverage', 0))
+        if not name or cov is None:
+            continue
+        try:
+            coverage[name] = float(cov)
+        except (TypeError, ValueError):
+            continue
+    if coverage:
+        log.info(
+            f'   ℹ️ Loaded existing coverage for {len(coverage)} functions '
+            f'from cloud FuzzIntrospector')
+    return coverage
+
+
+def _extract_existing_fuzzer_headers(
+        project_name: str, log: logging.Logger) -> Dict[str, List[str]]:
+    """Existing-fuzzer header extraction was removed with FuzzIntrospector.
+
+    Project headers are now derived from the local public_headers.txt produced
+    by the Clang/LLVM hybrid extractor (see data_context._extract_existing_*
+    fallback in `prepare()`).
+    """
+    return {'standard_headers': [], 'project_headers': []}
 
 
 def _strip_license_header(source: str) -> str:
@@ -1193,61 +1365,12 @@ def _extract_existing_driver_knowledge(project_name: str,
                                        log: logging.Logger,
                                        llm_client: Any = None,
                                        max_drivers: int = 3) -> Dict[str, Any]:
+    """Existing-fuzzer source extraction was removed with FuzzIntrospector.
+
+    Without FI we cannot enumerate harness paths nor stream their source from a
+    central index. Callers fall back to an empty knowledge dict.
     """
-    Extract fuzzing knowledge from existing OSS-Fuzz drivers.
-
-    Returns:
-        Dictionary containing:
-        - driver_sources: List of {'path': str, 'source': str}
-        - analysis: Structured analysis with core_functionality and setup_teardown
-    """
-    from data_prep import introspector
-
-    result = {
-        'driver_sources': [],
-        'analysis': None  # Will contain structured knowledge if LLM available
-    }
-
-    try:
-        # Fetch existing fuzzer source code
-        harness_data = introspector.query_introspector_for_harness_intrinsics(
-            project_name)
-        fuzzers = [item['source'] for item in harness_data if 'source' in item]
-        if not fuzzers:
-            log.info(f'No existing fuzzers found for {project_name}')
-            return result
-
-        log.info(f'Found {len(fuzzers)} existing fuzzers for {project_name}')
-
-        driver_sources = []
-        for fuzzer_path in fuzzers[:max_drivers]:
-            try:
-                fuzzer_source = introspector.query_introspector_file_source(
-                    project_name, fuzzer_path)
-                if fuzzer_source:
-                    driver_sources.append({
-                        'path': fuzzer_path,
-                        'source': fuzzer_source
-                    })
-            except Exception as e:
-                log.debug(f'Failed to fetch source for {fuzzer_path}: {e}')
-
-        if not driver_sources:
-            log.warning('Could not fetch any fuzzer source code')
-            return result
-
-        result['driver_sources'] = driver_sources
-        log.info(f'Fetched {len(driver_sources)} driver sources')
-
-        # LLM analysis: extract core functionality and setup/teardown patterns
-        if llm_client and driver_sources:
-            result['analysis'] = _analyze_driver_patterns(
-                driver_sources, project_name, llm_client, log)
-
-    except Exception as e:
-        log.warning(f"Failed to extract driver knowledge: {e}")
-
-    return result
+    return {'driver_sources': [], 'analysis': None}
 
 
 def _analyze_driver_patterns(driver_sources: List[Dict[str, str]],
@@ -1312,51 +1435,93 @@ def _analyze_driver_patterns(driver_sources: List[Dict[str, str]],
 def _generate_entry_point_sequences(
     entry_point_names: set,
     all_api_names: set,
-    log
+    log,
+    indirect_consumer_names: Optional[set] = None,
+    indirect_creators_for_consumer: Optional[Dict[str, List[str]]] = None,
+    lifecycle_pairs: Optional[List[Dict[str, Any]]] = None,
 ) -> List[List[str]]:
     """
     Generate Entry Point-focused sequences with proper cleanup APIs.
 
     Grammar-generated sequences mix Entry Points with channel-dependent APIs
     due to type compatibility. This function generates clean sequences with just:
-    - Entry Point API (parser that consumes fuzzer input)
+    - Entry Point API (parser that consumes fuzzer input). For *indirect* entry
+      points (consumer requires a handle produced by another API) the canonical
+      creator is prefixed automatically: ``[creator, consumer, ...cleanup]``.
     - Proper cleanup API (matched by naming pattern, not from grammar)
 
     Args:
-        entry_point_names: Set of Entry Point API names
+        entry_point_names: Set of Entry Point API names (direct + indirect-consumers)
         all_api_names: Set of all API names in the project
         log: Logger instance
+        indirect_consumer_names: Subset of entry_point_names that are *indirect*
+            consumers (e.g. ``ucl_parser_add_chunk``).
+        indirect_creators_for_consumer: Map ``consumer_name -> [creator_name, ...]``
+            ranked best-first. Used to prefix consumer-only sequences.
 
     Returns:
         List of Entry Point-focused sequences
     """
     result = []
+    indirect_consumer_names = indirect_consumer_names or set()
+    indirect_creators_for_consumer = indirect_creators_for_consumer or {}
+    lifecycle_pairs = lifecycle_pairs or []
 
     # Find common prefix (e.g., "ares" for c-ares)
     prefix = _find_api_prefix(entry_point_names)
 
-    # Find cleanup APIs by pattern matching
-    cleanup_patterns = [
-        (f'{prefix}_free_data', 'free_data'),      # ares_free_data
-        (f'{prefix}_free_hostent', 'free_hostent'),  # ares_free_hostent
-        (f'{prefix}_dns_record_destroy', 'dns_record_destroy'),  # ares_dns_record_destroy
-    ]
+    # ---- cleanup-API lookup, two sources ----
+    # 1. *Primary*: L2 LifecycleAnalysis pairs. ``init_api → destroy_api``
+    #    are project-discovered (name + type + semantic patterns), so this
+    #    works for any project whose L2 found pairs — no per-project naming
+    #    heuristic needed. Single source of truth for lifecycle facts.
+    # 2. *Fallback*: ``_find_cleanup_for_entry_point`` (naming-pattern
+    #    matcher) for projects whose L2 missed pairs.
+    init_to_destroy: Dict[str, str] = {}
+    for pair in lifecycle_pairs:
+        i, d = pair.get('init_api'), pair.get('destroy_api')
+        if i and d:
+            init_to_destroy[i] = d
 
-    # Map Entry Point patterns to their cleanup APIs
-    ep_to_cleanup = {}
+    ep_to_cleanup: Dict[str, str] = {}
     for ep_name in entry_point_names:
+        # Try L2-discovered destroyer first (covers libucl-shape libraries).
+        if ep_name in init_to_destroy:
+            ep_to_cleanup[ep_name] = init_to_destroy[ep_name]
+            continue
+        # Fall back to naming pattern (covers c-ares-shape libraries).
         cleanup_api = _find_cleanup_for_entry_point(ep_name, all_api_names, prefix)
         if cleanup_api:
             ep_to_cleanup[ep_name] = cleanup_api
 
     # Generate sequences
     for ep_name in sorted(entry_point_names):  # Sort for determinism
-        # Simple sequence: just the Entry Point
-        result.append([ep_name])
+        is_indirect = ep_name in indirect_consumer_names
+        creators = indirect_creators_for_consumer.get(ep_name, []) if is_indirect else []
+        prefix_apis = [creators[0]] if creators else []
 
-        # If we have a proper cleanup API, add it
-        if ep_name in ep_to_cleanup:
-            result.append([ep_name, ep_to_cleanup[ep_name]])
+        # Skip indirect consumers with no creator — bare [consumer] would
+        # crash because the handle arg would be NULL.
+        if is_indirect and not prefix_apis:
+            log.debug(
+                f"Skipping indirect consumer '{ep_name}': no creator registered"
+            )
+            continue
+
+        # Simple sequence: (creator) + entry point
+        result.append(prefix_apis + [ep_name])
+
+        # Cleanup append. For indirect consumers we also try the *creator's*
+        # destroyer (the handle the creator opened needs closing).
+        cleanup_api = ep_to_cleanup.get(ep_name)
+        if cleanup_api:
+            result.append(prefix_apis + [ep_name, cleanup_api])
+        elif prefix_apis:
+            # No cleanup for the consumer itself, but the upstream creator
+            # may have a paired destroyer — emit ``[creator, consumer, creator_destroy]``.
+            creator_destroy = init_to_destroy.get(prefix_apis[0])
+            if creator_destroy:
+                result.append(prefix_apis + [ep_name, creator_destroy])
 
     # Deduplicate
     seen = set()
@@ -1367,7 +1532,11 @@ def _generate_entry_point_sequences(
             seen.add(key)
             unique.append(seq)
 
-    log.debug(f"Generated {len(unique)} Entry Point-focused sequences from {len(entry_point_names)} Entry Points")
+    log.debug(
+        f"Generated {len(unique)} Entry Point-focused sequences from "
+        f"{len(entry_point_names)} Entry Points "
+        f"({len(indirect_consumer_names)} indirect)"
+    )
     return unique
 
 

@@ -164,11 +164,14 @@ class LifecycleAnalysis:
         return counts
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize to dictionary."""
+        """Serialize to dictionary. Set-derived lists are sorted for determinism."""
         return {
-            'pairs': [p.to_dict() for p in self.pairs],
-            'init_apis': list(self.init_apis),
-            'destroy_apis': list(self.destroy_apis),
+            'pairs': sorted(
+                (p.to_dict() for p in self.pairs),
+                key=lambda d: (d.get('init_api', ''), d.get('destroy_api', '')),
+            ),
+            'init_apis': sorted(self.init_apis),
+            'destroy_apis': sorted(self.destroy_apis),
             'stats': self.get_stats(),
         }
 
@@ -316,6 +319,17 @@ class LifecycleAnalyzer:
         )
 
         return analysis
+
+    # NOTE: ``validate_sequence`` and ``filter_sequences`` below maintain a
+    # local resource-state walker. The same walk is implemented more
+    # generally in ``liberator_adapter/analysis/usedef.py`` (``Typestate.check``).
+    # Both implementations are *correct* and produce equivalent verdicts on
+    # the projects we test against, but they are *parallel* code paths.
+    # Consolidation onto ``Typestate.check`` is tracked in CLAUDE.md TODO
+    # ("L2/L3 → UseDefGraph + Typestate migration"); deferred until either
+    # path needs a behaviour change. Touching this file should prefer
+    # extending ``Typestate.check`` instead, then translating its
+    # ``ViolationRecord`` output into ``LifecycleValidationResult`` here.
 
     def validate_sequence(self,
                           sequence: List[str],

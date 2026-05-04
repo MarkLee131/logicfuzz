@@ -1,19 +1,11 @@
-"""
-Agent tools for LangGraph workflow.
+"""Agent tools for the LangGraph workflow.
 
-This module provides tools organized by category:
+Modules:
+- src/tools/execution.py: BashExecuteTool, GDBExecuteTool
+- src/tools/context_prefetcher.py: AgentContextSpec + helpers
 
-1. Execution Tools (src/tools/execution.py):
-   - BashExecuteTool: Execute bash commands in project container
-   - GDBExecuteTool: Execute GDB commands in debug session
-
-2. FuzzIntrospector Tools (src/tools/introspector.py):
-   - FuzzIntrospectorQueryTool: Unified query tool for all FI operations
-   - create_introspector_tool: Factory function for configured tool
-
-3. Context Pre-fetcher (src/tools/context_prefetcher.py):
-   - AgentContextSpec: Defines NECESSARY vs OPTIONAL context per agent
-   - Three-layer tool access: NECESSARY, OPTIONAL, EXPENSIVE
+The FuzzIntrospector tool surface was removed; agents now consume pre-fetched
+context only (see context_prefetcher.AGENT_CONTEXT_SPECS).
 """
 
 from src.tools.base import (
@@ -37,32 +29,17 @@ from src.tools.execution import (
     GDBExecuteTool,
 )
 
-from src.tools.introspector import (
-    QueryType,
-    FuzzIntrospectorInput,
-    FuzzIntrospectorQueryTool,
-    create_introspector_tool,
-)
-
 __all__ = [
-    # Base
     "CommandInput",
     "EmptyInput",
     "ToolCategory",
     "ToolAccessLevel",
     "create_tool_with_executor",
-    # Context pre-fetcher
     "AgentContextSpec",
     "AGENT_CONTEXT_SPECS",
     "get_agent_context_spec",
     "get_necessary_context",
     "validate_necessary_context",
-    # Execution
     "BashExecuteTool",
     "GDBExecuteTool",
-    # Introspector
-    "QueryType",
-    "FuzzIntrospectorInput",
-    "FuzzIntrospectorQueryTool",
-    "create_introspector_tool",
 ]

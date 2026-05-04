@@ -253,7 +253,6 @@ def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
     # Use the LangGraph-based agent system
     trial_logger.info('Using LangGraph-based agent workflow')
     
-    # Update args with work_dirs for compatibility
     args.work_dirs = work_dirs
     
     # Create and run the LangGraph workflow
@@ -289,12 +288,9 @@ def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
       trial_logger.error(f'❌ workflow.run() failed after {workflow_duration:.2f} seconds: {e}')
       raise
     
-    # Convert LangGraph state back to legacy result format using StateAdapter
     trial_logger.info('🔄 Converting state to result_history...')
     from src.workflow.adapters import StateAdapter
-    
-    # Use StateAdapter to properly convert state to result_history
-    # This creates a complete result_history with BaseResult, BuildResult, RunResult, etc.
+
     result_history = StateAdapter.state_to_result_history(final_state)
     trial_logger.info(f'✅ Converted to result_history ({len(result_history)} results)')
     
@@ -426,7 +422,7 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
     # Infrastructure failure - also terminal
     logger.error(
       f'❌ Infrastructure failure during data preparation: {e}\n'
-      f'Check FuzzIntrospector API availability.',
+      f'Check Clang/LLVM extractor availability and the cloud FI coverage endpoint.',
       trial=0
     )
     return BenchmarkResult(

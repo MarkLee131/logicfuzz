@@ -32,7 +32,7 @@ log "Starting batch extended fuzzing"
 log "Duration: ${DURATION_HOURS}h (${DURATION_SECS}s)"
 log "Output directory: $RUN_DIR"
 
-# High-quality drivers to run
+# Single-driver targets (one binary per row).
 declare -A TARGETS=(
     ["c-ares/02"]="$RESULTS_DIR/output-c-ares-project/fuzz_targets/02.fuzz_target"
     ["c-ares/05"]="$RESULTS_DIR/output-c-ares-project/fuzz_targets/05.fuzz_target"
@@ -42,6 +42,13 @@ declare -A TARGETS=(
     ["sqlite3/04"]="$RESULTS_DIR/output-sqlite3-project/fuzz_targets/04.fuzz_target"
     ["sqlite3/05"]="$RESULTS_DIR/output-sqlite3-project/fuzz_targets/05.fuzz_target"
 )
+
+# Merged-harness targets (one fused binary per project — runs in parallel
+# with the per-driver rows above). Set MERGED_PROJECTS to "" to skip.
+# Each entry expects:
+#   results/output-<proj>-project/merged/synthesized/  (from
+#   `python -m tools.merge_drivers pipeline ...`)
+MERGED_PROJECTS="${MERGED_PROJECTS:-c-ares sqlite3 re2}"
 
 # Track PIDs for parallel runs
 declare -A PIDS
@@ -76,6 +83,43 @@ for target_name in "${!TARGETS[@]}"; do
     log "Started PID ${PIDS[$target_name]} for $target_name"
 
     # Small delay between starts to avoid resource contention
+    sleep 10
+done
+
+# Launch merged-harness fuzzing for each project that has a synthesized/
+# directory ready. We don't auto-run `merge_drivers pipeline` here —
+# that requires built per-driver binaries (see CLAUDE.md TODO). Caller
+# should run the pipeline beforehand.
+for proj in $MERGED_PROJECTS; do
+    synth_dir="$RESULTS_DIR/output-${proj}-project/merged/synthesized"
+    seed_dir="$RESULTS_DIR/output-${proj}-project/merged/corpus_merged"
+    if [ ! -d "$synth_dir" ]; then
+        log "WARNING: no synthesized harness for $proj at $synth_dir; skipping merged run"
+        continue
+    fi
+
+    output_dir="$RUN_DIR/${proj}_merged"
+    target_log="$output_dir/run.log"
+    mkdir -p "$output_dir"
+
+    log "Starting merged: $proj -> $output_dir (seeds=$seed_dir)"
+
+    seed_arg=""
+    if [ -d "$seed_dir" ]; then
+        seed_arg="--seed-corpus-dir $seed_dir"
+    fi
+
+    python3 "$SCRIPT_DIR/run_extended_fuzzing.py" \
+        --project "$proj" \
+        --fuzz-target-dir "$synth_dir" \
+        $seed_arg \
+        --duration "$DURATION_SECS" \
+        --output-dir "$output_dir" \
+        --snapshot-interval "$SNAPSHOT_INTERVAL" \
+        > "$target_log" 2>&1 &
+
+    PIDS["${proj}_merged"]=$!
+    log "Started PID ${PIDS[${proj}_merged]} for ${proj}_merged"
     sleep 10
 done
 

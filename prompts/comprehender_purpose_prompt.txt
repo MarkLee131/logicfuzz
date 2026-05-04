@@ -1,0 +1,7 @@
+Library name: {LIBRARY_NAME}
+
+Public header excerpts and/or README snippets:
+
+{DOC_EXCERPTS}
+
+Write the summary now.

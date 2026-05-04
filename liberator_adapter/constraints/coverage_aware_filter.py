@@ -243,45 +243,6 @@ class CoverageAwareFilter:
         return scored
 
 
-def get_function_coverage_from_introspector(
-    project_name: str,
-    introspector_url: str = "http://localhost:8080"
-) -> Dict[str, float]:
-    """
-    Fetch function coverage data from FuzzIntrospector API.
-
-    Returns:
-        Dict mapping function_name -> coverage percentage (0-100)
-    """
-    import requests
-
-    try:
-        # Try the function-coverage endpoint
-        url = f"{introspector_url}/api/project-summary?project={project_name}"
-        resp = requests.get(url, timeout=10)
-
-        if resp.status_code != 200:
-            logger.warning(f"Failed to fetch coverage from FI: {resp.status_code}")
-            return {}
-
-        data = resp.json()
-
-        # Extract function coverage
-        coverage = {}
-        for func in data.get('functions', []):
-            name = func.get('function_name', '')
-            cov = func.get('code_coverage', 0)
-            if name:
-                coverage[name] = float(cov)
-
-        logger.info(f"Loaded coverage for {len(coverage)} functions from FuzzIntrospector")
-        return coverage
-
-    except Exception as e:
-        logger.warning(f"Could not fetch FI coverage: {e}")
-        return {}
-
-
 def get_coverage_from_textcov(textcov_path: str) -> Dict[str, float]:
     """
     Parse coverage from textcov report file.

@@ -33,16 +33,7 @@ from liberator_adapter.bias import Bias
 from liberator_adapter.backend.libfuzz import LFBackendDriver
 from liberator_adapter.driver.driver_enhancer import DriverEnhancer, APIPatternCache
 
-# Fuzz Introspector API client (optional, for better public header detection)
-try:
-    from data_prep.introspector import (
-        query_introspector_header_files,
-        set_introspector_endpoints,
-        DEFAULT_INTROSPECTOR_ENDPOINT,
-    )
-    FI_AVAILABLE = True
-except ImportError:
-    FI_AVAILABLE = False
+# FuzzIntrospector header lookup removed; public headers are discovered locally.
 
 # Hybrid synthesis module
 from liberator_adapter.driver.synthesis import (
@@ -72,26 +63,22 @@ class ProjectDriverGenerator:
         self,
         project_name: str,
         benchmark=None,
-        use_clang_llvm: bool = True,
         work_dir: Optional[str] = None
     ):
         """
         Initialize project-level driver generator
-        
+
         Args:
             project_name: Project name
-            benchmark: Benchmark object (required when use_clang_llvm=True)
-            use_clang_llvm: Whether to use Clang/LLVM direct extraction (recommended)
+            benchmark: Benchmark object (required for Clang/LLVM extraction)
             work_dir: Working directory (for storing generated drivers)
         """
         self.project_name = project_name
         self.work_dir = Path(work_dir) if work_dir else Path(f"./results/{project_name}")
         self.work_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize adapter
+
         self.adapter = LiberatorAPIAdapter(
             project_name=project_name,
-            use_clang_llvm=use_clang_llvm,
             benchmark=benchmark
         )
         
@@ -131,11 +118,7 @@ class ProjectDriverGenerator:
             API set
         """
         logger.info(f"📦 Extracting all APIs for project {self.project_name}...")
-        
-        if not self.adapter.use_clang_llvm:
-            logger.warning("extract_all_apis requires use_clang_llvm=True")
-            return set()
-        
+
         # Auto-fetch source from OSS-Fuzz style docker image if paths are not provided
         include_dir, public_headers_file = self._ensure_sources(
             include_dir=include_dir,
@@ -821,34 +804,6 @@ class ProjectDriverGenerator:
 
         return drivers
     
-    def save_drivers(self, drivers: List[Driver], output_dir: Optional[str] = None):
-        """
-        Save generated drivers to files
-        
-        Args:
-            drivers: List of Drivers
-            output_dir: Output directory (defaults to work_dir/drivers)
-        """
-        if output_dir is None:
-            output_dir = self.work_dir / "drivers"
-        else:
-            output_dir = Path(output_dir)
-        
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        logger.info(f"💾 Saving {len(drivers)} drivers to {output_dir}...")
-        
-        # TODO: Implement driver serialization and saving logic
-        # This requires implementing a backend (e.g., LibFuzzerBackend) to convert Driver objects to code
-        logger.warning("Driver saving not yet implemented")
-        
-        return output_dir
-
-    # OTFactory has been removed - only CBFactory is supported
-    # def _create_ot_factory(self, driver_size: int):
-    #     """Create OTFactory (only_type policy)"""
-    #     ...
-
     def _create_cb_factory(self, driver_size: int, enable_z3_validation: bool = True):
         """
         Create CBFactory (constraint_based policy)
@@ -986,11 +941,11 @@ class ProjectDriverGenerator:
             Path to the extracted source directory.
         """
         # Use existing container from adapter (same image as fuzzing)
-        if not (self.adapter and self.adapter.use_clang_llvm and
-                self.adapter.hybrid_extractor and self.adapter.hybrid_extractor.container):
+        if not (self.adapter and self.adapter.hybrid_extractor and
+                self.adapter.hybrid_extractor.container):
             raise RuntimeError(
                 "No container available for source extraction. "
-                "Ensure HybridAPIExtractor is initialized with use_clang_llvm=True."
+                "Ensure HybridAPIExtractor has been initialized."
             )
 
         container = self.adapter.hybrid_extractor.container
@@ -1051,71 +1006,15 @@ class ProjectDriverGenerator:
 
         raise RuntimeError(f"Could not find source directory for {self.project_name} in /src/")
 
-    def _get_public_headers_from_fi(self) -> Optional[List[str]]:
-        """
-        Try to get public header files from Fuzz Introspector API.
-
-        Returns:
-            List of public header file names (basename only), or None if FI unavailable
-        """
-        if not FI_AVAILABLE:
-            return None
-
-        # Internal header patterns to exclude
-        internal_patterns = {'_plugin', '_internal', '_private', '_impl', '_p.h'}
-
-        def is_internal(header_path: str) -> bool:
-            name_lower = os.path.basename(header_path).lower()
-            return any(p in name_lower for p in internal_patterns)
-
-        try:
-            # Query FI for all header files
-            all_headers = query_introspector_header_files(self.project_name)
-
-            if not all_headers:
-                logger.debug(f"FI returned no headers for {self.project_name}")
-                return None
-
-            # Filter out internal headers and extract basenames
-            public_headers = []
-            for h in all_headers:
-                if not is_internal(h):
-                    # Extract just the filename (e.g., /src/lcms/include/lcms2.h -> lcms2.h)
-                    basename = os.path.basename(h)
-                    if basename not in public_headers:
-                        public_headers.append(basename)
-
-            if public_headers:
-                logger.info(f"📡 Got {len(public_headers)} public headers from FI: {public_headers}")
-                return public_headers
-            else:
-                logger.debug(f"FI returned headers but all were internal")
-                return None
-
-        except Exception as e:
-            logger.debug(f"Failed to query FI for headers: {e}")
-            return None
-
     def _generate_public_headers_file(self, include_dir: str, output_path: Path):
-        """
-        Intelligently scan for public header files and write to output_path.
+        """Scan |include_dir| for public header files and write basenames to |output_path|.
 
         Strategy:
-        1. Try Fuzz Introspector API first (most accurate)
-        2. Fall back to heuristic: look in include/ directory
-        3. If a header matches project name (e.g., cjson.h), use only that
-        4. Otherwise collect all headers, excluding test/example/internal directories
+        1. Look in include/ directory first
+        2. If a header matches project name (e.g., cjson.h), use only that
+        3. Otherwise collect all headers, excluding test/example/internal directories
         """
-        # Try FI first
-        fi_headers = self._get_public_headers_from_fi()
-        if fi_headers:
-            logger.info(f"Using FI-provided public headers: {fi_headers}")
-            with open(output_path, "w") as f:
-                for h in sorted(fi_headers):
-                    f.write(h + "\n")
-            return
-
-        logger.info("FI unavailable, falling back to heuristic header detection")
+        logger.info("Detecting public headers via local heuristics")
         header_exts = {".h", ".hpp", ".hxx", ".hh"}
         # Exclude test/example directories
         exclude_dirs = {'tests', 'test', 'testing', 'examples', 'example',
@@ -1240,16 +1139,14 @@ class ProjectDriverGenerator:
         self,
         drivers: List[Driver],
         backend: Optional[LFBackendDriver] = None,
-        output_dir: Optional[str] = None
     ):
         """
         Save generated drivers to files (using backend to generate code)
-        
+
         Args:
             drivers: List of Drivers
             backend: BackendDriver instance (if None, will try to auto-create)
-            output_dir: Output directory (deprecated, backend uses its own working_dir)
-        
+
         Returns:
             List of saved driver files
         """

@@ -184,17 +184,21 @@ class StateMachineAnalysis:
         return {
             'total_apis': self.total_apis,
             'apis_with_constraints': len(self.constraints),
-            'resource_types': list(self.resource_types),
+            'resource_types': sorted(self.resource_types),
             'transition_count': len(self.transitions),
             'by_role': role_counts,
         }
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize to dictionary."""
+        """Serialize to dictionary. Set-derived lists are sorted for determinism."""
         return {
-            'transitions': [t.to_dict() for t in self.transitions],
+            'transitions': sorted(
+                (t.to_dict() for t in self.transitions),
+                key=lambda d: (d.get('api_name', ''), d.get('resource_type', ''),
+                               d.get('from_state', ''), d.get('to_state', '')),
+            ),
             'constraints': {k: v.to_dict() for k, v in self.constraints.items()},
-            'resource_types': list(self.resource_types),
+            'resource_types': sorted(self.resource_types),
             'stats': self.get_stats(),
         }
 
@@ -333,6 +337,12 @@ class StateMachineAnalyzer:
         )
 
         return analysis
+
+    # NOTE: see the matching comment in
+    # ``liberator_adapter/constraints/lifecycle_analyzer.py``. This
+    # ``validate_sequence`` is a parallel encoding of
+    # ``liberator_adapter/analysis/usedef.py::Typestate.check``; both are
+    # correct but duplicated. Consolidation tracked in CLAUDE.md TODO.
 
     def validate_sequence(
         self,
@@ -610,10 +620,14 @@ class StateMachineAnalyzer:
         if not resource_types:
             return transitions, constraints
 
-        # Find common prefix from resource types to match APIs
+        # Find common prefix from resource types to match APIs.
+        # Sort both api_names and resource_types so the first-match-wins
+        # semantics below are deterministic across Python invocations
+        # (set iteration order is hash-randomized).
         prefixes = self._find_common_prefixes(resource_types)
+        sorted_resource_types = sorted(resource_types)
 
-        for api_name in api_names:
+        for api_name in sorted(api_names):
             # Skip APIs already in constraints
             if api_name in existing_constraints:
                 continue
@@ -628,7 +642,7 @@ class StateMachineAnalyzer:
                 for prefix in prefixes:
                     if api_name.startswith(prefix):
                         # Find resource type with same prefix
-                        for rt in resource_types:
+                        for rt in sorted_resource_types:
                             if rt.startswith(prefix) or prefix in rt:
                                 matching_resource = rt
                                 break

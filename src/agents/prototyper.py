@@ -1,10 +1,10 @@
 """
 LangGraphPrototyper agent for LangGraph workflow.
 
-Refactored to use consolidated tools for reduced token usage.
-LLM can query function source code and usage examples when needed.
+Generates fuzz drivers from API sequences using context provided in the prompt.
+The FuzzIntrospector tool surface was removed; all context is pre-fetched.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import argparse
 
 import logger
@@ -14,21 +14,11 @@ from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.agents.utils import parse_tag
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.introspector import FuzzIntrospectorQueryTool, QueryType
 from data_prep.api_classifier import classify_project_apis
 
 
 class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
-    """
-    Prototyper agent for LangGraph.
-
-    Now supports FuzzIntrospector tool access for querying:
-    - Function source code (to understand implementation details)
-    - Usage examples (to learn correct API patterns)
-    - Function signatures (to verify parameter types)
-
-    LLM can decide when to use tools based on uncertainty about API usage.
-    """
+    """Prototyper agent that generates fuzz drivers from pre-fetched context."""
 
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
         prompt_manager = get_prompt_manager()
@@ -38,7 +28,6 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                          trial=trial,
                          args=args,
                          system_message=system_message)
-        self.fi_tool = None
         self.project_name = None
         self.benchmark = None
 
@@ -47,22 +36,8 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     # =========================================================================
 
     def get_tools(self) -> List[BaseTool]:
-        """Return consolidated FuzzIntrospector tool for API understanding.
-
-        Uses 1 unified tool instead of 4 separate tools.
-        """
-        return [
-            FuzzIntrospectorQueryTool(
-                get_implementation=self._get_function_implementation,
-                get_signature=self._get_function_signature,
-                get_cross_refs=self._get_sample_cross_references,
-                get_type_defs=lambda: "Not available in prototyper",
-                get_headers=lambda _: "Not available in prototyper",
-                get_tests=self._get_tests_for_functions,
-                get_debug_types=lambda _: "Not available in prototyper",
-                get_by_return_type=lambda _: "Not available in prototyper",
-            ),
-        ]
+        """No tools - all context is pre-fetched into the prompt."""
+        return []
 
     def parse_response(self, content: str) -> Dict[str, Any]:
         """Parse final LLM response to extract fuzz target code or hole fillings.
@@ -247,70 +222,6 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         return result
 
     # =========================================================================
-    # Tool Executors
-    # =========================================================================
-
-    def _init_fi_tool(self):
-        """Initialize FuzzIntrospector tool for the project."""
-        if self.fi_tool is None and self.benchmark is not None:
-            from tool.fuzz_introspector_tool import FuzzIntrospectorTool
-            from experiment import benchmark as benchmarklib
-            benchmark_obj = benchmarklib.Benchmark.from_dict(self.benchmark)
-            logger.info(
-                f"Initializing FuzzIntrospector for project: {benchmark_obj.project}",
-                trial=self.trial)
-            self.fi_tool = FuzzIntrospectorTool(benchmark_obj)
-            self.project_name = benchmark_obj.project
-
-    def _get_function_implementation(self, function_name: str) -> str:
-        """Get function source code via FuzzIntrospector."""
-        self._init_fi_tool()
-        if not self.fi_tool:
-            return f"Error: FuzzIntrospector not available"
-        impl = self.fi_tool.get_function_implementation(
-            self.project_name, function_name)
-        if impl:
-            return f"Source code for '{function_name}':\n```c\n{impl}\n```"
-        return f"Error: Could not find source code for function '{function_name}'"
-
-    def _get_function_signature(self, function_name: str) -> str:
-        """Get function signature via FuzzIntrospector."""
-        self._init_fi_tool()
-        if not self.fi_tool:
-            return f"Error: FuzzIntrospector not available"
-        signature = self.fi_tool.get_function_signature(function_name)
-        if signature:
-            return f"Function signature: {signature}"
-        return f"Error: Could not find signature for function '{function_name}'"
-
-    def _get_sample_cross_references(self, function_signature: str) -> str:
-        """Get sample usage examples via FuzzIntrospector."""
-        self._init_fi_tool()
-        if not self.fi_tool:
-            return f"Error: FuzzIntrospector not available"
-        cross_refs = self.fi_tool.get_sample_cross_references(
-            function_signature)
-        if cross_refs:
-            result = f"Usage examples for '{function_signature}':\n\n"
-            for i, ref in enumerate(cross_refs[:5], 1):
-                result += f"Example {i}:\n```c\n{ref}\n```\n\n"
-            return result
-        return f"No usage examples found for '{function_signature}'"
-
-    def _get_tests_for_functions(self, function_names: List[str]) -> str:
-        """Get test code that uses these functions."""
-        self._init_fi_tool()
-        if not self.fi_tool:
-            return f"Error: FuzzIntrospector not available"
-        tests = self.fi_tool.get_tests_for_functions(function_names)
-        if tests and tests.get('source'):
-            result = f"Test examples using functions: {', '.join(function_names)}\n\n"
-            for i, snippet in enumerate(tests['source'][:3], 1):
-                result += f"Test {i}:\n```c\n{snippet}\n```\n\n"
-            return result
-        return f"No tests found for functions: {', '.join(function_names)}"
-
-    # =========================================================================
     # Main Execution
     # =========================================================================
 
@@ -383,18 +294,35 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
             f'{len(api_classification.mutators)} mutators',
             trial=self.trial)
 
+        # Knowledge layer (comprehender output). Empty dict / list when the
+        # comprehender was skipped or failed; downstream formatters degrade.
+        comprehension = context.get('comprehension', {}) or {}
+        sequence_semantics = context.get('sequence_semantics', []) or []
+        library_purpose = comprehension.get('purpose', '')
+        api_usages = comprehension.get('functions', {}) or {}
+
         api_sequences_text = self._format_api_sequences(api_sequences, limit=8)
-        sequence_signatures_text = self._format_sequence_api_signatures(api_sequences, project_apis)
+        sequence_signatures_text = self._format_sequence_api_signatures(
+            api_sequences, project_apis, api_usages=api_usages)
+        sequence_invariants_text = self._format_sequence_invariants(
+            sequence_semantics)
+        library_purpose_text = self._format_library_purpose(library_purpose)
+        # Project-adaptive protocol templates (P3): N accepting paths sampled
+        # directly from the project's learned automaton. These are *guaranteed
+        # correct* shapes the project's tests already exercise — the LLM may
+        # adapt or extend them to reach uncovered code, but should preserve
+        # the protocol shape (creator → consumer order, paired destroy, etc.).
+        protocol_templates_text = self._format_protocol_templates(
+            (context.get('automaton') or {}).get('sample_paths') or []
+        )
         project_apis_text = self._format_project_apis(project_apis, limit=20)
         dep_graph_text = self._format_dependency_graph(dependency_graph,
                                                        limit=12)
         condition_text = self._format_condition_info(condition_info)
 
-        # Try to get skeleton as mandatory template first
         skeleton_template_code, holes_description, has_skeleton_template = \
             self._format_skeleton_as_template(skeleton_drivers, limit=1)
 
-        # Fallback to legacy format if no template available
         skeleton_text = self._format_skeleton_drivers(skeleton_drivers,
                                                       limit=2)
         include_path_context = self._format_include_path_context(
@@ -471,7 +399,7 @@ Target language: **{target_language.upper()}**
 </task>
 
 <step1_understand_project>
-{api_understanding_text}
+{library_purpose_text}{api_understanding_text}
 
 Before writing any code, think about:
 1. What is this project's main purpose?
@@ -493,6 +421,9 @@ Before writing any code, think about:
 <sequence_api_signatures>
 {sequence_signatures_text}
 </sequence_api_signatures>
+
+{protocol_templates_text}
+{sequence_invariants_text}
 
 <project_apis>
 {project_apis_text}
@@ -556,30 +487,6 @@ If JSON mode doesn't work, output the complete filled code in <fuzz_target> tags
 """
             else:
                 base_prompt += """
-
-<tool_usage_guidance>
-**You have access to tools to query more information about APIs if needed:**
-
-- **get_function_implementation**: Get the source code of any API function
-  Use when: You need to understand how a function handles parameters (e.g., var-len relationships, buffer handling)
-
-- **get_function_signature**: Get the exact signature of a function
-  Use when: You're unsure about parameter types
-
-- **get_sample_cross_references**: Get real usage examples from the codebase
-  Use when: You want to see how other code correctly uses an API (especially for callbacks, complex patterns)
-
-- **get_tests_for_functions**: Get test code that uses these functions
-  Use when: You want to learn from existing test patterns
-
-**When to use tools:**
-- If you're uncertain about buffer-size relationships → query source code
-- If you need to implement callbacks → query usage examples to see signatures
-- If you're unsure about API lifecycle → query tests to see correct patterns
-- If the API usage is straightforward → no need to query, just generate code
-
-**Tool calls are optional** - use them only when you need more information.
-</tool_usage_guidance>
 
 <generation_rules>
 Generate a fuzz driver following these CRITICAL rules:
@@ -765,15 +672,6 @@ Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown'
 {additional_context}
 
 </reference_information>
-
-<tool_usage_guidance>
-You have access to FuzzIntrospector tools:
-- get_function_implementation: Get function source code
-- get_sample_cross_references: Get usage examples
-- get_tests_for_functions: Get test code
-
-Use these when you need to understand API patterns (var-len, callbacks, lifecycle).
-</tool_usage_guidance>
 
 <generation_rules>
 CRITICAL: Generate a fuzz driver using ONLY the APIs listed in <api_sequences> above.
@@ -971,11 +869,14 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
     def _format_sequence_api_signatures(self,
                                         api_sequences: List[List[str]],
-                                        project_apis: List[Dict[str, Any]]) -> str:
+                                        project_apis: List[Dict[str, Any]],
+                                        api_usages: Optional[Dict[str, str]] = None) -> str:
         """Format FULL signatures for APIs that appear in sequences.
 
         This is critical for LLM to understand pointer semantics correctly.
         Unlike _format_project_apis which truncates at 3 args, this shows ALL args.
+        When ``api_usages`` is provided (from comprehender-A) each signature is
+        followed by its usage note so the model gets type + intent in one place.
         """
         if not api_sequences or not project_apis:
             return "  (none)"
@@ -1027,11 +928,93 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 note = "  // ⚠️ Has output pointer parameter (type **)"
 
             lines.append(f"  {rt} {api_name}({args_str});{note}")
+            if api_usages:
+                usage = api_usages.get(api_name, "").strip()
+                if usage:
+                    lines.append(f"      usage: {usage}")
 
         if not lines[3:]:  # No APIs formatted
             return "  (no matching APIs found)"
 
         return "\n".join(lines)
+
+    def _format_library_purpose(self, purpose: str) -> str:
+        """Render the library-purpose blurb (comprehender-A output)."""
+        purpose = (purpose or "").strip()
+        if not purpose:
+            return ""
+        return f"<library_purpose>\n{purpose}\n</library_purpose>\n"
+
+    def _format_protocol_templates(
+            self,
+            sample_paths: List[List[str]],
+            limit: int = 4) -> str:
+        """Render automaton-sampled protocol templates (P3 output).
+
+        Each path is a sequence of API names that the project's tests
+        already exercise (post EDSM merging — may compose multiple test
+        bodies). They are *templates*, not constraints: the LLM may extend
+        them with novel APIs to reach uncovered code, but should preserve
+        the protocol shape (creator → consumer order; paired destroy at the
+        end; etc.).
+        """
+        if not sample_paths:
+            return ""
+        lines: List[str] = ["<protocol_templates>"]
+        lines.append(
+            "(API call shapes the project's own tests use; treat as "
+            "templates, not exact requirements — feel free to substitute "
+            "or extend APIs to maximise coverage, but keep the lifecycle/"
+            "ordering structure.)"
+        )
+        for i, path in enumerate(sample_paths[:limit], 1):
+            if not path:
+                continue
+            lines.append(f"  template_{i}: {' -> '.join(path)}")
+        lines.append("</protocol_templates>\n")
+        return "\n".join(lines)
+
+    def _format_sequence_invariants(
+            self, sequence_semantics: List[Dict[str, Any]]) -> str:
+        """Surface comprehender-B verdicts so the prototyper respects invariants.
+
+        For each non-VALID sequence we expose: the original sequence, the
+        diagnosis, the repair recommendation (if any), and the prototyper-facing
+        invariants. VALID sequences only appear if they carried any invariants.
+        """
+        if not sequence_semantics:
+            return ""
+        lines: List[str] = []
+        for entry in sequence_semantics:
+            status = (entry.get("semantic_status") or "VALID").upper()
+            invariants = entry.get("invariants_for_prototyper") or []
+            diagnosis = (entry.get("diagnosis") or "").strip()
+            repair = entry.get("repair") or {}
+            patched = repair.get("patched_sequence")
+            action = (repair.get("action") or "NONE").upper()
+            if status == "VALID" and not invariants and not patched:
+                continue
+            seq = entry.get("sequence") or []
+            lines.append(f"- sequence: {' -> '.join(seq) or '(empty)'}")
+            lines.append(f"    status: {status}")
+            if diagnosis:
+                lines.append(f"    diagnosis: {diagnosis}")
+            if patched and action != "NONE":
+                rationale = (repair.get("rationale") or "").strip()
+                lines.append(
+                    f"    suggested fix ({action}): {' -> '.join(patched)}"
+                    + (f"  // {rationale}" if rationale else ""))
+            for inv in invariants[:3]:
+                inv_text = (inv or "").strip()
+                if inv_text:
+                    lines.append(f"    invariant: {inv_text}")
+        if not lines:
+            return ""
+        return ("<sequence_semantics>\n"
+                "(verdicts from semantic comprehender; respect any invariants "
+                "and prefer the suggested fix when available)\n"
+                + "\n".join(lines)
+                + "\n</sequence_semantics>\n")
 
     def _format_project_apis(self,
                              project_apis: List[Dict[str, Any]],
@@ -1097,7 +1080,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
     def _format_skeleton_drivers(self,
                                  skeleton_drivers: List[Dict[str, Any]],
                                  limit: int = 2) -> str:
-        """Format pre-generated skeleton drivers for prompt (legacy reference mode)."""
+        """Format pre-generated skeleton drivers as reference for the prompt."""
         if not skeleton_drivers:
             return "  (no skeleton drivers available)"
 
@@ -1333,7 +1316,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
         Returns one of:
         - 'skeleton_strict': Use skeleton template with hole filling
-        - 'skeleton_reference': Use skeleton as reference (legacy)
+        - 'skeleton_reference': Use skeleton as reference (no holes)
         - 'freeform': No skeleton, generate from scratch
         """
         skeleton_code, holes, api_sequence = self._get_active_skeleton(state)
@@ -1475,7 +1458,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
             return function_analysis.get('raw_analysis',
                                          'No analysis available')
 
-        # Build formatted SRS specification (kept for backward compatibility)
         output = []
 
         archetype = srs_data.get('archetype', {})

@@ -69,8 +69,7 @@ class ToolAccessLevel(Enum):
 
 class ToolCategory(Enum):
     """Categories of agent tools."""
-    EXECUTION = "execution"        # Bash, GDB
-    INTROSPECTOR = "introspector"  # FuzzIntrospector queries
+    EXECUTION = "execution"  # Bash, GDB
 
 
 def create_tool_with_executor(

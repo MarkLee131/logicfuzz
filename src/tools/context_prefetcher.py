@@ -31,7 +31,7 @@ CoverageAnalyzer:
 
 Improver:
   - NECESSARY: Current code, coverage insights, improvement suggestions
-  - OPTIONAL: FuzzIntrospector queries (function source, examples)
+  - OPTIONAL: None (context pre-fetched)
   - EXPENSIVE: None
 
 CrashAnalyzer:
@@ -41,7 +41,7 @@ CrashAnalyzer:
 
 CrashFeasibilityAnalyzer:
   - NECESSARY: Crash analysis, fuzz target, function requirements
-  - OPTIONAL: Bash, FuzzIntrospector queries
+  - OPTIONAL: Bash
   - EXPENSIVE: None
 """
 
@@ -75,9 +75,7 @@ AGENT_CONTEXT_SPECS = {
             "header_information",     # Required includes
             "language",               # c or c++
         ],
-        optional_tools=[
-            "fuzz_introspector_query",  # For implementation details
-        ],
+        optional_tools=[],  # FI tool removed - context pre-fetched
         expensive_tools=[],
     ),
 
@@ -116,9 +114,7 @@ AGENT_CONTEXT_SPECS = {
             "coverage_percent",       # Current coverage metric
             "line_coverage_diff",     # Coverage change
         ],
-        optional_tools=[
-            "fuzz_introspector_query",  # For understanding uncovered code
-        ],
+        optional_tools=[],  # FI tool removed - context pre-fetched
         expensive_tools=[],
     ),
 
@@ -145,7 +141,6 @@ AGENT_CONTEXT_SPECS = {
         ],
         optional_tools=[
             "bash_execute",
-            "fuzz_introspector_query",
         ],
         expensive_tools=[],
     ),

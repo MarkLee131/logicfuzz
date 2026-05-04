@@ -1,0 +1,489 @@
+"""Knowledge-driven comprehender.
+
+Two-stage design (see docs/automaton.md § 11):
+
+1. ``LibraryComprehension``: per-API usage notes + a one-paragraph library
+   purpose. Layered fallback per API:
+
+      a. Deterministic synthesis from ConditionManager role
+         (SOURCE / SINK / INIT / SETBY) plus L2 lifecycle pairing.
+      b. Batched LLM call for the remainder, signature-only.
+
+   Only APIs that appear in the top-K filtered sequences are comprehended.
+   This is the load-bearing token-saving step.
+
+2. ``SequenceSemantics``: per-sequence semantic verdict. The L0–L3 filters
+   already prove type / lifecycle / state-machine validity; this stage answers
+   "is the *combination* meaningful?" e.g. ``parser_get_object`` after
+   ``parser_new`` but before any ``add_chunk``. Returns a status, optional
+   repaired sequence, and invariants the prototyper should respect.
+
+The comprehender is fail-soft: any LLM failure leaves the deterministic
+fallback in place rather than blocking ``FuzzingContext.prepare()``.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Sequence
+
+from src.knowledge.cache import KnowledgeCache
+from src.utils.prompt_loader import get_prompt_manager
+
+logger = logging.getLogger(__name__)
+
+# Cheap, fast model for comprehension. Override per project via prepare(model=...).
+DEFAULT_COMPREHENDER_MODEL = "gpt-4o-mini"
+
+# Batch size for comprehender-A (signatures per LLM call).
+API_BATCH_SIZE = 10
+
+
+@dataclass
+class LibraryComprehension:
+    """Output of comprehender-A. Mutable so crash-learner (B) can append later."""
+    purpose: str = ""
+    functions: Dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"purpose": self.purpose, "functions": dict(self.functions)}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LibraryComprehension":
+        return cls(
+            purpose=data.get("purpose", ""),
+            functions=dict(data.get("functions", {})),
+        )
+
+
+@dataclass
+class SequenceSemantics:
+    """Output of comprehender-B for a single candidate sequence."""
+    sequence: List[str]
+    semantic_status: str = "VALID"   # VALID | SUBOPTIMAL | INVALID
+    diagnosis: str = ""
+    repair_action: str = "NONE"      # NONE | INSERT | REORDER | REPLACE | DROP
+    patched_sequence: Optional[List[str]] = None
+    repair_rationale: str = ""
+    invariants_for_prototyper: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "sequence": list(self.sequence),
+            "semantic_status": self.semantic_status,
+            "diagnosis": self.diagnosis,
+            "repair": {
+                "action": self.repair_action,
+                "patched_sequence": list(self.patched_sequence) if self.patched_sequence else None,
+                "rationale": self.repair_rationale,
+            },
+            "invariants_for_prototyper": list(self.invariants_for_prototyper),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SequenceSemantics":
+        repair = data.get("repair") or {}
+        return cls(
+            sequence=list(data.get("sequence", [])),
+            semantic_status=data.get("semantic_status", "VALID"),
+            diagnosis=data.get("diagnosis", ""),
+            repair_action=repair.get("action", "NONE"),
+            patched_sequence=(list(repair["patched_sequence"])
+                              if repair.get("patched_sequence") else None),
+            repair_rationale=repair.get("rationale", ""),
+            invariants_for_prototyper=list(data.get("invariants_for_prototyper", [])),
+        )
+
+
+_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL)
+
+
+def _extract_json_block(text: str) -> Optional[Any]:
+    """Pull a fenced JSON object/array out of an LLM response. Tolerant."""
+    if not text:
+        return None
+    m = _FENCED_JSON_RE.search(text)
+    payload = m.group(1) if m else text.strip()
+    # If still wrapped in extra prose, find the outermost {...} or [...].
+    if not payload.lstrip().startswith(("{", "[")):
+        first_obj = re.search(r"\{.*\}", payload, re.DOTALL)
+        first_arr = re.search(r"\[.*\]", payload, re.DOTALL)
+        candidates = [c for c in (first_obj, first_arr) if c]
+        if not candidates:
+            return None
+        payload = min(candidates, key=lambda c: c.start()).group(0)
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError as exc:
+        logger.warning("LLM returned non-JSON: %s", exc)
+        return None
+
+
+def _format_signature(api: Dict[str, Any]) -> str:
+    rt = api.get("return_type") or "void"
+    name = api.get("function_name", "?")
+    args = api.get("arguments") or []
+    parts = []
+    for arg in args:
+        if isinstance(arg, dict):
+            t = arg.get("type") or "?"
+            n = arg.get("name") or ""
+            parts.append(f"{t} {n}".strip())
+        else:
+            parts.append(str(arg))
+    return f"{rt} {name}({', '.join(parts)});"
+
+
+def _condition_role(name: str, condition_info: Dict[str, Any]) -> Optional[str]:
+    if not condition_info:
+        return None
+    if name in (condition_info.get("inits") or []):
+        return "INIT"
+    if name in (condition_info.get("sources") or []):
+        return "SOURCE"
+    if name in (condition_info.get("sinks") or []):
+        return "SINK"
+    return None
+
+
+def _lifecycle_pair(name: str,
+                    lifecycle_analysis: Dict[str, Any]) -> Optional[str]:
+    """Return paired init/destroy partner if known, else None."""
+    if not lifecycle_analysis:
+        return None
+    pairs = lifecycle_analysis.get("pairs") or lifecycle_analysis.get("lifecycle_pairs") or []
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            continue
+        init = pair.get("init") or pair.get("init_api")
+        destroy = pair.get("destroy") or pair.get("destroy_api")
+        if name == init and destroy:
+            return f"pairs with destroy API `{destroy}`"
+        if name == destroy and init:
+            return f"pairs with init API `{init}`"
+    return None
+
+
+def _deterministic_usage(api: Dict[str, Any],
+                         condition_info: Dict[str, Any],
+                         lifecycle_analysis: Dict[str, Any]) -> Optional[str]:
+    """Synthesize a usage line from static facts. Returns None if we know nothing."""
+    name = api.get("function_name", "")
+    role = _condition_role(name, condition_info)
+    pair = _lifecycle_pair(name, lifecycle_analysis)
+    if not role and not pair:
+        return None
+    parts = []
+    if role == "INIT":
+        parts.append("Initializes a library object; call before any consumer API.")
+    elif role == "SOURCE":
+        parts.append("Produces fresh data / handle; safe to call without prior state.")
+    elif role == "SINK":
+        parts.append("Consumes a previously produced object; releases ownership.")
+    if pair:
+        parts.append(pair + ".")
+    return " ".join(parts) if parts else None
+
+
+def _build_static_facts(condition_info: Dict[str, Any],
+                        lifecycle_analysis: Dict[str, Any]) -> str:
+    lines: List[str] = []
+    if condition_info:
+        counts = condition_info.get("counts", {})
+        if counts:
+            lines.append(
+                f"Roles: {counts.get('inits', 0)} init, "
+                f"{counts.get('sources', 0)} source, "
+                f"{counts.get('sinks', 0)} sink APIs."
+            )
+    if lifecycle_analysis:
+        pairs = (lifecycle_analysis.get("pairs")
+                 or lifecycle_analysis.get("lifecycle_pairs") or [])
+        if pairs:
+            shown = []
+            for pair in pairs[:8]:
+                if not isinstance(pair, dict):
+                    continue
+                init = pair.get("init") or pair.get("init_api")
+                destroy = pair.get("destroy") or pair.get("destroy_api")
+                if init and destroy:
+                    shown.append(f"  {init} ↔ {destroy}")
+            if shown:
+                lines.append("Verified init/destroy pairs:")
+                lines.extend(shown)
+    return "\n".join(lines) if lines else "(no additional static facts)"
+
+
+class Comprehender:
+    """Orchestrates comprehender-A and comprehender-B."""
+
+    def __init__(self,
+                 project_name: str,
+                 model_name: str = DEFAULT_COMPREHENDER_MODEL,
+                 cache: Optional[KnowledgeCache] = None):
+        self.project_name = project_name
+        self.model_name = model_name
+        self.cache = cache or KnowledgeCache(project_name)
+        self.prompts = get_prompt_manager()
+        self._chat_model = None  # lazy
+
+    # ------------------------------------------------------------------ LLM
+    def _get_model(self):
+        if self._chat_model is not None:
+            return self._chat_model
+        try:
+            from src.llm.models import get_chat_model
+            self._chat_model = get_chat_model(self.model_name, temperature=0.2)
+        except Exception as exc:
+            logger.warning(
+                "Comprehender LLM unavailable (%s); will run deterministic-only.",
+                exc,
+            )
+            self._chat_model = None
+        return self._chat_model
+
+    def _invoke(self, system_prompt: str, user_prompt: str) -> str:
+        model = self._get_model()
+        if model is None:
+            return ""
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            response = model.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt),
+            ])
+            content = getattr(response, "content", "") or ""
+            if isinstance(content, list):
+                # Some providers return content as a list of parts.
+                content = "".join(part.get("text", "") if isinstance(part, dict) else str(part)
+                                  for part in content)
+            return content
+        except Exception as exc:
+            logger.warning("Comprehender LLM call failed: %s", exc)
+            return ""
+
+    # ---------------------------------------------------------------- A.purpose
+    def comprehend_purpose(self,
+                           library_name: str,
+                           doc_excerpts: str = "") -> str:
+        cached = self.cache.load_purpose()
+        if cached:
+            logger.info("Comprehender: purpose loaded from cache")
+            return cached
+        system = self.prompts.get_system_prompt("comprehender_purpose")
+        user = self.prompts.build_user_prompt(
+            "comprehender_purpose",
+            library_name=library_name,
+            doc_excerpts=doc_excerpts or "(no documentation available)",
+        )
+        purpose = self._invoke(system, user).strip()
+        if not purpose:
+            purpose = (
+                f"{library_name}: a C/C++ library; usage inferred from API "
+                f"signatures and OSS-Fuzz harness patterns."
+            )
+        self.cache.save_purpose(purpose)
+        return purpose
+
+    # ---------------------------------------------------------------- A.usage
+    def comprehend_apis(self,
+                        api_names: Sequence[str],
+                        project_apis: Sequence[Dict[str, Any]],
+                        purpose: str,
+                        condition_info: Optional[Dict[str, Any]] = None,
+                        lifecycle_analysis: Optional[Dict[str, Any]] = None,
+                        ) -> Dict[str, str]:
+        """Per-API usage with deterministic-then-LLM layering. Cache-aware."""
+        condition_info = condition_info or {}
+        lifecycle_analysis = lifecycle_analysis or {}
+        cached_usages = self.cache.load_api_usages()
+        usages: Dict[str, str] = {}
+        api_lookup = {a.get("function_name", ""): a for a in project_apis}
+
+        # Layer 1: cache hit → reuse
+        # Layer 2: deterministic synthesis from static facts
+        # Layer 3: LLM batched fallback for the remainder
+        need_llm: List[Dict[str, Any]] = []
+        for name in api_names:
+            if not name or name in usages:
+                continue
+            if name in cached_usages and cached_usages[name].strip():
+                usages[name] = cached_usages[name]
+                continue
+            api = api_lookup.get(name)
+            if api is None:
+                continue
+            det = _deterministic_usage(api, condition_info, lifecycle_analysis)
+            if det:
+                usages[name] = det
+                continue
+            need_llm.append(api)
+
+        if need_llm:
+            self._llm_fill_api_usages(
+                need_llm,
+                purpose=purpose,
+                condition_info=condition_info,
+                lifecycle_analysis=lifecycle_analysis,
+                out=usages,
+            )
+
+        # Persist (merging with prior cache so concurrent runs don't lose data)
+        merged = dict(cached_usages)
+        merged.update(usages)
+        self.cache.save_api_usages(merged)
+        return usages
+
+    def _llm_fill_api_usages(self,
+                             apis: List[Dict[str, Any]],
+                             purpose: str,
+                             condition_info: Dict[str, Any],
+                             lifecycle_analysis: Dict[str, Any],
+                             out: Dict[str, str]) -> None:
+        system = self.prompts.get_system_prompt("comprehender_api_usage")
+        static_facts = _build_static_facts(condition_info, lifecycle_analysis)
+        for batch_start in range(0, len(apis), API_BATCH_SIZE):
+            batch = apis[batch_start:batch_start + API_BATCH_SIZE]
+            sigs = "\n".join(_format_signature(a) for a in batch)
+            user = self.prompts.build_user_prompt(
+                "comprehender_api_usage",
+                library_name=self.project_name,
+                library_purpose=purpose or "(unknown)",
+                static_facts=static_facts,
+                api_signatures=sigs,
+            )
+            raw = self._invoke(system, user)
+            parsed = _extract_json_block(raw)
+            if not isinstance(parsed, dict):
+                logger.warning(
+                    "Comprehender-A: unparsable response for batch starting at %d",
+                    batch_start,
+                )
+                continue
+            for api in batch:
+                name = api.get("function_name", "")
+                if not name:
+                    continue
+                value = parsed.get(name)
+                if isinstance(value, str) and value.strip():
+                    out[name] = value.strip()
+
+    # ---------------------------------------------------------------- B.sequence
+    def comprehend_sequences(self,
+                             sequences: Sequence[Sequence[str]],
+                             api_usages: Dict[str, str],
+                             purpose: str,
+                             allowed_apis: Sequence[str],
+                             condition_info: Optional[Dict[str, Any]] = None,
+                             lifecycle_analysis: Optional[Dict[str, Any]] = None,
+                             automaton_acceptance_fn: Optional[Any] = None,
+                             ) -> List[SequenceSemantics]:
+        """Per-sequence semantic verdict. Cache-aware.
+
+        When ``automaton_acceptance_fn`` is supplied (a callable returning a
+        score in ``[0.0, 1.0]`` from the project-adaptive automaton), it is
+        used as a *positive-only* prefilter:
+
+        - **acceptance == 1.0** → emit VALID with no diagnosis, skip LLM
+        - **acceptance < 1.0** → defer to LLM (we cannot conclude INVALID
+          from non-acceptance because the automaton's training corpus is
+          inevitably incomplete; a sequence not seen in tests may still be
+          a perfectly valid direct entry point or a novel-but-correct
+          combination. Conservative bias: absence of evidence ≠ evidence
+          of absence.)
+
+        Cuts LLM calls roughly proportional to the fraction of candidate
+        sequences that hit canonical project protocols. Empirically ~30–50%
+        on libucl-shaped projects.
+        """
+        condition_info = condition_info or {}
+        lifecycle_analysis = lifecycle_analysis or {}
+        cached = self.cache.load_sequence_semantics()
+        results: List[SequenceSemantics] = []
+        new_cache: Dict[str, Dict[str, Any]] = {}
+        system = self.prompts.get_system_prompt("comprehender_sequence")
+        static_facts = _build_static_facts(condition_info, lifecycle_analysis)
+        allowed_text = ", ".join(sorted({a for a in allowed_apis if a}))
+        n_prefilter_valid = 0
+        n_llm_calls = 0
+
+        for seq in sequences:
+            seq_list = [s for s in seq if s]
+            if not seq_list:
+                continue
+            key = self.cache.sequence_key(seq_list)
+            if key in cached:
+                results.append(SequenceSemantics.from_dict(cached[key]))
+                new_cache[key] = cached[key]
+                continue
+
+            # Positive-only automaton prefilter: emit VALID without an LLM
+            # call when the sequence walks fully through the learned protocol
+            # automaton. Anything less than full acceptance defers to LLM —
+            # the automaton's training corpus is inevitably incomplete and
+            # an unobserved sequence is not the same as an invalid one.
+            if automaton_acceptance_fn is not None:
+                try:
+                    acc = automaton_acceptance_fn(seq_list)
+                except Exception:
+                    acc = -1.0
+                if acc >= 0.999:
+                    semantics = SequenceSemantics(
+                        sequence=seq_list,
+                        semantic_status="VALID",
+                        diagnosis="",
+                    )
+                    n_prefilter_valid += 1
+                    results.append(semantics)
+                    new_cache[key] = semantics.to_dict()
+                    continue
+                # else fall through to LLM
+            usages_block = "\n".join(
+                f"  {name}: {api_usages.get(name, '(no usage available)')}"
+                for name in seq_list
+            )
+            user = self.prompts.build_user_prompt(
+                "comprehender_sequence",
+                library_name=self.project_name,
+                library_purpose=purpose or "(unknown)",
+                sequence=" -> ".join(seq_list),
+                api_usages=usages_block,
+                static_facts=static_facts,
+                allowed_apis=allowed_text or "(none)",
+            )
+            raw = self._invoke(system, user)
+            n_llm_calls += 1
+            parsed = _extract_json_block(raw)
+            if not isinstance(parsed, dict):
+                # Fail-soft: treat as VALID with no annotations.
+                semantics = SequenceSemantics(sequence=seq_list)
+            else:
+                parsed["sequence"] = seq_list
+                semantics = SequenceSemantics.from_dict(parsed)
+                # Defensive: drop patched_sequence if it contains unknown APIs.
+                if semantics.patched_sequence:
+                    allowed_set = set(allowed_apis)
+                    if not all(a in allowed_set for a in semantics.patched_sequence):
+                        logger.warning(
+                            "Comprehender-B: discarding patched_sequence with "
+                            "out-of-pool APIs for %s",
+                            seq_list,
+                        )
+                        semantics.patched_sequence = None
+                        semantics.repair_action = "NONE"
+            results.append(semantics)
+            new_cache[key] = semantics.to_dict()
+
+        if automaton_acceptance_fn is not None:
+            logger.info(
+                "Comprehender-B prefilter: prefilter_VALID=%d, LLM_calls=%d",
+                n_prefilter_valid, n_llm_calls,
+            )
+
+        # Persist merged cache
+        merged = dict(cached)
+        merged.update(new_cache)
+        self.cache.save_sequence_semantics(merged)
+        return results

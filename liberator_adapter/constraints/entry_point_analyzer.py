@@ -204,6 +204,12 @@ class EntryPointType(Enum):
     # Generic: Matches pattern but unclear category
     GENERIC = "generic"
 
+    # Indirect: API consumes fuzzer data but also requires a handle produced
+    # by another API (e.g. `ucl_parser_add_chunk(parser, data, size)`). These
+    # are detected as the *consumer* half of an `IndirectEntryPoint` pair; the
+    # creator that produces the handle is tracked separately on the analysis.
+    INDIRECT = "indirect"
+
 
 @dataclass
 class EntryPointPattern:
@@ -276,15 +282,6 @@ class EntryPointInfo:
     matched_pattern: Optional[str] = None
     confidence: float = 1.0
 
-    # Legacy aliases for backward compatibility
-    @property
-    def buffer_arg_index(self) -> int:
-        return self.input_arg_index
-
-    @property
-    def buffer_arg_type(self) -> str:
-        return self.input_arg_type
-
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
         return {
@@ -301,21 +298,59 @@ class EntryPointInfo:
 
 
 @dataclass
+class IndirectEntryPoint:
+    """A (creator, consumer) pair forming an indirect entry point.
+
+    The consumer is an API whose signature contains a fuzzer-buffer slot but
+    whose remaining args require a handle that must be produced upstream.
+    The creator is an API in the same project whose return type matches that
+    handle. Together they form a usable two-step entry pattern such as
+    ``handle = ucl_parser_new(0); ucl_parser_add_chunk(handle, data, size);``.
+    """
+
+    consumer: EntryPointInfo
+    creator_name: str
+    handle_arg_index: int
+    handle_arg_type: str
+    confidence: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'consumer': self.consumer.to_dict(),
+            'creator_name': self.creator_name,
+            'handle_arg_index': self.handle_arg_index,
+            'handle_arg_type': self.handle_arg_type,
+            'confidence': self.confidence,
+        }
+
+
+@dataclass
 class EntryPointAnalysis:
     """Result of Entry Point analysis for a project."""
 
-    # All identified Entry Points
+    # All identified Entry Points (direct + indirect-consumer halves)
     entry_points: List[EntryPointInfo] = field(default_factory=list)
 
-    # Set of Entry Point function names (for fast lookup)
+    # Set of Entry Point function names (for fast lookup). Includes the
+    # consumer name from each indirect pair so existing callers that ask
+    # "is this API an entry point?" keep working.
     entry_point_names: Set[str] = field(default_factory=set)
 
     # APIs that are not Entry Points
     non_entry_points: List[Dict[str, Any]] = field(default_factory=list)
 
+    # === Indirect entry points (creator → consumer pairs) ===
+    indirect_entry_points: List[IndirectEntryPoint] = field(default_factory=list)
+    # Names of consumer APIs (subset of entry_point_names)
+    indirect_consumer_names: Set[str] = field(default_factory=set)
+    # Names of all creator APIs that produce a handle for any indirect consumer
+    indirect_creator_names: Set[str] = field(default_factory=set)
+    # Map: consumer_name -> list of plausible creator names (sorted, best first)
+    indirect_creators_for_consumer: Dict[str, List[str]] = field(default_factory=dict)
+
     # Analysis metadata
     total_apis: int = 0
-    analysis_version: str = "1.0"
+    analysis_version: str = "1.1"
 
     def __post_init__(self):
         """Ensure entry_point_names is populated."""
@@ -333,7 +368,7 @@ class EntryPointAnalysis:
         return self.entry_point_count / self.total_apis
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get analysis statistics."""
+        """Get analysis statistics. Set-derived lists are sorted for determinism."""
         type_counts = {}
         for ep in self.entry_points:
             type_name = ep.entry_type.value
@@ -344,14 +379,21 @@ class EntryPointAnalysis:
             'entry_point_count': self.entry_point_count,
             'entry_point_ratio': round(self.entry_point_ratio, 3),
             'by_type': type_counts,
-            'entry_point_names': list(self.entry_point_names),
+            'entry_point_names': sorted(self.entry_point_names),
+            'indirect_pair_count': len(self.indirect_entry_points),
+            'indirect_consumer_names': sorted(self.indirect_consumer_names),
+            'indirect_creator_names': sorted(self.indirect_creator_names),
         }
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize to dictionary."""
+        """Serialize to dictionary. Set-derived lists are sorted for determinism."""
         return {
             'entry_points': [ep.to_dict() for ep in self.entry_points],
-            'entry_point_names': list(self.entry_point_names),
+            'entry_point_names': sorted(self.entry_point_names),
+            'indirect_entry_points': [p.to_dict() for p in self.indirect_entry_points],
+            'indirect_consumer_names': sorted(self.indirect_consumer_names),
+            'indirect_creator_names': sorted(self.indirect_creator_names),
+            'indirect_creators_for_consumer': dict(self.indirect_creators_for_consumer),
             'stats': self.get_stats(),
         }
 
@@ -419,7 +461,14 @@ class EntryPointAnalyzer:
 
     def analyze(self, project_apis: List[Dict[str, Any]]) -> EntryPointAnalysis:
         """
-        Analyze project APIs to identify Entry Points.
+        Analyze project APIs to identify Entry Points (direct + indirect).
+
+        Two passes:
+        1. Direct: an API whose signature consumes fuzzer input on its own
+           (single-step ``LLVMFuzzerTestOneInput(api(data, size))``).
+        2. Indirect: an API that consumes fuzzer input *but also* requires a
+           handle produced by some other API in the project (two-step:
+           ``handle = creator(); consumer(handle, data, size)``).
 
         Args:
             project_apis: List of API dictionaries with keys:
@@ -428,28 +477,79 @@ class EntryPointAnalyzer:
                 - arguments: List[Dict] with 'type', 'is_const', etc.
 
         Returns:
-            EntryPointAnalysis with identified Entry Points and statistics.
+            EntryPointAnalysis populated with both direct entry points and
+            ``IndirectEntryPoint`` pairs. ``entry_point_names`` is the union
+            of direct names and indirect-consumer names so existing callers
+            keep working.
         """
-        entry_points = []
-        non_entry_points = []
+        entry_points: List[EntryPointInfo] = []
+        non_entry_points: List[Dict[str, Any]] = []
+        indirect_consumers: List[Tuple[Dict[str, Any], EntryPointInfo, int, str]] = []
 
         for api in project_apis:
             ep_info = self._check_entry_point(api)
             if ep_info:
                 entry_points.append(ep_info)
+                continue
+            indirect = self._check_indirect_consumer(api)
+            if indirect:
+                ep_info, handle_idx, handle_type = indirect
+                entry_points.append(ep_info)
+                indirect_consumers.append((api, ep_info, handle_idx, handle_type))
             else:
                 non_entry_points.append(api)
+
+        # Build the use-def graph and ask it for top-ranked root producers
+        # of each consumer's handle. The graph computes ``dependency_depth``
+        # internally (see ``UseDefGraph.dependency_depth``), so this single
+        # query subsumes our previous hand-written ranker, channel weighting,
+        # and iterator filter — all of which are now properties of the same
+        # use-def model.
+        from liberator_adapter.analysis import UseDefGraph, extract_api_effects
+        effects = extract_api_effects(
+            project_apis,
+            consumed_handle_keys=self._consumed_handle_keys,
+            extract_produced_handles=self._extract_produced_handles,
+            is_handle_type=self._is_handle_type,
+            normalize_handle_type=self._normalize_handle_type,
+        )
+        graph = UseDefGraph(effects)
+        max_creators_per_consumer = 3
+        indirect_pairs: List[IndirectEntryPoint] = []
+        creators_for_consumer: Dict[str, List[str]] = {}
+        for _api, ep_info, handle_idx, handle_type in indirect_consumers:
+            handle_key = self._normalize_handle_type(handle_type)
+            creators = graph.roots(handle_key, top_k=max_creators_per_consumer)
+            if not creators:
+                # No producer in the project for this handle. Keep the consumer
+                # as an entry-point name (the L0 type DAG may still surface
+                # cross-module creators) but skip pair registration.
+                continue
+            creators_for_consumer[ep_info.function_name] = creators
+            for creator_name in creators:
+                indirect_pairs.append(IndirectEntryPoint(
+                    consumer=ep_info,
+                    creator_name=creator_name,
+                    handle_arg_index=handle_idx,
+                    handle_arg_type=handle_type,
+                ))
 
         analysis = EntryPointAnalysis(
             entry_points=entry_points,
             entry_point_names={ep.function_name for ep in entry_points},
             non_entry_points=non_entry_points,
+            indirect_entry_points=indirect_pairs,
+            indirect_consumer_names={p.consumer.function_name for p in indirect_pairs},
+            indirect_creator_names={p.creator_name for p in indirect_pairs},
+            indirect_creators_for_consumer=creators_for_consumer,
             total_apis=len(project_apis),
         )
 
         self.log.debug(
             f"Entry Point Analysis: {analysis.entry_point_count}/{analysis.total_apis} "
-            f"({analysis.entry_point_ratio:.1%}) APIs are Entry Points"
+            f"({analysis.entry_point_ratio:.1%}) APIs are Entry Points "
+            f"({len(indirect_pairs)} indirect pairs across "
+            f"{len(analysis.indirect_consumer_names)} consumers)"
         )
 
         return analysis
@@ -485,10 +585,34 @@ class EntryPointAnalyzer:
                 'warning': 'no_entry_points_found'
             }
 
-        filtered = []
+        # Indirect-pair lookup: consumer_name -> ranked creator names.
+        creators_for_consumer = analysis.indirect_creators_for_consumer
+        indirect_consumers = analysis.indirect_consumer_names
+
+        # Strategy match must use *direct-only* names. If an indirect consumer
+        # short-circuited the strategy, the bare sequence would be kept without
+        # its creator and the resulting driver would deref a NULL handle.
+        direct_only_names = entry_names - indirect_consumers
+
+        filtered: List[List[str]] = []
+        injected_count = 0
         for seq in sequences:
-            if self._sequence_matches_strategy(seq, entry_names, strategy, n):
+            if direct_only_names and self._sequence_matches_strategy(
+                seq, direct_only_names, strategy, n
+            ):
                 filtered.append(seq)
+                continue
+            # Indirect path: a consumer in the prefix is acceptable as long as
+            # its creator appears earlier in the same sequence; otherwise we
+            # auto-inject the canonical creator at the head (mirrors L2's
+            # auto_complete approach).
+            patched = self._try_indirect_match(
+                seq, indirect_consumers, creators_for_consumer, strategy, n
+            )
+            if patched is not None:
+                if patched is not seq:
+                    injected_count += 1
+                filtered.append(patched)
 
         summary = {
             'strategy': strategy,
@@ -497,14 +621,59 @@ class EntryPointAnalyzer:
             'output': len(filtered),
             'reduction_ratio': round(1 - len(filtered) / len(sequences), 3) if sequences else 0,
             'entry_point_count': len(entry_names),
+            'indirect_pair_count': len(analysis.indirect_entry_points),
+            'indirect_creators_injected': injected_count,
         }
 
         self.log.debug(
             f"Entry Point Filter ({strategy}): {len(sequences)} -> {len(filtered)} sequences "
-            f"({summary['reduction_ratio']:.1%} reduction)"
+            f"({summary['reduction_ratio']:.1%} reduction, "
+            f"{injected_count} indirect creators auto-injected)"
         )
 
         return filtered, summary
+
+    def _try_indirect_match(self,
+                            seq: List[str],
+                            indirect_consumers: Set[str],
+                            creators_for_consumer: Dict[str, List[str]],
+                            strategy: str,
+                            n: int) -> Optional[List[str]]:
+        """Accept (and possibly auto-complete) sequences via indirect entries.
+
+        A sequence is accepted if some indirect *consumer* appears within the
+        first ``n+1`` positions and either:
+          a. one of its registered creators appears earlier in the sequence, or
+          b. no such creator is present — in which case we prepend the canonical
+             creator (first in the ranked list) at index 0.
+
+        Returns the (possibly patched) sequence, or ``None`` if no indirect
+        match could be made.
+        """
+        if not indirect_consumers or not seq:
+            return None
+        # The consumer must occur "near the head". Use n+1 because the indirect
+        # form unavoidably costs one extra slot for the creator.
+        if strategy in ("any", EntryPointFilterStrategy.ANY_POSITION.value):
+            window = len(seq)
+        elif strategy in ("first", EntryPointFilterStrategy.MUST_BE_FIRST.value):
+            # Strict-first does not make sense for indirect (creator must be first);
+            # fall back to "creator at 0, consumer at 1".
+            window = 2
+        else:
+            window = max(n + 1, 2)
+        for idx in range(min(window, len(seq))):
+            consumer_name = seq[idx]
+            if consumer_name not in indirect_consumers:
+                continue
+            creators = creators_for_consumer.get(consumer_name, [])
+            if not creators:
+                continue
+            if any(prev in creators for prev in seq[:idx]):
+                return seq  # already well-formed
+            # Auto-inject the canonical creator at the head.
+            return [creators[0]] + list(seq)
+        return None
 
     def _check_entry_point(self, api: Dict[str, Any]) -> Optional[EntryPointInfo]:
         """
@@ -580,6 +749,23 @@ class EntryPointAnalyzer:
                 if self.pattern.c_buffer_must_be_const and not is_const:
                     continue
 
+            # Reject if any *other* argument (not the buffer, not the size) is
+            # handle-shaped. Such APIs require a creator upstream and belong to
+            # the indirect entry-point pathway, not the direct one. This guards
+            # against e.g. `ucl_parser_add_chunk(parser*, data, size)` being
+            # treated as a standalone fuzz target — which would deref a NULL
+            # parser.
+            has_unrelated_handle = False
+            for other_idx, other_arg in enumerate(args):
+                if other_idx == arg_idx or other_idx == size_idx:
+                    continue
+                other_type = other_arg.get('type', other_arg.get('type_clang', ''))
+                if self._is_handle_type(other_type):
+                    has_unrelated_handle = True
+                    break
+            if has_unrelated_handle:
+                return None
+
             # Classify entry type based on function name
             entry_type = self._classify_entry_type(func_name)
 
@@ -597,6 +783,192 @@ class EntryPointAnalyzer:
             )
 
         return None
+
+    # Heuristic: arg types that almost certainly aren't *handles* and so should
+    # not register the API as an indirect consumer (avoids treating something
+    # like ``my_api(int flags, const uint8_t* data, size_t size)`` as needing
+    # an "int producer"). Buffer / size types are filtered separately.
+    _NON_HANDLE_PRIMITIVES: Tuple[str, ...] = (
+        "int", "long", "short", "char", "size_t", "ssize_t", "bool", "float",
+        "double", "void", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+        "int8_t", "int16_t", "int32_t", "int64_t", "unsigned",
+    )
+
+    # Creator name patterns ranked best-first when picking the canonical creator
+    # for an indirect entry's handle.
+    _CREATOR_PRIORITY_PATTERNS: Tuple[str, ...] = (
+        "_new", "_create", "_alloc", "_init", "_open",
+    )
+
+    # Production channels for handle delivery. Used to abstract away the C/C++
+    # idiomatic differences between "return the handle directly" and "write
+    # the handle into a caller-supplied out-pointer". Lower numeric weight =
+    # preferred when ranking competing creators.
+    _CHANNEL_RETURN: int = 0
+    _CHANNEL_OUT_POINTER: int = 1
+
+    def _check_indirect_consumer(
+        self, api: Dict[str, Any]
+    ) -> Optional[Tuple[EntryPointInfo, int, str]]:
+        """Detect APIs that consume fuzzer data *and* require a handle.
+
+        Returns ``(EntryPointInfo, handle_arg_index, handle_arg_type)`` if the
+        API has both a buffer-like input slot and at least one handle-typed
+        argument that isn't the buffer or its size. Returns ``None`` otherwise.
+
+        We require the API to NOT be a direct entry point; the caller already
+        filters that. The buffer search reuses the same matchers as
+        ``_check_entry_point`` to keep behaviour consistent.
+        """
+        args = api.get('arguments', api.get('arguments_info', []))
+        if not args:
+            return None
+        return_info = api.get('return_info', {})
+        if isinstance(return_info, dict):
+            return_type = return_info.get('type_clang', return_info.get('type', ''))
+        else:
+            return_type = api.get('return_type', '')
+
+        type_patterns = self.pattern.type_patterns
+
+        # Find a buffer-like argument, plus its size partner if applicable.
+        buffer_idx = -1
+        buffer_type = ""
+        size_idx = -1
+        size_type: Optional[str] = None
+        category: Optional[InputTypeCategory] = None
+        for arg_idx in range(len(args)):
+            arg = args[arg_idx]
+            arg_type = arg.get('type', arg.get('type_clang', ''))
+            is_const = self._get_is_const(arg)
+            cat = type_patterns.match_category(arg_type, is_const)
+            if cat is None or cat not in self.pattern.accepted_categories:
+                continue
+            if cat == InputTypeCategory.C_BUFFER_WITH_SIZE:
+                if self.pattern.c_buffer_must_be_const and not is_const:
+                    continue
+                size_info = self._find_size_argument(args, arg_idx)
+                if size_info is None:
+                    continue
+                size_idx, size_type = size_info
+            buffer_idx = arg_idx
+            buffer_type = arg_type
+            category = cat
+            break
+
+        if category is None:
+            return None
+
+        # Scan remaining args for a handle-shaped one. A "handle" here is an
+        # argument that's neither the buffer nor its size and whose type does
+        # not match a primitive scalar — i.e. it must be produced by another
+        # API. We pick the first such arg (commonly arg 0).
+        handle_idx = -1
+        handle_type = ""
+        for arg_idx in range(len(args)):
+            if arg_idx == buffer_idx or arg_idx == size_idx:
+                continue
+            arg = args[arg_idx]
+            arg_type = arg.get('type', arg.get('type_clang', ''))
+            if self._is_handle_type(arg_type):
+                handle_idx = arg_idx
+                handle_type = arg_type
+                break
+
+        if handle_idx < 0:
+            return None
+
+        func_name = api.get('function_name', '')
+        ep_info = EntryPointInfo(
+            function_name=func_name,
+            return_type=return_type,
+            arguments=args,
+            entry_type=EntryPointType.INDIRECT,
+            input_category=category,
+            input_arg_index=buffer_idx,
+            input_arg_type=buffer_type,
+            size_arg_index=size_idx,
+            size_arg_type=size_type,
+            confidence=0.9,  # slightly lower than direct: depends on creator pairing
+        )
+        return ep_info, handle_idx, handle_type
+
+    # The four handle-classification primitives below were lifted to
+    # ``liberator_adapter/analysis/usedef.py`` as the single source of
+    # truth (Aho/Sethi/Ullman §9 — reaching definitions / mod-ref summaries).
+    # These wrappers preserve the long-standing private-method signatures
+    # used by the rest of EntryPointAnalyzer; the bodies just delegate.
+
+    def _is_handle_type(self, type_str: str) -> bool:
+        from liberator_adapter.analysis.usedef import is_handle_type
+        return is_handle_type(type_str)
+
+    @staticmethod
+    def _normalize_handle_type(type_str: str) -> str:
+        from liberator_adapter.analysis.usedef import normalize_handle_type
+        return normalize_handle_type(type_str)
+
+    def _extract_produced_handles(
+        self, api: Dict[str, Any]
+    ) -> List[Tuple[str, int, float]]:
+        from liberator_adapter.analysis.usedef import extract_produced_handles
+        return extract_produced_handles(api)
+
+    def _consumed_handle_keys(self, api: Dict[str, Any]) -> Set[str]:
+        from liberator_adapter.analysis.usedef import consumed_handle_keys
+        return consumed_handle_keys(api)
+
+    def _find_buffer_size_positions(
+        self, args: List[Dict[str, Any]]
+    ) -> Tuple[int, int]:
+        """Locate the (buffer, size) arg pair if present; return (-1, -1) otherwise."""
+        type_patterns = self.pattern.type_patterns
+        for arg_idx, arg in enumerate(args):
+            arg_type = arg.get('type', arg.get('type_clang', ''))
+            is_const = self._get_is_const(arg)
+            cat = type_patterns.match_category(arg_type, is_const)
+            if cat != InputTypeCategory.C_BUFFER_WITH_SIZE:
+                continue
+            size_info = self._find_size_argument(args, arg_idx)
+            if size_info is None:
+                continue
+            return arg_idx, size_info[0]
+        return -1, -1
+
+    @staticmethod
+    def _count_pointer_levels(type_str: str) -> int:
+        """Pointer arity of ``type_str`` (``T`` = 0, ``T*`` = 1, ``T**`` = 2)."""
+        if not type_str:
+            return 0
+        return InputTypePatterns.normalize_type(type_str).count("*")
+
+    @staticmethod
+    def _strip_one_pointer_level(type_str: str) -> Optional[str]:
+        """Return ``type_str`` with one trailing pointer level removed.
+
+        ``"foo **"`` -> ``"foo *"``; ``"foo *"`` -> ``"foo"``. Returns ``None``
+        when the type isn't a pointer.
+        """
+        if not type_str:
+            return None
+        normalized = InputTypePatterns.normalize_type(type_str)
+        if "*" not in normalized:
+            return None
+        # normalize_type renders pointers as " *"; strip the last occurrence.
+        idx = normalized.rfind("*")
+        return (normalized[:idx] + normalized[idx + 1:]).strip().rstrip(" *") + (
+            "" if normalized.count("*") == 1 else " *"
+        )
+
+    @staticmethod
+    def _extract_return_type(api: Dict[str, Any]) -> str:
+        """Pull the return type, handling both top-level and nested layouts."""
+        return_info = api.get('return_info')
+        if isinstance(return_info, dict) and return_info:
+            rt = return_info.get('type_clang') or return_info.get('type')
+            if rt:
+                return rt
+        return api.get('return_type', '') or ''
 
     def _get_is_const(self, arg: Dict[str, Any]) -> bool:
         """Extract const qualifier from argument.

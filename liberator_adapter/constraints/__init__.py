@@ -7,17 +7,11 @@ from .Conditions        import Conditions
 from .ConditionManager import ConditionManager
 from .RunningContext    import RunningContext, ConditionUnsat
 
-# Sequence Filter (LLM-based filtering)
-from .sequence_filter import (
-    SequenceFilter,           # Basic filter
-    LLMLifecycleValidator,    # LLM lifecycle validator
-    LLMSequenceFilter,        # LLM sequence filter (main usage)
-    APILifecyclePhase,
-    APILifecycleInfo,
-    FilterResult,
-    LifecycleValidationResult,
-    LLMClient,                # LLM client protocol
-)
+# Note: the former ``sequence_filter`` module was removed during the L2/L3
+# Typestate consolidation. The LLM-driven validator it provided was a parallel
+# encoding of the resource-typestate concept now centralised in
+# ``liberator_adapter/analysis/usedef.py`` (``Typestate.check``); the LLM
+# oracle role is now an extension point of ``analysis/edsm.py``.
 
 # L1: Entry Point Analyzer (Progressive Filter Pipeline)
 from .entry_point_analyzer import (
@@ -73,7 +67,6 @@ from .coverage_ranker import (
 from .coverage_aware_filter import (
     CoverageAwareFilter,
     CoverageAwareResult,
-    get_function_coverage_from_introspector,
     get_coverage_from_textcov,
 )
 

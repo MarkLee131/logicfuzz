@@ -1,0 +1,20 @@
+Library: {LIBRARY_NAME}
+Library purpose: {LIBRARY_PURPOSE}
+
+Candidate sequence (calls executed in order):
+
+{SEQUENCE}
+
+Per-API usage notes (verified earlier):
+
+{API_USAGES}
+
+Static-analysis facts (lifecycle / state-machine — already satisfied, do not relitigate):
+
+{STATIC_FACTS}
+
+Allowed API pool for any patched sequence:
+
+{ALLOWED_APIS}
+
+Judge the sequence and emit the JSON now.

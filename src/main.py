@@ -24,7 +24,6 @@ from multiprocessing import Pool, Process
 from typing import Any
 
 import run_single_fuzz
-from data_prep import introspector
 from experiment import benchmark as benchmarklib
 from experiment import evaluator, oss_fuzz_checkout, textcov
 from experiment.workdir import WorkDirs
@@ -83,25 +82,13 @@ class Result:
     self.result = result
 
 def generate_benchmarks(args: argparse.Namespace) -> None:
-  """Generates benchmarks, write to filesystem and set args benchmark dir."""
-  logger.info('Generating benchmarks.')
-  benchmark_dir = introspector.get_next_generated_benchmarks_dir()
-  logger.info('Setting benchmark directory to %s.', benchmark_dir)
-  os.makedirs(benchmark_dir)
-  args.benchmarks_directory = benchmark_dir
-  benchmark_oracles = [
-      heuristic.strip() for heuristic in args.generate_benchmarks.split(',')
-  ]
-  projects_to_target = [
-      project.strip()
-      for project in args.generate_benchmarks_projects.split(',')
-  ]
-  for project in projects_to_target:
-    project_lang = oss_fuzz_checkout.get_project_language(project)
-    benchmarks = introspector.populate_benchmarks_using_introspector(
-        project, project_lang, args.generate_benchmarks_max, benchmark_oracles)
-    if benchmarks:
-      benchmarklib.Benchmark.to_yaml(benchmarks, outdir=benchmark_dir)
+  """The FI-driven benchmark generator was removed.
+
+  Provide benchmarks via ``--benchmark-yaml`` or ``--benchmarks-directory``.
+  """
+  raise SystemExit(
+      "--generate-benchmarks is no longer supported (FuzzIntrospector "
+      "harness oracle removed). Pass an explicit YAML via --benchmark-yaml.")
 
 def prepare_experiment_targets(
     args: argparse.Namespace) -> list[benchmarklib.Benchmark]:
@@ -1272,10 +1259,14 @@ def parse_args() -> argparse.Namespace:
                       action='store_true',
                       default=False,
                       help='Add context to function under test.')
-  parser.add_argument('-e',
-                      '--introspector-endpoint',
-                      type=str,
-                      default=introspector.DEFAULT_INTROSPECTOR_ENDPOINT)
+  parser.add_argument(
+      '-e',
+      '--introspector-endpoint',
+      type=str,
+      default='',
+      help=('Optional Fuzz Introspector endpoint override. Coverage queries '
+            'use the cloud OSS-Fuzz endpoint by default; set this (or the '
+            'LOGICFUZZ_FI_ENDPOINT env var) to point at a private mirror.'))
   parser.add_argument(
       '-lo',
       '--log-level',
@@ -1290,10 +1281,8 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
       '-g',
       '--generate-benchmarks',
-      help=('Generate benchmarks and use those for analysis. This is a string '
-            'of comma-separated heuristics to use when identifying benchmark '
-            'targets. Options available: '
-            f'{", ".join(introspector.get_oracle_dict().keys())}.'),
+      help=('[DEPRECATED] FuzzIntrospector benchmark generation was removed; '
+            'pass an explicit benchmark YAML via --benchmark-yaml.'),
       type=str)
   parser.add_argument(
       '-gp',
@@ -1395,44 +1384,23 @@ def parse_args() -> argparse.Namespace:
   return args
 
 def extend_report_with_coverage_gains() -> None:
-  """Process total gain from all generated harnesses for each projects and
-  update summary report. This makes it possible to view per-project stats
-  as experiments complete rather than only after all experiments run."""
+  """Aggregate per-project coverage gains and write them into the run report.
+
+  Per-language relative gain (vs. OSS-Fuzz baseline) was removed together with
+  the FI ``database-language-stats`` call; the per-project summary remains the
+  authoritative output for the experiment.
+  """
   coverage_gain_dict = _process_total_coverage_gain()
-  existing_oss_fuzz_cov = introspector.query_introspector_language_stats()
 
-  total_new_covgains = {}
+  total_new_covgains: dict = {}
   for project_dict in coverage_gain_dict.values():
-    lang_gains = total_new_covgains.get(project_dict.get('language', 'c'), 0)
-    lang_gains += project_dict.get('coverage_ofg_total_new_covered_lines', 0)
-    total_new_covgains[project_dict.get('language', 'c')] = lang_gains
+    lang = project_dict.get('language', 'c')
+    total_new_covgains[lang] = total_new_covgains.get(lang, 0) + \
+        project_dict.get('coverage_ofg_total_new_covered_lines', 0)
 
-  comparative_cov_gains = {}
-  for language, lang_cov_gain in total_new_covgains.items():
-    try:
-      total_coverage_increase = round(
-          (lang_cov_gain / existing_oss_fuzz_cov[language]['total']) * 100.0,
-          10)
-    except (KeyError, ZeroDivisionError):
-      total_coverage_increase = 0
-
-    try:
-      relative_coverage_increase = round(
-          (lang_cov_gain / existing_oss_fuzz_cov[language]['covered']) * 100.0,
-          10)
-    except (KeyError, ZeroDivisionError):
-      relative_coverage_increase = 0
-    comparative_cov_gains[language] = {
-        'total_coverage_increase': total_coverage_increase,
-        'relative_coverage_increase': relative_coverage_increase,
-    }
   add_to_json_report(WORK_DIR, 'coverage_gains_per_language',
                      total_new_covgains)
   add_to_json_report(WORK_DIR, 'project_summary', coverage_gain_dict)
-  add_to_json_report(WORK_DIR, 'oss_fuzz_language_status',
-                     existing_oss_fuzz_cov)
-  add_to_json_report(WORK_DIR, 'comperative_coverage_gains',
-                     comparative_cov_gains)
 
 def extend_report_with_coverage_gains_process():
   """A process that continuously runs to update coverage gains in the
@@ -1745,9 +1713,10 @@ def main():
   # Add num_samples to report.json
   add_to_json_report(args.work_dir, 'num_samples', args.num_samples)
 
-  # Set introspector endpoint before performing any operations to ensure the
-  # right API endpoint is used throughout.
-  introspector.set_introspector_endpoints(args.introspector_endpoint)
+  # Forward the endpoint override (if any) to the data_context FI helper via
+  # an env var. Coverage queries default to the public OSS-Fuzz introspector.
+  if args.introspector_endpoint:
+    os.environ['LOGICFUZZ_FI_ENDPOINT'] = args.introspector_endpoint
 
   run_single_fuzz.prepare(args.oss_fuzz_dir)
 

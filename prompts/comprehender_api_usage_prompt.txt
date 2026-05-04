@@ -1,0 +1,12 @@
+Library: {LIBRARY_NAME}
+Library purpose: {LIBRARY_PURPOSE}
+
+Static-analysis facts you may rely on (already verified, do not contradict):
+
+{STATIC_FACTS}
+
+API batch (each line: `<return_type> <name>(<args>);`):
+
+{API_SIGNATURES}
+
+Return the JSON map of usage notes now.

@@ -41,6 +41,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from experiment import oss_fuzz_checkout
+from tools.merge_drivers.merge import SynthesizedDriver  # for --fuzz-target-dir mode
 
 logging.basicConfig(
     level=logging.INFO,
@@ -141,10 +142,15 @@ class ExtendedFuzzer:
         sanitizer: str = "address",
         fuzzer_name: Optional[str] = None,
         skip_build: bool = False,
-        use_existing_build_dir: Optional[str] = None
+        use_existing_build_dir: Optional[str] = None,
+        fuzz_target_dir: Optional[str] = None,
+        merged_build_libs: str = "",
+        merged_build_includes: str = "",
+        seed_corpus_dir: Optional[str] = None,
     ):
         self.project = project
-        self.fuzz_target_path = Path(fuzz_target_path)
+        self.fuzz_target_path = Path(fuzz_target_path) if fuzz_target_path else None
+        self.fuzz_target_dir = Path(fuzz_target_dir) if fuzz_target_dir else None
         self.output_dir = Path(output_dir)
         self.duration = duration
         self.snapshot_interval = snapshot_interval
@@ -152,6 +158,13 @@ class ExtendedFuzzer:
         self.fuzzer_name = fuzzer_name
         self.skip_build = skip_build
         self.use_existing_build_dir = use_existing_build_dir
+        self.merged_build_libs = merged_build_libs
+        self.merged_build_includes = merged_build_includes
+        self.seed_corpus_dir = Path(seed_corpus_dir) if seed_corpus_dir else None
+        if (self.fuzz_target_path is None) == (self.fuzz_target_dir is None):
+            raise ValueError(
+                "exactly one of fuzz_target_path / fuzz_target_dir is required"
+            )
 
         # Create output directories
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -179,6 +192,22 @@ class ExtendedFuzzer:
 
     def _ensure_seed_corpus(self):
         """Ensure corpus has at least one seed file for LibFuzzer to start."""
+        # If caller supplied a pre-tagged seed corpus (e.g. corpus_merged/
+        # from tools/merge_drivers pipeline), copy it in first.
+        if self.seed_corpus_dir and self.seed_corpus_dir.is_dir():
+            n = 0
+            for src in self.seed_corpus_dir.iterdir():
+                if not src.is_file():
+                    continue
+                dst = self.corpus_dir / src.name
+                if not dst.exists():
+                    shutil.copy(src, dst)
+                    n += 1
+            if n:
+                logger.info(
+                    f"Copied {n} pre-tagged seeds from {self.seed_corpus_dir}"
+                )
+
         corpus_files = list(self.corpus_dir.glob("*"))
         if not corpus_files:
             # Create minimal seed inputs for common fuzzing scenarios
@@ -199,7 +228,8 @@ class ExtendedFuzzer:
             logger.info(f"Created {len(seeds)} seed corpus files in {self.corpus_dir}")
 
     def _read_fuzz_target(self) -> str:
-        """Read fuzz target source code."""
+        """Read fuzz target source code (single-file mode only)."""
+        assert self.fuzz_target_path is not None
         with open(self.fuzz_target_path, 'r') as f:
             return f.read()
 
@@ -219,85 +249,150 @@ class ExtendedFuzzer:
         return Path(oss_fuzz_checkout.OSS_FUZZ_DIR)
 
     def _setup_oss_fuzz_project(self) -> bool:
-        """Setup OSS-Fuzz project with our fuzz target."""
+        """Setup OSS-Fuzz project with our fuzz target (single file or merged dir)."""
         logger.info(f"Setting up OSS-Fuzz project for {self.project}...")
-
         try:
             oss_fuzz_dir = self._get_oss_fuzz_dir()
-
-            # Create a unique project name for this run
             timestamp = int(time.time())
             self.generated_project_name = f"{self.project}-ext-{timestamp}"
-
-            # Copy the original project
             src_project = oss_fuzz_dir / "projects" / self.project
             dst_project = oss_fuzz_dir / "projects" / self.generated_project_name
-
             if not src_project.exists():
                 logger.error(f"Project {self.project} not found in OSS-Fuzz")
                 return False
-
             shutil.copytree(src_project, dst_project)
 
-            # Copy our fuzz target to the project
-            target_basename = self.fuzz_target_path.name
-            shutil.copy(self.fuzz_target_path, dst_project / target_basename)
-
-            # Determine the target name in the build
-            if self.fuzzer_name:
-                target_name = self.fuzzer_name
-            else:
-                # Try to infer from the file
-                target_name = self.fuzz_target_path.stem
-                # Handle files like "01.fuzz_target" or "02.fuzz_target"
-                # stem gives "01" or "02", which are not good fuzzer names
-                if target_name.isdigit() or target_name in ('01', '02', '03', '04', '05'):
-                    target_name = f"{self.project}_fuzzer"
-                elif target_name.startswith(('01.', '02.', '03.')):
-                    target_name = f"{self.project}_fuzzer"
-
-            self.target_name = target_name
-            logger.info(f"Using target name: {self.target_name}")
-
-            # Update Dockerfile to copy our target
-            dockerfile = dst_project / "Dockerfile"
-            with open(dockerfile, 'a') as f:
-                f.write(f'\nCOPY {target_basename} /src/{target_basename}\n')
-
-            # Modify build.sh to include our target
-            # This ensures our fuzz target gets compiled
-            build_sh = dst_project / "build.sh"
-            if build_sh.exists():
-                with open(build_sh, 'r') as f:
-                    build_content = f.read()
-
-                # Add compilation for our target at the end
-                target_ext = self.fuzz_target_path.suffix
-                if target_ext in ['.c', '.cc', '.cpp', '.cxx']:
-                    compile_cmd = f'''
-# Compile extended fuzzing target
-$CXX $CXXFLAGS -c /src/{target_basename} -o /tmp/ext_fuzzer.o
-$CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} ${{LDFLAGS:-}}
-'''
-                    # Try to find library link flags from existing build.sh
-                    # Look for patterns like -lcjson, -lz, etc.
-                    import re
-                    lib_matches = re.findall(r'-l\w+', build_content)
-                    if lib_matches:
-                        libs = ' '.join(set(lib_matches))
-                        compile_cmd = compile_cmd.replace('${LDFLAGS:-}', f'${{LDFLAGS:-}} {libs}')
-
-                    with open(build_sh, 'a') as f:
-                        f.write(compile_cmd)
-
-            logger.info(f"Created project {self.generated_project_name}")
-            return True
-
+            if self.fuzz_target_dir is not None:
+                return self._setup_merged_dir(dst_project)
+            return self._setup_single_file(dst_project)
         except Exception as e:
             logger.error(f"Failed to setup project: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
+
+    def _setup_single_file(self, dst_project: Path) -> bool:
+        """Single-file fuzz target — original behavior."""
+        assert self.fuzz_target_path is not None
+        target_basename = self.fuzz_target_path.name
+        shutil.copy(self.fuzz_target_path, dst_project / target_basename)
+
+        if self.fuzzer_name:
+            target_name = self.fuzzer_name
+        else:
+            target_name = self.fuzz_target_path.stem
+            if target_name.isdigit() or target_name in ('01', '02', '03', '04', '05'):
+                target_name = f"{self.project}_fuzzer"
+            elif target_name.startswith(('01.', '02.', '03.')):
+                target_name = f"{self.project}_fuzzer"
+        self.target_name = target_name
+        logger.info(f"Using target name: {self.target_name}")
+
+        dockerfile = dst_project / "Dockerfile"
+        with open(dockerfile, 'a') as f:
+            f.write(f'\nCOPY {target_basename} /src/{target_basename}\n')
+
+        build_sh = dst_project / "build.sh"
+        if build_sh.exists():
+            with open(build_sh, 'r') as f:
+                build_content = f.read()
+            target_ext = self.fuzz_target_path.suffix
+            if target_ext in ['.c', '.cc', '.cpp', '.cxx']:
+                compile_cmd = f'''
+# Compile extended fuzzing target
+$CXX $CXXFLAGS -c /src/{target_basename} -o /tmp/ext_fuzzer.o
+$CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} ${{LDFLAGS:-}}
+'''
+                import re
+                lib_matches = re.findall(r'-l\w+', build_content)
+                if lib_matches:
+                    libs = ' '.join(set(lib_matches))
+                    compile_cmd = compile_cmd.replace('${LDFLAGS:-}', f'${{LDFLAGS:-}} {libs}')
+                with open(build_sh, 'a') as f:
+                    f.write(compile_cmd)
+        logger.info(f"Created project {self.generated_project_name}")
+        return True
+
+    def _setup_merged_dir(self, dst_project: Path) -> bool:
+        """Merged synthesized/ directory — emit OSS-Fuzz build snippet.
+
+        Expects ``self.fuzz_target_dir`` to point at a synthesized/
+        directory produced by ``tools/merge_drivers`` containing each
+        sub-driver TU plus an ``entry.{c,cpp}``.
+        """
+        assert self.fuzz_target_dir is not None
+        if not self.fuzz_target_dir.is_dir():
+            logger.error(f"fuzz_target_dir not a directory: {self.fuzz_target_dir}")
+            return False
+
+        target_name = self.fuzzer_name or f"{self.project}_synth_fuzzer"
+        self.target_name = target_name
+        logger.info(f"Using merged target name: {self.target_name}")
+
+        # Copy synthesized/ into the OSS-Fuzz project.
+        dst_synth = dst_project / "synthesized"
+        if dst_synth.exists():
+            shutil.rmtree(dst_synth)
+        shutil.copytree(self.fuzz_target_dir, dst_synth)
+
+        # Dockerfile: COPY synthesized into /src/
+        dockerfile = dst_project / "Dockerfile"
+        with open(dockerfile, 'a') as f:
+            f.write("\nCOPY synthesized /src/synthesized\n")
+
+        # Reconstruct a SynthesizedDriver from the on-disk files just
+        # to derive is_cpp + a build snippet aligned with what merge.py
+        # would emit. We pick up *.c/*.cpp/*.cc/*.cxx but exclude entry
+        # — actually entry is part of the same set; the snippet's
+        # for-loop compiles every TU including entry, which is correct.
+        sources = (
+            sorted(self.fuzz_target_dir.glob("*.c"))
+            + sorted(self.fuzz_target_dir.glob("*.cpp"))
+            + sorted(self.fuzz_target_dir.glob("*.cc"))
+            + sorted(self.fuzz_target_dir.glob("*.cxx"))
+        )
+        if not sources:
+            logger.error(f"No C/C++ files in {self.fuzz_target_dir}")
+            return False
+
+        # Auto-detect lib link flags from project's existing build.sh
+        # (matches single-file behavior).
+        build_sh = dst_project / "build.sh"
+        extra_libs = self.merged_build_libs
+        if build_sh.exists() and not extra_libs:
+            import re
+            content = build_sh.read_text()
+            lib_matches = re.findall(r'-l\w+', content)
+            if lib_matches:
+                extra_libs = ' '.join(sorted(set(lib_matches)))
+
+        # Drop the entry from the SynthesizedDriver list — emit_oss_fuzz_
+        # build_snippet only needs the language/N for snippet shape.
+        # We keep entry in the on-disk dir so it gets compiled.
+        non_entry_sources = [s for s in sources if s.stem != "entry"]
+        if not non_entry_sources:
+            logger.error("No sub-driver TUs found beside entry.*")
+            return False
+        try:
+            drv = SynthesizedDriver.from_paths(non_entry_sources)
+        except ValueError as e:
+            logger.error(f"merged synth driver invalid: {e}")
+            return False
+
+        snippet = drv.emit_oss_fuzz_build_snippet(
+            target_name=target_name,
+            extra_libs=extra_libs,
+            extra_includes=self.merged_build_includes,
+            synth_dir_var="/src/synthesized",
+        )
+        with open(build_sh, 'a') as f:
+            f.write(snippet)
+        logger.info(
+            f"Created merged project {self.generated_project_name} "
+            f"({drv.driver_count} sub-drivers, "
+            f"libs='{extra_libs}', includes='{self.merged_build_includes}')"
+        )
+        return True
 
     def _build_docker_image(self) -> bool:
         """Build OSS-Fuzz project image."""
@@ -770,7 +865,7 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
 
         result = ExtendedFuzzingResult(
             project=self.project,
-            fuzz_target_path=str(self.fuzz_target_path),
+            fuzz_target_path=str(self.fuzz_target_path or self.fuzz_target_dir),
             duration_seconds=self.duration,
             start_time=start_time.isoformat(),
             end_time="",
@@ -933,8 +1028,34 @@ def main():
     )
     parser.add_argument(
         "--fuzz-target", "-f",
-        required=True,
-        help="Path to generated fuzz target file"
+        default=None,
+        help="Path to a single fuzz target source file"
+    )
+    parser.add_argument(
+        "--fuzz-target-dir",
+        default=None,
+        help="Path to a synthesized/ directory produced by "
+             "tools/merge_drivers (multi-TU merged harness)"
+    )
+    parser.add_argument(
+        "--seed-corpus-dir",
+        default=None,
+        help="Optional pre-tagged seed corpus to copy into corpus/ "
+             "before fuzzing starts (e.g. corpus_merged/ from "
+             "tools/merge_drivers pipeline)"
+    )
+    parser.add_argument(
+        "--merged-libs",
+        default="",
+        help="(merged-dir mode) extra link libs for the merged harness "
+             "build snippet (default: auto-detect -l flags from project's "
+             "build.sh)"
+    )
+    parser.add_argument(
+        "--merged-includes",
+        default="",
+        help="(merged-dir mode) extra -I flags for the merged harness "
+             "build snippet"
     )
     parser.add_argument(
         "--duration", "-d",
@@ -982,15 +1103,28 @@ def main():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.output_dir = f"results/extended_fuzzing/{args.project}/{timestamp}"
 
-    # Validate fuzz target exists
-    if not os.path.exists(args.fuzz_target):
+    # Validate fuzz target spec — exactly one of --fuzz-target /
+    # --fuzz-target-dir is required.
+    if (args.fuzz_target is None) == (args.fuzz_target_dir is None):
+        logger.error(
+            "exactly one of --fuzz-target / --fuzz-target-dir is required"
+        )
+        sys.exit(2)
+    if args.fuzz_target and not os.path.exists(args.fuzz_target):
         logger.error(f"Fuzz target not found: {args.fuzz_target}")
+        sys.exit(1)
+    if args.fuzz_target_dir and not os.path.isdir(args.fuzz_target_dir):
+        logger.error(f"Fuzz target dir not found: {args.fuzz_target_dir}")
         sys.exit(1)
 
     # Run extended fuzzing
     fuzzer = ExtendedFuzzer(
         project=args.project,
         fuzz_target_path=args.fuzz_target,
+        fuzz_target_dir=args.fuzz_target_dir,
+        seed_corpus_dir=args.seed_corpus_dir,
+        merged_build_libs=args.merged_libs,
+        merged_build_includes=args.merged_includes,
         output_dir=args.output_dir,
         duration=args.duration,
         snapshot_interval=args.snapshot_interval,

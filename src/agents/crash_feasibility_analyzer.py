@@ -1,8 +1,9 @@
 """
 LangGraphCrashFeasibilityAnalyzer agent for LangGraph workflow.
 
-This agent analyzes whether a crash is reachable from the project's external entry points.
-Refactored to use consolidated tools for reduced token usage.
+Analyzes whether a crash is reachable from the project's external entry points.
+The FuzzIntrospector tool surface was removed; the agent only retains the bash
+inspection tool for container exploration.
 """
 import argparse
 import os
@@ -15,19 +16,12 @@ from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.utils.prompt_loader import get_prompt_manager
 from src.tools.execution import BashExecuteTool
-from src.tools.introspector import FuzzIntrospectorQueryTool, QueryType
 
 
 class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
-    """
-    Crash feasibility analyzer agent for LangGraph - analyzes crash reachability.
-
-    Uses ToolCallingMixin for standardized multi-round tool interaction.
-    Provides 2 consolidated tools: bash execution and FuzzIntrospector queries.
-    """
+    """Crash feasibility analyzer with bash-only tool access."""
 
     def __init__(self, model_name: str, trial: int, args: argparse.Namespace):
-        # Load system prompt from file
         prompt_manager = get_prompt_manager()
         system_message = prompt_manager.get_system_prompt(
             "crash_feasibility_analyzer")
@@ -38,8 +32,7 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
                          args=args,
                          system_message=system_message)
         self.inspect_tool = None
-        self.fi_tool = None  # FuzzIntrospector tool
-        self.benchmark = None  # Store benchmark for FI tool initialization
+        self.benchmark = None
         self.project_name = None
 
     # =========================================================================
@@ -47,24 +40,9 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
     # =========================================================================
 
     def get_tools(self) -> List[BaseTool]:
-        """Return consolidated tools for crash feasibility analysis.
-
-        Uses 2 tools instead of 9:
-        - BashExecuteTool: For container command execution
-        - FuzzIntrospectorQueryTool: Unified tool for all FI queries
-        """
+        """Return bash execution only; FI tool surface removed."""
         return [
             BashExecuteTool(executor=self._execute_bash),
-            FuzzIntrospectorQueryTool(
-                get_implementation=self._get_function_implementation,
-                get_signature=self._get_function_signature,
-                get_cross_refs=self._get_sample_cross_references,
-                get_type_defs=self._get_type_definitions,
-                get_headers=self._get_headers_for_function,
-                get_tests=self._get_tests_for_functions,
-                get_debug_types=self._get_function_debug_types,
-                get_by_return_type=self._get_functions_by_return_type,
-            ),
         ]
 
     def parse_response(self, content: str) -> Dict[str, Any]:
@@ -150,107 +128,6 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
 
         return str(result)
 
-    def _get_function_implementation(self, function_name: str) -> str:
-        """Get function implementation via FuzzIntrospector."""
-        impl = self.fi_tool.get_function_implementation(
-            self.project_name, function_name)
-        if impl:
-            return f"Function implementation for '{function_name}':\n```c\n{impl}\n```"
-        return f"Error: Could not find implementation for function '{function_name}'"
-
-    def _get_function_signature(self, function_name: str) -> str:
-        """Get function signature via FuzzIntrospector."""
-        signature = self.fi_tool.get_function_signature(function_name)
-        if signature:
-            return f"Function signature: {signature}"
-        return f"Error: Could not find signature for function '{function_name}'"
-
-    def _get_sample_cross_references(self, function_signature: str) -> str:
-        """Get sample cross references via FuzzIntrospector."""
-        cross_refs = self.fi_tool.get_sample_cross_references(
-            function_signature)
-        if cross_refs:
-            result = f"Sample usage examples for '{function_signature}':\n\n"
-            for i, ref in enumerate(cross_refs[:5], 1):  # Limit to 5 examples
-                result += f"Example {i}:\n```c\n{ref}\n```\n\n"
-            return result
-        return f"No cross-references found for '{function_signature}'"
-
-    def _get_type_definitions(self) -> str:
-        """Get type definitions via FuzzIntrospector."""
-        type_defs = self.fi_tool.get_type_definitions()
-        if type_defs:
-            result = "Type definitions in project:\n\n"
-            for typedef in type_defs[:
-                                     20]:  # Limit to 20 to avoid token overflow
-                name = typedef.get("name", "Unknown")
-                kind = typedef.get("kind", "Unknown")
-                defn = typedef.get("definition", "")
-                result += f"- {name} ({kind})\n"
-                if defn:
-                    result += f"  ```c\n  {defn}\n  ```\n"
-            if len(type_defs) > 20:
-                result += f"\n... and {len(type_defs) - 20} more type definitions"
-            return result
-        return "No type definitions found"
-
-    def _get_headers_for_function(self, function_signature: str) -> str:
-        """Get headers for function via FuzzIntrospector."""
-        headers = self.fi_tool.get_headers_for_function(function_signature)
-        if headers:
-            result = f"Required headers for '{function_signature}':\n"
-            for header in headers:
-                result += f"  #include <{header}>\n"
-            return result
-        return f"No header information found for '{function_signature}'"
-
-    def _get_tests_for_functions(self, function_names: List[str]) -> str:
-        """Get tests for functions via FuzzIntrospector."""
-        tests = self.fi_tool.get_tests_for_functions(function_names)
-        if tests:
-            result = f"Test examples for functions: {', '.join(function_names)}\n\n"
-            for func, test_code in tests.items():
-                if test_code:
-                    result += f"Tests for '{func}':\n```c\n{test_code}\n```\n\n"
-            return result
-        return f"No tests found for functions: {', '.join(function_names)}"
-
-    def _get_function_debug_types(self, function_signature: str) -> str:
-        """Get function debug types via FuzzIntrospector."""
-        debug_types = self.fi_tool.get_function_debug_types(function_signature)
-        if debug_types:
-            result = f"Debug type information for '{function_signature}':\n"
-            for i, dtype in enumerate(debug_types, 1):
-                result += f"  Parameter {i}: {dtype}\n"
-            return result
-        return f"No debug type information found for '{function_signature}'"
-
-    def _get_functions_by_return_type(self, return_type: str) -> str:
-        """Get functions by return type via FuzzIntrospector."""
-        functions = self.fi_tool.get_functions_by_return_type(return_type)
-        if functions:
-            result = f"Functions returning '{return_type}':\n"
-            for func in functions[:10]:  # Limit to 10
-                func_name = func.get("function_name", "Unknown")
-                func_sig = func.get("function_signature", "")
-                result += f"  - {func_name}\n"
-                if func_sig:
-                    result += f"    Signature: {func_sig}\n"
-            if len(functions) > 10:
-                result += f"\n... and {len(functions) - 10} more functions"
-            return result
-        return f"No functions found returning '{return_type}'"
-
-    def _init_fi_tool(self):
-        """Initialize FuzzIntrospector tool for the project."""
-        if self.fi_tool is None and self.benchmark is not None:
-            from tool.fuzz_introspector_tool import FuzzIntrospectorTool
-            logger.info(
-                f"Initializing FuzzIntrospector for project: {self.benchmark.project}",
-                trial=self.trial)
-            self.fi_tool = FuzzIntrospectorTool(self.benchmark)
-            self.project_name = self.benchmark.project
-
     # =========================================================================
     # Main Execution
     # =========================================================================
@@ -286,9 +163,6 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         self.inspect_tool = ProjectContainerTool(benchmark)
         self.inspect_tool.compile(
             extra_commands=' && rm -rf /out/* > /dev/null')
-
-        # Initialize FuzzIntrospector tool for API calls
-        self._init_fi_tool()
 
         # Get function requirements
         function_requirements = self._get_function_requirements(state)
