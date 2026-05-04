@@ -64,6 +64,15 @@ class _UnionFind:
         if self.rank[ra] == self.rank[rb]:
             self.rank[ra] += 1
 
+    def extend(self, new_ids: Iterable[int]) -> None:
+        """Add fresh node ids (Phase G incremental). Existing parent/rank
+        entries are left untouched so prior merges survive.
+        """
+        for i in new_ids:
+            if i not in self.parent:
+                self.parent[i] = i
+                self.rank[i] = 0
+
 
 # ----------------------------------------------------------------------- context
 
@@ -289,4 +298,113 @@ def merge(pta: PrefixTreeAcceptor,
         n_oracle_no=n_no,
         n_oracle_uncertain=n_uncertain,
         library_name=library_name,
+    )
+
+
+def incremental_merge(
+    prev_result: EDSMResult,
+    pta: PrefixTreeAcceptor,
+    new_node_ids: Iterable[int],
+    oracle: Optional[OracleFn] = None,
+    library_name: str = "",
+    library_purpose: str = "",
+    min_score_to_merge: float = 1.5,
+    max_merges: Optional[int] = None,
+) -> EDSMResult:
+    """Phase G: extend a previous EDSM merge with newly-added PTA nodes.
+
+    Preserves every union from ``prev_result.uf`` and only proposes new pairs
+    where at least one of (a, b) is in ``new_node_ids``. Same scoring rule
+    as :func:`merge`, same min-score threshold; the goal is *consistency*
+    with the prior pass, not re-derivation.
+
+    Iteration cost is bounded by ``|new_node_ids| × |bucket|`` instead of
+    ``|bucket|²`` for a full re-merge; on a project with stable typestate
+    buckets this gives roughly linear-time updates as the corpus grows.
+
+    Reference: Lang/Pearlmutter/Price 1998 §6 — incremental updates are
+    discussed informally; the standard practice (followed here) is to
+    apply scoring only on candidate pairs touching newly-added nodes.
+    """
+    new_ids = set(new_node_ids)
+    uf = prev_result.uf
+    uf.extend(new_ids)
+
+    ctx = EDSMContext(
+        pta=pta, uf=uf,
+        library_name=library_name or prev_result.library_name,
+        library_purpose=library_purpose,
+    )
+
+    # Bucket the entire (now grown) PTA by state vector — same as merge().
+    by_state: Dict = {}
+    for nid, node in pta.nodes.items():
+        by_state.setdefault(node.state, []).append(nid)
+
+    proposals: List[MergeProposal] = []
+    n_evaluated = (
+        prev_result.n_proposals_evaluated
+    )  # cumulative
+    n_yes = prev_result.n_oracle_yes
+    n_no = prev_result.n_oracle_no
+    n_uncertain = prev_result.n_oracle_uncertain
+    delta_evaluated = 0
+
+    for state, nids in by_state.items():
+        if len(nids) < 2:
+            continue
+        nids.sort()
+        for i in range(len(nids)):
+            for j in range(i + 1, len(nids)):
+                a_id, b_id = nids[i], nids[j]
+                # Phase-G filter: at least one side must be a new node.
+                if a_id not in new_ids and b_id not in new_ids:
+                    continue
+                a = pta.nodes[a_id]
+                b = pta.nodes[b_id]
+                if not _state_compatibility(a, b):
+                    continue
+                verdict: OracleVerdict = None
+                if oracle is not None:
+                    try:
+                        verdict = oracle(a, b, ctx)
+                    except Exception:
+                        verdict = None
+                delta_evaluated += 1
+                if verdict is True:
+                    n_yes += 1
+                elif verdict is False:
+                    n_no += 1
+                else:
+                    n_uncertain += 1
+                proposals.append(_score_merge(ctx, a, b, verdict))
+
+    proposals.sort(key=lambda p: p.score, reverse=True)
+    n_applied = prev_result.n_merges_applied
+    delta_applied = 0
+    for prop in proposals:
+        if max_merges is not None and delta_applied >= max_merges:
+            break
+        if prop.score < min_score_to_merge:
+            break
+        ra = uf.find(prop.a_rep)
+        rb = uf.find(prop.b_rep)
+        if ra == rb:
+            continue
+        uf.union(ra, rb)
+        delta_applied += 1
+    n_applied += delta_applied
+    n_evaluated += delta_evaluated
+
+    output_classes = {uf.find(nid) for nid in pta.nodes}
+    return EDSMResult(
+        pta=pta, uf=uf,
+        n_input_states=pta.size(),
+        n_output_states=len(output_classes),
+        n_proposals_evaluated=n_evaluated,
+        n_merges_applied=n_applied,
+        n_oracle_yes=n_yes,
+        n_oracle_no=n_no,
+        n_oracle_uncertain=n_uncertain,
+        library_name=library_name or prev_result.library_name,
     )

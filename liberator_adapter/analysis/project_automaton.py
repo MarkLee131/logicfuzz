@@ -33,7 +33,9 @@ from liberator_adapter.analysis.static_trace import (
     extract_project_traces,
 )
 from liberator_adapter.analysis.usedef import (
+    Typestate,
     UseDefGraph,
+    extend_post_def,
     extract_api_effects,
 )
 
@@ -204,6 +206,46 @@ class AutomatonArtifact:
             for h in eff.def_:
                 produced.add(h)
         return None
+
+    def post_parse_extensions(
+        self,
+        sequence: List[str],
+        depth: int = 2,
+        branching: int = 4,
+        acceptance_threshold: float = 0.0,
+    ) -> List[List[str]]:
+        """Generate downstream consumer-chain extensions of ``sequence``.
+
+        For each handle still live at the end of ``sequence``, append APIs
+        that USE that handle, recursing up to ``depth`` with ``branching``
+        candidates per step. Each extension is filtered by:
+
+          1. Typestate validity (no USE_BEFORE_INIT / DOUBLE_DESTROY etc.).
+             UNCLOSED_RESOURCE is tolerated as a trailing artifact — fuzz
+             drivers' outer scope owns final cleanup.
+          2. Optional acceptance threshold against the merged automaton.
+             ``acceptance_threshold=0.0`` (default) means no filter, so
+             projects with no learned automaton don't lose extensions.
+
+        Returns full extended sequences (``sequence ++ chain``), deduped.
+        ``[]`` when no graph is attached, no handle is live at the tail, or
+        no feasible chain exists.
+
+        Reuses ``UseDefGraph.consumers`` + ``Typestate.check`` — no new
+        heuristic. The returned set composes with the L4 candidate pool the
+        same way ``sample_accepting_paths`` and ``graft_creator_prefix`` do.
+        """
+        if self.graph is None or not sequence:
+            return []
+        typestate = Typestate(self.graph)
+        raw = extend_post_def(
+            self.graph, typestate, sequence,
+            depth=depth, branching=branching,
+        )
+        if acceptance_threshold > 0.0:
+            return [r for r in raw
+                    if self.acceptance_score(r) >= acceptance_threshold]
+        return raw
 
     def acceptance_score(self, sequence: List[str]) -> float:
         """Score a candidate API call sequence against the merged automaton.

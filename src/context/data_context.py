@@ -8,7 +8,7 @@ This module establishes clear data ownership:
 """
 
 from dataclasses import dataclass, field, replace
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Set, Tuple
 from pathlib import Path
 import logging
 import json
@@ -1112,7 +1112,9 @@ class FuzzingContext:
                 num_drivers=num_synthesis_drivers,
                 driver_size=driver_size,
                 project_name=project_name,
-                log=log)
+                log=log,
+                automaton_artifact=automaton_artifact,
+            )
             if synthesized_drivers:
                 log.info(
                     f'   ✅ Generated {len(synthesized_drivers)} synthesized drivers with CBFactory'
@@ -1841,7 +1843,9 @@ def _generate_sequences_from_grammar(grammar, num_sequences: int, max_len: int,
 def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
                                 project_name: str,
                                 log: logging.Logger,
-                                output_skeleton: bool = False) -> List[Dict[str, Any]]:
+                                output_skeleton: bool = False,
+                                automaton_artifact: Optional[Any] = None,
+                                automaton_threshold: float = 0.6) -> List[Dict[str, Any]]:
     """
     Generate fuzz drivers using CBFactory (traditional program synthesis).
 
@@ -1871,7 +1875,8 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
     import tempfile
     import os
 
-    synthesized_drivers = []
+    synthesized_drivers: List[Dict[str, Any]] = []
+    factory: Any = None  # bound below if synthesis reaches that far
 
     # Check prerequisites
     if not generator.condition_manager:
@@ -1919,7 +1924,10 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
             f"   Using {len(filtered_apis)}/{len(generator.all_apis)} APIs with conditions"
         )
 
-        # Create CBFactory with Z3 validation enabled
+        # Create CBFactory with Z3 validation enabled. Phase H: when an
+        # automaton artifact is supplied, the Z3-guided controller installs
+        # an AutomatonAcceptanceGuard that hard-prunes candidates whose
+        # running-sequence acceptance falls below ``automaton_threshold``.
         bias = Bias()
         factory = CBFactory(
             api_list=filtered_apis,
@@ -1927,8 +1935,17 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
             dgraph=generator.dependency_graph,
             conditions=generator.function_conditions,
             bias=bias,
-            enable_z3_validation=True  # Use Z3 to validate sequence feasibility
+            enable_z3_validation=True,  # Use Z3 to validate sequence feasibility
+            automaton_artifact=automaton_artifact,
+            automaton_threshold=automaton_threshold,
         )
+        if automaton_artifact is not None and factory.z3_controller is not None:
+            guard_stats_pre = factory.z3_controller.get_automaton_stats() or {}
+            log.info(
+                "   ⚙️  CBFactory automaton guard: strong=%s threshold=%.3f",
+                guard_stats_pre.get('strong'),
+                guard_stats_pre.get('threshold', automaton_threshold),
+            )
 
         # Create temporary directory for rendering drivers
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2035,6 +2052,26 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
         log.error(f"CBFactory synthesis failed: {e}")
         import traceback
         log.debug(traceback.format_exc())
+
+    # Phase H: post-synthesis automaton-guard telemetry. Surfaces how many
+    # candidates were rejected by the acceptance gate so callers can size
+    # the threshold and relax cadence empirically.
+    if (automaton_artifact is not None
+            and factory is not None
+            and getattr(factory, 'z3_controller', None) is not None):
+        try:
+            stats = factory.z3_controller.get_automaton_stats()
+            if stats:
+                log.info(
+                    "   📊 Automaton guard final: pruned=%d passed=%d "
+                    "relaxes=%d threshold=%.3f",
+                    stats.get('pruned', 0),
+                    stats.get('passed', 0),
+                    stats.get('relaxes', 0),
+                    stats.get('threshold', automaton_threshold),
+                )
+        except Exception:
+            pass  # Non-critical telemetry
 
     return synthesized_drivers
 

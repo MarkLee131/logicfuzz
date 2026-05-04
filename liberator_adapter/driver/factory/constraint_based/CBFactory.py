@@ -14,7 +14,7 @@ Key enhancement: Initialization chain backtracking
 import copy
 import logging
 import random
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from liberator_adapter.common import Api, FunctionConditionsSet, FunctionConditions, DataLayout
 from liberator_adapter.common import ValueMetadata, AccessTypeSet, Access
@@ -80,7 +80,9 @@ class CBFactory(Factory):
                  driver_enhancer: Optional['DriverEnhancer'] = None,
                  enable_z3_guidance: bool = True,
                  z3_strict_mode: bool = True,
-                 z3_timeout_ms: int = 1000):
+                 z3_timeout_ms: int = 1000,
+                 automaton_artifact: Optional[Any] = None,
+                 automaton_threshold: float = 0.6):
         """
         Initialize CBFactory
 
@@ -95,6 +97,12 @@ class CBFactory(Factory):
             enable_z3_guidance: Whether to enable Z3-guided decision making
             z3_strict_mode: If True, raise errors on Z3 failures (for debugging)
             z3_timeout_ms: Z3 solving timeout in milliseconds
+            automaton_artifact: Optional ``AutomatonArtifact`` (Phase H). When
+                supplied and the artifact is "strong", Z3-guided candidate
+                checks gain a hard-pruning acceptance gate that rejects
+                proposals whose running-sequence acceptance falls below
+                ``automaton_threshold``. ``None`` preserves legacy behaviour.
+            automaton_threshold: Acceptance floor for the guard.
         """
         self.api_list = api_list
         self.driver_size = driver_size
@@ -107,6 +115,8 @@ class CBFactory(Factory):
         self.enable_z3_guidance = enable_z3_guidance and Z3_GUIDED_AVAILABLE
         self.z3_strict_mode = z3_strict_mode
         self.z3_timeout_ms = z3_timeout_ms
+        self.automaton_artifact = automaton_artifact
+        self.automaton_threshold = float(automaton_threshold)
 
         # Initialize Z3 validator
         self.z3_validator = None
@@ -124,11 +134,20 @@ class CBFactory(Factory):
             try:
                 self.z3_controller = create_guided_controller(
                     timeout_ms=self.z3_timeout_ms,
-                    strict_mode=self.z3_strict_mode
+                    strict_mode=self.z3_strict_mode,
+                    automaton_artifact=self.automaton_artifact,
+                    automaton_threshold=self.automaton_threshold,
                 )
                 if self.z3_controller:
+                    guard_state = "off"
+                    if self.z3_controller.automaton_guard is not None:
+                        guard_state = (
+                            "strong" if self.z3_controller.automaton_guard.is_strong()
+                            else "weak"
+                        )
                     logger.info("[Z3 Guided] Enabled for decision guidance "
-                               f"(strict={z3_strict_mode}, timeout={z3_timeout_ms}ms)")
+                               f"(strict={z3_strict_mode}, timeout={z3_timeout_ms}ms, "
+                               f"automaton_guard={guard_state})")
                 else:
                     self.enable_z3_guidance = False
             except Exception as e:

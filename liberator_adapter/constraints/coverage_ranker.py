@@ -136,6 +136,8 @@ class CoverageRanker:
         automaton_acceptance_fn: Optional[Any] = None,
         automaton_graft_fn: Optional[Any] = None,
         automaton_sample_paths: Optional[List[List[str]]] = None,
+        automaton_post_extend_fn: Optional[Any] = None,
+        post_extend_max_inputs: int = 12,
         length_floor_safe_apis: Optional[Set[str]] = None,
     ) -> CoverageRankingResult:
         """
@@ -233,7 +235,32 @@ class CoverageRanker:
                     augmented.append(grafted)
                     seen.add(key)
 
-        # Step 1b: Score all (augmented) sequences.
+        # Step 1c: Post-DEF extension augmentation (Phase E).
+        # For each L0–L4 surviving sequence, ask the automaton/typestate to
+        # enumerate downstream consumer chains. This is the missing-tail
+        # complement of ``graft_creator_prefix`` (which adds an upstream
+        # prefix). Together they let L4 consider both halves of a protocol
+        # (constructor… and …downstream) that L0 type generation cut off.
+        # Capped at ``post_extend_max_inputs`` source sequences so synthesis
+        # cost stays linear in K, not in |sequences|.
+        n_post_extend_added = 0
+        if automaton_post_extend_fn is not None and sequences:
+            sources = list(sequences)[:post_extend_max_inputs]
+            for s in sources:
+                try:
+                    extras = automaton_post_extend_fn(s) or []
+                except Exception as exc:
+                    self.log.debug("post-extend failed for %s: %s", s, exc)
+                    extras = []
+                for ext in extras:
+                    key = tuple(ext)
+                    if key not in seen:
+                        augmented.append(list(ext))
+                        seen.add(key)
+                        n_post_extend_added += 1
+        self._post_extend_added = n_post_extend_added
+
+        # Step 1d: Score all (augmented) sequences.
         scored = [
             self._score_sequence(seq, entry_points, automaton_acceptance_fn)
             for seq in augmented
@@ -416,6 +443,10 @@ def select_top_k_sequences(
     important_apis: Optional[Set[str]] = None,
     automaton_artifact: Optional[Any] = None,
     automaton_n_sample_paths: int = 8,
+    automaton_post_extend_depth: int = 2,
+    automaton_post_extend_branching: int = 4,
+    automaton_post_extend_max_inputs: int = 12,
+    automaton_post_extend_acceptance_threshold: float = 0.0,
     length_floor_safe_apis: Optional[Set[str]] = None,
 ) -> Tuple[List[List[str]], Dict[str, Any]]:
     """
@@ -498,6 +529,7 @@ def select_top_k_sequences(
     ranker = CoverageRanker(logger_instance=logger_instance)
     automaton_acceptance_fn = None
     automaton_graft_fn = None
+    automaton_post_extend_fn = None
     automaton_sample_paths: List[List[str]] = []
     automaton_stats: Dict[str, Any] = {'enabled': False}
     if automaton_artifact is not None:
@@ -507,17 +539,33 @@ def select_top_k_sequences(
             automaton_sample_paths = automaton_artifact.sample_accepting_paths(
                 n=automaton_n_sample_paths,
             )
+            # Phase E: post-parse extension closure. Wraps the artifact's
+            # method with the chosen depth/branching/threshold so the ranker
+            # only needs a unary callable (sequence -> [extensions]).
+            if hasattr(automaton_artifact, "post_parse_extensions"):
+                _depth = automaton_post_extend_depth
+                _branch = automaton_post_extend_branching
+                _thr = automaton_post_extend_acceptance_threshold
+                def _post_extend(seq, _art=automaton_artifact,
+                                 _d=_depth, _b=_branch, _t=_thr):
+                    return _art.post_parse_extensions(
+                        seq, depth=_d, branching=_b,
+                        acceptance_threshold=_t,
+                    )
+                automaton_post_extend_fn = _post_extend
             observed = automaton_artifact.observed_apis()
             automaton_stats = {
                 'enabled': True,
                 'merged_states': automaton_artifact.n_merged_states,
                 'observed_apis': len(observed),
                 'sample_paths': len(automaton_sample_paths),
+                'post_extend_enabled': automaton_post_extend_fn is not None,
             }
         except Exception as exc:
             log.warning("automaton signal unavailable (%s); falling back", exc)
             automaton_acceptance_fn = None
             automaton_graft_fn = None
+            automaton_post_extend_fn = None
             automaton_sample_paths = []
             automaton_stats = {'enabled': False, 'error': str(exc)}
 
@@ -526,8 +574,15 @@ def select_top_k_sequences(
         automaton_acceptance_fn=automaton_acceptance_fn,
         automaton_graft_fn=automaton_graft_fn,
         automaton_sample_paths=automaton_sample_paths,
+        automaton_post_extend_fn=automaton_post_extend_fn,
+        post_extend_max_inputs=automaton_post_extend_max_inputs,
         length_floor_safe_apis=length_floor_safe_apis,
     )
+
+    if automaton_post_extend_fn is not None:
+        automaton_stats['post_extend_added'] = getattr(
+            ranker, '_post_extend_added', 0,
+        )
 
     summary = {
         'input': len(sequences),

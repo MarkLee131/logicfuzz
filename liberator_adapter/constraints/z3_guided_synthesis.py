@@ -130,6 +130,127 @@ class VariableState:
 # Incremental Z3 Solver
 # ============================================================
 
+# ============================================================
+# AutomatonAcceptanceGuard — Phase H hard-pruning gate
+# ============================================================
+#
+# Treats automaton acceptance as a *hard* constraint at synthesis time, but
+# only when the project automaton has accumulated enough evidence to be
+# trusted. Three safety mechanisms keep this from over-pruning:
+#
+#   1. **Strength gate**: silent no-op unless ``observed_apis ≥ N_min`` and
+#      ``n_merged_states ≥ S_min``. Weak automatons (no traces, tiny merge
+#      quotient) admit everything.
+#   2. **Auto-relaxation**: after ``unsat_relax_count`` consecutive UNSAT
+#      verdicts the threshold drops by ``relax_step``. Mirrors how Z3's
+#      UnsatCoreDiagnoser informs synthesis recovery — but here recovery is
+#      "loosen the soft cut" rather than "find a producer".
+#   3. **Float-on-failure**: any exception from the artifact (e.g. mid-merge
+#      pickled state, malformed sequence) admits the candidate and logs.
+#      Fail-open is the right default for a soft signal promoted to hard.
+#
+# Reference: Lang/Pearlmutter/Price 1998 §5 — the EDSM merge oracle is
+# advisory; here we use the same convention (oracle-says-no → reject the
+# *candidate*, not the *automaton*).
+
+
+class AutomatonAcceptanceGuard:
+    """Hard-pruning gate based on project automaton acceptance.
+
+    Wraps an ``AutomatonArtifact`` and exposes ``admits(sequence) -> bool``
+    that synthesis loops consult before committing a candidate API. The
+    guard is **strong-only**: weak/missing artifacts return ``True``
+    unconditionally so projects without learnable typestate behaviour aren't
+    starved.
+
+    Stats are exposed via :py:meth:`stats` for telemetry; callers should
+    log them after synthesis to size the relax cadence and threshold.
+    """
+
+    def __init__(
+        self,
+        artifact: Optional[Any] = None,
+        threshold: float = 0.6,
+        min_observed_apis: int = 10,
+        min_merged_states: int = 4,
+        unsat_relax_count: int = 5,
+        relax_step: float = 0.15,
+    ) -> None:
+        self.artifact = artifact
+        self.initial_threshold = float(threshold)
+        self.threshold = float(threshold)
+        self.min_observed_apis = int(min_observed_apis)
+        self.min_merged_states = int(min_merged_states)
+        self.unsat_relax_count = int(unsat_relax_count)
+        self.relax_step = float(relax_step)
+        self._consecutive_reject = 0
+        self.n_pruned = 0
+        self.n_passed = 0
+        self.n_relaxes = 0
+        self.n_errors = 0
+        self._strong = self._compute_strength()
+
+    def _compute_strength(self) -> bool:
+        if self.artifact is None:
+            return False
+        try:
+            n_obs = len(self.artifact.observed_apis())
+            n_states = int(self.artifact.n_merged_states)
+        except Exception:
+            return False
+        return (n_obs >= self.min_observed_apis
+                and n_states >= self.min_merged_states)
+
+    def is_strong(self) -> bool:
+        return self._strong
+
+    def admits(self, candidate_sequence: List[str]) -> bool:
+        """``True`` iff guard is weak (always admit) or sequence acceptance
+        clears the *current* threshold. Side-effects: increments stats and
+        auto-relaxes on consecutive rejects.
+        """
+        if not self._strong or self.artifact is None:
+            self.n_passed += 1
+            return True
+        try:
+            score = float(self.artifact.acceptance_score(candidate_sequence))
+        except Exception as exc:
+            logger.debug("[AutomatonGuard] acceptance_score raised %s; "
+                         "fail-open admit", exc)
+            self.n_errors += 1
+            self.n_passed += 1
+            return True
+        if score >= self.threshold:
+            self.n_passed += 1
+            self._consecutive_reject = 0
+            return True
+        self.n_pruned += 1
+        self._consecutive_reject += 1
+        if self._consecutive_reject >= self.unsat_relax_count:
+            new_thr = max(0.0, self.threshold - self.relax_step)
+            if new_thr < self.threshold:
+                self.threshold = new_thr
+                self.n_relaxes += 1
+                self._consecutive_reject = 0
+                logger.info(
+                    "[AutomatonGuard] %d consecutive rejects → relax "
+                    "threshold to %.3f",
+                    self.unsat_relax_count, self.threshold,
+                )
+        return False
+
+    def stats(self) -> Dict[str, Any]:
+        return {
+            "strong": self._strong,
+            "threshold": round(self.threshold, 4),
+            "initial_threshold": round(self.initial_threshold, 4),
+            "pruned": self.n_pruned,
+            "passed": self.n_passed,
+            "relaxes": self.n_relaxes,
+            "errors": self.n_errors,
+        }
+
+
 class IncrementalZ3Solver:
     """
     Incremental Z3 solver supporting push/pop for backtracking.
@@ -138,12 +259,20 @@ class IncrementalZ3Solver:
     hypothesis testing (check without commit).
     """
 
-    def __init__(self, timeout_ms: int = 1000):
+    def __init__(self, timeout_ms: int = 1000,
+                 automaton_guard: Optional[AutomatonAcceptanceGuard] = None):
         """
         Initialize incremental solver.
 
         Args:
             timeout_ms: Z3 solving timeout in milliseconds
+            automaton_guard: Optional hard-pruning guard from the project
+                automaton. When supplied and strong, ``check_candidate``
+                rejects candidates whose hypothetical sequence
+                (``api_sequence + [candidate]``) fails the guard's
+                acceptance threshold *before* invoking Z3. Saves both Z3
+                time and propagates an additional symbolic-vs-statistical
+                cross-check from the use-def model.
         """
         self.solver = Solver()
         self.solver.set("timeout", timeout_ms)
@@ -160,6 +289,12 @@ class IncrementalZ3Solver:
         # Track constraints by checkpoint level for diagnosis
         self.constraints_by_level: Dict[int, List[Tuple[str, Any]]] = {0: []}
 
+        # Phase H: track api_sequence length per checkpoint so pop() rolls
+        # the running sequence back alongside the Z3 solver state. Without
+        # this, automaton-guard checks against the running sequence diverge
+        # from Z3's actual frame after a backtrack.
+        self._sequence_length_by_level: Dict[int, int] = {0: 0}
+
         # Variable mappings
         self.api_vars: Dict[str, Any] = {}      # api_name -> Bool var
         self.order_vars: Dict[str, Any] = {}    # api_name -> Int var
@@ -168,6 +303,10 @@ class IncrementalZ3Solver:
 
         # Constraint naming for unsat core
         self._constraint_counter = 0
+
+        # Phase H: optional automaton acceptance guard.
+        self.automaton_guard = automaton_guard
+        self.n_automaton_pruned = 0
 
     def _next_constraint_name(self, prefix: str = "c") -> str:
         """Generate unique constraint name for unsat core tracking"""
@@ -207,6 +346,9 @@ class IncrementalZ3Solver:
         self.solver.push()
         self.checkpoint_level += 1
         self.constraints_by_level[self.checkpoint_level] = []
+        # Snapshot api_sequence length so pop() can roll the running sequence
+        # back in lockstep with the Z3 frame.
+        self._sequence_length_by_level[self.checkpoint_level] = len(self.api_sequence)
         logger.debug(f"[Z3Guided] Push to level {self.checkpoint_level}")
         return self.checkpoint_level
 
@@ -222,6 +364,13 @@ class IncrementalZ3Solver:
             # Clean up constraints at this level
             if self.checkpoint_level in self.constraints_by_level:
                 del self.constraints_by_level[self.checkpoint_level]
+            # Truncate api_sequence to this checkpoint's snapshot length so
+            # the automaton-guard sees the same sequence as the Z3 frame.
+            snapshot_len = self._sequence_length_by_level.pop(
+                self.checkpoint_level, len(self.api_sequence),
+            )
+            if len(self.api_sequence) > snapshot_len:
+                self.api_sequence = self.api_sequence[:snapshot_len]
             self.checkpoint_level -= 1
 
         logger.debug(f"[Z3Guided] Popped to level {self.checkpoint_level}")
@@ -380,9 +529,10 @@ class IncrementalZ3Solver:
         """
         Test if a candidate API is feasible without committing.
 
-        Checks both:
+        Checks three layers (in order, short-circuit on first reject):
         1. Required resources are actually available (tracked in state)
-        2. Z3 constraints are satisfiable
+        2. **Phase H** automaton-acceptance guard (when strong)
+        3. Z3 constraints are satisfiable
 
         Args:
             api_name: Name of candidate API
@@ -408,7 +558,26 @@ class IncrementalZ3Solver:
                 conflicting_constraints=[]
             )
 
-        # Second check: Z3 constraint satisfiability
+        # Second check (Phase H): automaton-acceptance hard pruning. We
+        # fabricate the hypothetical sequence (running sequence ++ candidate)
+        # and consult the guard. Strong guards reject sequences whose typestate
+        # doesn't match the project's learned protocol — eliminating Z3 calls
+        # that would have produced syntactically-valid-but-semantically-wrong
+        # candidates. Weak/missing guards admit everything (no-op).
+        if self.automaton_guard is not None:
+            hypothetical = list(self.api_sequence) + [api_name]
+            if not self.automaton_guard.admits(hypothetical):
+                self.n_automaton_pruned += 1
+                return CandidateResult(
+                    api_name=api_name,
+                    is_feasible=False,
+                    missing_resources=[],
+                    conflicting_constraints=[
+                        f"automaton_acceptance<{self.automaton_guard.threshold:.3f}"
+                    ],
+                )
+
+        # Third check: Z3 constraint satisfiability
         # Push a temporary checkpoint
         self.push()
 
@@ -623,15 +792,35 @@ class Z3GuidedSynthesisController:
     decision making in CBFactory.
     """
 
-    def __init__(self, timeout_ms: int = 1000, strict_mode: bool = True):
+    def __init__(self, timeout_ms: int = 1000, strict_mode: bool = True,
+                 automaton_artifact: Optional[Any] = None,
+                 automaton_threshold: float = 0.6):
         """
         Initialize the synthesis controller.
 
         Args:
             timeout_ms: Z3 solving timeout
             strict_mode: If True, raise errors on Z3 failures (for debugging)
+            automaton_artifact: Optional ``AutomatonArtifact`` to gate
+                candidate APIs against the project's learned typestate.
+                When supplied and "strong" (≥10 observed APIs, ≥4 merged
+                states), Z3 candidates that would push the running sequence
+                below ``automaton_threshold`` acceptance score are rejected
+                before Z3 is consulted. See ``AutomatonAcceptanceGuard``.
+            automaton_threshold: Hard-pruning acceptance floor in [0.0, 1.0].
+                Lower = looser; the guard auto-relaxes by 0.15 after 5
+                consecutive UNSAT verdicts so an over-eager threshold
+                doesn't starve synthesis on novel-but-valid sequences.
         """
-        self.solver = IncrementalZ3Solver(timeout_ms=timeout_ms)
+        self.automaton_guard: Optional[AutomatonAcceptanceGuard] = None
+        if automaton_artifact is not None:
+            self.automaton_guard = AutomatonAcceptanceGuard(
+                artifact=automaton_artifact,
+                threshold=automaton_threshold,
+            )
+        self.solver = IncrementalZ3Solver(
+            timeout_ms=timeout_ms, automaton_guard=self.automaton_guard,
+        )
         self.diagnoser = UnsatCoreDiagnoser(self.solver)
         self.strict_mode = strict_mode
 
@@ -779,6 +968,14 @@ class Z3GuidedSynthesisController:
             "hit_rate": self._cache_hits / max(1, self._cache_hits + self._cache_misses)
         }
 
+    def get_automaton_stats(self) -> Optional[Dict[str, Any]]:
+        """Phase H: telemetry on automaton-guard prunings. ``None`` when no
+        artifact was attached at construction time.
+        """
+        if self.automaton_guard is None:
+            return None
+        return self.automaton_guard.stats()
+
 
 class Z3GuidedSynthesisError(Exception):
     """Exception raised when Z3-guided synthesis encounters a constraint violation"""
@@ -797,16 +994,27 @@ def is_z3_guided_available() -> bool:
     return Z3_AVAILABLE
 
 
-def create_guided_controller(timeout_ms: int = 1000,
-                             strict_mode: bool = True) -> Optional[Z3GuidedSynthesisController]:
+def create_guided_controller(
+    timeout_ms: int = 1000,
+    strict_mode: bool = True,
+    automaton_artifact: Optional[Any] = None,
+    automaton_threshold: float = 0.6,
+) -> Optional[Z3GuidedSynthesisController]:
     """
     Create a Z3-guided synthesis controller.
 
     Args:
         timeout_ms: Z3 solving timeout
         strict_mode: If True, raise errors on failures
+        automaton_artifact: Optional ``AutomatonArtifact`` for Phase H
+            hard-pruning. ``None`` (default) preserves legacy behaviour.
+        automaton_threshold: Acceptance threshold in [0.0, 1.0].
 
     Returns:
         Controller instance
     """
-    return Z3GuidedSynthesisController(timeout_ms=timeout_ms, strict_mode=strict_mode)
+    return Z3GuidedSynthesisController(
+        timeout_ms=timeout_ms, strict_mode=strict_mode,
+        automaton_artifact=automaton_artifact,
+        automaton_threshold=automaton_threshold,
+    )

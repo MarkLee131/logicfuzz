@@ -594,3 +594,123 @@ def extract_api_effects(
                     raw=destroy_eff.raw,
                 )
     return list(effects.values())
+
+
+# =============================================================================
+# Post-DEF sequence extension (Phase E: Post-Parse Sequence Extension)
+# =============================================================================
+#
+# Many sequences synthesized at L0 stop at parse / get_object (e.g. for libucl,
+# the Top-K is dominated by ``[ucl_parser_new, ucl_parser_add_chunk]``). The
+# typestate model already gives us everything needed to walk past that
+# boundary: a handle DEF'd by a creator is *live* until KILL'd, and any API
+# whose USE set is a subset of the live set is a typestate-feasible next step.
+#
+# Reference: Aho/Sethi/Ullman §9 (reaching definitions) — the live-handle set
+# is the analogue of "in-scope reaching defs"; consumers of those handles are
+# the legal extensions. Strom/Yemini Typestate 1986 §3 — the typestate
+# precondition check is exactly ``USE ⊆ live ∧ no kill-then-use``.
+
+
+def extend_post_def(
+    graph: "UseDefGraph",
+    typestate: "Typestate",
+    sequence: List[str],
+    depth: int = 2,
+    branching: int = 4,
+) -> List[List[str]]:
+    """Extend ``sequence`` with downstream consumer chains.
+
+    For each handle still live (open count > 0) at the end of ``sequence``,
+    enumerate APIs whose USE set is satisfied by the live set, append them,
+    and recurse up to ``depth``. ``branching`` caps fan-out per recursion
+    step. The full extended sequence is validated by ``Typestate.check`` —
+    only ``UNCLOSED_RESOURCE`` is tolerated as a trailing artifact, all other
+    violations cause the candidate to be dropped.
+
+    Returns full extended sequences (i.e. ``sequence ++ chain``), deduped.
+    Returns ``[]`` when no handle is live or no feasible chain exists.
+
+    Determinism: candidate ordering is ``(-graph.dependency_depth(api), api_name)``
+    — deeper consumers (further from the root constructor) win, with
+    name as the lex tiebreaker. This keeps the same input deterministic
+    across runs and biases toward APIs that the dependency-depth fixpoint
+    classified as terminal/leaf operations.
+    """
+    if depth <= 0 or not sequence:
+        return []
+
+    # Walk the input sequence to compute the running open count per handle.
+    # Same accounting as Typestate.check (kill before def, max(0, n-1) on KILL).
+    open_counts: Dict[HandleType, int] = {}
+    for name in sequence:
+        eff = graph.effect(name)
+        if eff is None:
+            continue
+        for h in eff.kill:
+            open_counts[h] = max(0, open_counts.get(h, 0) - 1)
+        for h in eff.def_:
+            open_counts[h] = open_counts.get(h, 0) + 1
+
+    if not any(n > 0 for n in open_counts.values()):
+        return []
+
+    depth_map = graph.dependency_depth()
+    seq_set = set(sequence)
+    extensions: List[List[str]] = []
+    seen: Set[Tuple[str, ...]] = set()
+
+    def _live(counts: Dict[HandleType, int]) -> Set[HandleType]:
+        return {h for h, n in counts.items() if n > 0}
+
+    def _candidates(live: Set[HandleType], used: Set[str]) -> List[str]:
+        seen_apis: Set[str] = set()
+        scored: List[Tuple[str, int]] = []
+        for h in live:
+            for c in graph.consumers(h):
+                if c in seq_set or c in used or c in seen_apis:
+                    continue
+                eff = graph.effect(c)
+                if eff is None:
+                    continue
+                # USE must be fully covered by currently live handles —
+                # otherwise we'd need yet another upstream call (which is
+                # what graft_creator_prefix handles for the reverse case).
+                if not eff.use.issubset(live):
+                    continue
+                seen_apis.add(c)
+                scored.append((c, depth_map.get(c, 0)))
+        scored.sort(key=lambda kv: (-kv[1], kv[0]))
+        return [c for c, _ in scored[:branching]]
+
+    def _recurse(prefix: List[str], counts: Dict[HandleType, int],
+                 used_in_chain: Set[str], remaining: int) -> None:
+        if remaining <= 0:
+            return
+        live = _live(counts)
+        if not live:
+            return
+        for c in _candidates(live, used_in_chain):
+            extended = prefix + [c]
+            # Full typestate validation; UNCLOSED_RESOURCE is a tail artifact
+            # (handles still open at end), which is acceptable for fuzz
+            # drivers — caller's outer scope owns the cleanup.
+            violations = typestate.check(extended)
+            if any(v.kind != ViolationKind.UNCLOSED_RESOURCE for v in violations):
+                continue
+            key = tuple(extended)
+            if key not in seen:
+                seen.add(key)
+                extensions.append(extended)
+            # Compute new open counts for recursion.
+            eff = graph.effect(c)
+            new_counts = dict(counts)
+            if eff is not None:
+                for h in eff.kill:
+                    new_counts[h] = max(0, new_counts.get(h, 0) - 1)
+                for h in eff.def_:
+                    new_counts[h] = new_counts.get(h, 0) + 1
+            _recurse(extended, new_counts, used_in_chain | {c}, remaining - 1)
+
+    _recurse(list(sequence), dict(open_counts), set(), depth)
+    return extensions
