@@ -251,7 +251,9 @@ class FuzzingContext:
                 filter_top_k: int = 12,
                 use_cache: bool = True,
                 num_synthesis_drivers: int = 5,
-                llm_client: Any = None) -> 'FuzzingContext':
+                llm_client: Any = None,
+                closed_loop_iters: int = 0,
+                closed_loop_early_stop: int = 0) -> 'FuzzingContext':
         """
         Prepare all fuzzing data using Liberator project-level modeling.
 
@@ -1127,6 +1129,52 @@ class FuzzingContext:
             import traceback
             log.debug(traceback.format_exc())
             synthesized_drivers = []
+
+        # === Step 11b (Phase G): Closed-loop CBFactory feedback ===
+        # When ``closed_loop_iters > 0`` and the project has a learned
+        # automaton, run N feedback iterations. Each iteration feeds prior
+        # drivers as evidence (incremental EDSM) and re-synthesises with
+        # the grown automaton. Phase E post-parse extensions and Phase H
+        # acceptance guard read the mutated artifact automatically.
+        if (closed_loop_iters > 0
+                and automaton_artifact is not None
+                and synthesized_drivers):
+            try:
+                from src.closed_loop import run_closed_loop
+
+                def _resynth(art, k: int) -> List[Dict[str, Any]]:
+                    return _generate_cbfactory_drivers(
+                        generator=generator,
+                        num_drivers=k,
+                        driver_size=driver_size,
+                        project_name=project_name,
+                        log=log,
+                        automaton_artifact=art,
+                    ) or []
+
+                cl_result = run_closed_loop(
+                    project=project_name,
+                    automaton_artifact=automaton_artifact,
+                    initial_drivers=synthesized_drivers,
+                    resynthesize_fn=_resynth,
+                    n_iters=closed_loop_iters,
+                    early_stop_delta=closed_loop_early_stop,
+                    target_drivers_per_iter=num_synthesis_drivers,
+                    persist_dir=Path(f"./results/{project_name}/automaton"),
+                    log=log,
+                )
+                synthesized_drivers = cl_result.final_drivers
+                log.info(
+                    "   🔁 Closed-loop done: %d iters run (early_stopped=%s, "
+                    "reason=%s); final drivers=%d",
+                    len(cl_result.iterations),
+                    cl_result.early_stopped,
+                    cl_result.early_stop_reason or "n/a",
+                    len(cl_result.final_drivers),
+                )
+            except Exception as exc:
+                log.warning("Closed-loop feedback failed (non-critical): %s",
+                            exc)
 
         # === Step 12: Extract knowledge from existing drivers (optional, requires LLM) ===
         log.info('  12/12 Extracting knowledge from existing drivers...')

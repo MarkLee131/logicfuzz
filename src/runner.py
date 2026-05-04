@@ -201,6 +201,13 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
     # Get synthesis settings from args if available
     # Note: Synthesis is always enabled (CBFactory + LLM refinement)
     num_synthesis_drivers = getattr(args, 'num_synthesis_drivers', 5) if args else 5
+    closed_loop_iters = (
+        getattr(args, 'closed_loop_iters', 0)
+        if (args and getattr(args, 'closed_loop', False)) else 0
+    )
+    closed_loop_early_stop = (
+        getattr(args, 'closed_loop_early_stop', 0) if args else 0
+    )
 
     # Create LLM adapter for driver knowledge extraction (optional)
     llm_client = None
@@ -216,7 +223,9 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
       logger_instance=None,  # Use standard logging - no trial concept here
       num_synthesis_drivers=num_synthesis_drivers,
-      llm_client=llm_client  # Pass LLM for driver knowledge extraction
+      llm_client=llm_client,  # Pass LLM for driver knowledge extraction
+      closed_loop_iters=closed_loop_iters,
+      closed_loop_early_stop=closed_loop_early_stop,
     )
     return context.to_dict()
   except (ValueError, RuntimeError) as e:

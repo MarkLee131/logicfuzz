@@ -1370,6 +1370,29 @@ def parse_args() -> argparse.Namespace:
                       dest='num_synthesis_drivers',
                       help='Number of base drivers to generate with CBFactory for LLM refinement (default: 5).')
 
+  # Phase G: closed-loop CBFactory feedback
+  parser.add_argument('--closed-loop',
+                      action='store_true',
+                      default=False,
+                      dest='closed_loop',
+                      help='Phase G: run N feedback iterations after the '
+                           'initial synthesis pass. Each iteration feeds '
+                           'prior drivers as evidence to the project '
+                           'automaton (incremental EDSM) and re-synthesises '
+                           'with the grown automaton.')
+  parser.add_argument('--closed-loop-iters',
+                      type=int,
+                      default=3,
+                      dest='closed_loop_iters',
+                      help='Number of feedback iterations (default: 3).')
+  parser.add_argument('--closed-loop-early-stop',
+                      type=int,
+                      default=0,
+                      dest='closed_loop_early_stop',
+                      help='Stop early when |Δmerged_states| ≤ this value '
+                           'for 2 consecutive iterations (default: 0 = '
+                           'exact saturation).')
+
   args = parser.parse_args()
   if args.num_samples:
     assert args.num_samples > 0, '--num-samples must take a positive integer.'
