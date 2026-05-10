@@ -67,19 +67,30 @@ class AutomatonArtifact:
         A trace is accepted iff every step's edge label exists in the merged
         equivalence class's outgoing edge set. This is the design-doc P1
         exit criterion's "≥80% acceptance" measure.
+
+        Adjacency dict is cached and invalidated when the PTA size or the
+        merged-state count changes (closed-loop's ``update_with_traces``
+        bumps both, which is the only legitimate mutation path).
         """
         if not self.pta.nodes or self.n_traces == 0:
             return 0.0
         # Reconstruct per-trace path through the original PTA, then verify
         # that the same label sequence is reachable through the quotient.
         accepted = 0
-        # Build a rep → outgoing-label → rep adjacency.
-        adj: Dict[int, Dict] = {}
-        for nid, node in self.pta.nodes.items():
-            rep = self.edsm.uf.find(nid)
-            outs = adj.setdefault(rep, {})
-            for label, child in node.children.items():
-                outs[label] = self.edsm.uf.find(child)
+        # Build (or reuse) the rep → outgoing-label → rep adjacency.
+        version_key = (self.pta.size(), self.n_merged_states)
+        cached = getattr(self, "_acceptance_adj_cache", None)
+        if cached is not None and cached[0] == version_key:
+            adj = cached[1]
+        else:
+            adj = {}
+            for nid, node in self.pta.nodes.items():
+                rep = self.edsm.uf.find(nid)
+                outs = adj.setdefault(rep, {})
+                for label, child in node.children.items():
+                    outs[label] = self.edsm.uf.find(child)
+            # Cache via setattr to avoid dataclass-field requirement.
+            object.__setattr__(self, "_acceptance_adj_cache", (version_key, adj))
         # We don't carry trace_id → labels directly; recover by walking
         # children from the root with each trace_id present in witnesses.
         trace_paths: Dict[int, List] = {}
@@ -175,20 +186,25 @@ class AutomatonArtifact:
         """Try to ground an unaccepted candidate by prepending creator(s).
 
         Walks ``sequence`` in order, tracking which handles have been DEF'd
-        upstream. When the first step is found that USEs a handle without a
-        prior DEF, the artifact's underlying ``UseDefGraph`` is queried for
-        the top-ranked root producer of that handle (``graph.roots(h)`` —
-        same depth-based ranking we use for indirect-EP detection). If found,
-        prepend that producer and return the grafted sequence; else return
-        ``None``.
+        upstream. For every step whose USE set has unmet handles, queries
+        ``UseDefGraph.roots(h)`` for the top-ranked root producer. Each
+        producer is prepended once; multiple unmet handles produce a chain
+        of creators (deduped, in discovery order).
 
-        Reuses the existing depth-ranked creator lookup from ``UseDefGraph``
-        (P1 work), no new heuristic. The artifact must have been built with
-        a non-None ``graph`` attribute (default from ``learn_project_automaton``).
+        The previous implementation returned after grafting the FIRST unmet
+        handle — sequences that needed two or more upstream creators (e.g.
+        a parser that takes a context AND a config handle, both produced
+        elsewhere) were never properly grounded.
+
+        Returns the grafted sequence on success, ``None`` if no graft could
+        be made (no `graph` attribute, no unmet handles, or no producer
+        found that isn't already in the sequence).
         """
         if not sequence or self.graph is None:
             return None
         produced: Set[str] = set()
+        creators_to_prepend: List[str] = []
+        seq_set: Set[str] = set(sequence)
         for step in sequence:
             eff = self.graph.effect(step)
             if eff is None:
@@ -198,15 +214,28 @@ class AutomatonArtifact:
                     continue
                 # Unmet USE — try to graft a root producer.
                 roots = self.graph.roots(h, top_k=3)
-                # Drop roots already in the sequence (would create cycles
-                # at the protocol level even if type-feasible).
-                roots = [r for r in roots if r not in sequence]
+                # Drop roots already in the sequence or chosen creators
+                # (would create cycles at the protocol level even if
+                # type-feasible).
+                roots = [r for r in roots
+                         if r not in seq_set and r not in creators_to_prepend]
                 if not roots:
                     continue
-                return [roots[0]] + list(sequence)
+                chosen = roots[0]
+                creators_to_prepend.append(chosen)
+                seq_set.add(chosen)
+                # Mark this handle (and any others the chosen creator
+                # DEFs in the same call) as produced so we don't re-graft.
+                chosen_eff = self.graph.effect(chosen)
+                if chosen_eff is not None:
+                    produced.update(chosen_eff.def_)
+                else:
+                    produced.add(h)
             for h in eff.def_:
                 produced.add(h)
-        return None
+        if not creators_to_prepend:
+            return None
+        return creators_to_prepend + list(sequence)
 
     def post_parse_extensions(
         self,
@@ -263,19 +292,30 @@ class AutomatonArtifact:
         ``api_name`` only (not full edge label including binding pattern), so
         a sequence that the project uses with different binding shapes still
         scores 1.0. This is intentional — L4 ranks API order, not binding.
+
+        Adjacency dict is cached per (pta_size, n_merged_states) version so
+        L4 calling this for every candidate doesn't re-pay O(|nodes|) build
+        cost per call.
         """
         if not sequence or self.pta.size() == 0:
             return 0.0
-        # Build per-equivalence-class api_name → next_rep adjacency once.
-        adj: Dict[int, Dict[str, int]] = {}
-        for nid, node in self.pta.nodes.items():
-            rep = self.edsm.uf.find(nid)
-            outs = adj.setdefault(rep, {})
-            for (api, _bp), child_id in node.children.items():
-                # First match wins; subsequent collisions ignored — this is
-                # acceptable because identical equivalence classes share
-                # outgoing API names by construction.
-                outs.setdefault(api, self.edsm.uf.find(child_id))
+        # Build (or reuse) per-equivalence-class api_name → next_rep adjacency.
+        version_key = (self.pta.size(), self.n_merged_states)
+        cached = getattr(self, "_acceptance_score_adj_cache", None)
+        if cached is not None and cached[0] == version_key:
+            adj = cached[1]
+        else:
+            adj = {}
+            for nid, node in self.pta.nodes.items():
+                rep = self.edsm.uf.find(nid)
+                outs = adj.setdefault(rep, {})
+                for (api, _bp), child_id in node.children.items():
+                    # First match wins; subsequent collisions ignored — this
+                    # is acceptable because identical equivalence classes
+                    # share outgoing API names by construction.
+                    outs.setdefault(api, self.edsm.uf.find(child_id))
+            object.__setattr__(
+                self, "_acceptance_score_adj_cache", (version_key, adj))
         cur = self.edsm.uf.find(0)
         steps_walked = 0
         for api in sequence:
@@ -441,10 +481,16 @@ def learn_project_automaton(
     output_dir: Path,
     library_purpose: str = "",
     include_dirs: Optional[List[Path]] = None,
-    enable_llm_oracle: bool = True,
+    enable_llm_oracle: bool = False,
     oracle_model: str = "gpt-4o-mini",
     min_score_to_merge: float = 1.5,
 ) -> AutomatonArtifact:
+    # Default ``enable_llm_oracle=False`` matches the production policy
+    # documented in CLAUDE.md ("Open TODOs": oracle off in production
+    # until cost-aware pacing lands). Previously defaulted to True, which
+    # only worked because the sole live caller (data_context.py Step 5e2)
+    # always passed False explicitly. Aligning the default removes a
+    # foot-gun for any new caller.
     """End-to-end: extract traces, build PTA, run EDSM (with optional oracle),
     persist all intermediate artifacts under ``output_dir``.
     """

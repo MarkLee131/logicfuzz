@@ -20,6 +20,7 @@ the underlying PTA is never mutated and the EDSM run is reproducible.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -28,6 +29,8 @@ from liberator_adapter.analysis.pta import (
     PrefixTreeAcceptor,
     PTANode,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Oracle verdict on whether two abstract states represent the same library
@@ -262,7 +265,15 @@ def merge(pta: PrefixTreeAcceptor,
                 if oracle is not None:
                     try:
                         verdict = oracle(a, b, ctx)
-                    except Exception:
+                    except Exception as exc:
+                        # Oracle implementation bug. We continue (treating as
+                        # "uncertain") so one bad pair doesn't stall the whole
+                        # merge, but log the failure so it shows up in audit.
+                        logger.warning(
+                            "[EDSM] oracle raised %r on pair (node %d, node %d); "
+                            "treating as uncertain",
+                            exc, a.node_id, b.node_id,
+                        )
                         verdict = None
                 n_evaluated += 1
                 if verdict is True:
@@ -368,7 +379,15 @@ def incremental_merge(
                 if oracle is not None:
                     try:
                         verdict = oracle(a, b, ctx)
-                    except Exception:
+                    except Exception as exc:
+                        # Oracle implementation bug. We continue (treating as
+                        # "uncertain") so one bad pair doesn't stall the whole
+                        # merge, but log the failure so it shows up in audit.
+                        logger.warning(
+                            "[EDSM] oracle raised %r on pair (node %d, node %d); "
+                            "treating as uncertain",
+                            exc, a.node_id, b.node_id,
+                        )
                         verdict = None
                 delta_evaluated += 1
                 if verdict is True:

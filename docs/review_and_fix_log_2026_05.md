@@ -140,6 +140,31 @@ still work (54/54 tests pass already).
 | Automaton acceptance_fn exception now logs `warning` | `coverage_ranker.py:_score_sequence` | If the automaton artifact has a bug, log should now show `automaton acceptance_score raised ...` warnings. Expected: **0 such warnings in healthy run; any occurrence is an artifact-side bug to file**. |
 | Automaton graft_fn exception now logs `warning` | `coverage_ranker.py:rank_and_select` | Same pattern. Expected: **0 graft warnings in healthy run**. |
 
+### Automaton — A: EDSM oracle exception now visible (next commit)
+
+| Fix | File:symbol | Validate by |
+|---|---|---|
+| `edsm.merge` + `incremental_merge` oracle exceptions log `warning` | `edsm.py:merge`, `edsm.py:incremental_merge` | If the oracle implementation has a bug, log shows `[EDSM] oracle raised ...` with node IDs. Expected: **0 such warnings with oracle disabled; any non-zero count with oracle enabled is an implementation bug**. |
+
+### Automaton — B: Acceptance adjacency caching (next commit)
+
+| Fix | File:symbol | Validate by |
+|---|---|---|
+| `acceptance_rate` caches `rep → outgoing` adjacency | `project_automaton.py:acceptance_rate` | After cache, repeat calls within the same PTA version are O(walk) not O(walk + adj-rebuild). Expected: **L4 wall-time on top-K=30+ candidates drops noticeably; project with smallest K shows smallest delta**. |
+| `acceptance_score` caches adjacency analogously | `project_automaton.py:acceptance_score` | Same. L4 calls this per candidate during ranking. |
+
+### Automaton — C2: Multi-handle graft (next commit)
+
+| Fix | File:symbol | Validate by |
+|---|---|---|
+| `graft_creator_prefix` now prepends ONE creator per unmet handle (was: first unmet handle only) | `project_automaton.py:graft_creator_prefix` | On projects with multi-handle parsers (mbedtls ctx + config; nghttp2 session + frame), grafted candidates increase. Expected: **L4 admits more grafted candidates on mbedtls / nghttp2; healthy graft on these projects shows the creator chain prepended**. |
+
+### Automaton — E: Default policy alignment (next commit)
+
+| Fix | File:symbol | Validate by |
+|---|---|---|
+| `learn_project_automaton` default `enable_llm_oracle=False` (was: True) | `project_automaton.py:learn_project_automaton` | Live caller in `data_context.py:756` already passed `False` explicitly, so the production effect is zero. Validate by audit: any NEW caller of `learn_project_automaton` that omits the parameter gets the production-safe default. |
+
 ---
 
 ## Combined dynamic-run script template
