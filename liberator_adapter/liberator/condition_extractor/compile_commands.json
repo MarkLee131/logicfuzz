@@ -1,67 +1,80 @@
 [
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/AccessType.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/AccessType.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/AccessType.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/AccessType.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/AccessType.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/AccessType.cpp",
+  "output": "src/CMakeFiles/extractor.dir/AccessType.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/Dominators.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/Dominators.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/Dominators.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/Dominators.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/Dominators.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/Dominators.cpp",
+  "output": "src/CMakeFiles/extractor.dir/Dominators.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/GenericDominatorTy.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/GenericDominatorTy.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/GenericDominatorTy.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/GenericDominatorTy.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/GenericDominatorTy.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/GenericDominatorTy.cpp",
+  "output": "src/CMakeFiles/extractor.dir/GenericDominatorTy.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/GlobalStruct.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/GlobalStruct.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/GlobalStruct.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/GlobalStruct.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/GlobalStruct.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/GlobalStruct.cpp",
+  "output": "src/CMakeFiles/extractor.dir/GlobalStruct.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/IBBG.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/IBBG.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/IBBG.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/IBBG.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/IBBG.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/IBBG.cpp",
+  "output": "src/CMakeFiles/extractor.dir/IBBG.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/LibfuzzUtil.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/LibfuzzUtil.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/LibfuzzUtil.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/LibfuzzUtil.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/LibfuzzUtil.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/LibfuzzUtil.cpp",
+  "output": "src/CMakeFiles/extractor.dir/LibfuzzUtil.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/PhiFunction.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/PhiFunction.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/PhiFunction.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/PhiFunction.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/PhiFunction.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/PhiFunction.cpp",
+  "output": "src/CMakeFiles/extractor.dir/PhiFunction.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/PostDominators.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/PostDominators.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/PostDominators.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/PostDominators.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/PostDominators.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/PostDominators.cpp",
+  "output": "src/CMakeFiles/extractor.dir/PostDominators.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/ProvenanceTracker.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/ProvenanceTracker.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/ProvenanceTracker.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/ProvenanceTracker.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/ProvenanceTracker.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/ProvenanceTracker.cpp",
+  "output": "src/CMakeFiles/extractor.dir/ProvenanceTracker.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/TypeMatcher.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/TypeMatcher.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/TypeMatcher.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/TypeMatcher.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/TypeMatcher.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/TypeMatcher.cpp",
+  "output": "src/CMakeFiles/extractor.dir/TypeMatcher.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/extractor.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/extractor.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/extractor.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/extractor.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/extractor.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/extractor.cpp",
+  "output": "src/CMakeFiles/extractor.dir/extractor.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/jsoncpp.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/jsoncpp.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/jsoncpp.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/jsoncpp.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/jsoncpp.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/jsoncpp.cpp",
+  "output": "src/CMakeFiles/extractor.dir/jsoncpp.cpp.o"
 },
 {
-  "directory": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src",
-  "command": "/usr/bin/c++  -I/usr/lib/llvm-14/include -I/home/likaixuan/logicfuzz_deps/SVF/svf/include -I/home/likaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home/likaixuan/logicfuzz_deps/SVF/Release-build/include -I/home/likaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -std=gnu++14 -o CMakeFiles/extractor.dir/md5.cpp.o -c /home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/md5.cpp",
-  "file": "/home/likaixuan/fuzzing/logicfuzz/liberator_adapter/liberator/condition_extractor/src/md5.cpp"
+  "directory": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src",
+  "command": "/usr/bin/c++  -I/home1/kaixuan/logicfuzz_deps/llvm-14/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf/include -I/home1/kaixuan/logicfuzz_deps/SVF/svf-llvm/include -I/home1/kaixuan/logicfuzz_deps/SVF/Release-build/include -I/home1/kaixuan/logicfuzz_deps/z3/include -fPIC -std=gnu++14 -O0 -fno-rtti -Wno-deprecated -Wfatal-errors -g -std=gnu++14   -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -o CMakeFiles/extractor.dir/md5.cpp.o -c /home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/md5.cpp",
+  "file": "/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/md5.cpp",
+  "output": "src/CMakeFiles/extractor.dir/md5.cpp.o"
 }
 ]

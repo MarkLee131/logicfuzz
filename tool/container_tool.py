@@ -1,12 +1,31 @@
 """A tool for LLM agents to interact within a project's docker container."""
 import logging
+import os
 import subprocess as sp
+import threading
+from typing import Dict, Tuple
 
 from experiment import oss_fuzz_checkout
 from experiment.benchmark import Benchmark
 from tool.base_tool import BaseTool
 
 logger = logging.getLogger(__name__)
+
+# Container reuse: keep one long-lived `docker run -d` per (image_name,
+# language) pair across all ProjectContainerTool instances. Each tool
+# call goes through `docker exec` against the shared container, saving
+# 1-2s per call (container startup) and avoiding repeated apt cache
+# warm-up for tools that re-enter the same project image.
+#
+# Disable with LIBERATOR_DISABLE_CONTAINER_REUSE=1 (e.g. if isolation
+# matters for a debug repro).
+_DISABLE_REUSE = bool(int(os.environ.get('LIBERATOR_DISABLE_CONTAINER_REUSE',
+                                          '0')))
+
+# (image_name, language) -> (container_id, refcount)
+_SHARED_CONTAINERS: Dict[Tuple[str, str], Tuple[str, int]] = {}
+_SHARED_CONTAINERS_LOCK = threading.Lock()
+
 
 class ProjectContainerTool(BaseTool):
   """A tool for LLM agents to interact within a project's docker container."""
@@ -20,10 +39,43 @@ class ProjectContainerTool(BaseTool):
     self.project_name = project_name or benchmark.project
     self.image_name = self._prepare_project_image(
         self.project_name, use_llvm14_builder=use_llvm14_builder)
-    self.container_id = self._start_docker_container()
+    self.container_id, self._container_is_shared = (
+        self._acquire_container())
     self.build_script_path = '/src/build.sh'
     self._backup_default_build_script()
     self.project_dir = self._get_project_dir()
+
+  def _acquire_container(self) -> Tuple[str, bool]:
+    """Get a running container for this image. Returns (id, is_shared).
+
+    On reuse the caller must NOT terminate the container in their own
+    `terminate()` — the refcounted teardown lives here.
+    """
+    if _DISABLE_REUSE:
+      return self._start_docker_container(), False
+
+    key = (self.image_name, self.benchmark.language)
+    with _SHARED_CONTAINERS_LOCK:
+      entry = _SHARED_CONTAINERS.get(key)
+      if entry is not None:
+        cid, refs = entry
+        # Verify it's still running — docker may have garbage-collected
+        # if a parent process died unexpectedly.
+        check = sp.run(['docker', 'inspect', '-f', '{{.State.Running}}', cid],
+                       stdout=sp.PIPE, stderr=sp.PIPE, text=True)
+        if check.returncode == 0 and check.stdout.strip() == 'true':
+          _SHARED_CONTAINERS[key] = (cid, refs + 1)
+          logger.debug('Reusing container %s for %s (refs=%d)',
+                       cid[:12], self.image_name, refs + 1)
+          return cid, True
+        # Stale entry — clear and restart.
+        logger.debug('Stale shared container %s for %s; restarting',
+                     cid[:12], self.image_name)
+        _SHARED_CONTAINERS.pop(key, None)
+      cid = self._start_docker_container()
+      if cid:
+        _SHARED_CONTAINERS[key] = (cid, 1)
+      return cid, True
 
   def tutorial(self) -> str:
     """Constructs a tool guide tutorial for LLM agents."""
@@ -141,7 +193,29 @@ class ProjectContainerTool(BaseTool):
     return compile_process
 
   def terminate(self) -> bool:
-    """Terminates the container."""
+    """Terminates the container.
+
+    For shared containers, just decrements the refcount. The container
+    is only `docker stop`'d when the last user releases it.
+    """
+    if self._container_is_shared and not _DISABLE_REUSE:
+      key = (self.image_name, self.benchmark.language)
+      with _SHARED_CONTAINERS_LOCK:
+        entry = _SHARED_CONTAINERS.get(key)
+        if entry is None:
+          return True  # Already torn down by another path.
+        cid, refs = entry
+        if cid != self.container_id:
+          # Someone else (re)started it; we no longer own the slot.
+          return True
+        new_refs = refs - 1
+        if new_refs > 0:
+          _SHARED_CONTAINERS[key] = (cid, new_refs)
+          logger.debug('Released container %s for %s (refs=%d)',
+                       cid[:12], self.image_name, new_refs)
+          return True
+        _SHARED_CONTAINERS.pop(key, None)
+    # Last user (or non-shared mode) — actually stop the container.
     terminate_container_command = ['docker', 'stop', self.container_id]
     result = self._execute_command(terminate_container_command)
     return result.returncode == 0

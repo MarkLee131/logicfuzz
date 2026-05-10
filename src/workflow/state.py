@@ -132,6 +132,13 @@ class FuzzingWorkflowState(TypedDict):
     # Contains: success, actual_called_apis, missing_apis, coverage_ratio, validation_method, report
     target_api_validation: NotRequired[Dict[str, Any]]
 
+    # === Build attempt telemetry ===
+    # Append-only list, one record per build_node invocation. Used to derive
+    # per-error-class fixer success curves so retry budgets can be calibrated
+    # from data instead of priors. See run_single_fuzz._fuzzing_pipeline for
+    # the dump to trial_NN/build_attempts.json.
+    build_attempts: NotRequired[List[Dict[str, Any]]]
+
 
 class WorkerState(TypedDict):
     """State for worker nodes in parallel execution."""
@@ -181,6 +188,7 @@ def create_initial_state(
         # Workflow phase control
         workflow_phase="compilation",  # Start with compilation phase
         compilation_retry_count=0,  # Track compilation retries separately
+        build_attempts=[],  # Append-only telemetry for retry-budget calibration
         prototyper_regenerate_count=0,  # Track prototyper regenerations
         previous_fuzz_target_source="",  # For diff generation
         # Store additional configuration

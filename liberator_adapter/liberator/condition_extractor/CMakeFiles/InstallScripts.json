@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/cmake_install.cmake",
+		"/home1/kaixuan/conti/fdg_2025/logic-fuzz/liberator_adapter/liberator/condition_extractor/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

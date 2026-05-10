@@ -3,8 +3,10 @@ LLVM API Extractor
 
 Uses Liberator's condition_extractor/bin/extractor to extract apis_llvm.json from bitcode
 """
+import hashlib
 import os
 import logging
+import shutil
 import subprocess
 from typing import Optional
 from pathlib import Path
@@ -14,6 +16,33 @@ from experiment.benchmark import Benchmark
 from liberator_adapter.extractors.base_extractor import BaseAPIExtractor
 
 logger = logging.getLogger(__name__)
+
+# SVF analysis on some libraries (libucl) doesn't converge — cap wall-time
+# and let the caller fall back to clang-only mode rather than thrash swap.
+# Override with LIBERATOR_SVF_TIMEOUT_SECS env var.
+_SVF_TIMEOUT_SECS = int(os.environ.get('LIBERATOR_SVF_TIMEOUT_SECS', '600'))
+
+# Disk cache for SVF outputs keyed by bitcode hash. SVF is deterministic
+# given a fixed binary version + same .bc input, so re-extraction is
+# wasted CPU. Override path with LIBERATOR_SVF_CACHE_DIR.
+_SVF_CACHE_DIR = Path(os.environ.get(
+    'LIBERATOR_SVF_CACHE_DIR',
+    str(Path.home() / '.cache' / 'logicfuzz' / 'svf')
+))
+
+
+def _bitcode_fingerprint(bc_path: str, extractor_bin: Path) -> str:
+    """Hash the bitcode + extractor binary together so cache invalidates
+    when either the input or the analysis tool changes."""
+    h = hashlib.sha256()
+    for p in (bc_path, str(extractor_bin)):
+        if not os.path.exists(p):
+            continue
+        with open(p, 'rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                h.update(chunk)
+        h.update(b'\x00')
+    return h.hexdigest()[:16]
 
 
 class LLVMAPIExtractor(BaseAPIExtractor):
@@ -238,32 +267,82 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             local_data_layout = os.path.join(temp_dir, 'data_layout.txt')
             local_minimized_apis = os.path.join(temp_dir, 'apis_minimized.txt')
 
-            # 4. Run extractor on host
-            # Need to set environment variables
-            env = os.environ.copy()
-            env['LIBFUZZ_LOG_PATH'] = temp_dir
+            # 3.5 Cache lookup. SVF is deterministic in (bitcode, extractor)
+            # so if we've analysed this exact bitcode + extractor binary
+            # before, just copy the cached outputs back.
+            cache_key = _bitcode_fingerprint(local_bc_file, self.extractor_bin)
+            cache_slot = _SVF_CACHE_DIR / cache_key
+            cached_conditions = cache_slot / 'conditions.json'
+            cached_apis_llvm = cache_slot / 'apis_llvm.json'
+            cached_data_layout = cache_slot / 'data_layout.txt'
+            if cached_conditions.exists() and cached_data_layout.exists():
+                logger.info(
+                    'SVF cache HIT for bitcode %s (key=%s); skipping ~%ds '
+                    'analysis', os.path.basename(bc_file), cache_key,
+                    _SVF_TIMEOUT_SECS,
+                )
+                shutil.copy(cached_conditions, local_conditions)
+                shutil.copy(cached_data_layout, local_data_layout)
+                if cached_apis_llvm.exists():
+                    shutil.copy(cached_apis_llvm, local_apis_llvm)
+            else:
+                # 4. Run extractor on host with a hard wall-time cap. SVF's
+                # pointer analysis on some libraries (libucl) won't converge
+                # in any reasonable resource budget; bound it so the pipeline
+                # falls back to clang-only mode rather than swap-thrash.
+                env = os.environ.copy()
+                env['LIBFUZZ_LOG_PATH'] = temp_dir
 
-            cmd = [
-                str(self.extractor_bin),
-                local_bc_file,
-                '-interface', local_apis_clang,
-                '-output', local_conditions,
-                '-minimize_api', local_minimized_apis,
-                '-v', 'v0',
-                '-t', 'json',
-                '-do_indirect_jumps',
-                '-data_layout', local_data_layout
-            ]
+                cmd = [
+                    str(self.extractor_bin),
+                    local_bc_file,
+                    '-interface', local_apis_clang,
+                    '-output', local_conditions,
+                    '-minimize_api', local_minimized_apis,
+                    '-v', 'v0',
+                    '-t', 'json',
+                    '-do_indirect_jumps',
+                    '-data_layout', local_data_layout
+                ]
 
-            logger.info(f'Running extractor on host: {" ".join(cmd)}')
-            result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+                logger.info(
+                    f'Running extractor on host (timeout {_SVF_TIMEOUT_SECS}s): '
+                    f'{" ".join(cmd)}'
+                )
+                try:
+                    result = subprocess.run(
+                        cmd, env=env, capture_output=True, text=True,
+                        timeout=_SVF_TIMEOUT_SECS,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.error(
+                        'Extractor exceeded %ds wall-time on bitcode %s; '
+                        'killing — pipeline will fall back to clang-only mode',
+                        _SVF_TIMEOUT_SECS, os.path.basename(bc_file),
+                    )
+                    raise RuntimeError(
+                        f'Extractor timed out after {_SVF_TIMEOUT_SECS}s'
+                    )
 
-            if result.returncode != 0:
-                logger.error(f'Extractor stdout: {result.stdout}')
-                logger.error(f'Extractor stderr: {result.stderr}')
-                raise RuntimeError(f'Extractor failed: {result.stderr}')
+                if result.returncode != 0:
+                    logger.error(f'Extractor stdout: {result.stdout}')
+                    logger.error(f'Extractor stderr: {result.stderr}')
+                    raise RuntimeError(f'Extractor failed: {result.stderr}')
 
-            logger.info('Extractor completed successfully on host')
+                logger.info('Extractor completed successfully on host')
+
+                # Populate cache for subsequent runs.
+                try:
+                    cache_slot.mkdir(parents=True, exist_ok=True)
+                    if os.path.exists(local_conditions):
+                        shutil.copy(local_conditions, cached_conditions)
+                    if os.path.exists(local_data_layout):
+                        shutil.copy(local_data_layout, cached_data_layout)
+                    if os.path.exists(local_apis_llvm):
+                        shutil.copy(local_apis_llvm, cached_apis_llvm)
+                    logger.debug('SVF cache MISS → wrote slot %s', cache_slot)
+                except OSError as exc:
+                    logger.warning('Failed to populate SVF cache: %s', exc)
 
             # 5. Copy results to output directory
             os.makedirs(output_dir, exist_ok=True)

@@ -448,6 +448,7 @@ def select_top_k_sequences(
     automaton_post_extend_max_inputs: int = 12,
     automaton_post_extend_acceptance_threshold: float = 0.0,
     length_floor_safe_apis: Optional[Set[str]] = None,
+    disable_coverage_filter: bool = False,
 ) -> Tuple[List[List[str]], Dict[str, Any]]:
     """
     Convenience function matching the filter interface of L1-L3.
@@ -486,8 +487,14 @@ def select_top_k_sequences(
         entry_point_names = set(entry_point_analysis.get('entry_point_names', []))
 
     # === L5: Coverage-Aware Pre-filtering (if coverage data available) ===
+    # Skipped when disable_coverage_filter=True (evaluation mode: maximise
+    # total coverage by NOT avoiding APIs the baseline already covers).
     coverage_aware_stats = {}
-    if existing_coverage:
+    if disable_coverage_filter:
+        coverage_aware_stats = {'coverage_aware_enabled': False,
+                                'reason': 'disabled_for_evaluation'}
+        log.info("   ⏭️  L5 Coverage-Aware: SKIPPED (disable_coverage_filter=True)")
+    elif existing_coverage:
         try:
             from .coverage_aware_filter import CoverageAwareFilter
 

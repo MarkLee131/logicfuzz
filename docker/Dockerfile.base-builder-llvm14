@@ -21,7 +21,9 @@ RUN apt-get update && apt-get install -y \
     && add-apt-repository "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-14 main" \
     && apt-get update
 
-# Install LLVM 14 and libc++ 14
+# Install LLVM 14 and libc++ 14, plus libclang for Python clang bindings,
+# and common build tools that downstream project Dockerfiles often need
+# (avoids fragile in-container apt fetches against archive.ubuntu.com)
 RUN apt-get install -y \
     clang-14 \
     llvm-14 \
@@ -30,7 +32,17 @@ RUN apt-get install -y \
     llvm-14-runtime \
     libc++-14-dev \
     libc++abi-14-dev \
+    libclang-14-dev \
+    python3-clang-14 \
+    pkg-config \
+    libtool \
+    automake \
+    autoconf \
+    texinfo \
     && rm -rf /var/lib/apt/lists/*
+
+# Symlink libclang.so for python-clang bindings to find it
+RUN ln -sf /usr/lib/llvm-14/lib/libclang.so.1 /usr/lib/x86_64-linux-gnu/libclang.so
 
 # Install wllvm for bitcode extraction
 RUN pip3 install wllvm

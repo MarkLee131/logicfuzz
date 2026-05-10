@@ -579,6 +579,44 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
         state_update["total_build_failure_count"] = total_build_failures
         logger.debug(f'Build failed, total_build_failure_count={total_build_failures}', trial=trial)
 
+    # === Telemetry: append per-attempt record for retry-budget calibration ===
+    # Read-only data flow: nothing routes off this list. Used post-hoc to
+    # compute fixer success curves per error category.
+    #
+    # Robustness contract: the BASE record (success/binary/error_count) must
+    # always make it into build_attempts even if classification fails. The
+    # earlier version wrapped the entire block in try/except, so any triage
+    # exception (we hit one on zlib trial 03 — context shape varied) silently
+    # dropped the whole attempt — exactly the failure data we need most.
+    base_record = {
+        "attempt_idx": len(state.get("build_attempts", [])),
+        "phase": state.get("workflow_phase", "compilation"),
+        "compile_success": compile_success,
+        "binary_exists": state_update["binary_exists"],
+        "error_count": len(state_update["build_errors"]),
+        "primary_category": None,
+        "categories": {},
+        "fixer_calls_before": state.get("node_visit_counts", {}).get("fixer", 0),
+        "compilation_retry_count": state.get("compilation_retry_count", 0),
+    }
+    try:
+        from src.utils.compilation_error_triage import triage_build_errors
+        _ctx_for_triage = state.get("context") or {}
+        if hasattr(_ctx_for_triage, 'get'):
+            project_apis = _ctx_for_triage.get("project_apis", []) or []
+        else:
+            project_apis = []
+        triage = triage_build_errors(state_update["build_errors"], project_apis)
+        base_record["primary_category"] = (
+            triage.primary_category.name if triage.primary_category else None)
+        base_record["categories"] = {
+            cat.name: count for cat, count in triage.summary.items()}
+    except Exception as exc:  # classification failure must NOT drop the record
+        logger.debug(f'build_attempts triage classification failed: {exc}',
+                     trial=trial)
+    state_update["build_attempts"] = (
+        state.get("build_attempts", []) + [base_record])
+
     # If compilation successful and we're in compilation phase, switch to optimization phase
     if compile_success and state.get("workflow_phase") == "compilation":
         logger.info('Compilation successful, switching workflow_phase to optimization', trial=trial)

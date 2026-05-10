@@ -808,23 +808,45 @@ class BuilderRunner:
       logger.debug('No cached image found for %s with %s sanitizer', 
                    self.benchmark.project, sanitizer)
 
-    # Build the image
-    command = [
-        'docker', 'build', '-t', f'gcr.io/oss-fuzz/{generated_project}',
-        os.path.join(oss_fuzz_checkout.OSS_FUZZ_DIR, 'projects',
-                     generated_project)
-    ]
-    with open(log_path, 'w+') as log_file:
-      try:
-        sp.run(command,
-               cwd=oss_fuzz_checkout.OSS_FUZZ_DIR,
-               stdin=sp.DEVNULL,
-               stdout=log_file,
-               stderr=sp.STDOUT,
-               check=True)
-      except sp.CalledProcessError as e:
-        logger.info('Failed to build image for %s: %s', generated_project, e)
-        return False
+    # Fast path: reuse pre-built base image if present, just retag.
+    # NOTE: the base image holds source + deps but NOT a compiled fuzzer
+    # binary, so this only skips the docker-build step. We still need to
+    # fall through to `docker run ... compile` below to actually produce
+    # the fuzz target binary.
+    new_tag = f'gcr.io/oss-fuzz/{generated_project}'
+    image_already_tagged = False
+    base_project = generated_project.split('-', 1)[0]
+    if base_project and base_project != generated_project:
+      base_tag = f'gcr.io/oss-fuzz/{base_project}'
+      inspect = sp.run(['docker', 'image', 'inspect', base_tag],
+                       stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+      if inspect.returncode == 0:
+        retag = sp.run(['docker', 'tag', base_tag, new_tag],
+                       stdout=sp.PIPE, stderr=sp.PIPE)
+        if retag.returncode == 0:
+          logger.info('Reused %s as %s (skip image rebuild)',
+                      base_tag, new_tag)
+          image_already_tagged = True
+    # Build the image (host network + legacy builder for IPv6 apt access)
+    if not image_already_tagged:
+      command = [
+          'docker', 'build', '--network=host', '-t', new_tag,
+          os.path.join(oss_fuzz_checkout.OSS_FUZZ_DIR, 'projects',
+                       generated_project)
+      ]
+      build_env = os.environ | {'DOCKER_BUILDKIT': '0'}
+      with open(log_path, 'w+') as log_file:
+        try:
+          sp.run(command,
+                 cwd=oss_fuzz_checkout.OSS_FUZZ_DIR,
+                 env=build_env,
+                 stdin=sp.DEVNULL,
+                 stdout=log_file,
+                 stderr=sp.STDOUT,
+                 check=True)
+        except sp.CalledProcessError as e:
+          logger.info('Failed to build image for %s: %s', generated_project, e)
+          return False
 
     outdir = get_build_artifact_dir(generated_project, 'out')
     workdir = get_build_artifact_dir(generated_project, 'work')

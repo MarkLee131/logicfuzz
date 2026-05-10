@@ -29,6 +29,9 @@ class ClangAPIExtractor(BaseAPIExtractor):
         '/usr/lib/x86_64-linux-gnu/libclang-10.so.1',
         '/usr/lib/llvm-11/lib/libclang.so.1',
         '/usr/lib/llvm-12/lib/libclang.so.1',
+        '/usr/lib/llvm-14/lib/libclang.so.1',
+        '/usr/lib/llvm-15/lib/libclang.so.1',
+        '/usr/lib/x86_64-linux-gnu/libclang-14.so.1',
     ]
     
     def __init__(self, benchmark: Benchmark, container: Optional[ProjectContainerTool] = None,
@@ -124,8 +127,11 @@ class ClangAPIExtractor(BaseAPIExtractor):
                 logger.info(f'Found libclang at: {path}')
                 return path
         
-        # Fallback to find command
-        result = self.container.execute('find /usr -name "libclang*.so*" 2>/dev/null | head -1')
+        # Fallback to find command — exclude sanitizer runtime libs (libclang_rt*)
+        result = self.container.execute(
+            r'find /usr -regex ".*/libclang\(-[0-9]+\)?\.so\(\.[0-9]+\)*$" '
+            '! -name "libclang_rt*" 2>/dev/null | head -1'
+        )
         if result.returncode == 0 and result.stdout.strip():
             path = result.stdout.strip()
             logger.info(f'Found libclang via find: {path}')

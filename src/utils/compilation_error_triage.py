@@ -13,6 +13,7 @@ targeted fix strategies. Different error types require different approaches:
 Inspired by Scheduzz's compilation error triage approach.
 """
 
+import os
 import re
 import logging
 from enum import Enum, auto
@@ -31,7 +32,20 @@ class ErrorCategory(Enum):
     SYNTAX_ERROR = auto()         # syntax errors
     LANGUAGE_MISMATCH = auto()    # C++ features in C code
     INTERNAL_API = auto()         # internal/private API usage
-    FAKE_DEFINITION = auto()      # LLM-invented functions
+    INCONCLUSIVE_LINK = auto()    # undefined reference for a symbol that is
+                                  # NOT in known_apis but plausibly real:
+                                  # close prefix match to a known API, or
+                                  # reasonable function-name shape. Ambiguous
+                                  # between "actual hallucination" and
+                                  # "static-extracted known_apis is incomplete"
+                                  # (macros, weak symbols, #define renames).
+                                  # Recoverable — fixer gets one informed shot
+                                  # with a suggested similar-API hint.
+    FAKE_DEFINITION = auto()      # LLM-invented functions: undefined symbol
+                                  # AND no plausible match to any known API.
+                                  # Strict criterion (raised from "not in
+                                  # known_apis"): also requires NO close
+                                  # prefix/suffix match. Not recoverable.
     OTHER = auto()                # unclassified errors
 
 
@@ -316,19 +330,52 @@ class CompilationErrorTriage:
                         details="missing_extern_c",
                         recoverable=True
                     )
-                # Check if this is a fake definition (but not for known fuzzer symbols)
-                if known_apis and symbol:
-                    known_names = {api.get('function_name', '') for api in known_apis}
-                    if symbol not in known_names and not self._is_system_symbol(symbol):
+                # Two-signal classification for undefined symbols.
+                #
+                # Old behavior (band-aid in supervisor): symbol ∉ known_apis
+                # → FAKE_DEFINITION → END trial. This false-flags any symbol
+                # that the static extractor missed (macro-expanded name,
+                # weak symbol, #define-renamed real func), forcing the
+                # supervisor to either give a blanket "1 retry for fake-def"
+                # or terminate immediately.
+                #
+                # New behavior (root-cause in triage): split into three
+                # buckets by *evidence strength*:
+                #   - In known_apis or system symbol → LINK_ERROR (legit)
+                #   - ∉ known_apis but plausibly real (close prefix match
+                #     to a known API, or normal function-name shape) →
+                #     INCONCLUSIVE_LINK (fixer-recoverable, with hint)
+                #   - ∉ known_apis AND no plausible match → FAKE_DEFINITION
+                #     (genuine hallucination, not recoverable)
+                if known_apis and symbol and not self._is_system_symbol(symbol):
+                    known_names = {api.get('function_name', '')
+                                   for api in known_apis}
+                    if symbol not in known_names:
+                        similar = (self._find_similar_api(symbol, known_names)
+                                   if self._inconclusive_enabled() else None)
+                        if similar:
+                            return TriagedError(
+                                raw_error=error,
+                                category=ErrorCategory.INCONCLUSIVE_LINK,
+                                fix_strategy=FixStrategy.INCLUDE_CPP_FILE,
+                                extracted_symbol=symbol,
+                                line_number=line_number,
+                                details=(f"Symbol '{symbol}' not in known_apis "
+                                         f"but resembles '{similar}' "
+                                         f"(could be macro/weak/define-renamed)"),
+                                recoverable=True,
+                            )
                         return TriagedError(
                             raw_error=error,
                             category=ErrorCategory.FAKE_DEFINITION,
                             fix_strategy=FixStrategy.REGENERATE,
                             extracted_symbol=symbol,
                             line_number=line_number,
-                            details=f"Function '{symbol}' not found in project APIs",
-                            recoverable=False
-                    )
+                            details=(f"Function '{symbol}' not found in project "
+                                     f"APIs and no close match — likely "
+                                     f"hallucination"),
+                            recoverable=False,
+                        )
                 return TriagedError(
                     raw_error=error,
                     category=ErrorCategory.LINK_ERROR,
@@ -437,6 +484,69 @@ class CompilationErrorTriage:
         }
         return symbol.startswith(system_prefixes) or symbol in system_names
 
+    # Threshold for INCONCLUSIVE_LINK gating. Picked empirically: project
+    # APIs almost always share a 4-char common prefix with related variants
+    # (cJSON_*, ucl_*, ares_*, png_*, etc.). A 4-char shared prefix is a
+    # strong "this is a real API I just don't know about" signal; below
+    # that, more likely an LLM hallucination. Tunable via env override
+    # (LOGICFUZZ_TRIAGE_PREFIX_LEN) for projects with shorter prefix
+    # conventions (e.g. zlib's z_*).
+    _DEFAULT_MIN_PREFIX_FOR_INCONCLUSIVE = 4
+
+    @property
+    def _MIN_PREFIX_FOR_INCONCLUSIVE(self) -> int:
+        try:
+            return max(1, int(os.environ.get(
+                'LOGICFUZZ_TRIAGE_PREFIX_LEN',
+                self._DEFAULT_MIN_PREFIX_FOR_INCONCLUSIVE)))
+        except ValueError:
+            return self._DEFAULT_MIN_PREFIX_FOR_INCONCLUSIVE
+
+    @staticmethod
+    def _inconclusive_enabled() -> bool:
+        """A/B kill switch for the INCONCLUSIVE_LINK split.
+
+        Setting LOGICFUZZ_TRIAGE_INCONCLUSIVE=0 reverts to the old
+        binary classification (in known_apis ⇒ LINK_ERROR, otherwise
+        ⇒ FAKE_DEFINITION). Useful for measuring the contribution of
+        the split in a controlled experiment without code changes.
+        """
+        return os.environ.get('LOGICFUZZ_TRIAGE_INCONCLUSIVE', '1') != '0'
+
+    def _find_similar_api(self, symbol: str,
+                          known_names: set) -> Optional[str]:
+        """Return the closest-matching known API by shared prefix length.
+
+        Returns the candidate iff the longest common case-insensitive
+        prefix is ≥ self._MIN_PREFIX_FOR_INCONCLUSIVE. Else None.
+
+        This is the discriminator between INCONCLUSIVE_LINK (close match,
+        recoverable) and FAKE_DEFINITION (no plausible match,
+        non-recoverable). Mirrors the heuristic in
+        unified_validator._suggest_similar_api but with a stricter cutoff.
+        """
+        if not known_names or not symbol:
+            return None
+        sym_lower = symbol.lower()
+        best_name = None
+        best_len = 0
+        for api in known_names:
+            if not api:
+                continue
+            api_lower = api.lower()
+            n = 0
+            for c1, c2 in zip(sym_lower, api_lower):
+                if c1 == c2:
+                    n += 1
+                else:
+                    break
+            if n > best_len:
+                best_len = n
+                best_name = api
+        if best_len >= self._MIN_PREFIX_FOR_INCONCLUSIVE:
+            return best_name
+        return None
+
     def _get_recommended_strategy(self, primary_category: Optional[ErrorCategory],
                                    errors: List[TriagedError]) -> Optional[FixStrategy]:
         """Get recommended fix strategy based on error pattern."""
@@ -452,6 +562,10 @@ class CompilationErrorTriage:
             ErrorCategory.SYNTAX_ERROR: FixStrategy.FIX_SYNTAX,
             ErrorCategory.LANGUAGE_MISMATCH: FixStrategy.USE_C_PATTERNS,
             ErrorCategory.INTERNAL_API: FixStrategy.USE_PUBLIC_API,
+            # INCONCLUSIVE_LINK: try treating it like a real link error first
+            # (give the fixer a chance to surface the symbol), with the
+            # similar-API hint embedded in the per-error details.
+            ErrorCategory.INCONCLUSIVE_LINK: FixStrategy.INCLUDE_CPP_FILE,
             ErrorCategory.FAKE_DEFINITION: FixStrategy.REGENERATE,
             ErrorCategory.OTHER: FixStrategy.MANUAL_REVIEW,
         }
@@ -506,8 +620,9 @@ class CompilationErrorTriage:
             ErrorCategory.SYNTAX_ERROR: "⚠️",
             ErrorCategory.LANGUAGE_MISMATCH: "🌐",
             ErrorCategory.INTERNAL_API: "🔒",
+            ErrorCategory.INCONCLUSIVE_LINK: "❓",
             ErrorCategory.FAKE_DEFINITION: "❌",
-            ErrorCategory.OTHER: "❓",
+            ErrorCategory.OTHER: "❔",
         }
         return emojis.get(category, "•")
 
@@ -553,6 +668,17 @@ def get_fix_guidance(result: TriageResult) -> str:
         guidance_lines.append("1. Add `#include \"implementation.cpp\"` (check existing fuzzers)")
         guidance_lines.append("2. Add library link flag in build script (`-lfoo`)")
         guidance_lines.append("3. Find and link the correct .a/.so file\n")
+
+    if result.has_category(ErrorCategory.INCONCLUSIVE_LINK):
+        guidance_lines.append("### ❓ Inconclusive Link (probably a real symbol)")
+        guidance_lines.append(
+            "These symbols are NOT in the static-extracted known_apis but resemble "
+            "real APIs (close prefix match). Likely macro-expanded names, weak "
+            "symbols, or #define-renamed real functions. Treat as a link error: "
+            "find the right header / link flag / .cpp include before regenerating.")
+        for err in result.get_errors_by_category(ErrorCategory.INCONCLUSIVE_LINK)[:5]:
+            guidance_lines.append(f"  - `{err.extracted_symbol}` — {err.details}")
+        guidance_lines.append("")
 
     if result.has_category(ErrorCategory.HEADER_NOT_FOUND):
         guidance_lines.append("### 📁 Header Not Found")

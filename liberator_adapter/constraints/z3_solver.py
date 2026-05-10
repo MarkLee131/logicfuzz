@@ -324,17 +324,24 @@ class Z3ConstraintBuilder:
         """
         Add API sequence order constraint
 
-        Ensure APIs in sequence are executed in given order
+        Ensure APIs in sequence are executed in given order. The order var
+        is keyed by API name (one var per name), so if an API appears at
+        multiple indices we only pin its order to the FIRST occurrence —
+        otherwise ``order_X == 0 AND order_X == 2`` is UNSAT for any
+        legitimate sequence that uses an API more than once. The
+        ``api_called`` boolean assertion is also idempotent.
         """
         if len(api_sequence) < 2:
             return None
 
         order_exprs = []
+        seen: Set[str] = set()
         for i, api in enumerate(api_sequence):
+            if api in seen:
+                continue
+            seen.add(api)
             order_var = self._get_or_create_order_var(api)
-            # Set sequence number
             order_exprs.append(order_var == i)
-            # Mark API as called
             api_var = self._get_or_create_api_var(api)
             self.solver.add(api_var)
 

@@ -58,10 +58,11 @@ from src.utils.compilation_error_triage import (
 
 # ==================== Configuration Constants ====================
 MAX_COMPILATION_RETRIES = 2          # Max fixer attempts during compilation
-MAX_CRASH_FIX_RETRIES = 2            # Max fixer attempts after crash (false positive)
-MAX_TOTAL_BUILD_FAILURES = 10        # Global safety limit
-MAX_NODE_VISITS = 10                 # Loop detection threshold
+MAX_CRASH_FIX_RETRIES = 1            # Max fixer attempts after crash (false positive)
+MAX_TOTAL_BUILD_FAILURES = 5         # Global safety limit
+MAX_NODE_VISITS = 6                  # Loop detection threshold
 MAX_COVERAGE_IMPROVE_ITERATIONS = 1  # coverage_analyzer and improver run at most once
+MAX_FIXER_INVOCATIONS = 3            # Hard cap on total fixer invocations per trial
 LINE_COVERAGE_THRESHOLD = 0.1        # 10% real project coverage to consider "good"
 
 
@@ -99,6 +100,12 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
                           f'possible loop detected', trial=trial)
             return _end_workflow("node_loop_detected",
                                f"Workflow terminated: {next_action} visited {node_visit_counts[next_action]} times",
+                               node_visit_counts=node_visit_counts)
+
+        if next_action == "fixer" and node_visit_counts["fixer"] > MAX_FIXER_INVOCATIONS:
+            logger.warning(f'Fixer hit hard cap ({MAX_FIXER_INVOCATIONS}); ending trial', trial=trial)
+            return _end_workflow("fixer_cap_exceeded",
+                               f"Workflow terminated: fixer reached MAX_FIXER_INVOCATIONS={MAX_FIXER_INVOCATIONS}",
                                node_visit_counts=node_visit_counts)
 
     logger.info(f'Supervisor routing to: {next_action} '

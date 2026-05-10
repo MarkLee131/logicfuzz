@@ -196,17 +196,32 @@ class Evaluator:
     outdir = builder_runner.get_build_artifact_dir(project_name, 'out')
     target_binary = os.path.join(outdir, self.benchmark.target_name)
     binary_exists = os.path.exists(target_binary)
-    
-    # Parse errors from log if build failed
-    errors = []
-    if not build_succeeded:
-      # Extract error lines from log
+    overall_success = build_succeeded and binary_exists
+
+    # Parse errors from log whenever the overall build did not produce a
+    # binary — covers (a) builder_runner returning False, and (b) the case
+    # where it returned True but no binary was emitted (e.g. compile step
+    # silently failed). Without this, the fixer would receive `errors=[]`
+    # and have nothing to triage.
+    errors: list[str] = []
+    if not overall_success:
       for line in build_log.split('\n'):
         if 'error:' in line.lower() or 'undefined reference' in line:
           errors.append(line.strip())
-    
+      if not errors:
+        # Last-resort: keep the trailing log so triage has something to
+        # categorize as OTHER instead of silently dropping the failure.
+        tail = [ln for ln in build_log.splitlines()[-20:] if ln.strip()]
+        if tail:
+          errors.append('Build did not produce a binary. Tail of log:\n'
+                        + '\n'.join(tail))
+        else:
+          errors.append(
+              f'Build did not produce a binary at {target_binary}; '
+              f'build log was empty.')
+
     return {
-        'success': build_succeeded and binary_exists,
+        'success': overall_success,
         'errors': errors,
         'log': build_log,
         'binary_exists': binary_exists

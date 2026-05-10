@@ -32,7 +32,10 @@ NUM_EVA = int(os.getenv('LLM_NUM_EVA', '6'))
 # WARN: Avoid large NUM_SAMPLES in highly parallelized local experiments.
 # It controls the number of LLM responses per prompt, which may exceed your
 # LLM's limit on query-per-second.
-NUM_SAMPLES = 5
+# Trial cap dropped from 5 → 2 (override with -n) to halve LLM cost on
+# repeated runs; the L4 ranker already prunes to 12 sequences so the gain
+# from extra trials past 2 is marginal in our empirical runs.
+NUM_SAMPLES = 2
 MAX_TOKENS: int = 409600
 RUN_TIMEOUT: int = 60
 TEMPERATURE: float = 0.4
@@ -201,6 +204,14 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
     # Get synthesis settings from args if available
     # Note: Synthesis is always enabled (CBFactory + LLM refinement)
     num_synthesis_drivers = getattr(args, 'num_synthesis_drivers', 5) if args else 5
+    # Phase G closed-loop knobs (only active when --closed-loop is also set)
+    closed_loop_iters = (
+        getattr(args, 'closed_loop_iters', 0)
+        if (args and getattr(args, 'closed_loop', False)) else 0
+    )
+    closed_loop_early_stop = (
+        getattr(args, 'closed_loop_early_stop', 0) if args else 0
+    )
 
     # Create LLM adapter for driver knowledge extraction (optional)
     llm_client = None
@@ -216,7 +227,9 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
       logger_instance=None,  # Use standard logging - no trial concept here
       num_synthesis_drivers=num_synthesis_drivers,
-      llm_client=llm_client  # Pass LLM for driver knowledge extraction
+      llm_client=llm_client,  # Pass LLM for driver knowledge extraction
+      closed_loop_iters=closed_loop_iters,
+      closed_loop_early_stop=closed_loop_early_stop,
     )
     return context.to_dict()
   except (ValueError, RuntimeError) as e:
@@ -369,7 +382,43 @@ def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
         finished=True)
     write_duration = time.time() - write_start
     trial_logger.info(f'📍 Trial result written in {write_duration:.3f}s')
-    
+
+    # Dump build-attempt telemetry alongside the trial result.
+    # See state.py:build_attempts — used to derive per-error-class fixer
+    # success curves so retry budgets can be calibrated from data instead
+    # of priors. Failure here is non-fatal.
+    #
+    # We dump even when `attempts` is empty so missing-telemetry trials
+    # are visible (vs. "trial never reached the dump path"). The
+    # aggregator can then distinguish "no build attempts captured"
+    # from "no trial at all" and surface the gap.
+    try:
+        attempts = (final_state.get("build_attempts", [])
+                    if final_state else [])
+        import json as _json
+        status_dir = trial_result.best_result.work_dirs.status
+        attempts_path = os.path.join(
+            status_dir, f'{trial:02d}', 'build_attempts.json')
+        os.makedirs(os.path.dirname(attempts_path), exist_ok=True)
+        with open(attempts_path, 'w') as f:
+            _json.dump(
+                {
+                    "trial": trial,
+                    "attempts": attempts,
+                    "final_outcome": (
+                        "compile_succeeded"
+                        if any(a.get("compile_success") for a in attempts)
+                        else ("compile_failed" if attempts
+                              else "no_build_attempts_recorded")),
+                },
+                f, indent=2)
+        trial_logger.info(
+            f'📊 build_attempts telemetry written: {len(attempts)} record(s) '
+            f'→ {attempts_path}')
+    except Exception as _telem_exc:
+        trial_logger.debug(
+            f'build_attempts telemetry dump skipped: {_telem_exc}')
+
     trial_logger.info('✅ _fuzzing_pipeline completed, returning trial_result')
     return trial_result
     
@@ -432,6 +481,21 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
     )
   
   shared_data_duration = time.time() - shared_data_start
+
+  # Resolve --num-samples=auto. Until viability analysis runs (L0–L5 + L4
+  # greedy max-coverage), we cannot know how many sequences survive — so
+  # there's no honest CLI default. Default to "one trial per viable
+  # CBFactory base driver" so every survivor gets at least one LLM pass.
+  # Falls back to 1 when the synthesis pool is empty (still better than
+  # crashing on `range(1, None+1)`).
+  if args.num_samples is None:
+    n_synth = len(shared_data.get('synthesized_drivers', []))
+    args.num_samples = n_synth if n_synth > 0 else 1
+    logger.info(
+        f'📍 [_fuzzing_pipelines] --num-samples auto-resolved to '
+        f'{args.num_samples} (one trial per viable base driver)',
+        trial=0)
+
   logger.info(
       f'📍 [_fuzzing_pipelines] Shared data prepared in {shared_data_duration:.2f}s '
       f'(will be reused by all {args.num_samples} trials)',
@@ -467,16 +531,103 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
       )
     
     logger.info('📍 [_fuzzing_pipelines] Exiting ThreadPool context (will wait for cleanup)...', trial=0)
-  
+
   cleanup_duration = time.time() - starmap_start - starmap_duration
   logger.info(f'📍 [_fuzzing_pipelines] ThreadPool cleanup completed in {cleanup_duration:.2f}s', trial=0)
-  
+
+  # Optional: merge successful trials into a single multi-task harness.
+  # See docs/merge_drivers.md and the --merge-drivers flag in run_logicfuzz.
+  if getattr(args, 'merge_drivers', False):
+    _maybe_merge_drivers(benchmark, work_dirs, trial_results)
+
   logger.info('📍 [_fuzzing_pipelines] Creating BenchmarkResult...', trial=0)
   result = BenchmarkResult(benchmark=benchmark,
                           work_dirs=work_dirs,
                           trial_results=trial_results)
   logger.info('📍 [_fuzzing_pipelines] BenchmarkResult created, returning', trial=0)
   return result
+
+
+def _maybe_merge_drivers(benchmark: Benchmark,
+                         work_dirs: WorkDirs,
+                         trial_results: List) -> Optional[str]:
+  """Synthesize a multi-task harness from successful trials.
+
+  Minimum-viable integration of tools.merge_drivers (--merge-drivers /
+  --eval). Output: ``<work_dirs.base>/merged/`` with:
+    - synthesized/entry.{c,cpp}    dispatcher
+    - synthesized/<id>.{c,cpp}     renamed sub-driver i
+    - oss_fuzz_build_snippet.sh    append to OSS-Fuzz project build.sh
+
+  Skipped here vs the standalone `pipeline` subcommand:
+    - **preflight** (smoke-fuzz each binary): the per-trial OSS-Fuzz
+      binaries are removed during _fuzzing_pipeline cleanup; we only
+      have the .fuzz_target sources at this stage. Adding preflight
+      would require keeping binaries around for the whole run, which
+      this minimal cut intentionally avoids.
+    - **coverage-aware Top-K selection**: same reason — needs binaries
+      to gather per-driver edge counts. Without it we use uniform
+      dispatch (PromeFuzz §5.2 fallback when coverage signal is
+      unavailable). Future enhancement: read from per-driver coverage
+      reports under work_dirs.code_coverage_report (the run_target_local
+      path produces these and they survive cleanup).
+
+  Returns the output directory on success, None if there were fewer
+  than 2 successful trials (nothing meaningful to merge).
+  """
+  from pathlib import Path
+  successful_sources: List[Path] = []
+  for tr in trial_results:
+    if not tr or not getattr(tr, 'best_result', None):
+      continue
+    if not getattr(tr.best_result, 'compiles', False):
+      continue
+    src = Path(work_dirs.fuzz_targets) / f'{tr.trial:02d}.fuzz_target'
+    if src.exists():
+      successful_sources.append(src)
+
+  if len(successful_sources) < 2:
+    logger.info(
+        f'merge_drivers: skipping (only {len(successful_sources)} '
+        f'successful trial(s); need ≥2 to merge)', trial=0)
+    return None
+
+  try:
+    # Import lazily so a missing tools.merge_drivers package doesn't
+    # break the main run; the flag is opt-in and a clean error is
+    # better than a hard import failure at module-load.
+    from tools.merge_drivers.merge import (
+        DispatchMode, SelectorPosition, SynthesizedDriver)
+  except ImportError as exc:
+    logger.warning(
+        f'merge_drivers: tools.merge_drivers unavailable ({exc}); '
+        f'skipping', trial=0)
+    return None
+
+  try:
+    drv = SynthesizedDriver.from_paths(
+        successful_sources,
+        mode=DispatchMode.UNIFORM,
+        position=SelectorPosition.TAIL,
+        weights=None,
+    )
+    out_dir = Path(work_dirs.base) / 'merged'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    drv.save(out_dir)
+    snippet_path = out_dir / 'oss_fuzz_build_snippet.sh'
+    snippet_path.write_text(drv.emit_oss_fuzz_build_snippet(
+        target_name='merged_fuzzer'))
+    logger.info(
+        f'merge_drivers: synthesized {drv.driver_count} drivers '
+        f'(lang={"C++" if drv.is_cpp else "C"}, '
+        f'selector_bytes={drv.selector_bytes}) → {out_dir}',
+        trial=0)
+    return str(out_dir)
+  except Exception as exc:  # noqa: BLE001 — never break the main run
+    logger.warning(
+        f'merge_drivers: synthesis failed ({type(exc).__name__}: {exc}); '
+        f'main run unaffected', trial=0)
+    return None
 
 def run(benchmark: Benchmark, model_name: str, args: argparse.Namespace,
         work_dirs: WorkDirs) -> Optional[AggregatedResult]:

@@ -304,6 +304,20 @@ class IncrementalZ3Solver:
         # Constraint naming for unsat core
         self._constraint_counter = 0
 
+        # De-dup state for idempotent assertions. Z3 rejects duplicate named
+        # assertions within a frame; we skip re-asserting (consumer, type)
+        # `requires_*` pairs that the recursive synthesis loop may visit
+        # more than once. Tracked per checkpoint so ``pop()`` discards
+        # pairs that were added in the popped frame (their Z3 named
+        # assertions go away with the pop, so future re-assertions are
+        # legitimate fresh additions).
+        self._asserted_requires_by_level: Dict[int, Set[Tuple[str, str]]] = {0: set()}
+        self._asserted_produces_by_level: Dict[int, Set[Tuple[str, str]]] = {0: set()}
+        # (api_name, position) pairs already pinned by ``add_api_called``;
+        # re-asserting the same pair within the active stack would collide
+        # on the ``api_order_{name}_{pos}`` constraint name.
+        self._asserted_order_by_level: Dict[int, Set[Tuple[str, int]]] = {0: set()}
+
         # Phase H: optional automaton acceptance guard.
         self.automaton_guard = automaton_guard
         self.n_automaton_pruned = 0
@@ -364,6 +378,11 @@ class IncrementalZ3Solver:
             # Clean up constraints at this level
             if self.checkpoint_level in self.constraints_by_level:
                 del self.constraints_by_level[self.checkpoint_level]
+            # Drop the level's de-dup state so future re-assertions in a
+            # fresh frame are not mistakenly skipped.
+            self._asserted_requires_by_level.pop(self.checkpoint_level, None)
+            self._asserted_produces_by_level.pop(self.checkpoint_level, None)
+            self._asserted_order_by_level.pop(self.checkpoint_level, None)
             # Truncate api_sequence to this checkpoint's snapshot length so
             # the automaton-guard sees the same sequence as the Z3 frame.
             snapshot_len = self._sequence_length_by_level.pop(
@@ -398,7 +417,22 @@ class IncrementalZ3Solver:
             name = self._next_constraint_name(constraint_type.value)
 
         # Add with tracking for unsat core
-        self.solver.assert_and_track(constraint, Bool(name))
+        try:
+            self.solver.assert_and_track(constraint, Bool(name))
+        except Exception as exc:
+            logger.error(
+                "[Z3Guided] assert_and_track failed for name=%r at level=%d "
+                "(api_seq=%s, asserted_requires=%s, asserted_produces=%s): %s",
+                name,
+                self.checkpoint_level,
+                self.api_sequence,
+                {lvl: sorted(s) for lvl, s in
+                 self._asserted_requires_by_level.items()},
+                {lvl: sorted(s) for lvl, s in
+                 self._asserted_produces_by_level.items()},
+                exc,
+            )
+            raise
 
         # Track at current level
         self.constraints_by_level[self.checkpoint_level].append((name, constraint_type))
@@ -409,6 +443,16 @@ class IncrementalZ3Solver:
         """
         Assert that an API is called at a specific position.
 
+        The model assumes one position per API (``api_vars``/``order_vars``
+        are keyed by name with no positional indexing). The CBFactory init-
+        chain recursion can route through the same API as a producer for
+        multiple resource types, so guard against re-asserting the
+        ``api_called_{name}`` boolean — Z3 rejects duplicate named
+        assertions within a frame. The per-position order constraint name
+        already carries ``position`` and is therefore unique; re-asserting
+        ``order_var == position`` for a different position correctly
+        surfaces as UNSAT on the next check, which the caller rolls back.
+
         Args:
             api_name: Name of the API
             position: Position in the call sequence
@@ -416,16 +460,26 @@ class IncrementalZ3Solver:
         api_var = self._get_or_create_api_var(api_name)
         order_var = self._get_or_create_order_var(api_name)
 
-        self.add_constraint(api_var, f"api_called_{api_name}",
-                           GuidanceConstraintType.INIT_COMPLETION)
-        self.add_constraint(order_var == position, f"api_order_{api_name}_{position}",
-                           GuidanceConstraintType.ACCESS_ORDER)
+        if api_name not in self.api_sequence:
+            self.add_constraint(api_var, f"api_called_{api_name}",
+                               GuidanceConstraintType.INIT_COMPLETION)
+            self.api_sequence.append(api_name)
 
-        self.api_sequence.append(api_name)
+        order_pair = (api_name, position)
+        if not any(order_pair in s for s in self._asserted_order_by_level.values()):
+            self._asserted_order_by_level.setdefault(
+                self.checkpoint_level, set()).add(order_pair)
+            self.add_constraint(order_var == position, f"api_order_{api_name}_{position}",
+                               GuidanceConstraintType.ACCESS_ORDER)
 
     def add_resource_produced(self, type_str: str, producer_api: str, var_name: str):
         """
         Assert that a resource of given type is produced.
+
+        ``Implies(api_called, resource)`` is idempotent for a given
+        ``(producer, type)`` pair, but Z3 rejects re-asserting the same
+        named constraint within a frame, so guard with the existing
+        ``resource_types`` membership state.
 
         Args:
             type_str: Type of resource produced
@@ -436,10 +490,17 @@ class IncrementalZ3Solver:
         resource_var = self._get_or_create_resource_var(type_str)
         api_var = self._get_or_create_api_var(producer_api)
 
-        # Resource exists if producer API is called
-        self.add_constraint(Implies(api_var, resource_var),
-                           f"produces_{producer_api}_{type_key}",
-                           GuidanceConstraintType.RESOURCE_EXISTENCE)
+        # Resource exists if producer API is called. Idempotent per
+        # (producer, type) pair across the active stack of frames; pop()
+        # discards the popped level's pairs so subsequent re-assertions
+        # in a fresh frame are not mistakenly skipped.
+        pair = (producer_api, type_key)
+        if not any(pair in s for s in self._asserted_produces_by_level.values()):
+            self._asserted_produces_by_level.setdefault(
+                self.checkpoint_level, set()).add(pair)
+            self.add_constraint(Implies(api_var, resource_var),
+                               f"produces_{producer_api}_{type_key}",
+                               GuidanceConstraintType.RESOURCE_EXISTENCE)
 
         # Track in state
         if type_key not in self.resource_types:
@@ -458,11 +519,20 @@ class IncrementalZ3Solver:
         """
         Assert that an API requires a resource of given type.
 
+        Idempotent per ``(consumer, type)`` pair; Z3 rejects duplicate named
+        assertions so guard with a small membership set.
+
         Args:
             type_str: Type of resource required
             consumer_api: API that consumes the resource
         """
         type_key = self._normalize_type(type_str)
+        pair = (consumer_api, type_key)
+        if any(pair in s for s in self._asserted_requires_by_level.values()):
+            return
+        self._asserted_requires_by_level.setdefault(
+            self.checkpoint_level, set()).add(pair)
+
         resource_var = self._get_or_create_resource_var(type_str)
         api_var = self._get_or_create_api_var(consumer_api)
 
@@ -637,6 +707,9 @@ class IncrementalZ3Solver:
         self.resource_vars.clear()
         self.binding_vars.clear()
         self._constraint_counter = 0
+        self._asserted_requires_by_level = {0: set()}
+        self._asserted_produces_by_level = {0: set()}
+        self._asserted_order_by_level = {0: set()}
 
 
 # ============================================================

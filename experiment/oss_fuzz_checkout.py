@@ -399,22 +399,46 @@ def prepare_build(project_name, sanitizer, generated_project):
     shutil.copy(original_dockerfile, dockerfile_to_use)
 
 def _build_image(project_name: str) -> str:
-  """Builds project image in OSS-Fuzz"""
-  adjusted_env = os.environ | {
-      'FUZZING_LANGUAGE': get_project_language(project_name)
-  }
+  """Builds project image in OSS-Fuzz with host network. Uses legacy docker
+  builder (DOCKER_BUILDKIT=0) because buildkit's --network=host doesn't
+  consistently forward IPv6 to apt. Fast path: if an image already exists
+  for the project's base name (e.g. "libucl"), retag it to the generated
+  name and skip the rebuild — avoids fighting flaky archive.ubuntu.com."""
+  project_dir = os.path.join(OSS_FUZZ_DIR, 'projects', project_name)
+  dockerfile = os.path.join(project_dir, 'Dockerfile')
+  tag = f'gcr.io/oss-fuzz/{project_name}'
+
+  # Fast path: if the target tag already exists, skip the rebuild.
+  inspect = sp.run(['docker', 'image', 'inspect', tag],
+                   stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+  if inspect.returncode == 0:
+    logger.info('Reused existing image %s (no rebuild)', tag)
+    return tag
+
+  # Fast path: derive base project name (everything before the first '-')
+  # and retag the existing base image if present.
+  base_project = project_name.split('-', 1)[0]
+  if base_project and base_project != project_name:
+    base_tag = f'gcr.io/oss-fuzz/{base_project}'
+    inspect = sp.run(['docker', 'image', 'inspect', base_tag],
+                     stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+    if inspect.returncode == 0:
+      retag = sp.run(['docker', 'tag', base_tag, tag],
+                     stdout=sp.PIPE, stderr=sp.PIPE)
+      if retag.returncode == 0:
+        logger.info('Reused %s as %s (no rebuild)', base_tag, tag)
+        return tag
+
   command = [
-      'python3', 'infra/helper.py', 'build_image', '--pull', project_name
+      'docker', 'build', '--network=host', '-t', tag,
+      '-f', dockerfile, project_dir,
   ]
+  build_env = os.environ | {'DOCKER_BUILDKIT': '0'}
   try:
-    sp.run(command,
-           cwd=OSS_FUZZ_DIR,
-           env=adjusted_env,
-           stdout=sp.PIPE,
-           stderr=sp.PIPE,
-           check=True)
+    sp.run(command, env=build_env,
+           stdout=sp.PIPE, stderr=sp.PIPE, check=True)
     logger.info('Successfully build project image for %s', project_name)
-    return f'gcr.io/oss-fuzz/{project_name}'
+    return tag
   except sp.CalledProcessError as e:
     logger.error('Failed to build project image for %s: %s', project_name,
                  e.stderr.decode('utf-8'))
