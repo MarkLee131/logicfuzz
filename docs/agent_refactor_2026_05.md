@@ -107,6 +107,42 @@ All `model.invoke` call sites updated:
 
 ## §2. Deferred (with rationale)
 
+### TODO — Truncation strategy beyond "head 8KB"
+
+Cluster A aligned every truncate call to a flat 8000-char head cap.
+That's the right floor (consistent with CLAUDE.md, fixes the cluster
+inconsistency) but it's a blunt instrument. Things to think about
+before the next refactor:
+
+1. **Semantic-boundary truncation.** Cutting mid-character / mid-line
+   forces the LLM to guess at the truncated token. Truncate at the
+   nearest preceding newline so each line is intact.
+2. **Head + tail keep.** For long compiler output, the *first* error
+   and the *summary* (e.g. "N errors generated") are the highest-
+   signal parts. Middle is usually duplicated cascading errors.
+   Existing `_generate_code_context` in Fixer does head+tail for
+   source code but not for tool output.
+3. **Per-stream caps.** stdout and stderr each get 8KB separately
+   (some agents already do this). For a build that fills stderr but
+   produces little stdout, head-only stderr can elide the linker
+   failure entirely. Stratified caps would let stderr get more
+   budget on link errors.
+4. **Tool-type-aware caps.** GDB session output is much sparser than
+   build output. Same 8KB cap means GDB gets effectively unbounded
+   while build output gets truncated.  Per-tool caps tuned to expected
+   density would let each tool keep its informative tail.
+5. **Compression / summarisation.** A real LLM-friendly truncator
+   could ask a fast model (Haiku?) to *summarise* long output
+   instead of cutting. Cost: another LLM call per round. Reward: the
+   primary agent sees a tight summary rather than a head/tail
+   fragment. Worth A/B-testing once we have baseline numbers.
+6. **Drop redundant cascading errors.** A C++ template error often
+   produces 50+ lines for one root cause. Detect repetition / shared
+   prefix and dedupe before truncating.
+
+For now: flat 8KB cap, document the limitations, revisit after the
+17-benchmark dynamic run shows where truncation is actually biting.
+
 ### Cluster D — `max_rounds` policy heterogeneity
 
 Three different conventions across the 6 agents (hardcoded 3 for
