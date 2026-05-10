@@ -1,0 +1,5 @@
+"language": "c"
+"project": "liblouis"
+"url": "https://github.com/liblouis/liblouis.git"
+"target_name": "fuzz_translate_generic"
+"target_path": "/src/liblouis/tests/fuzzing/fuzz_translate_generic.c"

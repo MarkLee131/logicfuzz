@@ -1,0 +1,5 @@
+"language": "c++"
+"project": "pugixml"
+"url": "https://github.com/zeux/pugixml.git"
+"target_name": "fuzz_parse"
+"target_path": "/src/pugixml/tests/fuzz_parse.cpp"

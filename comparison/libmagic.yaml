@@ -1,0 +1,5 @@
+"language": "c"
+"project": "libmagic"
+"url": "https://github.com/file/file.git"
+"target_name": "magic_fuzzer"
+"target_path": "/src/libmagic/fuzz/magic_fuzzer.c"

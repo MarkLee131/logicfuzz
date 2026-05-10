@@ -1,0 +1,5 @@
+"language": "c++"
+"project": "tinygltf"
+"url": "https://github.com/syoyo/tinygltf.git"
+"target_name": "fuzz_gltf"
+"target_path": "/src/tinygltf/tests/fuzzer/fuzz_gltf.cc"

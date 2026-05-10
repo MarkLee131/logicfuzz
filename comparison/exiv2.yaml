@@ -1,0 +1,5 @@
+"language": "c++"
+"project": "exiv2"
+"url": "https://github.com/Exiv2/exiv2.git"
+"target_name": "fuzz-read-print-write"
+"target_path": "/src/exiv2/fuzz/fuzz-read-print-write.cpp"
