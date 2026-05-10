@@ -1,34 +1,29 @@
 """
-Synthesis Module - Hybrid Program Synthesis
+Synthesis Module — Skeleton-with-holes program synthesis.
 
-Hybrid driver generation method based on traditional program synthesis + LLM.
+A skeleton has structurally-correct parts (variable declarations,
+producer→consumer wiring, API call sequence, paired cleanup) plus
+``Hole`` placeholders that the LLM (Prototyper) refines.
 
-Core components:
-1. hole.py - Hole definitions (simple holes/complex holes)
-2. skeleton_generator.py - Skeleton generator
-3. constraint_collector.py - Constraint collection and solving
-4. hole_filler.py - Hole filler (rules + templates + LLM)
+Earlier this module also shipped a ``HoleFiller`` (rule / template /
+constraint / LLM strategies) that pre-filled "simple" holes
+deterministically. The infrastructure was never wired into the live
+``CBFactory.create_skeleton_for_sequence`` path; an empirical study
+across 70 OSS-Fuzz drivers showed:
 
-Usage example:
-```python
-from liberator_adapter.driver.synthesis import (
-    SkeletonGenerator, render_skeleton, HoleFiller
-)
+  * 54% of hole positions are rule-fillable in principle, but
+  * the prompt cost is dominated by the skeleton + context, not the
+    response, so pre-filling saves ~3–5% of the API bill, and
+  * LLM stochasticity on simple holes occasionally introduces
+    coverage-useful tricks (zlib's ``data[0]``-as-size,
+    cjson's ``prebuffer=1``).
 
-# Generate skeleton
-generator = SkeletonGenerator()
-skeleton = generator.generate(api_sequence)
-
-# Fill holes
-filler = HoleFiller()
-report = filler.fill_all(skeleton)
-
-# Render code
-code = render_skeleton(skeleton)
-```
+We therefore deleted the HoleFiller entirely. The narrow exceptions
+that ARE worth pre-filling deterministically — RESOURCE_CLEANUP and
+LOOP_BOUND — are handled inline in ``SkeletonGenerator.generate``,
+not as a separate strategy framework.
 """
 
-# Hole definitions
 from liberator_adapter.driver.synthesis.hole import (
     Hole,
     HoleKind,
@@ -50,7 +45,6 @@ from liberator_adapter.driver.synthesis.hole import (
     create_error_handling_hole,
 )
 
-# Skeleton generation
 from liberator_adapter.driver.synthesis.skeleton_generator import (
     DriverSkeleton,
     SkeletonVariable,
@@ -61,39 +55,6 @@ from liberator_adapter.driver.synthesis.skeleton_generator import (
     AllocationType,
     generate_skeleton_for_sequence,
     render_skeleton,
-)
-
-# Constraint collection and solving
-from liberator_adapter.driver.synthesis.constraint_collector import (
-    Constraint,
-    ConstraintKind,
-    ConstraintSet,
-    TypeConstraint,
-    VarLenConstraint,
-    ValueRangeConstraint,
-    NotNullConstraint,
-    DependsOnConstraint,
-    ConstraintCollector,
-    ConstraintSolver,
-    RuleBasedSolver,
-    Z3SolverAdapter,
-    collect_and_solve,
-)
-
-# Hole filling
-from liberator_adapter.driver.synthesis.hole_filler import (
-    FillResult,
-    FillReport,
-    FillStrategy,
-    RuleFillStrategy,
-    ConstraintFillStrategy,
-    LLMFillStrategy,
-    TemplateFillStrategy,
-    CallbackStubLibrary,
-    HoleFiller,
-    LLMClient,
-    fill_skeleton_holes,
-    apply_fill_report,
 )
 
 __all__ = [
@@ -126,31 +87,4 @@ __all__ = [
     "AllocationType",
     "generate_skeleton_for_sequence",
     "render_skeleton",
-    # Constraints
-    "Constraint",
-    "ConstraintKind",
-    "ConstraintSet",
-    "TypeConstraint",
-    "VarLenConstraint",
-    "ValueRangeConstraint",
-    "NotNullConstraint",
-    "DependsOnConstraint",
-    "ConstraintCollector",
-    "ConstraintSolver",
-    "RuleBasedSolver",
-    "Z3SolverAdapter",
-    "collect_and_solve",
-    # Hole filling
-    "FillResult",
-    "FillReport",
-    "FillStrategy",
-    "RuleFillStrategy",
-    "ConstraintFillStrategy",
-    "LLMFillStrategy",
-    "TemplateFillStrategy",
-    "CallbackStubLibrary",
-    "HoleFiller",
-    "LLMClient",
-    "fill_skeleton_holes",
-    "apply_fill_report",
 ]

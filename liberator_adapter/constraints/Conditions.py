@@ -1,13 +1,7 @@
 from typing import List, Set, Dict, Tuple, Optional
 
-from liberator_adapter.driver.ir import Type, PointerType
+from liberator_adapter.driver.ir import Type, PointerType, Variable
 from liberator_adapter.common import AccessTypeSet, AccessType, Access, ValueMetadata
-
-# Note: Variable is not implemented yet
-try:
-    from liberator_adapter.driver.ir import Variable
-except ImportError:
-    Variable = None
 
 class Conditions:
     # conditions that have WRITE or RET
@@ -15,17 +9,17 @@ class Conditions:
     is_array: bool
     is_malloc_size: bool
     is_file_path: bool
-    len_depends_on: Variable
-    setby_dependencies: List[Variable]
+    len_depends_on: Optional[Variable]
+    setby_dependencies: Optional[List[Variable]]
     is_initialized: bool
-    
+
     def __init__(self, mdata: ValueMetadata):
         self.ats = AccessTypeSet()
         self.add_conditions(mdata.ats)
         self.is_array = mdata.is_array
         self.is_malloc_size = mdata.is_malloc_size
         self.is_file_path = mdata.is_file_path
-        self.len_depends_on = None 
+        self.len_depends_on = None
         self.setby_dependencies = None
         self.is_initialized = False
 

@@ -20,7 +20,7 @@ from enum import Enum, auto
 from liberator_adapter.common.api import Api, Arg
 from liberator_adapter.driver.synthesis.hole import (
     Hole, HoleSet, HolePriority,
-    ArrayLengthHole, InitValueHole, LoopBoundHole, ResourceCleanupHole,
+    ArrayLengthHole, InitValueHole,
     create_buffer_size_hole, create_callback_hole, create_loop_condition_hole,
 )
 
@@ -581,10 +581,26 @@ class SkeletonGenerator:
         skeleton: DriverSkeleton,
         var_requirements: Dict[str, Dict]
     ) -> None:
-        """Generate variable declarations"""
+        """Generate variable declarations.
+
+        Tracks the FIRST API in the sequence so ``_create_variable_for_param``
+        can apply the entry-point safety net (B4 mitigation): a non-const
+        non-char pointer arg on the entry API is rebound to the fuzz-input
+        stream rather than a stack array (the wrong default that
+        ``_is_input_param``'s overly-strict const check would have produced).
+        """
         declared_vars: Set[str] = set()
 
+        # Identify the entry API (first call in the sequence) for the B4
+        # safety net. var_requirements is a dict (insertion-ordered in 3.7+)
+        # but we iterate over the original sequence to be explicit.
+        entry_api_name = (
+            skeleton.target_apis[0].function_name
+            if skeleton.target_apis else None
+        )
+
         for api_name, req in var_requirements.items():
+            is_entry_api = (api_name == entry_api_name)
             # Return value variable
             if req['return']:
                 ret_name = req['return']['name']
@@ -599,7 +615,10 @@ class SkeletonGenerator:
             for arg_info in req['args']:
                 var_name = f"{arg_info['name']}_{api_name}"
                 if var_name not in declared_vars:
-                    var = self._create_variable_for_param(var_name, arg_info, skeleton)
+                    var = self._create_variable_for_param(
+                        var_name, arg_info, skeleton,
+                        is_entry_api=is_entry_api,
+                    )
                     if var:
                         skeleton.add_variable(var)
                         declared_vars.add(var_name)
@@ -626,9 +645,23 @@ class SkeletonGenerator:
         self,
         name: str,
         arg_info: Dict,
-        skeleton: DriverSkeleton
+        skeleton: DriverSkeleton,
+        is_entry_api: bool = False,
     ) -> Optional[SkeletonVariable]:
-        """Create variable for parameter"""
+        """Create variable for parameter.
+
+        ``is_entry_api`` triggers the B4 safety net: ``_is_input_param``
+        misclassifies non-const pointers as "not input" (75% of OSS-Fuzz
+        entry-point calls in the 2026-05 study used const pointers, so
+        the heuristic was tuned for those). For the *entry* API we
+        cannot rely on producer→consumer wiring (no prior call) and the
+        fuzz buffer is the only sensible source. So when:
+          - the arg is a non-callback pointer
+          - on the entry API
+          - and not already covered by the C_STRING wrapper (char*)
+        force the FUZZ_INPUT branch with ``(void*)data`` regardless of
+        what ``is_input``/``is_output`` claim.
+        """
         c_type = arg_info['type']
         is_pointer = '*' in c_type
 
@@ -644,6 +677,32 @@ class SkeletonGenerator:
                 name=name,
                 c_type=c_type,
                 init_value=hole.get_placeholder()
+            )
+
+        # B4 safety net: entry-API non-const pointer that ISN'T a char*
+        # (char* is handled by `_maybe_inject_c_string_wrapper`) — force
+        # the fuzz-input bridge so the caller doesn't get a stack array
+        # for a buffer-input parameter the const-check missed.
+        ttype_norm = c_type.replace(' ', '')
+        is_char_star = 'char*' in ttype_norm
+        if (is_entry_api and is_pointer and not is_char_star
+                and not arg_info['is_input']):
+            varlen = arg_info.get('varlen_target')
+            if varlen:
+                len_idx, rel = varlen
+                hole = create_buffer_size_hole(
+                    name=f"bufsize_{self._next_hole_id()}",
+                    buffer_idx=arg_info['idx'],
+                    length_idx=len_idx,
+                    relationship=rel,
+                )
+                skeleton.add_hole(hole)
+            return SkeletonVariable(
+                name=name,
+                c_type=c_type,
+                allocation=AllocationType.FUZZ_INPUT,
+                is_pointer=True,
+                init_value="(void*)data",
             )
 
         # Input buffer parameter - may need to get from fuzz input
@@ -773,11 +832,17 @@ class SkeletonGenerator:
         api: Api,
         loop_info: Dict
     ) -> None:
-        """Generate loop API call"""
+        """Generate loop API call.
+
+        LOOP_BOUND is filled deterministically with ``loop_info[max_iterations]``
+        (or 100 default) so the LLM doesn't have to guess. LOOP_CONDITION is
+        still LLM-only — it requires API-return semantics the rule layer can't
+        infer (cf. data study 2026-05).
+        """
 
         loop_type = loop_info.get('loop_type', 'iterator')
 
-        # Create loop condition Hole
+        # LOOP_CONDITION still needs LLM judgement.
         cond_hole = create_loop_condition_hole(
             name=f"loopcond_{self._next_hole_id()}",
             loop_type=loop_type,
@@ -785,18 +850,17 @@ class SkeletonGenerator:
         )
         skeleton.add_hole(cond_hole)
 
-        # Create loop bound Hole
-        bound_hole = LoopBoundHole(
-            name=f"loopbound_{self._next_hole_id()}",
-            suggested_bound=loop_info.get('max_iterations', 100)
-        )
-        skeleton.add_hole(bound_hole)
+        # LOOP_BOUND: deterministic — emit the suggested numeric literal
+        # directly. We *don't* register a hole for it; the renderer just sees
+        # the int.
+        bound_value = int(loop_info.get('max_iterations', 100) or 100)
 
-        # Loop start
         loop_start = SkeletonStatement(
             kind=StatementKind.LOOP_START,
-            code=f"int __iter_count = 0;\nwhile ({cond_hole.get_placeholder()} && __iter_count++ < {bound_hole.get_placeholder()}) {{",
-            holes=[cond_hole.name, bound_hole.name]
+            code=(f"int __iter_count = 0;\n"
+                  f"while ({cond_hole.get_placeholder()} "
+                  f"&& __iter_count++ < {bound_value}) {{"),
+            holes=[cond_hole.name],
         )
         skeleton.add_statement(loop_start)
 
@@ -811,20 +875,46 @@ class SkeletonGenerator:
         skeleton.add_statement(loop_end)
 
     def _generate_cleanup(self, skeleton: DriverSkeleton) -> None:
-        """Generate cleanup code"""
+        """Emit cleanup statements.
 
-        # Create resource cleanup Hole
-        cleanup_hole = ResourceCleanupHole(
-            name=f"cleanup_{self._next_hole_id()}",
-            resources=list(skeleton.variables.keys()),
-            priority=HolePriority.MEDIUM
-        )
-        skeleton.add_hole(cleanup_hole)
+        Cleanup is paired-destroy by construction: every variable that
+        was allocated on the heap (alloc==HEAP) gets a matching destroy
+        call inferred from the producing API's name (e.g. ``cJSON_Parse``
+        ↔ ``cJSON_Delete``). Patterns recognised:
+
+        * ``<prefix>_create_*`` ↔ ``<prefix>_destroy_*``
+        * ``<prefix>_new_*``    ↔ ``<prefix>_free_*``
+        * ``<prefix>_open_*``   ↔ ``<prefix>_close_*``
+        * ``<prefix>_init_*``   ↔ ``<prefix>_deinit_*``
+        * Default fallback: ``free(<var>)``
+
+        We emit the statements directly and skip RESOURCE_CLEANUP holes
+        for paired-destroyable resources. When no rule fires (e.g. the
+        producer name doesn't match a known pattern), we still emit a
+        plain ``free(<var>)`` guard rather than a hole — the empirical
+        study (2026-05) showed expert OSS-Fuzz drivers use the same
+        paired-destroy logic 100% of the time. Skipping the hole means
+        the LLM no longer has to guess at trivial teardown.
+        """
+        cleanup_lines: List[str] = []
+
+        # Walk variables that came from heap-allocated API returns
+        # (source_api set ⇒ producer-tracked).
+        for var_name, var in skeleton.variables.items():
+            if not var.source_api:
+                continue
+            destroy_call = _infer_paired_destroy(var.source_api, var_name)
+            if destroy_call is None:
+                continue
+            cleanup_lines.append(f"if ({var_name}) {{ {destroy_call}; }}")
+
+        if not cleanup_lines:
+            # Nothing to clean up. Don't emit a hole for "no work".
+            return
 
         cleanup_stmt = SkeletonStatement(
             kind=StatementKind.CLEANUP,
-            code=cleanup_hole.get_placeholder(),
-            holes=[cleanup_hole.name]
+            code="\n".join(cleanup_lines),
         )
         skeleton.add_cleanup(cleanup_stmt)
 
@@ -850,13 +940,12 @@ class SkeletonRenderer:
     Renders DriverSkeleton to C code string
     """
 
-    def render(self, skeleton: DriverSkeleton, is_cpp_target: bool = True) -> str:
-        """Render skeleton to C/C++ code
+    def render(self, skeleton: DriverSkeleton) -> str:
+        """Render skeleton to C/C++ code.
 
-        Args:
-            skeleton: Driver skeleton to render
-            is_cpp_target: If True, use 'extern "C"' for C++ fuzz target.
-                          If False, emit pure C code (no extern "C").
+        Always uses ``#ifdef __cplusplus extern "C"`` guards so the
+        emitted code compiles correctly under OSS-Fuzz (clang++ on
+        both .c and .cc) without per-target dispatch.
         """
         lines = []
 
@@ -915,9 +1004,9 @@ class SkeletonRenderer:
 
         return "\n".join(lines)
 
-    def render_with_holes_marked(self, skeleton: DriverSkeleton, is_cpp_target: bool = True) -> str:
+    def render_with_holes_marked(self, skeleton: DriverSkeleton) -> str:
         """Render skeleton, marking all Hole positions"""
-        code = self.render(skeleton, is_cpp_target=is_cpp_target)
+        code = self.render(skeleton)
 
         # Add comment for each Hole
         for hole in skeleton.holes:
@@ -962,17 +1051,67 @@ def generate_skeleton_for_sequence(
     )
 
 
-def render_skeleton(skeleton: DriverSkeleton, mark_holes: bool = False, is_cpp_target: bool = True) -> str:
+def render_skeleton(skeleton: DriverSkeleton, mark_holes: bool = False) -> str:
     """Convenience function: render skeleton
 
     Args:
         skeleton: Driver skeleton to render
         mark_holes: Whether to mark unfilled holes with comments
-        is_cpp_target: Deprecated - no longer used. The generated code now always
-                      uses #ifdef __cplusplus guard for extern "C" since OSS-Fuzz
-                      always compiles with clang++.
     """
     renderer = SkeletonRenderer()
     if mark_holes:
-        return renderer.render_with_holes_marked(skeleton, is_cpp_target=is_cpp_target)
-    return renderer.render(skeleton, is_cpp_target=is_cpp_target)
+        return renderer.render_with_holes_marked(skeleton)
+    return renderer.render(skeleton)
+
+
+# =============================================================================
+# Paired-destroy inference (2026-05 refactor — replaces RESOURCE_CLEANUP hole)
+# =============================================================================
+
+# Common API name conventions for producer→destroyer pairing across
+# OSS-Fuzz C/C++ projects. Order matters: longer prefixes first so that
+# "create_with_options" matches before "create".
+_DESTROY_PAIRS = [
+    ("_new", "_free"),
+    ("_create", "_destroy"),
+    ("_alloc", "_free"),
+    ("_open", "_close"),
+    ("_init", "_deinit"),
+    ("_init", "_free"),
+    ("_parse", "_free"),
+    ("Parse", "Delete"),  # cJSON convention
+    ("New", "Free"),
+    ("Create", "Destroy"),
+    ("Alloc", "Free"),
+    ("Open", "Close"),
+]
+
+
+def _infer_paired_destroy(producer_api: str, var_name: str) -> Optional[str]:
+    """Given the API name that produced a heap variable, return the
+    matching destroy call as a C statement (without the trailing ``;``).
+
+    Returns ``None`` only when no pattern matches AND ``producer_api``
+    looks unrelated to allocation (so we don't emit a misleading
+    ``free(x)`` for a stack-returned struct).
+    """
+    if not producer_api:
+        return None
+    for create_suffix, destroy_suffix in _DESTROY_PAIRS:
+        if producer_api.endswith(create_suffix):
+            base = producer_api[: -len(create_suffix)]
+            destroy_fn = base + destroy_suffix
+            return f"{destroy_fn}({var_name})"
+        # also handle infix: <api>_<verb>_<rest> patterns where the verb
+        # is at a non-tail position, e.g. cJSON_Parse → cJSON_Delete.
+        idx = producer_api.find(create_suffix)
+        if idx > 0 and idx + len(create_suffix) <= len(producer_api):
+            head = producer_api[:idx]
+            tail = producer_api[idx + len(create_suffix):]
+            if not tail or tail.startswith("_") or tail[0].isupper():
+                return f"{head}{destroy_suffix}({var_name})"
+    # Fallback: classic libc allocator chain
+    if producer_api.endswith("alloc") or producer_api == "malloc":
+        return f"free({var_name})"
+    # Could not infer — let the LLM (via prompt) decide if needed.
+    return None

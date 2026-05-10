@@ -1,19 +1,10 @@
 from typing import Set, Dict, List, Tuple
 
-from liberator_adapter.driver.ir import Type, PointerType, TypeTag
+from liberator_adapter.driver.ir import Type, PointerType, TypeTag, ApiCall, Buffer
 from liberator_adapter.driver.factory import Factory
 
 from liberator_adapter.common import Api, FunctionConditionsSet, ValueMetadata, Access
 from liberator_adapter.common import FunctionConditionsSet, DataLayout
-
-# Note: ApiCall and Buffer are not implemented yet, some functionality of ConditionManager may require these classes
-# If full functionality is needed, these classes need to be copied from liberator
-try:
-    from liberator_adapter.driver.ir import ApiCall, Buffer
-except ImportError:
-    # Placeholder to avoid import errors
-    ApiCall = None
-    Buffer = None
 
 class ConditionManager:
     sink_map            : Dict[Type, Api]

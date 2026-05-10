@@ -409,22 +409,26 @@ class CBFactory(Factory):
 
     def validate_sequence_with_z3(self, api_sequence: List[Api]) -> Tuple[bool, List[str]]:
         """
-        Use Z3 to validate if API sequence satisfies constraints
+        Use Z3 to validate if API sequence satisfies constraints.
 
-        Args:
-            api_sequence: API call sequence
-
-        Returns:
-            (is_valid, violations): Whether valid, and list of violated constraints
+        Returns ``(True, [])`` only when Z3 is disabled. When Z3 is on,
+        a check failure returns ``(False, ["z3_error: ..."])`` rather
+        than the previous "swallow exception, claim valid" behaviour
+        which masked real bugs in the constraint encoding (e.g.
+        ``add_type_match_constraint``'s contradictory assertion). Under
+        ``z3_strict_mode`` the exception is re-raised instead.
         """
         if not self.enable_z3_validation or not self.z3_validator:
             return True, []
 
         try:
-            return self.z3_validator.validate_sequence(api_sequence, self.conditions_map)
+            return self.z3_validator.validate_sequence(
+                api_sequence, self.conditions_map)
         except Exception as e:
-            logger.warning(f"Z3 validation failed: {e}")
-            return True, []  # Conservative handling: consider valid when validation fails
+            if self.z3_strict_mode:
+                raise
+            logger.warning("Z3 validation raised %r; reporting as INVALID", e)
+            return False, [f"z3_error: {type(e).__name__}: {e}"]
 
     def _build_type_producer_map(self):
         """

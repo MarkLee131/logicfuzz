@@ -1931,8 +1931,12 @@ def _synthesize_skeletons_per_sequence(
         automaton_threshold=automaton_threshold,
     )
 
+    # ``target_path`` is no longer needed for renderer dispatch — the
+    # generated skeleton always emits ``#ifdef __cplusplus`` extern "C"
+    # guards (OSS-Fuzz drives clang++ on .c files too). Kept here only
+    # for downstream telemetry that still references it.
     target_path = getattr(benchmark, 'target_path', '') or ''
-    is_cpp_target = target_path.lower().endswith(('.cpp', '.cc', '.cxx', '.c++'))
+    _ = target_path  # noqa: F841
 
     skeletons: List[Dict[str, Any]] = []
     z3_rejected = 0
@@ -1972,8 +1976,7 @@ def _synthesize_skeletons_per_sequence(
                 continue
 
             try:
-                rendered_code = render_skeleton(
-                    skeleton, mark_holes=True, is_cpp_target=is_cpp_target)
+                rendered_code = render_skeleton(skeleton, mark_holes=True)
             except Exception:
                 rendered_code = str(skeleton)
 

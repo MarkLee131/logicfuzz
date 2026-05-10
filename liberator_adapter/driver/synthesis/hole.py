@@ -23,23 +23,25 @@ from abc import ABC, abstractmethod
 # =============================================================================
 
 class HoleKind(Enum):
-    """Hole classification"""
+    """Hole classification.
 
-    # === SimpleHole (solvable by rules/constraints) ===
+    Trimmed in 2026-05 to the kinds the live skeleton path actually
+    emits. ``NULL_CHECK``, ``TYPE_CAST``, ``API_SEQUENCE``, and
+    ``PARAM_CONSTRAINT`` were defined for an earlier HoleFiller design
+    that is no longer wired in.
+    """
+
+    # === SimpleHole (rule-fillable in principle, currently delegated to LLM) ===
     BUFFER_SIZE = auto()        # Buffer size: determined by var-len relationship
     ARRAY_LENGTH = auto()       # Array length: determined by size parameter
-    NULL_CHECK = auto()         # NULL check condition: based on API return value semantics
     LOOP_BOUND = auto()         # Loop bound: safe upper limit
-    TYPE_CAST = auto()          # Type cast: based on type compatibility
     INIT_VALUE = auto()         # Initialization value: 0, NULL, or default value
 
-    # === ComplexHole (requires LLM) ===
+    # === ComplexHole (LLM territory) ===
     CALLBACK_IMPL = auto()      # Callback function implementation
     LOOP_CONDITION = auto()     # Loop termination condition
     ERROR_HANDLING = auto()     # Error handling logic
-    RESOURCE_CLEANUP = auto()   # Resource cleanup order
-    PARAM_CONSTRAINT = auto()   # Parameter constraint relationship
-    API_SEQUENCE = auto()       # API call order selection
+    RESOURCE_CLEANUP = auto()   # Resource cleanup order (now pre-filled inline)
 
 
 class HolePriority(Enum):
@@ -257,19 +259,6 @@ class ResourceCleanupHole(ComplexHole):
 
     def get_placeholder(self) -> str:
         return f"__CLEANUP_{self.name}__"
-
-
-@dataclass
-class ParamConstraintHole(ComplexHole):
-    """Parameter constraint hole"""
-
-    kind: HoleKind = field(default=HoleKind.PARAM_CONSTRAINT, init=False)
-    param_name: str = ""            # Parameter name
-    param_type: str = ""            # Parameter type
-    related_params: List[str] = field(default_factory=list)  # Related parameters
-
-    def get_placeholder(self) -> str:
-        return f"__PARAMCONST_{self.name}__"
 
 
 # =============================================================================

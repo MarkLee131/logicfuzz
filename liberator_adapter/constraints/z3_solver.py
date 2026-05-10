@@ -115,22 +115,28 @@ class Z3ConstraintBuilder:
         """
         Add type matching constraint
 
-        If target_api depends on source_api's output, types must be compatible
+        If target_api depends on source_api's output, types must be compatible.
+        When types are incompatible, the constraint is "both APIs cannot be
+        called together in this dependency relation" — *not* a contradictory
+        ``expr ∧ ¬expr`` pair (which made the whole solver UNSAT regardless
+        of the actual sequence).
         """
-        source_var = self._get_or_create_type_var(source_type)
-        target_var = self._get_or_create_type_var(target_type)
-
         # Simplify: compare after removing pointers and spaces
         source_clean = source_type.replace("*", "").replace(" ", "")
         target_clean = target_type.replace("*", "").replace(" ", "")
 
-        # If types are the same, add equivalence constraint
         if source_clean == target_clean:
+            # Compatible types — record an informational equality on the type
+            # vars; this is trivially satisfiable.
+            source_var = self._get_or_create_type_var(source_type)
+            target_var = self._get_or_create_type_var(target_type)
             expr = source_var == target_var
         else:
-            # Types differ, constraint is False (incompatible)
-            expr = Bool(f"type_compat_{source_api}_{target_api}")
-            self.solver.add(Not(expr))  # Default incompatible
+            # Incompatible types — if both APIs are present in a dep relation,
+            # the relation is infeasible. Express as: ¬(src_called ∧ tgt_called).
+            src_called = self._get_or_create_api_var(source_api)
+            tgt_called = self._get_or_create_api_var(target_api)
+            expr = Not(And(src_called, tgt_called))
 
         constraint = Z3Constraint(
             constraint_type=ConstraintType.TYPE_MATCH,
@@ -458,10 +464,20 @@ class Z3SequenceValidator:
         api_sequence: List[Api],
         function_conditions: Dict[str, FunctionConditions]
     ):
-        """Add resource lifecycle constraints"""
-        # Collect CREATE and DELETE operations
-        creates: Dict[str, List[str]] = {}  # type -> [api_names]
-        deletes: Dict[str, List[str]] = {}
+        """Add resource lifecycle constraints.
+
+        Tracks three roles per type: CREATE (return is producer), USE
+        (READ / WRITE on argument), DELETE (consume). Enforces:
+          * CREATE before any USE of the same type
+          * CREATE before DELETE
+          * USE before DELETE (you can't delete then use)
+
+        Without USE tracking, sequences like ``[use_x, create_x]`` would
+        SAT-pass.
+        """
+        creates: Dict[str, List[str]] = {}  # type -> [api_names producing it]
+        uses: Dict[str, List[str]] = {}     # type -> [api_names reading/writing it]
+        deletes: Dict[str, List[str]] = {}  # type -> [api_names destroying it]
 
         for api in api_sequence:
             if api.function_name not in function_conditions:
@@ -469,28 +485,41 @@ class Z3SequenceValidator:
 
             cond = function_conditions[api.function_name]
 
-            # Check if return value has CREATE
             for at in cond.return_at.ats:
                 if at.access == Access.CREATE:
                     type_str = at.type_string or api.return_info.type
-                    if type_str not in creates:
-                        creates[type_str] = []
-                    creates[type_str].append(api.function_name)
+                    creates.setdefault(type_str, []).append(api.function_name)
 
-            # Check if parameters have DELETE
             for arg_cond in cond.argument_at:
                 for at in arg_cond.ats:
+                    type_str = at.type_string or ""
+                    if not type_str:
+                        continue
                     if at.access == Access.DELETE:
-                        type_str = at.type_string or ""
-                        if type_str not in deletes:
-                            deletes[type_str] = []
-                        deletes[type_str].append(api.function_name)
+                        deletes.setdefault(type_str, []).append(api.function_name)
+                    elif at.access in (Access.READ, Access.WRITE):
+                        uses.setdefault(type_str, []).append(api.function_name)
 
-        # Add constraint that CREATE must occur before DELETE
-        for type_str in set(creates.keys()) & set(deletes.keys()):
-            for create_api in creates[type_str]:
-                for delete_api in deletes[type_str]:
-                    self.builder.add_access_order_constraint(create_api, delete_api)
+        # CREATE before USE
+        for type_str in set(creates) & set(uses):
+            for c in creates[type_str]:
+                for u in uses[type_str]:
+                    if c != u:
+                        self.builder.add_access_order_constraint(c, u)
+
+        # CREATE before DELETE
+        for type_str in set(creates) & set(deletes):
+            for c in creates[type_str]:
+                for d in deletes[type_str]:
+                    if c != d:
+                        self.builder.add_access_order_constraint(c, d)
+
+        # USE before DELETE (no use-after-free)
+        for type_str in set(uses) & set(deletes):
+            for u in uses[type_str]:
+                for d in deletes[type_str]:
+                    if u != d:
+                        self.builder.add_access_order_constraint(u, d)
 
 
 class Z3DependencyPruner:

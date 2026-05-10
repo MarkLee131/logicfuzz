@@ -89,26 +89,18 @@ class Factory:
             if a_type_core == "unsignedshort":
                 a_type_core = "unsigned short"
             
-            # Get type size and completeness information
-            try:
-                a_size = DataLayout.instance().get_type_size(a_type_core)
-            except:
-                # If DataLayout is not initialized, use default value
-                a_size = 0
-            
-            try:
-                a_incomplete_core = DataLayout.instance().is_incomplete(a_type_core)
-            except:
-                # If DataLayout is not initialized, assume type is complete
-                a_incomplete_core = False
-
-            # Determine if it's STRUCT or PRIMITIVE
-            type_tag = TypeTag.PRIMITIVE
-            try:
-                if DataLayout.instance().is_a_struct(a_type_core):
-                    type_tag = TypeTag.STRUCT
-            except:
-                pass
+            # Type size, completeness, and STRUCT/PRIMITIVE tag come from
+            # ``DataLayout``. Production callers always initialise it (see
+            # ``data_context.py`` Step 5: build_data_layout). The earlier
+            # try/except defaults (size=0, incomplete=False, tag=PRIMITIVE)
+            # silently corrupted type metadata when DataLayout was missing,
+            # in violation of the SSOT "No fallbacks" principle. Now we let
+            # the AssertionError / RuntimeError surface so the caller knows
+            # to fix initialisation order.
+            dl = DataLayout.instance()
+            a_size = dl.get_type_size(a_type_core)
+            a_incomplete_core = dl.is_incomplete(a_type_core)
+            type_tag = TypeTag.STRUCT if dl.is_a_struct(a_type_core) else TypeTag.PRIMITIVE
                 
             type_core = Type(a_type_core, a_size, a_incomplete_core, a_is_const[-1] if a_is_const else False, type_tag)
 

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-LogicFuzz: LLM-powered agentic fuzz driver generation for C/C++ libraries using LangGraph.
+Neuro-symbolic fuzz driver generation for C/C++ libraries.
 
 ## Commands
 
@@ -55,6 +55,9 @@ justification + future-work plan lives in `docs/`:
 |-----|-----------|--------|
 | `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) **and** the PromeFuzz-derived knowledge layer (comprehender shipped, ConstraintLearner design-only). Includes empirical justification across 25 benchmarks, A/B outcomes, future work. | shipped + forward-looking |
 | `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`); preflight + coverage-aware selection + weighted CDF dispatch + tail selector + corpus union. | shipped |
+| `docs/upstream_liberator_diffs.md` | Upstream `reference/liberator` issues that the adapter has already fixed (or has a clear path to fix). Adapter-side bugs are NOT recorded here — they are work-in-progress fix items. | living |
+| `docs/synthesis_refactor_2026_05.md` | Per-cluster record of the 2026-05 synthesis-pipeline refactor: HoleFiller deletion, Z3 correctness fixes, B4 entry-point safety net, silent-fallback removal. Includes empty placeholder for post-run A/B coverage data. | living |
+| `docs/llm_vs_traditional_choices.md` | For every place LogicFuzz invokes an LLM (Prototyper, Fixer, Crash{,Feasibility}Analyzer, Coverage{Analyzer,Improver}, Comprehender, ProjectAnalyzer): what symbolic alternative was considered, why LLM won, what we'd lose by reverting, and the falsifiable measurement that would prove the LLM choice wrong. | living |
 
 ## Architecture
 
@@ -342,3 +345,16 @@ even when the object was in scope.
 `extend_post_def` over `UseDefGraph` to extend `parse → get_object`
 prefixes with witness-grounded post-parse uses. Consumed by L4
 candidate augmentation.
+
+---
+
+## Upstream Liberator issues fixed in the adapter
+
+Bugs / limitations that exist in upstream `reference/liberator`
+that the adapter has fixed (or has a clear path to fix). See
+`docs/upstream_liberator_diffs.md` for the per-item detail.
+
+(Adapter-side bugs in our own code — Z3 layer, synthesis package,
+hole filler, ported-file cleanups — are NOT recorded there. Those
+are work-in-progress fix items, tracked through normal review /
+commits.)

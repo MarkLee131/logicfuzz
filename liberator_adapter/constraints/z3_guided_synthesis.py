@@ -565,34 +565,52 @@ class IncrementalZ3Solver:
         """
         Check satisfiability of current constraints.
 
-        Returns:
-            SatisfiabilityResult with status, model, or unsat core
+        Distinguishes the three Z3-reported outcomes (SAT / UNSAT / UNKNOWN)
+        from a Python-side exception. The previous version mapped any
+        exception to ``TIMEOUT``, which conflated real bugs (constraint
+        mis-encoding, missing variable, malformed AST) with genuine timeouts.
+        Now exceptions surface as ``UNKNOWN`` with a tag in the unsat_core
+        slot so the caller can tell the two apart.
         """
         try:
             result = self.solver.check()
+        except Exception as e:
+            logger.warning(f"[Z3Guided] solver.check() raised: {e!r}")
+            return SatisfiabilityResult(
+                status=SatisfiabilityStatus.UNKNOWN,
+                unsat_core=[f"z3_exception:{type(e).__name__}:{e}"],
+            )
 
-            if result == sat:
+        if result == sat:
+            try:
                 model = self.solver.model()
+                model_dict = {str(var): str(model[var]) for var in model}
+            except Exception as e:
+                logger.warning(f"[Z3Guided] model extraction failed: {e!r}")
                 model_dict = {}
-                for var in model:
-                    model_dict[str(var)] = str(model[var])
-                return SatisfiabilityResult(
-                    status=SatisfiabilityStatus.SAT,
-                    model=model_dict
-                )
-            elif result == unsat:
+            return SatisfiabilityResult(
+                status=SatisfiabilityStatus.SAT, model=model_dict)
+
+        if result == unsat:
+            try:
                 core = self.solver.unsat_core()
                 core_names = [str(c) for c in core]
-                return SatisfiabilityResult(
-                    status=SatisfiabilityStatus.UNSAT,
-                    unsat_core=core_names
-                )
-            else:
-                return SatisfiabilityResult(status=SatisfiabilityStatus.UNKNOWN)
+            except Exception as e:
+                logger.warning(f"[Z3Guided] unsat_core extraction failed: {e!r}")
+                core_names = []
+            return SatisfiabilityResult(
+                status=SatisfiabilityStatus.UNSAT, unsat_core=core_names)
 
-        except Exception as e:
-            logger.warning(f"[Z3Guided] Check failed: {e}")
+        # result == unknown — Z3 itself reports the timeout / undecided case.
+        # Distinct from the exception path above.
+        reason = ""
+        try:
+            reason = self.solver.reason_unknown()
+        except Exception:
+            pass
+        if "timeout" in reason.lower():
             return SatisfiabilityResult(status=SatisfiabilityStatus.TIMEOUT)
+        return SatisfiabilityResult(status=SatisfiabilityStatus.UNKNOWN)
 
     def check_candidate(self, api_name: str, required_types: List[str],
                        produced_types: List[str]) -> CandidateResult:
@@ -802,21 +820,45 @@ class UnsatCoreDiagnoser:
         )
 
     def _extract_missing_resources(self, resource_constraints: List[str]) -> List[str]:
-        """Extract resource type names from constraint names"""
+        """Extract resource type names from constraint names.
+
+        Constraint names use ``_`` as a separator but API names themselves can
+        contain underscores (e.g. ``cJSON_Print``,
+        ``archive_read_open_filename``). We must therefore round-trip through
+        the live ``solver.api_vars`` keyset to identify the API prefix
+        precisely, leaving the remainder as the type.
+        """
         missing = []
+        # Collect API name candidates from the solver's live state, longest
+        # first so a name like ``foo_bar`` is matched before ``foo``.
+        api_names = sorted(
+            (n for n in self.solver.api_vars.keys()),
+            key=len, reverse=True,
+        )
+
         for constraint in resource_constraints:
-            # Format: "requires_{api}_{type}" or "resource_{type}"
-            parts = constraint.split("_")
-            if len(parts) >= 2:
-                if parts[0] == "requires" and len(parts) >= 3:
-                    # requires_api_type
-                    type_str = "_".join(parts[2:])
-                    if type_str not in missing:
-                        missing.append(type_str)
-                elif parts[0] == "resource":
-                    type_str = "_".join(parts[1:])
-                    if type_str not in missing:
-                        missing.append(type_str)
+            type_str = None
+            if constraint.startswith("requires_"):
+                rest = constraint[len("requires_"):]
+                # Try to peel off a known API name prefix.
+                for n in api_names:
+                    if rest.startswith(n + "_"):
+                        type_str = rest[len(n) + 1:]
+                        break
+                if type_str is None:
+                    # Fallback: tail substring after the last '_'.
+                    type_str = rest.rsplit("_", 1)[-1]
+            elif constraint.startswith("resource_"):
+                type_str = constraint[len("resource_"):]
+            elif constraint.startswith("produces_"):
+                rest = constraint[len("produces_"):]
+                for n in api_names:
+                    if rest.startswith(n + "_"):
+                        type_str = rest[len(n) + 1:]
+                        break
+
+            if type_str and type_str not in missing:
+                missing.append(type_str)
         return missing
 
     def suggest_producers(self, missing_type: str,
@@ -897,17 +939,9 @@ class Z3GuidedSynthesisController:
         self.diagnoser = UnsatCoreDiagnoser(self.solver)
         self.strict_mode = strict_mode
 
-        # Cache for API feasibility results
-        self._feasibility_cache: Dict[Tuple[str, ...], CandidateResult] = {}
-        self._cache_hits = 0
-        self._cache_misses = 0
-
     def reset(self):
         """Reset controller state for new synthesis"""
         self.solver.reset()
-        self._feasibility_cache.clear()
-        self._cache_hits = 0
-        self._cache_misses = 0
 
     def evaluate_source_apis(self, source_apis: List[Any],
                              get_required_types: callable,
@@ -1032,14 +1066,6 @@ class Z3GuidedSynthesisController:
                 suggestions.extend(producers)
 
         return list(set(suggestions))  # Deduplicate
-
-    def get_cache_stats(self) -> Dict[str, int]:
-        """Get cache hit/miss statistics"""
-        return {
-            "hits": self._cache_hits,
-            "misses": self._cache_misses,
-            "hit_rate": self._cache_hits / max(1, self._cache_hits + self._cache_misses)
-        }
 
     def get_automaton_stats(self) -> Optional[Dict[str, Any]]:
         """Phase H: telemetry on automaton-guard prunings. ``None`` when no
