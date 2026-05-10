@@ -420,6 +420,25 @@ class FuzzingContext:
                 f"This is an internal error in TypeDependencyGraphGenerator."
             ) from e
 
+        # === Step 3.5: Build data layout (must come BEFORE grammar gen) ===
+        # GrammarGenerator.has_incomplete_type → Factory.normalize_type
+        # consults DataLayout.instance() for type size/incompleteness/struct
+        # classification. The 2026-05 synthesis refactor (cluster 5) removed
+        # Factory.normalize_type's try/except fallback that previously
+        # masked uninitialised-DataLayout AttributeErrors; without that
+        # mask, grammar gen now crashes unless DataLayout is initialised
+        # first. Moved up from former Step 5 position. Only depends on
+        # extract_metadata (set in Step 2) and self.adapter (init time),
+        # so safe to run here.
+        log.debug('  3.5/10 Building data layout...')
+        try:
+            generator.build_data_layout()
+            log.info('   ✅ Data layout built')
+        except Exception as e:
+            log.warning(
+                f"Failed to build data layout: {e} (ConditionManager may have reduced precision)"
+            )
+
         # === Step 4: Generate grammar (API sequences) ===
         log.debug('  4/10 Generating grammar and API sequences...')
         try:
@@ -452,16 +471,6 @@ class FuzzingContext:
             raise ValueError(
                 f"No API sequences generated for project '{project_name}'.\n"
                 f"This might indicate the dependency graph is empty or grammar generation failed."
-            )
-
-        # === Step 5: Build data layout (required for ConditionManager) ===
-        log.debug('  5/10 Building data layout...')
-        try:
-            generator.build_data_layout()
-            log.info('   ✅ Data layout built')
-        except Exception as e:
-            log.warning(
-                f"Failed to build data layout: {e} (ConditionManager may have reduced precision)"
             )
 
         # === Step 5b: Build condition manager ===

@@ -103,9 +103,19 @@ These all violated CLAUDE.md's "No fallbacks — explicit failures".
   `None`).
 * `Factory.normalize_type` no longer wraps `DataLayout.instance()`
   calls in `try/except → 0/False/PRIMITIVE`. The production
-  `data_context.py` Step 5 always initialises DataLayout before
-  any normalize_type call; the fallback was masking a contract bug
+  pipeline (`data_context.py` Step 3.5 — see the cross-module
+  review note below) initialises DataLayout before any
+  `normalize_type` call; the fallback was masking a contract bug
   rather than serving a real scenario.
+
+  **Cross-module follow-up (2026-05 review-of-review):** the
+  original change here exposed a latent ordering bug — Step 4
+  (grammar gen) called `Factory.normalize_type` BEFORE Step 5
+  initialised DataLayout, and the old `try/except` masked it.
+  After removing the mask, Step 4 started crashing on every
+  non-primitive type. Fix: `build_data_layout` was moved up to
+  Step 3.5 (before Step 4), so the SSOT-strict normalize_type
+  now has a properly initialised DataLayout when it runs.
 
 ### Cluster 6 — Cleanups
 

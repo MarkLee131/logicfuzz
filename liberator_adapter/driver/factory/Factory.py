@@ -91,12 +91,13 @@ class Factory:
             
             # Type size, completeness, and STRUCT/PRIMITIVE tag come from
             # ``DataLayout``. Production callers always initialise it (see
-            # ``data_context.py`` Step 5: build_data_layout). The earlier
+            # ``data_context.py`` Step 3.5: build_data_layout, which runs
+            # BEFORE Step 4 grammar gen for this exact reason). The earlier
             # try/except defaults (size=0, incomplete=False, tag=PRIMITIVE)
             # silently corrupted type metadata when DataLayout was missing,
             # in violation of the SSOT "No fallbacks" principle. Now we let
-            # the AssertionError / RuntimeError surface so the caller knows
-            # to fix initialisation order.
+            # the AttributeError surface so the caller knows the
+            # initialisation order is broken.
             dl = DataLayout.instance()
             a_size = dl.get_type_size(a_type_core)
             a_incomplete_core = dl.is_incomplete(a_type_core)
