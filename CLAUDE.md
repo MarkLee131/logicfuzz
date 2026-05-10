@@ -58,6 +58,7 @@ justification + future-work plan lives in `docs/`:
 | `docs/upstream_liberator_diffs.md` | Upstream `reference/liberator` issues that the adapter has already fixed (or has a clear path to fix). Adapter-side bugs are NOT recorded here — they are work-in-progress fix items. | living |
 | `docs/synthesis_refactor_2026_05.md` | Per-cluster record of the 2026-05 synthesis-pipeline refactor: HoleFiller deletion, Z3 correctness fixes, B4 entry-point safety net, silent-fallback removal. Includes empty placeholder for post-run A/B coverage data. | living |
 | `docs/llm_vs_traditional_choices.md` | For every place LogicFuzz invokes an LLM (Prototyper, Fixer, Crash{,Feasibility}Analyzer, Coverage{Analyzer,Improver}, Comprehender, ProjectAnalyzer): what symbolic alternative was considered, why LLM won, what we'd lose by reverting, and the falsifiable measurement that would prove the LLM choice wrong. | living |
+| `docs/filter_pipeline_refactor_2026_05.md` | Sequel to the synthesis refactor: 2026-05 review of L1–L5 filter pipeline. 4 high-priority cluster fixes (L1 const-buffer admit, L2 auto_complete strictness, L3 dead method removal, L1 dead-helper removal); 4 deferred items with rationale. Includes placeholder for post-run A/B data. | living |
 
 ## Architecture
 

@@ -436,8 +436,12 @@ class LifecycleAnalyzer:
                     filtered.append(completed_seq)
                     auto_completed.append(seq)
                 else:
-                    # Can't auto-complete, but keep anyway (might still be useful)
-                    filtered.append(seq)
+                    # Can't auto-complete AND invalid — drop. The previous
+                    # behaviour (keep anyway) made `auto_complete` and
+                    # `permissive` indistinguishable and let unfix-able
+                    # invalid sequences leak through to L4 → downstream
+                    # never realised L2 had actually rejected them.
+                    invalid_count += 1
 
             elif strategy == "annotate_only":
                 # Keep all sequences

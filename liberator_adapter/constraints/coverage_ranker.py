@@ -226,7 +226,12 @@ class CoverageRanker:
                     if automaton_acceptance_fn(s) >= 0.999:
                         continue  # already accepted, no graft needed
                     grafted = automaton_graft_fn(s)
-                except Exception:
+                except Exception as exc:
+                    self.log.warning(
+                        "automaton graft raised %r on %s; "
+                        "skipping graft for this sequence",
+                        exc, s,
+                    )
                     grafted = None
                 if grafted is None:
                     continue
@@ -342,7 +347,17 @@ class CoverageRanker:
                 v = automaton_acceptance_fn(sequence)
                 if isinstance(v, (int, float)):
                     automaton_acceptance = max(0.0, min(1.0, float(v)))
-            except Exception:
+            except Exception as exc:
+                # Automaton artifact misbehaved on this sequence. We keep
+                # going (acceptance signal disabled for *this* sequence
+                # only) — the artifact is project-learned and may have
+                # bugs we shouldn't crash the whole pipeline for. Log at
+                # warning so the bug is visible.
+                self.log.warning(
+                    "automaton acceptance_score raised %r on %s; "
+                    "signal disabled for this sequence",
+                    exc, sequence,
+                )
                 automaton_acceptance = -1.0
 
         return SequenceScore(

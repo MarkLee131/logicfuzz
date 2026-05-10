@@ -316,12 +316,12 @@ class StateMachineAnalyzer:
                 constraints[api] = constraint
                 api_roles[api] = constraint.roles.copy()
 
-        # Method 3: Use condition_info for additional hints
-        if condition_info:
-            ci_transitions = self._derive_from_condition_info(
-                condition_info, api_names, resource_types
-            )
-            transitions.extend(ci_transitions)
+        # condition_info source/sink hints were previously consumed by
+        # ``_derive_from_condition_info`` here, but that method had a
+        # ``pass``-body for loop and produced no transitions — see the
+        # 2026-05 L1-L5 refactor for the removal. If we ever need
+        # source/sink-derived transitions back, add a real implementation
+        # rather than restoring the no-op.
 
         analysis = StateMachineAnalysis(
             transitions=transitions,
@@ -677,27 +677,6 @@ class StateMachineAnalyzer:
                     )
 
         return transitions, constraints
-
-    def _derive_from_condition_info(
-        self,
-        condition_info: Dict[str, Any],
-        api_names: Set[str],
-        resource_types: Set[str]
-    ) -> List[StateTransition]:
-        """Derive additional transitions from condition_info."""
-        transitions = []
-
-        # Sources might produce values that require cleanup
-        sources = set(condition_info.get('sources', []))
-        sinks = set(condition_info.get('sinks', []))
-
-        # Sources that aren't already init APIs might be value producers
-        for source in sources:
-            if source in api_names and source not in []:  # Could add more filtering
-                # Source APIs might produce values
-                pass
-
-        return transitions
 
     def _find_common_prefixes(self, names: Set[str]) -> List[str]:
         """Find common prefixes in names."""

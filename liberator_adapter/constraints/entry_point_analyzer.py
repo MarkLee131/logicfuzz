@@ -244,8 +244,17 @@ class EntryPointPattern:
     # Default: first argument
     cpp_input_arg_index: int = 0
 
-    # Whether C-style buffer must be const (indicates input data)
-    c_buffer_must_be_const: bool = True
+    # Whether C-style buffer must be const (indicates input data).
+    # Default was True (strict-const) but the empirical study (2026-05)
+    # showed ~5–10% of real OSS-Fuzz entry-point APIs use non-const
+    # ``uint8_t *``/``void *`` for input. With the synthesis-side B4
+    # safety net (``_create_variable_for_param`` entry-API fallback),
+    # admitting these here is the only way to actually exercise that
+    # path end-to-end. False means "match the type pattern; admit
+    # both const and non-const buffer args". EntryPointInfo.confidence
+    # is set lower for non-const matches so L4 still prefers const
+    # variants when available.
+    c_buffer_must_be_const: bool = False
 
     # Whether to allow scanning all arguments (not just fixed positions)
     # If True, will check all arguments for matching input types
@@ -744,10 +753,16 @@ class EntryPointAnalyzer:
                 size_idx = -1
                 size_type = None
 
-            # Additional validation for C buffer: must be const
-            if category == InputTypeCategory.C_BUFFER_WITH_SIZE:
-                if self.pattern.c_buffer_must_be_const and not is_const:
-                    continue
+            # Additional validation for C buffer: must be const (only when
+            # the strict-const policy is active). When admitting non-const,
+            # we lower the EntryPointInfo confidence so L4 prefers const
+            # alternatives when both exist.
+            non_const_buffer = (
+                category == InputTypeCategory.C_BUFFER_WITH_SIZE
+                and not is_const
+            )
+            if non_const_buffer and self.pattern.c_buffer_must_be_const:
+                continue
 
             # Reject if any *other* argument (not the buffer, not the size) is
             # handle-shaped. Such APIs require a creator upstream and belong to
@@ -769,6 +784,11 @@ class EntryPointAnalyzer:
             # Classify entry type based on function name
             entry_type = self._classify_entry_type(func_name)
 
+            # Non-const C buffer entries are real (~5–10% of OSS-Fuzz entry
+            # APIs) but lower-precision: the type pattern matches but the
+            # const heuristic that worked for const variants is gone. Drop
+            # confidence to 0.7 so L4 favours const matches when both exist.
+            confidence = 0.7 if non_const_buffer else 1.0
             return EntryPointInfo(
                 function_name=func_name,
                 return_type=return_type,
@@ -779,7 +799,7 @@ class EntryPointAnalyzer:
                 input_arg_type=arg_type,
                 size_arg_index=size_idx,
                 size_arg_type=size_type,
-                confidence=1.0,
+                confidence=confidence,
             )
 
         return None
@@ -837,6 +857,7 @@ class EntryPointAnalyzer:
         size_idx = -1
         size_type: Optional[str] = None
         category: Optional[InputTypeCategory] = None
+        buffer_is_non_const = False
         for arg_idx in range(len(args)):
             arg = args[arg_idx]
             arg_type = arg.get('type', arg.get('type_clang', ''))
@@ -845,8 +866,10 @@ class EntryPointAnalyzer:
             if cat is None or cat not in self.pattern.accepted_categories:
                 continue
             if cat == InputTypeCategory.C_BUFFER_WITH_SIZE:
-                if self.pattern.c_buffer_must_be_const and not is_const:
-                    continue
+                if not is_const:
+                    if self.pattern.c_buffer_must_be_const:
+                        continue
+                    buffer_is_non_const = True
                 size_info = self._find_size_argument(args, arg_idx)
                 if size_info is None:
                     continue
@@ -879,6 +902,11 @@ class EntryPointAnalyzer:
             return None
 
         func_name = api.get('function_name', '')
+        # Indirect entries are already lower-precision than direct (depend on
+        # creator pairing). Penalise non-const buffers further so L4 prefers
+        # the const + direct entry over non-const + indirect when both exist.
+        base_conf = 0.9
+        confidence = base_conf - (0.2 if buffer_is_non_const else 0.0)
         ep_info = EntryPointInfo(
             function_name=func_name,
             return_type=return_type,
@@ -889,7 +917,7 @@ class EntryPointAnalyzer:
             input_arg_type=buffer_type,
             size_arg_index=size_idx,
             size_arg_type=size_type,
-            confidence=0.9,  # slightly lower than direct: depends on creator pairing
+            confidence=confidence,
         )
         return ep_info, handle_idx, handle_type
 
@@ -918,57 +946,13 @@ class EntryPointAnalyzer:
         from liberator_adapter.analysis.usedef import consumed_handle_keys
         return consumed_handle_keys(api)
 
-    def _find_buffer_size_positions(
-        self, args: List[Dict[str, Any]]
-    ) -> Tuple[int, int]:
-        """Locate the (buffer, size) arg pair if present; return (-1, -1) otherwise."""
-        type_patterns = self.pattern.type_patterns
-        for arg_idx, arg in enumerate(args):
-            arg_type = arg.get('type', arg.get('type_clang', ''))
-            is_const = self._get_is_const(arg)
-            cat = type_patterns.match_category(arg_type, is_const)
-            if cat != InputTypeCategory.C_BUFFER_WITH_SIZE:
-                continue
-            size_info = self._find_size_argument(args, arg_idx)
-            if size_info is None:
-                continue
-            return arg_idx, size_info[0]
-        return -1, -1
-
-    @staticmethod
-    def _count_pointer_levels(type_str: str) -> int:
-        """Pointer arity of ``type_str`` (``T`` = 0, ``T*`` = 1, ``T**`` = 2)."""
-        if not type_str:
-            return 0
-        return InputTypePatterns.normalize_type(type_str).count("*")
-
-    @staticmethod
-    def _strip_one_pointer_level(type_str: str) -> Optional[str]:
-        """Return ``type_str`` with one trailing pointer level removed.
-
-        ``"foo **"`` -> ``"foo *"``; ``"foo *"`` -> ``"foo"``. Returns ``None``
-        when the type isn't a pointer.
-        """
-        if not type_str:
-            return None
-        normalized = InputTypePatterns.normalize_type(type_str)
-        if "*" not in normalized:
-            return None
-        # normalize_type renders pointers as " *"; strip the last occurrence.
-        idx = normalized.rfind("*")
-        return (normalized[:idx] + normalized[idx + 1:]).strip().rstrip(" *") + (
-            "" if normalized.count("*") == 1 else " *"
-        )
-
-    @staticmethod
-    def _extract_return_type(api: Dict[str, Any]) -> str:
-        """Pull the return type, handling both top-level and nested layouts."""
-        return_info = api.get('return_info')
-        if isinstance(return_info, dict) and return_info:
-            rt = return_info.get('type_clang') or return_info.get('type')
-            if rt:
-                return rt
-        return api.get('return_type', '') or ''
+    # NOTE: `_find_buffer_size_positions`, `_count_pointer_levels`,
+    # `_strip_one_pointer_level`, `_extract_return_type` were removed in
+    # the 2026-05 L1-L5 refactor — they had no callers in this module
+    # and the canonical implementations live in
+    # `liberator_adapter/analysis/usedef.py`. See
+    # `docs/synthesis_refactor_2026_05.md` for the same pattern applied
+    # to the synthesis subsystem.
 
     def _get_is_const(self, arg: Dict[str, Any]) -> bool:
         """Extract const qualifier from argument.
