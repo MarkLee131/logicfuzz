@@ -198,9 +198,6 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
   project_name = benchmark.project
 
   try:
-    # Get synthesis settings from args if available
-    # Note: Synthesis is always enabled (CBFactory + LLM refinement)
-    num_synthesis_drivers = getattr(args, 'num_synthesis_drivers', 5) if args else 5
     closed_loop_iters = (
         getattr(args, 'closed_loop_iters', 0)
         if (args and getattr(args, 'closed_loop', False)) else 0
@@ -222,7 +219,6 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       project_name=project_name,
       benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
       logger_instance=None,  # Use standard logging - no trial concept here
-      num_synthesis_drivers=num_synthesis_drivers,
       llm_client=llm_client,  # Pass LLM for driver knowledge extraction
       closed_loop_iters=closed_loop_iters,
       closed_loop_early_stop=closed_loop_early_stop,
@@ -441,6 +437,23 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
     )
   
   shared_data_duration = time.time() - shared_data_start
+
+  # Auto-resolve --num-samples to one trial per Z3-validated skeleton.
+  # Pre-runtime we don't know how many viable sequences a project will
+  # yield (depends on L0–L5 + Z3 + automaton attrition), so we let the
+  # post-viability count drive the trial axis instead of a hardcoded
+  # default. User can still override with -n N. Floor at 1 so that a
+  # project producing zero skeletons still runs one freeform LLM trial.
+  if args.num_samples is None:
+    skeleton_count = len(shared_data.get('skeleton_drivers') or [])
+    args.num_samples = max(1, skeleton_count)
+    logger.info(
+        f'📍 [_fuzzing_pipelines] --num-samples auto-resolved to '
+        f'{args.num_samples} (= len(skeleton_drivers), one trial per '
+        f'viable sequence)',
+        trial=0
+    )
+
   logger.info(
       f'📍 [_fuzzing_pipelines] Shared data prepared in {shared_data_duration:.2f}s '
       f'(will be reused by all {args.num_samples} trials)',

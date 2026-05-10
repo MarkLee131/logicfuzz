@@ -1234,8 +1234,12 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument('-n',
                       '--num-samples',
                       type=int,
-                      default=NUM_SAMPLES,
-                      help='The number of samples to request from LLM.')
+                      default=None,
+                      help='Number of LLM trials. Default: auto, resolved '
+                           'after viability analysis to the number of '
+                           'CBFactory base drivers (one trial per viable '
+                           'sequence). Pass an explicit value to override '
+                           '(e.g. -n 1 for fast smoke).')
   parser.add_argument(
       '-t',
       '--temperature',
@@ -1316,14 +1320,32 @@ def parse_args() -> argparse.Namespace:
                       action='store_true',
                       default=False,
                       help='Only run Liberator Clang extraction for the provided benchmark YAML(s) and exit.')
+  # ───────────────────────────────────────────────────────────────────────
+  # Static-only baseline path (independent from the LLM pipeline).
+  #
+  # `--generate-drivers` runs Liberator/CBFactory ALONE: it produces N full
+  # random drivers via `generate_drivers_for_benchmark` (this file, ~L1079)
+  # and exits. It does NOT enter `FuzzingContext.prepare()`, does NOT use
+  # the LLM, and does NOT touch `skeleton_drivers`. Use it when you want a
+  # pure program-synthesis baseline for paper comparisons.
+  #
+  # The LLM pipeline (default, no `--generate-drivers`) is a separate path:
+  # it generates one Z3-validated skeleton per L4-viable sequence and lets
+  # the LLM Prototyper refine it. Trial count = len(skeleton_drivers); no
+  # numeric knob.
+  #
+  # Do NOT add LLM-pipeline arguments below — they belong with the LLM
+  # config block further down. Editing this baseline path will NOT affect
+  # the LLM workflow.
+  # ───────────────────────────────────────────────────────────────────────
   parser.add_argument('--generate-drivers',
                       action='store_true',
                       default=False,
-                      help='Generate fuzz drivers using Liberator CBFactory after extraction.')
+                      help='Static-only baseline: generate fuzz drivers using Liberator CBFactory after extraction (no LLM).')
   parser.add_argument('--num-drivers',
                       type=int,
                       default=10,
-                      help='Number of drivers to generate (default: 10).')
+                      help='Number of drivers to generate in --generate-drivers static-only mode (default: 10).')
   parser.add_argument('--driver-size',
                       type=int,
                       default=5,
@@ -1362,13 +1384,17 @@ def parse_args() -> argparse.Namespace:
                       dest='use_session_memory',
                       help='Disable session memory (short-memory) for cross-agent consensus sharing.')
 
-  # Program synthesis configuration (CBFactory + LLM refinement)
-  # Note: Synthesis is always enabled - CBFactory generates base drivers, LLM Prototyper refines them
-  parser.add_argument('--num-synthesis-drivers',
-                      type=int,
-                      default=5,
-                      dest='num_synthesis_drivers',
-                      help='Number of base drivers to generate with CBFactory for LLM refinement (default: 5).')
+  # Evaluation knob: disable L5 novelty filter to maximise total coverage
+  # (use when comparing against developer-written / OGHarn baselines).
+  parser.add_argument('--no-coverage-filter',
+                      action='store_true',
+                      default=False,
+                      dest='no_coverage_filter',
+                      help='Disable L5 CoverageAwareFilter so candidate '
+                           'sequences are NOT filtered by novelty vs '
+                           'existing OSS-Fuzz coverage. Use for paper '
+                           'comparisons where total coverage is the metric. '
+                           'Equivalent to LOGICFUZZ_DISABLE_COVERAGE_FILTER=1.')
 
   # Phase G: closed-loop CBFactory feedback
   parser.add_argument('--closed-loop',
@@ -1393,7 +1419,53 @@ def parse_args() -> argparse.Namespace:
                            'for 2 consecutive iterations (default: 0 = '
                            'exact saturation).')
 
+  # Evaluation profile shortcut. Bundles the flags that are individually
+  # opt-in but should ALL be on when reporting "total coverage vs baseline"
+  # numbers (PromeFuzz Table 2 etc.):
+  #   --no-coverage-filter  (don't suppress already-covered code)
+  #   --closed-loop         (Phase G feedback, designed to grow coverage)
+  #   --merge-drivers       (synthesize a single multi-task harness from
+  #                          successful trials at the eval tail)
+  #
+  # Kept as an explicit named profile rather than changing defaults so that
+  # backwards-compatible "production novelty" runs still work unchanged
+  # (recall the Failed Attempts note in CLAUDE.md: L5 default-on suppresses
+  # TOTAL coverage by design — flipping it silently would break anyone
+  # interpreting historical report.json files).
+  parser.add_argument('--eval',
+                      action='store_true',
+                      default=False,
+                      dest='eval_profile',
+                      help='Evaluation profile: implies --no-coverage-filter, '
+                           '--closed-loop, --merge-drivers. Overridden by '
+                           'explicit flags.')
+
+  # Multi-task harness merger. Folds successful trials' .fuzz_target source
+  # files into a single dispatcher driver via tools.merge_drivers.merge.
+  # Output land at <work_dirs>/merged/. Skips preflight + coverage-aware
+  # selection (Top-K) because the OSS-Fuzz binaries are cleaned up between
+  # trials — the minimum viable integration is "produce the merged source
+  # + build snippet as deliverables; user runs them through OSS-Fuzz".
+  parser.add_argument('--merge-drivers',
+                      action='store_true',
+                      default=False,
+                      dest='merge_drivers',
+                      help='After all trials complete, fold successful '
+                           'drivers into a single multi-task harness via '
+                           'tools.merge_drivers (uniform dispatch). Output: '
+                           '<work_dirs>/merged/synthesized + build snippet.')
+
   args = parser.parse_args()
+
+  # Apply evaluation profile (only fills flags the user did not set
+  # explicitly — explicit always wins).
+  if args.eval_profile:
+    if not args.no_coverage_filter:
+      args.no_coverage_filter = True
+    if not args.closed_loop:
+      args.closed_loop = True
+    if not args.merge_drivers:
+      args.merge_drivers = True
   if args.num_samples:
     assert args.num_samples > 0, '--num-samples must take a positive integer.'
 
@@ -1758,6 +1830,10 @@ def main():
   # an env var. Coverage queries default to the public OSS-Fuzz introspector.
   if args.introspector_endpoint:
     os.environ['LOGICFUZZ_FI_ENDPOINT'] = args.introspector_endpoint
+
+  # Forward --no-coverage-filter to data_context via env var (read in Step 5f).
+  if args.no_coverage_filter:
+    os.environ['LOGICFUZZ_DISABLE_COVERAGE_FILTER'] = '1'
 
   run_single_fuzz.prepare(args.oss_fuzz_dir)
 

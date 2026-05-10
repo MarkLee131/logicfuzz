@@ -237,9 +237,6 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         function_analysis = state.get("function_analysis", {})
         context = state.get('context', {})
 
-        # === Synthesis mode is always enabled (CBFactory as base for LLM refinement) ===
-        synthesized_drivers = context.get('synthesized_drivers', [])
-
         project_apis = context.get('project_apis', [])
         api_sequences = context.get('api_sequences', [])
         dependency_graph = context.get('dependency_graph', {})
@@ -301,7 +298,17 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         library_purpose = comprehension.get('purpose', '')
         api_usages = comprehension.get('functions', {}) or {}
 
-        api_sequences_text = self._format_api_sequences(api_sequences, limit=8)
+        # Per-trial primary sequence: trial N optimises for
+        # api_sequences[(N-1) % K] specifically. Without this, every
+        # trial sees the same top-K with no orientation, and the LLM
+        # converges on the top-1 protocol — collapsing trial diversity
+        # to LLM stochasticity. See note in _format_api_sequences for
+        # the cjson/zlib symptom that motivated this fix.
+        primary_index_for_trial: Optional[int] = None
+        if api_sequences:
+            primary_index_for_trial = (self.trial - 1) % len(api_sequences)
+        api_sequences_text = self._format_api_sequences(
+            api_sequences, limit=8, primary_index=primary_index_for_trial)
         sequence_signatures_text = self._format_sequence_api_signatures(
             api_sequences, project_apis, api_usages=api_usages)
         sequence_invariants_text = self._format_sequence_invariants(
@@ -320,24 +327,37 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                                                        limit=12)
         condition_text = self._format_condition_info(condition_info)
 
-        skeleton_template_code, holes_description, has_skeleton_template = \
-            self._format_skeleton_as_template(skeleton_drivers, limit=1)
+        # === Single active skeleton for this trial ===
+        # Trial N picks skeleton_drivers[(N-1) % K] once at the top; all
+        # downstream renderers (template, base-driver, hole-merge,
+        # generation_mode) consume the SAME element. Without this, three
+        # separate format helpers each pinned different indices and trial
+        # diversity collapsed (cjson/zlib repro: trial diff was just
+        # whitespace).
+        active_skeleton: Optional[Dict[str, Any]] = None
+        if skeleton_drivers:
+            active_idx = (self.trial - 1) % len(skeleton_drivers)
+            active_skeleton = skeleton_drivers[active_idx]
+            logger.info(
+                f'[Synthesis Mode] Trial {self.trial} → '
+                f'skeleton_drivers[{active_idx}] of {len(skeleton_drivers)}',
+                trial=self.trial)
 
-        skeleton_text = self._format_skeleton_drivers(skeleton_drivers,
-                                                      limit=2)
+        skeleton_template_code, holes_description, has_skeleton_template = \
+            self._format_skeleton_as_template(active_skeleton)
         include_path_context = self._format_include_path_context(
             target_path, existing_fuzzer_headers)
         driver_knowledge_text = self._format_driver_knowledge(
             existing_driver_knowledge)
 
-        # === Synthesis mode: Format CBFactory base driver for LLM refinement ===
+        # The Z3-validated skeleton rendered as "base for refinement". The
+        # LLM is told to refine THIS specific driver (preserve API order,
+        # fix compilation, improve coverage). Mutually consistent with
+        # has_skeleton_template above — same active_skeleton, two views.
         synthesis_base_text = ""
-        if synthesized_drivers:
+        if active_skeleton is not None:
             synthesis_base_text = self._format_synthesis_base_driver(
-                synthesized_drivers, state)
-            logger.info(
-                f'[Synthesis Mode] Providing {len(synthesized_drivers)} CBFactory drivers as base for LLM refinement',
-                trial=self.trial)
+                active_skeleton)
 
         # Add extern "C" guidance if needed
         extern_c_note = ""
@@ -437,9 +457,6 @@ Before writing any code, think about:
 {condition_text}
 </constraints>
 
-<skeleton_drivers>
-{skeleton_text}
-</skeleton_drivers>
 {driver_knowledge_text}
 {synthesis_base_text}
 </reference_information>"""
@@ -526,7 +543,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
             base_prompt = self._build_fallback_prompt(
                 benchmark, include_path_context, api_sequences_text,
                 project_apis_text, dep_graph_text, condition_text,
-                skeleton_text, srs_specification, skeleton_code,
+                synthesis_base_text, srs_specification, skeleton_code,
                 additional_context)
 
         prompt = build_prompt_with_session_memory(state,
@@ -623,7 +640,8 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
     def _build_fallback_prompt(self, benchmark, include_path_context,
                                api_sequences_text, project_apis_text,
-                               dep_graph_text, condition_text, skeleton_text,
+                               dep_graph_text, condition_text,
+                               synthesis_base_text,
                                srs_specification, skeleton_code,
                                additional_context):
         """Build fallback prompt when template fails."""
@@ -641,10 +659,6 @@ Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown'
 {api_sequences_text}
 </api_sequences>
 
-<sequence_api_signatures>
-{sequence_signatures_text}
-</sequence_api_signatures>
-
 <project_apis>
 {project_apis_text}
 </project_apis>
@@ -657,9 +671,7 @@ Generate a LibFuzzer fuzz driver for project {benchmark.get('project', 'unknown'
 {condition_text}
 </constraints>
 
-<skeleton_drivers>
-{skeleton_text}
-</skeleton_drivers>
+{synthesis_base_text}
 
 <project_analysis>
 {srs_specification}
@@ -698,88 +710,67 @@ Output your fuzz driver code inside <fuzz_target> tags.
     # Formatting helpers (unchanged from original)
     # =========================================================================
 
-    def _format_synthesis_base_driver(self,
-                                      synthesized_drivers: List[Dict[str,
-                                                                     Any]],
-                                      state: FuzzingWorkflowState) -> str:
-        """Format CBFactory synthesized drivers as base for LLM refinement."""
-        if not synthesized_drivers:
+    def _format_synthesis_base_driver(
+        self,
+        active_skeleton: Optional[Dict[str, Any]],
+    ) -> str:
+        """Render the trial-bound Z3 skeleton as the LLM's refinement base.
+
+        Caller selected the active_skeleton via trial-rotation upstream;
+        no rotation logic here. Returns "" if active_skeleton is falsy
+        (no skeletons synthesised this run).
+        """
+        if not active_skeleton:
             return ""
 
-        lines = []
-        lines.append("")
-        lines.append(
-            "**=== CBFactory SYNTHESIZED DRIVER (Base for Refinement) ===**")
-        lines.append("")
-        lines.append(
-            "The following driver was generated by CBFactory (traditional program synthesis)."
-        )
-        lines.append(
-            "It is structurally correct and respects API constraints, but needs YOUR refinement:"
-        )
-        lines.append("")
-        lines.append("**Your tasks:**")
-        lines.append(
-            "1. **Fix compilation issues** - Add missing headers, fix type errors"
-        )
-        lines.append(
-            "2. **Improve input generation** - Replace basic buffers with structured fuzzer input"
-        )
-        lines.append(
-            "3. **Add error handling** - Check return values, handle NULL pointers"
-        )
-        lines.append("4. **Enhance coverage** - Add branches, test edge cases")
-        lines.append(
-            "5. **Keep the API sequence** - The call order is constraint-validated, preserve it"
-        )
-        lines.append("")
+        driver_name = active_skeleton.get('name', 'cbfactory_skeleton')
+        api_sequence = active_skeleton.get('api_sequence', [])
+        code = active_skeleton.get('code', '')
+        synthesis_info = active_skeleton.get('synthesis_info', {})
 
-        synthesis_index = state.get("synthesis_driver_index",
-                                    0) if state else 0
-        if synthesis_index >= len(synthesized_drivers):
-            synthesis_index = 0
-
-        driver = synthesized_drivers[synthesis_index]
-        driver_name = driver.get('name', f'cbfactory_driver_{synthesis_index}')
-        api_sequence = driver.get('api_sequence', [])
-        code = driver.get('code', '')
-        synthesis_info = driver.get('synthesis_info', {})
-
-        lines.append(f"**Driver: {driver_name}**")
-        lines.append(
-            f"  - API sequence ({len(api_sequence)} calls): {' → '.join(api_sequence[:8])}"
-            + (" ..." if len(api_sequence) > 8 else ""))
+        lines = [
+            "",
+            "**=== CBFactory SYNTHESIZED DRIVER (Base for Refinement) ===**",
+            "",
+            "The following driver was generated by CBFactory (traditional program synthesis).",
+            "It is structurally correct and respects API constraints, but needs YOUR refinement:",
+            "",
+            "**Your tasks:**",
+            "1. **Fix compilation issues** - Add missing headers, fix type errors",
+            "2. **Improve input generation** - Replace basic buffers with structured fuzzer input",
+            "3. **Add error handling** - Check return values, handle NULL pointers",
+            "4. **Enhance coverage** - Add branches, test edge cases",
+            "5. **Keep the API sequence** - The call order is constraint-validated, preserve it",
+            "",
+            f"**Driver: {driver_name}**",
+            f"  - API sequence ({len(api_sequence)} calls): "
+            + " → ".join(api_sequence[:8])
+            + (" ..." if len(api_sequence) > 8 else ""),
+        ]
         if synthesis_info:
             lines.append(
                 f"  - Synthesis method: {synthesis_info.get('method', 'CBFactory')}"
             )
             lines.append(
                 f"  - Has cleanup: {synthesis_info.get('has_cleanup', False)}")
-        lines.append("")
-        lines.append("**Base Code (REFINE THIS):**")
-        lines.append("```cpp")
+        lines += [
+            "",
+            "**Base Code (REFINE THIS):**",
+            "```cpp",
+        ]
         code_lines = code.split('\n')
         if len(code_lines) > 80:
             lines.extend(code_lines[:80])
             lines.append("// ... (truncated)")
         else:
             lines.append(code)
-        lines.append("```")
-        lines.append("")
-        lines.append(
-            "**IMPORTANT:** Use this as your starting point. Keep the API call sequence,"
-        )
-        lines.append(
-            "but improve the driver to be compilable and achieve high code coverage."
-        )
-        lines.append("")
-
-        if len(synthesized_drivers) > 1:
-            lines.append(
-                f"*({len(synthesized_drivers) - 1} more synthesized drivers available)*"
-            )
-            lines.append("")
-
+        lines += [
+            "```",
+            "",
+            "**IMPORTANT:** Use this as your starting point. Keep the API call sequence,",
+            "but improve the driver to be compilable and achieve high code coverage.",
+            "",
+        ]
         return "\n".join(lines)
 
     def _format_api_understanding(self, classification) -> str:
@@ -856,13 +847,31 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
     def _format_api_sequences(self,
                               api_sequences: List[List[str]],
-                              limit: int = 10) -> str:
+                              limit: int = 10,
+                              primary_index: Optional[int] = None) -> str:
+        """Render the top-K API sequences for the prototyper prompt.
+
+        ``primary_index`` (default None for backwards-compat) marks ONE
+        sequence as the trial's main target — the LLM is then instructed
+        to optimise for that sub-language specifically. Without it, all
+        N samples of the same benchmark pin on the same top-1 protocol
+        and merge_drivers ends up folding LLM-stochastic copies of the
+        same protocol (the silent bug found in cjson/zlib runs: trial
+        diff was just whitespace + variable naming).
+        """
         if not api_sequences:
             return "  (none)"
         lines = []
+        # Render up to `limit` sequences, prefixing the primary one with
+        # an explicit marker so the LLM knows which to optimise for.
+        if primary_index is not None and 0 <= primary_index < len(api_sequences):
+            lines.append(
+                f"  *** PRIMARY for this trial — optimise this sequence's "
+                f"coverage specifically *** (Sequence {primary_index + 1})")
         for i, seq in enumerate(api_sequences[:limit]):
             seq_str = " → ".join(seq)
-            lines.append(f"  Sequence {i+1}: {seq_str}")
+            marker = (" ★ PRIMARY" if i == primary_index else "")
+            lines.append(f"  Sequence {i+1}{marker}: {seq_str}")
         if len(api_sequences) > limit:
             lines.append(f"  ... and {len(api_sequences) - limit} more")
         return "\n".join(lines)
@@ -1077,82 +1086,24 @@ Output your fuzz driver code inside <fuzz_target> tags.
                      (" ..." if len(inits) > 10 else ""))
         return "\n".join(lines)
 
-    def _format_skeleton_drivers(self,
-                                 skeleton_drivers: List[Dict[str, Any]],
-                                 limit: int = 2) -> str:
-        """Format pre-generated skeleton drivers as reference for the prompt."""
-        if not skeleton_drivers:
-            return "  (no skeleton drivers available)"
-
-        lines = []
-        for i, skeleton in enumerate(skeleton_drivers[:limit]):
-            name = skeleton.get("name", f"skeleton_{i}")
-            api_seq = skeleton.get("api_sequence", [])
-            holes = skeleton.get("holes", [])
-            code = skeleton.get("code", "")
-
-            lines.append(f"\n  **Skeleton {i+1}: {name}**")
-            lines.append(f"    API sequence: {' → '.join(api_seq[:5])}" +
-                         (" ..." if len(api_seq) > 5 else ""))
-
-            if holes:
-                unfilled = [h for h in holes if not h.get("filled", False)]
-                hole_types = [str(h['hole_type']) for h in unfilled[:3]]
-                lines.append(
-                    f"    Holes to fill: {len(unfilled)} ({', '.join(hole_types)})"
-                )
-
-            if code:
-                code_lines = code.split('\n')[:15]
-                lines.append("    Code preview:")
-                lines.append("    ```c")
-                for line in code_lines:
-                    lines.append(f"    {line}")
-                if len(code.split('\n')) > 15:
-                    lines.append("    // ... (truncated)")
-                lines.append("    ```")
-
-        if len(skeleton_drivers) > limit:
-            lines.append(
-                f"\n  ... and {len(skeleton_drivers) - limit} more skeleton drivers"
-            )
-
-        return "\n".join(lines)
-
     def _format_skeleton_as_template(
-            self, skeleton_drivers: List[Dict[str, Any]],
-            limit: int = 1) -> tuple:
-        """Format skeleton as mandatory template with hole markers.
+            self,
+            active_skeleton: Optional[Dict[str, Any]]) -> tuple:
+        """Render the trial's active skeleton as a MANDATORY hole-filling
+        template (LLM must preserve structure, only fill marked holes).
 
-        This method formats the first skeleton as a mandatory template that the LLM
-        must follow, extracting holes that need to be filled with appropriate code.
-
-        Args:
-            skeleton_drivers: List of skeleton driver dictionaries
-            limit: Number of skeletons to use (default 1)
+        Caller selected the active_skeleton via trial-rotation upstream;
+        no rotation here.
 
         Returns:
-            Tuple of (skeleton_code, holes_description, has_skeleton)
-            - skeleton_code: The skeleton code with hole placeholders
-            - holes_description: Formatted description of holes to fill
-            - has_skeleton: Whether a valid skeleton was found
+            Tuple of (skeleton_code, holes_description, has_skeleton).
+            Returns ("", "", False) when active_skeleton is None or has
+            no code.
         """
-        if not skeleton_drivers:
+        if not active_skeleton or not active_skeleton.get('code'):
             return "", "", False
 
-        # Use the first skeleton with holes
-        skeleton = None
-        for sk in skeleton_drivers[:limit]:
-            if sk.get('holes') and sk.get('code'):
-                skeleton = sk
-                break
-
-        if skeleton is None:
-            # Fallback to first skeleton even without explicit holes
-            skeleton = skeleton_drivers[0]
-            if not skeleton.get('code'):
-                return "", "", False
-
+        skeleton = active_skeleton
         code = skeleton.get('code', '')
         holes = skeleton.get('holes', [])
         api_sequence = skeleton.get('api_sequence', [])
@@ -1225,30 +1176,26 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
     def _get_active_skeleton(
             self, state: FuzzingWorkflowState) -> tuple:
-        """Get the active skeleton for the current synthesis attempt.
+        """Get this trial's active Z3 skeleton.
+
+        Trial N picks ``skeleton_drivers[(N-1) % K]`` — the same rotation
+        used at the prompt-rendering top of ``__call__``. Both call sites
+        (hole-merge and ``_get_generation_mode``) get the SAME skeleton
+        the prompt was built from.
 
         Returns:
-            Tuple of (skeleton_code, holes_list, api_sequence) or (None, None, None)
+            Tuple of (skeleton_code, holes_list, api_sequence) or
+            (None, None, None) when no skeletons are available.
         """
-        context = state.get('context', {})
-        skeleton_drivers = context.get('skeleton_drivers', [])
-        synthesized_drivers = context.get('synthesized_drivers', [])
+        skeleton_drivers = state.get('context', {}).get('skeleton_drivers', [])
+        if not skeleton_drivers:
+            return None, None, None
 
-        # First try synthesized drivers (from CBFactory skeleton mode)
-        for driver in synthesized_drivers:
-            if driver.get('synthesis_info', {}).get('method') == 'template_based_synthesis':
-                return (driver.get('code', ''),
-                        driver.get('holes', []),
-                        driver.get('api_sequence', []))
-
-        # Fallback to skeleton_drivers
-        if skeleton_drivers:
-            sk = skeleton_drivers[0]
-            return (sk.get('code', ''),
-                    sk.get('holes', []),
-                    sk.get('api_sequence', []))
-
-        return None, None, None
+        active_idx = (self.trial - 1) % len(skeleton_drivers)
+        sk = skeleton_drivers[active_idx]
+        return (sk.get('code', ''),
+                sk.get('holes', []),
+                sk.get('api_sequence', []))
 
     def _validate_skeleton_adherence(self, generated_code: str,
                                      skeleton_code: str,

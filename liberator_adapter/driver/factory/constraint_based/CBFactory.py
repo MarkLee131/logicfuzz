@@ -735,11 +735,24 @@ class CBFactory(Factory):
         """
         Track an API addition in the Z3 controller state.
 
+        Idempotent on ``api.function_name``: the constraint model assigns one
+        order var per API, so re-tracking the same name at a new position
+        would surface as a (correct) UNSAT. The init-chain recursion can
+        produce a chain that revisits an already-added API; silently skip
+        such re-tracks at the boundary so callers don't have to know.
+
         Args:
             api: API object being added to the sequence
             position: Position in the sequence
         """
         if not self.enable_z3_guidance or not self.z3_controller:
+            return
+
+        if api.function_name in self.z3_controller.solver.api_sequence:
+            logger.debug(
+                f"[Z3Guided] API {api.function_name} already tracked, "
+                f"skipping re-track at position {position}"
+            )
             return
 
         try:
@@ -1267,36 +1280,196 @@ class CBFactory(Factory):
 
         return api_sequence
 
-    def _create_skeleton_from_sequence(self, api_sequence: List[Api]) -> 'DriverSkeleton':
+    def create_skeleton_for_sequence(
+        self, target_seq: List[Api]
+    ) -> Optional['DriverSkeleton']:
+        """
+        Generate a Z3-validated DriverSkeleton (with holes) for a SPECIFIC
+        API sequence supplied by the caller.
+
+        This is the program-synthesis-as-precondition path used by
+        ``data_context.py`` Step 10 to upgrade the per-sequence base
+        drivers from "pattern-rendered" to "constraint-validated":
+
+          - **Viability is decided by the constraint solver, not by an
+            arbitrary numeric cap**. ``validate_sequence_with_z3`` returns
+            False when the sequence cannot satisfy type / lifecycle /
+            provenance constraints — we drop those sequences silently
+            (the caller's filtered list shrinks naturally).
+          - **The skeleton structure is correct by construction** because
+            ``_create_skeleton_from_sequence`` reuses the same
+            ``varlen_relations`` extracted from CBFactory's conditions
+            (which are themselves derived from LLVM IR analysis).
+          - **Holes mark the parts that need LLM judgment** — callbacks,
+            buffer sizes, loop conditions. The LLM refines the skeleton
+            (PromeFuzz-aligned scaffolding pattern) instead of generating
+            from scratch.
+
+        Differs from ``create_random_driver_skeleton()`` (which calls
+        ``_generate_api_sequence`` to RANDOMLY pick a source API + walk
+        the dependency graph). Here we honor the caller's sequence and
+        use Z3 only to *validate*.
+
+        Args:
+            target_seq: Caller-provided list of Api objects (e.g. one
+                of the L4-validated viable sequences).
+
+        Returns:
+            DriverSkeleton with holes if the sequence passes Z3
+            validation; None if Z3 rejects (caller treats as "this
+            specific sequence is infeasible, skip").
+        """
+        if not SKELETON_AVAILABLE:
+            logger.warning("Skeleton generation not available (SKELETON_AVAILABLE=False)")
+            return None
+        if not target_seq:
+            return None
+        is_valid, violations = self.validate_sequence_with_z3(target_seq)
+        if not is_valid:
+            logger.info(
+                "Z3 rejected viable-candidate sequence %s; first violations: %s",
+                [api.function_name for api in target_seq],
+                violations[:3],
+            )
+            return None
+        return self._create_skeleton_from_sequence(target_seq)
+
+    def _create_skeleton_from_sequence(self, api_sequence: List[Api]) -> Optional['DriverSkeleton']:
         """
         Convert an API sequence to a skeleton with holes.
 
-        Uses SkeletonGenerator to create a skeleton where uncertain parts
-        (callbacks, buffer sizes, loop conditions) are marked as holes.
+        The variable wiring (which arg references which prior call's
+        return) is computed by upstream's
+        ``RunningContext.try_to_get_var`` machinery — we drive it via
+        ``try_to_instantiate_api_call`` per API in the caller's sequence.
+        That gives us:
+          1. Validation by construction: if any API fails to instantiate
+             (unsat vars), the sequence is genuinely infeasible — return
+             None directly.
+          2. A precomputed wiring map: ``(api_name, arg_idx) -> ret_<prev>``
+             when an arg reuses a prior call's return value. Passed to
+             SkeletonGenerator as ``arg_bindings``; the generator just
+             renders.
+
+        See ``CLAUDE.md`` Design Principles ("Reuse upstream Liberator")
+        and the module-level comment in ``skeleton_generator.py``.
 
         Args:
             api_sequence: List of Api objects to generate skeleton for
 
         Returns:
-            DriverSkeleton with holes
+            DriverSkeleton with holes, or None when the sequence is
+            infeasible under upstream's variable-binding semantics.
         """
-        # Extract var-len relationships from CBFactory conditions
-        varlen_relations = self._extract_varlen_relations(api_sequence)
+        # Step 1: drive RunningContext over the caller's sequence and
+        # extract a (api_name, arg_idx) -> wired-text map. Returns None
+        # when any API is infeasible.
+        bindings = self._compute_arg_bindings_via_running_context(api_sequence)
+        if bindings is None:
+            return None
 
-        # Use SkeletonGenerator to create skeleton
+        # Step 2: SkeletonGenerator owns the rendering layer. It receives
+        # the upstream-computed bindings and applies them to consumer-arg
+        # init_value, leaving Holes for callbacks / buffer sizes etc.
+        varlen_relations = self._extract_varlen_relations(api_sequence)
         generator = SkeletonGenerator()
         skeleton = generator.generate(
             api_sequence=api_sequence,
             varlen_relations=varlen_relations,
-            driver_name="cbfactory_skeleton"
+            driver_name="cbfactory_skeleton",
+            arg_bindings=bindings,
         )
 
-        # Add metadata about the generation method
         skeleton.metadata['synthesis_method'] = 'CBFactory'
         skeleton.metadata['api_count'] = len(api_sequence)
         skeleton.metadata['api_names'] = [api.function_name for api in api_sequence]
 
         return skeleton
+
+    def _compute_arg_bindings_via_running_context(
+        self, api_sequence: List[Api]
+    ) -> Optional[Dict[Tuple[str, int], str]]:
+        """Drive ``try_to_instantiate_api_call`` over a fixed sequence and
+        translate the resulting Variable identities to SkeletonGenerator's
+        ``ret_<api>`` naming.
+
+        The upstream contract: ``try_to_instantiate_api_call(call, cond,
+        rng_ctx)`` mutates ``call.arg_vars`` and ``call.ret_var``, picking
+        existing live variables when a sink/init/setby category matches.
+        When it picks a *prior call's* return value, that's the wiring
+        signal we want — the consumer arg is reusing the producer's
+        output.
+
+        We resolve via Python identity: each prior ``ApiCall.ret_var``
+        (unwrapped from Address) is recorded; when a later call's
+        ``arg_vars[j]`` resolves (also unwrapped) to that same Variable
+        object, we emit ``bindings[(api, j)] = "ret_<prev_api>"``.
+
+        Returns:
+            ``{(api_name, arg_idx): wired_text}`` on success (possibly
+            empty if no cross-API reuse occurred), or ``None`` if any
+            API in the sequence is infeasible per upstream's binding
+            rules.
+        """
+        if not api_sequence:
+            return {}
+
+        rng_ctx = RunningContext()
+        drv_calls: List[Tuple[Api, ApiCall]] = []
+
+        for api in api_sequence:
+            cond = self.conditions.get_function_conditions(api.function_name)
+            if cond is None:
+                # Missing FunctionConditions for this API — upstream
+                # cannot wire it. Treat as infeasible on this path.
+                return None
+            call = Factory.api_to_apicall(api)
+            try:
+                rng_ctx_next, unsat = self.try_to_instantiate_api_call(
+                    call, cond, rng_ctx)
+            except Exception as exc:
+                logger.debug(
+                    "RunningContext instantiation crashed on %s: %s",
+                    api.function_name, exc)
+                return None
+            if unsat:
+                logger.debug(
+                    "RunningContext rejected %s with %d unsat var(s)",
+                    api.function_name, len(unsat))
+                return None
+            drv_calls.append((api, call))
+            rng_ctx = rng_ctx_next
+
+        # Build a map: id(Variable) -> producer api_name.
+        # We only consider direct Variable returns. NullConstant returns
+        # don't enter the map (no name to reuse).
+        var_id_to_producer: Dict[int, str] = {}
+        for prev_api, prev_call in drv_calls:
+            ret = prev_call.ret_var
+            if ret is None:
+                continue
+            base = ret.get_variable() if isinstance(ret, Address) else ret
+            if isinstance(base, Variable):
+                var_id_to_producer[id(base)] = prev_api.function_name
+
+        # Walk each call's args; emit a binding when an arg resolves to
+        # a known prior producer (and isn't this call's own ret).
+        bindings: Dict[Tuple[str, int], str] = {}
+        for api, call in drv_calls:
+            for j, arg_var in enumerate(call.arg_vars):
+                if arg_var is None:
+                    continue
+                base = arg_var
+                if isinstance(arg_var, Address):
+                    base = arg_var.get_variable()
+                if not isinstance(base, Variable):
+                    continue
+                producer = var_id_to_producer.get(id(base))
+                if producer is None or producer == api.function_name:
+                    continue
+                bindings[(api.function_name, j)] = f"ret_{producer}"
+
+        return bindings
 
     def _extract_varlen_relations(self, api_sequence: List[Api]) -> Dict[str, List[Tuple[int, int, str]]]:
         """

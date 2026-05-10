@@ -151,8 +151,7 @@ assert solver.api_sequence == ['a']
 1. Benchmark with strong-automaton project (libucl, sqlite3 once
    automaton learning works):
    ```bash
-   python3 run_logicfuzz.py -y comparison/libucl.yaml -l gpt-4o \
-       --num-synthesis-drivers 10
+   python3 run_logicfuzz.py -y comparison/libucl.yaml -l gpt-4o
    ```
    Expected logs:
    ```
@@ -330,8 +329,7 @@ with tempfile.TemporaryDirectory() as td:
 
 ```bash
 # 1. E baseline
-python3 run_logicfuzz.py -y comparison/libucl.yaml -l gpt-4o \
-    --num-synthesis-drivers 10
+python3 run_logicfuzz.py -y comparison/libucl.yaml -l gpt-4o
 # Inspect coverage_ranking summary; expect post_extend_added > 0
 
 # 2. H on top
@@ -340,7 +338,7 @@ python3 run_logicfuzz.py -y comparison/libucl.yaml -l gpt-4o \
 
 # 3. G on top
 python3 run_logicfuzz.py -y comparison/libucl.yaml -l gpt-4o \
-    --closed-loop --closed-loop-iters 3 --num-synthesis-drivers 10
+    --closed-loop --closed-loop-iters 3
 # Inspect closed_loop_trajectory.json
 ```
 

@@ -59,14 +59,10 @@ class FuzzingContext:
     pattern_analysis: Dict[str, Any] = field(
         default_factory=dict)  # VarLen/Loop/Callback/TLV
 
-    # === Skeleton drivers (P0: SkeletonGenerator integration) ===
-    skeleton_drivers: List[Dict[str, Any]] = field(
-        default_factory=list)  # Pre-generated skeletons
-
-    # === Synthesized drivers (CBFactory program synthesis) ===
-    # Note: Synthesis is always enabled - CBFactory generates base drivers, LLM Prototyper refines them
-    synthesized_drivers: List[Dict[str, Any]] = field(
-        default_factory=list)  # Full drivers from CBFactory
+    # === Z3-validated skeleton drivers (program synthesis as precondition for LLM refinement) ===
+    # One skeleton per L4-viable sequence (1:1 binding). Trial N picks
+    # skeleton_drivers[(N-1) % K] as its base; LLM refines from there.
+    skeleton_drivers: List[Dict[str, Any]] = field(default_factory=list)
 
     # === Existing driver knowledge (extracted from OSS-Fuzz fuzzers via LLM) ===
     # Contains patterns, configurations, and fuzzing strategies learned from existing drivers
@@ -201,7 +197,9 @@ class FuzzingContext:
                 'project_headers': []
             }
 
-            # Skeleton drivers - optional, may not exist in older caches
+            # Z3-validated skeleton drivers — optional, may not exist in older
+            # caches. A cache HIT can skip CBFactory entirely, which is the
+            # long pole on first runs (Z3 + ConditionManager).
             skeleton_drivers = []
             skeleton_path = cache_dir / 'skeleton_drivers.json'
             if skeleton_path.exists():
@@ -220,7 +218,9 @@ class FuzzingContext:
                 return None
 
             log.info(
-                f'   ✅ Loaded {len(project_apis)} APIs, {len(api_sequences)} sequences from cache'
+                f'   ✅ Loaded {len(project_apis)} APIs, '
+                f'{len(api_sequences)} sequences, '
+                f'{len(skeleton_drivers)} Z3 skeletons from cache'
             )
 
             return cls(
@@ -248,9 +248,15 @@ class FuzzingContext:
                 logger_instance: logging.Logger = None,
                 num_sequences: int = 24,
                 driver_size: int = 5,
-                filter_top_k: int = 12,
+                # Budget cap on the per-project driver count after L4
+                # greedy max-coverage. NOT a viability filter — viability
+                # is decided by L0–L5 + the greedy itself, which already
+                # orders by marginal coverage and self-terminates when no
+                # candidate adds new APIs. This cap just bounds compile /
+                # fuzz / LLM cost. Matches PromeFuzz CCS'25's per-project
+                # driver count for direct comparability.
+                filter_top_k: int = 10,
                 use_cache: bool = True,
-                num_synthesis_drivers: int = 5,
                 llm_client: Any = None,
                 closed_loop_iters: int = 0,
                 closed_loop_early_stop: int = 0) -> 'FuzzingContext':
@@ -272,7 +278,6 @@ class FuzzingContext:
             driver_size: Target length of each API sequence
             filter_top_k: Top-K sequences to keep after heuristic filtering
             use_cache: Whether to try loading from cache first (default: True)
-            num_synthesis_drivers: Number of drivers to synthesize with CBFactory (default: 5)
             llm_client: Optional LLM client for extracting knowledge from existing drivers
 
         Returns:
@@ -780,6 +785,13 @@ class FuzzingContext:
             # Rank and select top-k sequences (with L5 coverage-aware filtering
             # + automaton signal + length-floor defensive guard when available)
             pre_rank_count = len(api_sequences)
+            import os as _os
+            _disable_cov = _os.environ.get(
+                'LOGICFUZZ_DISABLE_COVERAGE_FILTER', '0'
+            ).lower() in ('1', 'true', 'yes')
+            # filter_top_k is a budget cap (default 10); greedy max-coverage
+            # may stop earlier when no candidate adds new APIs (viability
+            # self-termination at coverage_ranker.py:394).
             api_sequences, ranking_summary = select_top_k_sequences(
                 api_sequences,
                 entry_point_analysis=entry_point_analysis_result,
@@ -788,6 +800,7 @@ class FuzzingContext:
                 existing_coverage=existing_coverage if existing_coverage else None,
                 automaton_artifact=automaton_artifact,
                 length_floor_safe_apis=length_floor_safe or None,
+                disable_coverage_filter=_disable_cov,
             )
             coverage_ranking_result = ranking_summary
 
@@ -1022,20 +1035,35 @@ class FuzzingContext:
             log.warning(f"Pattern analysis failed (non-critical): {e}")
             pattern_analysis = {}
 
-        # === Step 10: Generate skeleton drivers (P0 - SkeletonGenerator integration) ===
-        log.debug('  10/10 Generating skeleton drivers...')
+        # === Step 10: Z3-validated skeleton drivers (program synthesis as
+        # the deterministic precondition before LLM refinement) ===
+        #
+        # This step produces ONE constraint-validated DriverSkeleton per
+        # L4-viable sequence. The skeleton is structurally correct
+        # (CBFactory's varlen_relations / type matching / lifecycle
+        # constraints all enforced) and marks the parts requiring
+        # semantic judgment (callbacks, buffer sizes) as Holes. The LLM
+        # then refines this skeleton — it does NOT generate the driver
+        # from scratch.
+        #
+        # The previous implementation routed through
+        # ``generator.generate_skeleton_drivers()``, which only used
+        # SkeletonGenerator's pattern path (no Z3 validation, type-string
+        # heuristics only). We now go through CBFactory's
+        # ``create_skeleton_for_sequence`` so:
+        #   - Each sequence is Z3-checked; infeasible ones are dropped
+        #     (viability analysis self-decides, no numeric cap).
+        #   - The resulting skeleton's structure derives from CBFactory's
+        #     varlen / typestate analysis, not from regex on type strings.
+        log.debug('  10/10 Generating Z3-validated skeleton drivers...')
         skeleton_drivers = []
+        filtered_api_sequences: List[List[Any]] = []  # consumed by Step 11
         try:
-            # Convert filtered sequences (List[List[str]]) to List[List[Api]]
-            # This ensures skeletons use our L0-L4 filtered sequences, not auto-generated ones
             api_name_to_obj = {api.function_name: api for api in generator.all_apis}
-            filtered_api_sequences = []
-            for seq in api_sequences[:min(num_sequences, 5)]:
-                api_objs = []
-                for api_name in seq:
-                    if api_name in api_name_to_obj:
-                        api_objs.append(api_name_to_obj[api_name])
-                if api_objs:  # Only include sequences with at least one valid API
+            for seq in api_sequences:
+                api_objs = [api_name_to_obj[name]
+                            for name in seq if name in api_name_to_obj]
+                if api_objs:
                     filtered_api_sequences.append(api_objs)
 
             if filtered_api_sequences:
@@ -1043,102 +1071,60 @@ class FuzzingContext:
             else:
                 log.warning('   ⚠️ No valid filtered sequences, falling back to auto-generation')
 
-            # Generate skeleton drivers using the synthesis module
-            skeletons = generator.generate_skeleton_drivers(
-                api_sequences=filtered_api_sequences if filtered_api_sequences else None,
-                num_drivers=min(num_sequences, 5),  # Limit to 5 skeletons
+            skeleton_drivers = _synthesize_skeletons_per_sequence(
+                generator=generator,
+                target_sequences=filtered_api_sequences,
                 driver_size=driver_size,
-                llm_client=None  # LLM filtering moved to Prototyper agent
+                benchmark=benchmark,
+                log=log,
+                automaton_artifact=automaton_artifact,
             )
-
-            if skeletons:
-                from liberator_adapter.driver.synthesis.skeleton_generator import render_skeleton
-
-                # Determine if target is C++ from benchmark target_path
-                target_path = benchmark.target_path if hasattr(
-                    benchmark, 'target_path') else ''
-                cpp_extensions = ('.cpp', '.cc', '.cxx', '.c++')
-                is_cpp_target = target_path.lower().endswith(cpp_extensions)
-
-                for skeleton in skeletons:
-                    # Get API sequence from target_apis
-                    api_seq = [
-                        api.function_name for api in skeleton.target_apis
-                    ] if skeleton.target_apis else []
-
-                    # Render skeleton code (use extern "C" only for C++ targets)
-                    try:
-                        rendered_code = render_skeleton(
-                            skeleton,
-                            mark_holes=True,
-                            is_cpp_target=is_cpp_target)
-                    except Exception:
-                        rendered_code = str(skeleton)
-
-                    # Extract hole information
-                    holes_info = []
-                    if hasattr(skeleton, 'holes') and skeleton.holes:
-                        # HoleSet stores holes in .holes dict
-                        holes_dict = skeleton.holes.holes if hasattr(
-                            skeleton.holes, 'holes') else {}
-                        for hole in holes_dict.values():
-                            holes_info.append({
-                                'hole_type':
-                                hole.kind.value if hasattr(hole.kind, 'value')
-                                else str(hole.kind),
-                                'name':
-                                hole.name,
-                                'filled':
-                                hole.is_filled
-                            })
-
-                    skeleton_drivers.append({
-                        'name': skeleton.name,
-                        'api_sequence': api_seq,
-                        'code': rendered_code,
-                        'holes': holes_info
-                    })
+            if skeleton_drivers:
                 log.info(
-                    f'   ✅ Generated {len(skeleton_drivers)} skeleton drivers')
+                    f'   ✅ {len(skeleton_drivers)}/{len(filtered_api_sequences)} sequences passed Z3 → skeletons emitted')
         except Exception as e:
             log.warning(f"Skeleton generation failed (non-critical): {e}")
             skeleton_drivers = []
 
-        # === Step 11: Generate synthesized drivers with CBFactory (always enabled) ===
-        # Philosophy: CBFactory generates structurally correct base drivers, LLM Prototyper refines them
-        log.info(f'  11/11 Generating synthesized drivers with CBFactory...')
-        synthesized_drivers = []
-        try:
-            synthesized_drivers = _generate_cbfactory_drivers(
-                generator=generator,
-                num_drivers=num_synthesis_drivers,
-                driver_size=driver_size,
-                project_name=project_name,
-                log=log,
-                automaton_artifact=automaton_artifact,
-            )
-            if synthesized_drivers:
-                log.info(
-                    f'   ✅ Generated {len(synthesized_drivers)} synthesized drivers with CBFactory'
-                )
-            else:
-                log.warning(
-                    '   ⚠️ No drivers synthesized (CBFactory returned empty)')
-        except Exception as e:
-            log.warning(f"CBFactory synthesis failed: {e}")
-            import traceback
-            log.debug(traceback.format_exc())
-            synthesized_drivers = []
+        # Single SSOT for trial-bound list. Overwrite api_sequences with the
+        # Z3-passed subset when non-empty so downstream consumers (prototyper
+        # PRIMARY index, _format_api_sequences, _format_synthesis_base_driver)
+        # all see the same K' = len(skeleton_drivers) list. Trial N then
+        # picks index (N-1) % K' across BOTH api_sequences[i] and
+        # skeleton_drivers[i] — they refer to the same logical sequence.
+        # When skeleton_drivers is empty (Z3 rejected every L4-viable seq,
+        # or skeleton synthesis failed), keep the original L0-L4 name list
+        # so the LLM still sees protocol candidates in the prompt.
+        if skeleton_drivers:
+            api_sequences = [s.get('api_sequence', []) for s in skeleton_drivers]
+            log.info(
+                f'   🔗 api_sequences aligned with skeleton_drivers '
+                f'(K={len(api_sequences)})')
 
-        # === Step 11b (Phase G): Closed-loop CBFactory feedback ===
+        # === Step 11 (Phase G): Closed-loop automaton feedback ===
         # When ``closed_loop_iters > 0`` and the project has a learned
-        # automaton, run N feedback iterations. Each iteration feeds prior
-        # drivers as evidence (incremental EDSM) and re-synthesises with
-        # the grown automaton. Phase E post-parse extensions and Phase H
-        # acceptance guard read the mutated artifact automatically.
+        # automaton, run N feedback iterations. Each iteration feeds the
+        # current viable skeletons' API sequences as evidence (incremental
+        # EDSM merge), then re-synthesises additional drivers under the
+        # grown automaton. The artifact is mutated in-place; Phase E
+        # post-parse extensions and Phase H acceptance guard read the
+        # mutated artifact automatically when prepare()'s automaton
+        # snapshot block (below) reads `sample_accepting_paths` etc.
+        #
+        # cl_result.final_drivers is intentionally discarded: the LLM
+        # consumes ``skeleton_drivers`` as its base. The closed loop's
+        # value here is the automaton mutation it preserves through
+        # ``persist_dir`` and through the artifact passed by reference.
+        log.info(
+            "  11/11 Phase G gate: closed_loop_iters=%d, "
+            "automaton_artifact=%s, skeleton_drivers=%d",
+            closed_loop_iters,
+            "present" if automaton_artifact is not None else "None",
+            len(skeleton_drivers),
+        )
         if (closed_loop_iters > 0
                 and automaton_artifact is not None
-                and synthesized_drivers):
+                and skeleton_drivers):
             try:
                 from src.closed_loop import run_closed_loop
 
@@ -1155,18 +1141,17 @@ class FuzzingContext:
                 cl_result = run_closed_loop(
                     project=project_name,
                     automaton_artifact=automaton_artifact,
-                    initial_drivers=synthesized_drivers,
+                    initial_drivers=skeleton_drivers,
                     resynthesize_fn=_resynth,
                     n_iters=closed_loop_iters,
                     early_stop_delta=closed_loop_early_stop,
-                    target_drivers_per_iter=num_synthesis_drivers,
+                    target_drivers_per_iter=len(skeleton_drivers),
                     persist_dir=Path(f"./results/{project_name}/automaton"),
                     log=log,
                 )
-                synthesized_drivers = cl_result.final_drivers
                 log.info(
                     "   🔁 Closed-loop done: %d iters run (early_stopped=%s, "
-                    "reason=%s); final drivers=%d",
+                    "reason=%s); evidence drivers in last iter=%d",
                     len(cl_result.iterations),
                     cl_result.early_stopped,
                     cl_result.early_stop_reason or "n/a",
@@ -1235,7 +1220,6 @@ class FuzzingContext:
                    condition_info=condition_info,
                    pattern_analysis=pattern_analysis,
                    skeleton_drivers=skeleton_drivers,
-                   synthesized_drivers=synthesized_drivers,
                    existing_driver_knowledge=existing_driver_knowledge,
                    entry_point_analysis=entry_point_analysis_result,
                    lifecycle_analysis=lifecycle_analysis_result,
@@ -1266,7 +1250,6 @@ class FuzzingContext:
             'condition_info': self.condition_info,
             'pattern_analysis': self.pattern_analysis,
             'skeleton_drivers': self.skeleton_drivers,
-            'synthesized_drivers': self.synthesized_drivers,
             'existing_driver_knowledge': self.existing_driver_knowledge,
             'entry_point_analysis': self.entry_point_analysis,
             'lifecycle_analysis': self.lifecycle_analysis,
@@ -1888,6 +1871,157 @@ def _generate_sequences_from_grammar(grammar, num_sequences: int, max_len: int,
     return sequences
 
 
+def _synthesize_skeletons_per_sequence(
+    generator,
+    target_sequences: List[List[Any]],
+    driver_size: int,
+    benchmark: Any,
+    log: logging.Logger,
+    automaton_artifact: Optional[Any] = None,
+    automaton_threshold: float = 0.6,
+) -> List[Dict[str, Any]]:
+    """
+    For each L4-viable sequence, produce ONE Z3-validated skeleton with
+    holes via ``CBFactory.create_skeleton_for_sequence``. This is the
+    program-synthesis-precondition path that feeds the LLM prototyper
+    refinement step (PromeFuzz-style scaffolding, not from-scratch
+    generation).
+
+    Returns a list of dicts shaped to be consumed by the prototyper:
+        {'name', 'api_sequence', 'code', 'holes', 'synthesis_info'}
+
+    Sequences that Z3 rejects are silently dropped — viability analysis
+    decides, no numeric cap. Falls back to empty list on any unexpected
+    failure (caller treats skeleton drivers as non-critical context).
+    """
+    if not target_sequences:
+        return []
+
+    # CBFactory needs the same prerequisites as in _generate_cbfactory_drivers.
+    if (not generator.condition_manager
+            or not generator.function_conditions
+            or not generator.all_apis
+            or not generator.dependency_graph):
+        log.warning(
+            "CBFactory prerequisites missing; cannot run Z3 skeleton synthesis "
+            "(needs condition_manager, function_conditions, all_apis, dgraph).")
+        return []
+
+    from liberator_adapter.driver.factory.constraint_based import CBFactory
+    from liberator_adapter.bias import Bias
+    from liberator_adapter.driver.synthesis.skeleton_generator import render_skeleton
+
+    available_conditions = set(generator.function_conditions.fun_cond_set.keys())
+    filtered_apis = {
+        api for api in generator.all_apis
+        if api.function_name in available_conditions
+    }
+    if not filtered_apis:
+        log.warning("No APIs have conditions available for skeleton synthesis")
+        return []
+
+    factory = CBFactory(
+        api_list=filtered_apis,
+        driver_size=driver_size,
+        dgraph=generator.dependency_graph,
+        conditions=generator.function_conditions,
+        bias=Bias(),
+        enable_z3_validation=True,
+        automaton_artifact=automaton_artifact,
+        automaton_threshold=automaton_threshold,
+    )
+
+    target_path = getattr(benchmark, 'target_path', '') or ''
+    is_cpp_target = target_path.lower().endswith(('.cpp', '.cc', '.cxx', '.c++'))
+
+    skeletons: List[Dict[str, Any]] = []
+    z3_rejected = 0
+    automaton_pruned = 0
+    # When the CBFactory has an AutomatonAcceptanceGuard wired in, sequences
+    # whose automaton acceptance_score < threshold are dropped BEFORE Z3
+    # ever runs. We pre-compute the score per sequence so the helper can
+    # report "X pruned by automaton, Y rejected by Z3" — without this
+    # split the two failure modes are indistinguishable in logs.
+    artifact_for_score = automaton_artifact if automaton_artifact is not None else None
+    for i, target_seq in enumerate(target_sequences):
+        try:
+            if artifact_for_score is not None:
+                try:
+                    score = float(
+                        artifact_for_score.acceptance_score(target_seq))
+                    if score < float(automaton_threshold):
+                        automaton_pruned += 1
+                        log.debug(
+                            "[skeleton-helper] automaton pruned seq %s "
+                            "(score=%.3f < threshold=%.2f)",
+                            [api.function_name for api in target_seq],
+                            score, automaton_threshold)
+                        continue
+                except Exception:
+                    # Score computation failed — fall through to Z3.
+                    pass
+
+            skeleton = factory.create_skeleton_for_sequence(target_seq)
+            if skeleton is None:
+                # Z3 rejected or skeleton infrastructure unavailable. The
+                # CBFactory method already logs a precise reason. Note:
+                # automaton-pruned sequences were already dropped above,
+                # so this counter only reflects Z3 / SKELETON_AVAILABLE
+                # failures.
+                z3_rejected += 1
+                continue
+
+            try:
+                rendered_code = render_skeleton(
+                    skeleton, mark_holes=True, is_cpp_target=is_cpp_target)
+            except Exception:
+                rendered_code = str(skeleton)
+
+            api_seq = [api.function_name for api in skeleton.target_apis] \
+                if skeleton.target_apis else []
+
+            holes_info: List[Dict[str, Any]] = []
+            if hasattr(skeleton, 'holes') and skeleton.holes:
+                holes_dict = (skeleton.holes.holes
+                              if hasattr(skeleton.holes, 'holes') else {})
+                for hole in holes_dict.values():
+                    holes_info.append({
+                        'hole_type': (hole.kind.value
+                                      if hasattr(hole.kind, 'value')
+                                      else str(hole.kind)),
+                        'name': hole.name,
+                        'filled': hole.is_filled,
+                    })
+
+            skeletons.append({
+                'name': f'cbfactory_skeleton_{i}',
+                'api_sequence': api_seq,
+                'code': rendered_code,
+                'holes': holes_info,
+                'synthesis_info': {
+                    'method': 'CBFactory_skeleton_for_sequence',
+                    'driver_size': driver_size,
+                    'num_apis_used': len(api_seq),
+                    'num_holes': len(holes_info),
+                },
+            })
+        except Exception as e:
+            # One bad sequence must not torpedo the whole batch.
+            log.warning(
+                f"Skeleton synthesis failed for sequence {i} "
+                f"({[api.function_name for api in target_seq]}): {e}")
+
+    total = len(target_sequences)
+    if automaton_pruned or z3_rejected:
+        log.info(
+            f"   ⚠️ Skeleton synthesis attrition on {total} sequences: "
+            f"automaton_pruned={automaton_pruned} (acceptance_score < "
+            f"{automaton_threshold}), z3_rejected={z3_rejected} "
+            f"(infeasible under type/lifecycle/provenance), "
+            f"emitted={len(skeletons)}")
+    return skeletons
+
+
 def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
                                 project_name: str,
                                 log: logging.Logger,
@@ -2295,7 +2429,9 @@ def save_intermediate_results(project_name: str,
                       indent=2)
         log.info(f"   📄 Saved project APIs ({len(project_apis)}): {apis_path}")
 
-        # Save skeleton drivers (for cache loading)
+        # Save Z3-validated skeleton drivers (for cache loading) — this
+        # lets cache hits skip Z3 synthesis on rerun, the slowest LLM-free
+        # step.
         if skeleton_drivers:
             skeleton_path = results_path / "skeleton_drivers.json"
             with open(skeleton_path, 'w') as f:

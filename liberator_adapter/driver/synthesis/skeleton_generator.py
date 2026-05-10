@@ -24,7 +24,29 @@ from liberator_adapter.driver.synthesis.hole import (
     create_buffer_size_hole, create_callback_hole, create_loop_condition_hole,
 )
 
+
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Producer→consumer wiring is owned by upstream Liberator, NOT this module
+# =============================================================================
+# Upstream solves cross-API dataflow via
+# ``RunningContext.try_to_get_var`` (see
+# ``framework/constraints/RunningContext.py:try_to_get_var`` on the
+# ``reference/liberator`` branch and the adapter port at
+# ``liberator_adapter/constraints/RunningContext.py``). It is category-aware
+# (sink / init / setby / source) and runs ``is_compatible_with(cond)``
+# semantic checks against a live var pool.
+#
+# SkeletonGenerator is a *renderer* — it receives a precomputed
+# ``arg_bindings`` map from a caller that did the wiring (typically
+# ``CBFactory._create_skeleton_from_sequence``). When a binding is
+# present for ``(api_name, arg_idx)``, the consumer var's ``init_value``
+# is set to the binding text directly (e.g. ``ret_cJSON_Parse``).
+# When no binding exists, the variable falls back to NULL/0 — that
+# fallback is a degraded path; the wiring layer is upstream's
+# responsibility, not ours.
 
 
 # =============================================================================
@@ -235,9 +257,11 @@ class SkeletonGenerator:
                  loop_patterns: Optional[Dict[str, Dict]] = None,
                  callback_infos: Optional[Dict[str, List[Dict]]] = None,
                  driver_name: str = "fuzz_driver",
-                 is_cpp: bool = True) -> DriverSkeleton:
+                 is_cpp: bool = True,
+                 arg_bindings: Optional[Dict[Tuple[str, int], str]] = None,
+                 ) -> DriverSkeleton:
         """
-        Generate driver skeleton
+        Generate driver skeleton.
 
         Args:
             api_sequence: API call sequence
@@ -246,6 +270,15 @@ class SkeletonGenerator:
             callback_infos: API callback information {api_name: [{arg_idx, type, ...}, ...]}
             driver_name: Generated driver name
             is_cpp: If True, generate C++ skeleton with FuzzedDataProvider
+            arg_bindings: Optional pre-computed wiring map.
+                Key = (api_name, arg_idx), value = the variable / expression
+                text the consumer arg should reference (e.g. ``ret_cJSON_Parse``).
+                Computed UPSTREAM (typically by ``CBFactory`` driving
+                ``RunningContext.try_to_get_var`` over the sequence) — this
+                renderer just consumes the decision. When a binding is present,
+                the corresponding consumer var's ``init_value`` is set to the
+                binding text, replacing the default NULL/0. When absent, the
+                arg falls back to NULL/0 (a degraded path).
 
         Returns:
             DriverSkeleton: Skeleton with holes
@@ -269,6 +302,22 @@ class SkeletonGenerator:
         # 3. Generate variable declarations
         self._generate_variable_declarations(skeleton, var_requirements)
 
+        # 3.5. C_STRING entry-point wrapper: stateless parsers (cjson,
+        # libxml2-style) take const char* but no companion size. The default
+        # `(void*)data` cast would feed them a non-null-terminated buffer,
+        # which causes UB. Detect this and inject a malloc/copy/null-term
+        # prologue that rebinds the entry param to a proper C string.
+        self._maybe_inject_c_string_wrapper(skeleton, api_sequence)
+
+        # 3.6. Apply caller-supplied wiring decisions. The producer→consumer
+        # dataflow logic lives upstream (RunningContext.try_to_get_var); we
+        # just consume the result here.
+        if arg_bindings:
+            applied = self._apply_arg_bindings(skeleton, var_requirements,
+                                               api_sequence, arg_bindings)
+            if applied:
+                skeleton.metadata['wired_args'] = applied
+
         # 4. Generate API call sequence
         self._generate_api_calls(
             skeleton, api_sequence,
@@ -281,6 +330,150 @@ class SkeletonGenerator:
         self._generate_cleanup(skeleton)
 
         return skeleton
+
+    def _apply_arg_bindings(
+        self,
+        skeleton: DriverSkeleton,
+        var_requirements: Dict[str, Dict],
+        api_sequence: List[Api],
+        arg_bindings: Dict[Tuple[str, int], str],
+    ) -> int:
+        """Override consumer-arg ``init_value`` per the wiring map.
+
+        The map is computed upstream (e.g. CBFactory translating
+        ``call.arg_vars`` from ``try_to_instantiate_api_call``). Each
+        binding ``(api_name, arg_idx) -> text`` rebinds the corresponding
+        skeleton variable's init from the default (NULL / 0 / hole
+        placeholder) to ``text``.
+
+        Skips rebinding for FUZZ_INPUT-allocated vars (entry-point fuzz
+        stream must keep its raw ``(void*)data`` cast) and for vars
+        already pointing at a Hole placeholder (callback impl etc. must
+        stay an LLM responsibility).
+
+        Returns the count of args actually rebound (for telemetry).
+        """
+        applied = 0
+        for api in api_sequence:
+            api_name = api.function_name
+            req = var_requirements.get(api_name)
+            if req is None:
+                continue
+            for arg_info in req.get('args', []):
+                idx = arg_info.get('idx', 0)
+                key = (api_name, idx)
+                if key not in arg_bindings:
+                    continue
+                wired_text = arg_bindings[key]
+                if not wired_text:
+                    continue
+
+                var_basename = (arg_info.get('name')
+                                or f"arg{idx}")
+                var_name = f"{var_basename}_{api_name}"
+                var = skeleton.variables.get(var_name)
+                if var is None:
+                    continue
+                if var.allocation == AllocationType.FUZZ_INPUT:
+                    continue
+                if var.init_value and var.init_value.startswith('__'):
+                    continue
+
+                var.init_value = wired_text
+                var.source_api = wired_text
+                applied += 1
+        return applied
+
+    def _maybe_inject_c_string_wrapper(
+        self,
+        skeleton: DriverSkeleton,
+        api_sequence: List[Api],
+    ) -> None:
+        """If the entry API takes a null-terminated `const char*` (no size
+        companion), emit a fuzzer-input → null-terminated-buffer wrapper.
+
+        Implementation: stack-allocated 64KB buffer (no malloc → no leak
+        across early-return-on-NULL paths emitted by the API call gen).
+        The entry parameter's binding is set via an assignment statement
+        AFTER the buffer is filled, avoiding C decl-order use-before-init.
+        """
+        if not api_sequence:
+            return
+        entry = api_sequence[0]
+        if not entry.arguments_info:
+            return
+
+        # Find first pointer-input arg on the entry API.
+        target_idx = -1
+        target_arg = None
+        for idx, arg in enumerate(entry.arguments_info):
+            if '*' in arg.type and self._is_input_param(arg):
+                target_idx = idx
+                target_arg = arg
+                break
+        if target_arg is None:
+            return
+
+        # Only kick in for `const char*` / `char *` (the C_STRING shape).
+        # Buffer-with-size APIs already work via varlen_target → (void*)data.
+        ttype = target_arg.type.replace(' ', '')
+        if 'char*' not in ttype:
+            return
+        # Skip if there's a paired length arg — that's C_BUFFER_WITH_SIZE,
+        # not C_STRING. Check varlen_target was set on the requirements pass:
+        var_name = f"{target_arg.name or f'arg{target_idx}'}_{entry.function_name}"
+        existing = skeleton.variables.get(var_name)
+        if existing and existing.allocation == AllocationType.FUZZ_INPUT:
+            # Var-len pair already wired — leave it alone.
+            return
+
+        # Stack buffer: 64KB cap is well within libfuzzer's 8MB stack and
+        # avoids the malloc/free leak risk under early-return paths the
+        # downstream call generator emits on NULL returns.
+        skeleton.add_statement(SkeletonStatement(
+            kind=StatementKind.BUFFER_DECL,
+            code="char __lf_str_buf[65536];",
+            indent=1,
+        ))
+        skeleton.add_statement(SkeletonStatement(
+            kind=StatementKind.BUFFER_INIT,
+            code=("size_t __lf_n = size < (sizeof(__lf_str_buf) - 1) "
+                  "? size : (sizeof(__lf_str_buf) - 1);"),
+            indent=1,
+        ))
+        skeleton.add_statement(SkeletonStatement(
+            kind=StatementKind.BUFFER_INIT,
+            code="memcpy(__lf_str_buf, data, __lf_n);",
+            indent=1,
+        ))
+        skeleton.add_statement(SkeletonStatement(
+            kind=StatementKind.BUFFER_INIT,
+            code="__lf_str_buf[__lf_n] = '\\0';",
+            indent=1,
+        ))
+
+        # Rebind the entry param to the buffer via assignment. Make sure
+        # the param's variable exists and stays initialised to NULL at
+        # decl-time (otherwise we'd reference __lf_str_buf before it's
+        # declared in C).
+        c_type = target_arg.type
+        if existing is None:
+            skeleton.add_variable(SkeletonVariable(
+                name=var_name,
+                c_type=c_type,
+                is_pointer=True,
+                init_value="NULL",
+            ))
+        else:
+            existing.init_value = "NULL"
+            existing.allocation = AllocationType.STACK
+            existing.is_pointer = True
+
+        skeleton.add_statement(SkeletonStatement(
+            kind=StatementKind.ASSIGNMENT,
+            code=f"{var_name} = __lf_str_buf;",
+            indent=1,
+        ))
 
     def _generate_includes(self, apis: List[Api], is_cpp: bool = True) -> List[str]:
         """Generate include list

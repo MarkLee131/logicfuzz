@@ -1298,14 +1298,22 @@ def parse_args() -> argparse.Namespace:
                       action='store_true',
                       default=False,
                       help='Only run Liberator Clang extraction for the provided benchmark YAML(s) and exit.')
+  # ───────────────────────────────────────────────────────────────────────
+  # Static-only baseline path (independent from the LLM pipeline).
+  # See the matching block in run_logicfuzz.py for the full rationale.
+  # Short version: `--generate-drivers` runs Liberator/CBFactory alone —
+  # it does NOT enter FuzzingContext.prepare() and does NOT touch the LLM
+  # pipeline. The LLM pipeline binds 1:1 to L4-viable Z3 skeletons and has
+  # no numeric driver-count knob.
+  # ───────────────────────────────────────────────────────────────────────
   parser.add_argument('--generate-drivers',
                       action='store_true',
                       default=False,
-                      help='Generate fuzz drivers using Liberator CBFactory after extraction.')
+                      help='Static-only baseline: generate fuzz drivers using Liberator CBFactory after extraction (no LLM).')
   parser.add_argument('--num-drivers',
                       type=int,
                       default=10,
-                      help='Number of drivers to generate (default: 10).')
+                      help='Number of drivers to generate in --generate-drivers static-only mode (default: 10).')
   parser.add_argument('--driver-size',
                       type=int,
                       default=5,
@@ -1343,14 +1351,6 @@ def parse_args() -> argparse.Namespace:
                       action='store_false',
                       dest='use_session_memory',
                       help='Disable session memory (short-memory) for cross-agent consensus sharing.')
-
-  # Program synthesis configuration (CBFactory + LLM refinement)
-  # Note: Synthesis is always enabled - CBFactory generates base drivers, LLM Prototyper refines them
-  parser.add_argument('--num-synthesis-drivers',
-                      type=int,
-                      default=5,
-                      dest='num_synthesis_drivers',
-                      help='Number of base drivers to generate with CBFactory for LLM refinement (default: 5).')
 
   args = parser.parse_args()
   if args.num_samples:
