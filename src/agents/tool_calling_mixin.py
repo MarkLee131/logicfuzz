@@ -23,6 +23,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 
 import logger
+from src.agents.base import _invoke_with_retry
 from src.workflow.state import update_token_usage
 
 
@@ -200,9 +201,11 @@ class ToolCallingMixin:
         agent_name = getattr(self, 'name', 'unknown_agent')
 
         for cur_round in range(max_rounds):
-            # Call LLM with tools
-            response: AIMessage = model_with_tools.invoke(
-                messages)  # type: ignore
+            # Call LLM with tools. Use the shared retry helper from
+            # base.py — same transient-network policy across all
+            # agent calls (cluster F of the 2026-05 Agent review).
+            response: AIMessage = _invoke_with_retry(
+                model_with_tools, messages)  # type: ignore
             messages.append(response)
 
             # Track token usage
@@ -255,8 +258,13 @@ class ToolCallingMixin:
         return self.parse_response(
             all_responses[-1] if all_responses else ""), all_responses
 
-    def _truncate(self, text: Any, max_len: int = 10000) -> str:
-        """Truncate tool output to avoid context overflow."""
+    def _truncate(self, text: Any, max_len: int = 8000) -> str:
+        """Truncate tool output to avoid context overflow.
+
+        Default 8000 matches the CLAUDE.md "8KB output truncation" claim.
+        Aligned with ``LangGraphAgent.truncate_tool_output`` in the
+        2026-05 Agent review (cluster A).
+        """
         s = str(text) if not isinstance(text, str) else text
         if len(s) > max_len:
             return s[:max_len] + f"...[truncated {len(s) - max_len} chars]"

@@ -125,6 +125,13 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
                 trial=self.trial)
             improved_code = current_code
 
+        # Validate the improved code for hallucinated / internal-API usage,
+        # matching the same check Prototyper does. Without this, Improver's
+        # rewrites could re-introduce hallucinated symbols that Fixer never
+        # sees a warning for. 2026-05 Agent review (cluster C).
+        validation_warnings = self._validate_api_usage(
+            improved_code, project_name)
+
         improvement_count = state.get("improvement_attempt_count", 0) + 1
         notes = f"Improver attempt #{improvement_count}"
         add_coverage_attempt(state=state,
@@ -149,6 +156,7 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
             "session_memory": updated_session_memory,
             "no_coverage_improvement_count": 0,
             "improvement_attempt_count": improvement_count,
+            "api_validation_warnings": validation_warnings,
         }
 
         logger.info(f'Improvement attempt count: {improvement_count}',
@@ -157,6 +165,33 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
         self._langgraph_logger.flush_agent_logs(self.name)
 
         return state_update
+
+    def _validate_api_usage(self, code: str, project_name: str) -> str:
+        """Validate improved code for hallucinated / internal-API usage.
+
+        Same UnifiedCodeValidator check Prototyper runs. 2026-05 Agent
+        review (cluster C): Improver freely rewrites without skeleton
+        constraint and without this gate, the Fixer downstream never
+        sees the validation warning that Prototyper's flow produces.
+        Adding it here keeps validation discipline consistent across
+        both LLM-driven code-producing agents.
+        """
+        try:
+            from src.utils.unified_validator import UnifiedCodeValidator, format_validation_report
+            validator = UnifiedCodeValidator()
+            result = validator.validate(code=code, project_name=project_name)
+            if not result.success:
+                logger.warning('Improved code contains internal API usage',
+                               trial=self.trial)
+                return format_validation_report(result)
+            logger.info('Improved code passed API validation',
+                        trial=self.trial)
+            return ""
+        except Exception as e:
+            logger.warning(
+                f'API validation crashed with {type(e).__name__}: {e}',
+                trial=self.trial)
+            return f"validator_error: {type(e).__name__}: {e}"
 
     def _compress_coverage_insights(self, insights: str) -> str:
         """

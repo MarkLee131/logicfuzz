@@ -5,6 +5,7 @@ This module provides a clean agent interface designed for LangGraph,
 using LangChain's native message types and model interfaces.
 """
 from abc import ABC, abstractmethod
+import time
 from typing import Any, Dict, List, Optional
 import argparse
 import json
@@ -21,6 +22,47 @@ import logger
 from src.llm.models import get_chat_model, DEFAULT_MODEL
 from src.workflow.state import FuzzingWorkflowState
 from src.utils.logger import LangGraphLogger, NullLogger
+
+
+# Network-level errors that warrant a retry of ``model.invoke``. We
+# *do not* retry on RateLimitError / AuthenticationError / etc — the
+# LangChain providers already implement their own backoff for those,
+# and re-retrying compounds the wait. We also do not retry on
+# ValueError / TypeError / JSON-parse exceptions — those indicate a
+# bug in our prompt or response parsing, not a transient issue.
+#
+# 2026-05 Agent review (cluster F).
+_RETRIABLE_NETWORK_EXCEPTIONS = (
+    TimeoutError,
+    ConnectionError,
+    OSError,  # broad but covers socket-level failures
+)
+
+
+def _invoke_with_retry(model: BaseChatModel, messages: List[BaseMessage],
+                       max_attempts: int = 2,
+                       initial_backoff_seconds: float = 1.0):
+    """Invoke a LangChain chat model, retrying on transient network errors.
+
+    Returns the model's response on success; re-raises on the final
+    failure or on any non-retriable exception. ``max_attempts=2``
+    means one initial try + one retry by default (matches typical
+    transient-fault windows without amplifying rate-limit waits).
+    """
+    last_exc: Optional[BaseException] = None
+    backoff = float(initial_backoff_seconds)
+    for attempt in range(max_attempts):
+        try:
+            return model.invoke(messages)
+        except _RETRIABLE_NETWORK_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt == max_attempts - 1:
+                # Final attempt failed; let it propagate.
+                raise
+            time.sleep(backoff)
+            backoff *= 2
+    # Unreachable; placate the type checker.
+    raise last_exc if last_exc else RuntimeError("retry loop exited without resolution")
 
 
 class LangGraphAgent(ABC):
@@ -151,9 +193,9 @@ class LangGraphAgent(ABC):
                                                round_num=self._round,
                                                metadata=prompt_metadata)
 
-        # Call LLM
+        # Call LLM (with transient-network retry per cluster F)
         model = self.get_chat_model()
-        response = model.invoke(messages)
+        response = _invoke_with_retry(model, messages)
         response_text = response.content if isinstance(
             response.content, str) else str(response.content)
 
@@ -215,7 +257,7 @@ class LangGraphAgent(ABC):
                                                metadata=prompt_metadata)
 
         model = self.get_chat_model()
-        response = model.invoke(messages)
+        response = _invoke_with_retry(model, messages)
         response_text = response.content if isinstance(
             response.content, str) else str(response.content)
 
@@ -287,7 +329,7 @@ class LangGraphAgent(ABC):
                                                    metadata=prompt_metadata)
 
         model = self.get_chat_model()
-        response = model.invoke(messages)
+        response = _invoke_with_retry(model, messages)
         response_text = response.content if isinstance(
             response.content, str) else str(response.content)
 
@@ -341,13 +383,18 @@ class LangGraphAgent(ABC):
                 }
         return None
 
-    def truncate_tool_output(self, output: str, max_chars: int = 10000) -> str:
+    def truncate_tool_output(self, output: str, max_chars: int = 8000) -> str:
         """
         Truncate tool output to prevent context overflow.
 
+        Default 8000 chars (~8KB) matches the CLAUDE.md "8KB output
+        truncation" claim. Was 10000 historically; aligned in the
+        2026-05 Agent review (cluster A) so every agent uses the
+        same cap.
+
         Args:
             output: Raw tool output string
-            max_chars: Maximum characters to keep (default: 10000)
+            max_chars: Maximum characters to keep (default: 8000)
 
         Returns:
             Truncated output with indicator if truncated

@@ -67,8 +67,13 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
 
     def _execute_bash(self, command: str) -> str:
         result = self.inspect_tool.execute(command)
-        stdout = (result.stdout or "").strip()
-        stderr = (result.stderr or "").strip()
+        # Apply the 8KB cap at the tool boundary to match the rest of the
+        # agent suite (cluster A of the 2026-05 Agent review). The shared
+        # ToolCallingMixin._truncate also caps at 8KB at the message
+        # boundary, but a per-stream cap here keeps single-call output
+        # from dominating the combined message before mixin truncation.
+        stdout = (result.stdout or "").strip()[:8000]
+        stderr = (result.stderr or "").strip()[:8000]
         parts = [f"$ {command}", f"exit={result.returncode}"]
         if stdout:
             parts.append(stdout)

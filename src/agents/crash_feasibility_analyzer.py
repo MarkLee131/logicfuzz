@@ -109,8 +109,10 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
             stdout = result.stdout.strip() if result.stdout else ""
             stderr = result.stderr.strip() if result.stderr else ""
 
-            # Limit output size
-            max_output_len = 10000
+            # Limit output size. 8KB matches CLAUDE.md and the shared
+            # truncate helpers in base.py / tool_calling_mixin.py
+            # (cluster A of the 2026-05 Agent review).
+            max_output_len = 8000
             if len(stdout) > max_output_len:
                 stdout = stdout[:max_output_len] + f'\n... (truncated {len(stdout) - max_output_len} chars)'
             if len(stderr) > max_output_len:

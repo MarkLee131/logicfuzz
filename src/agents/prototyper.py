@@ -1197,87 +1197,19 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 sk.get('holes', []),
                 sk.get('api_sequence', []))
 
-    def _validate_skeleton_adherence(self, generated_code: str,
-                                     skeleton_code: str,
-                                     api_sequence: List[str]) -> bool:
-        """Validate that generated code follows the skeleton structure.
-
-        Checks:
-        1. All APIs from the sequence appear in the generated code
-        2. No unfilled holes remain
-
-        Args:
-            generated_code: The generated/merged code
-            skeleton_code: The original skeleton code
-            api_sequence: Expected API call sequence
-
-        Returns:
-            True if the code adheres to skeleton structure
-        """
-        if not generated_code:
-            return False
-
-        import re
-
-        # Check for unfilled holes (use \w+ to match names with underscores like callback_1)
-        unfilled_holes = re.findall(
-            r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN|ERRHANDLE|COMPLEX_HOLE)_[\w]+__',
-            generated_code)
-        if unfilled_holes:
-            logger.warning(
-                f'Generated code has {len(unfilled_holes)} unfilled holes',
-                trial=self.trial)
-            return False
-
-        # Check that all APIs from sequence appear in generated code
-        missing_apis = []
-        for api in api_sequence:
-            if api not in generated_code:
-                missing_apis.append(api)
-
-        if missing_apis:
-            logger.warning(
-                f'Generated code missing {len(missing_apis)} APIs from sequence: {missing_apis[:5]}',
-                trial=self.trial)
-            # Stricter validation: require at least 50% of APIs present
-            if len(missing_apis) >= len(api_sequence) * 0.5:
-                return False
-
-        # Also check for unauthorized APIs (common LLM substitutions)
-        # These indicate LLM is ignoring our sequences
-        unauthorized_apis = [
-            'ares_parse_a_reply', 'ares_parse_mx_reply',  # c-ares legacy parsers
-        ]
-        for unauth_api in unauthorized_apis:
-            if unauth_api in generated_code and unauth_api not in api_sequence:
-                logger.warning(
-                    f'Generated code uses unauthorized API {unauth_api} not in sequence. '
-                    f'LLM may be ignoring provided sequences.',
-                    trial=self.trial)
-                # Don't reject, just warn - the API might be legitimate in other contexts
-
-        return True
-
-    def _get_generation_mode(self, state: FuzzingWorkflowState) -> str:
-        """Determine which generation mode to use based on state.
-
-        Returns one of:
-        - 'skeleton_strict': Use skeleton template with hole filling
-        - 'skeleton_reference': Use skeleton as reference (no holes)
-        - 'freeform': No skeleton, generate from scratch
-        """
-        skeleton_code, holes, api_sequence = self._get_active_skeleton(state)
-
-        # Check if we have a valid skeleton with holes
-        if skeleton_code and holes:
-            return 'skeleton_strict'
-
-        # Check if we have skeleton code at all (for reference)
-        if skeleton_code:
-            return 'skeleton_reference'
-
-        # No skeleton available
-        return 'freeform'
+    # The earlier ``_validate_skeleton_adherence`` and
+    # ``_get_generation_mode`` methods were removed in the 2026-05 Agent
+    # review — both were defined but never called from anywhere in the
+    # codebase. ``llm_vs_traditional_choices.md`` §A historically
+    # described a "validator re-checks LLM output against the skeleton"
+    # gate; that contract is now enforced at synthesis time via the
+    # skeleton-template prompt mode (see ``_format_skeleton_as_template``)
+    # and post-hoc via the runtime build attempt + Fixer cycle, not via
+    # a separate Python-side adherence checker.
+    #
+    # The dead ``unauthorized_apis = ['ares_parse_a_reply', ...]`` hardcode
+    # from the deleted method is also gone — same pattern as the L2
+    # c-ares-specific patterns we already flagged for generalisation.
 
     def _format_driver_knowledge(self, driver_knowledge: Dict[str,
                                                               Any]) -> str:
@@ -1378,7 +1310,15 @@ Output your fuzz driver code inside <fuzz_target> tags.
         return "\n".join(lines)
 
     def _validate_api_usage(self, code: str, project_name: str) -> str:
-        """Validate generated code for internal/private API usage."""
+        """Validate generated code for internal/private API usage.
+
+        Previously swallowed validator exceptions and returned ``""`` (the
+        signal for "validation passed"). The 2026-05 Agent review caught
+        this — under CLAUDE.md's "No fallbacks — explicit failures"
+        principle, a validator crash should not be reported as a clean
+        pass. Now we tag the validation_warnings string so the Fixer
+        sees the failure mode and can react.
+        """
         try:
             from src.utils.unified_validator import UnifiedCodeValidator, format_validation_report
 
@@ -1389,14 +1329,13 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 logger.warning('Generated code contains internal API usage',
                                trial=self.trial)
                 return format_validation_report(result)
-            else:
-                logger.info('Generated code passed API validation',
-                            trial=self.trial)
-                return ""
-        except Exception as e:
-            logger.warning(f'API validation failed with error: {e}',
-                           trial=self.trial)
+            logger.info('Generated code passed API validation',
+                        trial=self.trial)
             return ""
+        except Exception as e:
+            logger.warning(f'API validation crashed with {type(e).__name__}: {e}',
+                           trial=self.trial)
+            return f"validator_error: {type(e).__name__}: {e}"
 
     def _format_analysis_summary(self, function_analysis: dict) -> str:
         """Format analysis summary for the Prototyper prompt."""
