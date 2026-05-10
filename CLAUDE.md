@@ -63,6 +63,7 @@ justification + future-work plan lives in `docs/`:
 | `docs/automaton_refactor_2026_05.md` | Third in the refactor series: 2826-LOC automaton subsystem review (pta/edsm/project_automaton/usedef/static_trace/llm_oracle). 4 cluster fixes (A: EDSM oracle log visibility, B: acceptance adjacency caching, C2: multi-handle graft, E: default policy alignment). Includes deferred-with-rationale list and empty placeholder for post-run validation. | living |
 | `docs/cross_module_review_2026_05.md` | Global consistency audit of the three refactor commits. 10 cross-module invariants checked; 1 real regression caught (Factory.normalize_type ↔ Step 4 grammar gen ordering) and fixed by moving `build_data_layout` to Step 3.5. Documents the regression mechanism in detail so future cross-module audits can mimic the format. | living |
 | `docs/agent_refactor_2026_05.md` | Fourth in the refactor series: 4316-LOC Agent subsystem review (base/tool_calling_mixin/utils/prototyper/fixer/crash_analyzer/crash_feasibility_analyzer/coverage_analyzer/improver/project_analyzer). 4 cluster fixes (B: Prototyper validator dead code + silent fallback, C: Improver hallucination-validation gate, A: 8KB truncate alignment, F: LLM transient-network retry). Includes deferred-with-rationale list and empty placeholder for post-run validation. | living |
+| `docs/driverenhancer_refactor_2026_05.md` | Fifth in the refactor series: 430-LOC DriverEnhancer review. After synthesis cluster-2 deleted CallbackStubLibrary, DriverEnhancer is the sole callback-stub source. 3 fixes (issue #1: empty-stub had wrong signature, replaced with signature-aware default fallback; issue #2: READER template required driver-side context nobody emitted, now signature-safe no-op; issue #3: dead `enhance_context_get_function_pointer` decorator removed). Includes empty placeholder for post-run validation. | living |
 
 ## Architecture
 
@@ -358,8 +359,3 @@ candidate augmentation.
 Bugs / limitations that exist in upstream `reference/liberator`
 that the adapter has fixed (or has a clear path to fix). See
 `docs/upstream_liberator_diffs.md` for the per-item detail.
-
-(Adapter-side bugs in our own code — Z3 layer, synthesis package,
-hole filler, ported-file cleanups — are NOT recorded there. Those
-are work-in-progress fix items, tracked through normal review /
-commits.)

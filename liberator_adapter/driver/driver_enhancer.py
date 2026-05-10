@@ -75,8 +75,13 @@ class EnhancedCallbackStubGenerator:
                 break
 
         if callback_info is None:
-            # Not analyzed, return empty stub
-            return self._generate_empty_stub(func_name), CallbackType.UNKNOWN
+            # Not analyzed: return empty stub_code so the LFBackendDriver's
+            # signature-aware default fallback runs at emit time. The
+            # earlier ``_generate_empty_stub`` emitted ``void f(void)``,
+            # which is shorter but breaks the link when the real callback
+            # signature is anything else (the most common case).
+            # 2026-05 DriverEnhancer review (issue #1).
+            return "", CallbackType.UNKNOWN
 
         # Use analyzed stub code
         if callback_info.stub_code:
@@ -90,14 +95,6 @@ class EnhancedCallbackStubGenerator:
         stub = self._generate_from_template(func_name, callback_info)
         self._generated_stubs[func_name] = stub
         return stub, callback_info.callback_type
-
-    def _generate_empty_stub(self, func_name: str) -> str:
-        """Generate empty stub"""
-        return f'''
-void {func_name}(void) {{
-    // Generic empty callback stub
-}}
-'''
 
     def _customize_stub_name(self, stub: str, func_name: str,
                              callback_info: CallbackInfo) -> str:
@@ -141,22 +138,22 @@ void {func_name}(void* user_data) {{
     (void)user_data;
 }}
 ''',
+            # READER stub: previously defined a ``FuzzReaderCtx_xxx`` struct
+            # and dereferenced ``stream`` as a pointer to it. CBFactory does
+            # not emit the matching caller-side context allocation, so the
+            # callee dereferenced whatever pointer the API was called with
+            # — often NULL → segfault. Safer: signature-correct stub that
+            # treats stream as an opaque cookie and returns 0 (EOF). This
+            # loses the "feed fuzz data through the read callback" coverage
+            # signal, but doesn't crash. Full restoration needs CBFactory
+            # to emit a typed context variable AND wire it as the stream
+            # arg. TODO tracked in docs/driverenhancer_refactor_2026_05.md.
             CallbackType.READER: f'''
-typedef struct {{
-    const uint8_t* data;
-    size_t size;
-    size_t pos;
-}} FuzzReaderCtx_{func_name};
-
 size_t {func_name}(void* ptr, size_t size, void* stream) {{
-    FuzzReaderCtx_{func_name}* ctx = (FuzzReaderCtx_{func_name}*)stream;
-    size_t avail = ctx->size - ctx->pos;
-    size_t to_read = (size < avail) ? size : avail;
-    if (to_read > 0) {{
-        memcpy(ptr, ctx->data + ctx->pos, to_read);
-        ctx->pos += to_read;
-    }}
-    return to_read;
+    (void)ptr;
+    (void)size;
+    (void)stream;
+    return 0;  // EOF — safe default until CBFactory wires a real context
 }}
 ''',
             CallbackType.WRITER: f'''
@@ -186,8 +183,12 @@ int {func_name}(void* item, void* user_data) {{
 ''',
         }
 
-        return templates.get(callback_info.callback_type,
-                            self._generate_empty_stub(func_name))
+        # Same fail-soft policy as the ``callback_info is None`` path: if
+        # we don't have a template for this callback type, return ""
+        # so LFBackendDriver.emit_stub_functions falls through to the
+        # signature-aware default rather than emitting a wrong-signature
+        # ``void f(void)``. 2026-05 DriverEnhancer review (issue #1).
+        return templates.get(callback_info.callback_type, "")
 
     def get_all_stubs(self) -> Dict[str, str]:
         """Get all generated stubs"""
@@ -354,35 +355,13 @@ class DriverEnhancer:
         self.pattern_analyzer.clear_cache()
 
 
-# =============================================================================
-# Enhanced Context (optional replacement for original Context)
-# =============================================================================
-
-def enhance_context_get_function_pointer(original_method):
-    """
-    Decorator: Enhance Context.get_function_pointer method
-
-    Uses CallbackAnalyzer to generate smarter stubs
-    """
-    def enhanced_method(self, type, api=None, arg_idx=None, enhancer=None):
-        if enhancer and api and arg_idx is not None:
-            # Use enhanced stub generation
-            func_name = f"fuzz_cb_{api.function_name}_{arg_idx}"
-            stub_code, cb_type = enhancer.generate_callback_stub(api, arg_idx, func_name)
-
-            # Create Function object
-            from liberator_adapter.driver.ir import Function
-            func = Function(func_name, type)
-            func.stub_code = stub_code
-            func.callback_type = cb_type
-
-            self.stub_functions[type] = func
-            return func
-
-        # Fallback to original method
-        return original_method(self, type)
-
-    return enhanced_method
+# The earlier ``enhance_context_get_function_pointer`` decorator was a
+# planned alternative path for Context.get_function_pointer that used
+# DriverEnhancer to produce smarter stubs. It was defined but never
+# wired in (no production caller); CBFactory.``_get_enhanced_function_pointer``
+# in 2026-05 takes its place. Removed in the 2026-05 DriverEnhancer
+# review (issue #3 — dead code, same pattern as the dead methods we
+# removed from Prototyper earlier this month).
 
 
 # =============================================================================
