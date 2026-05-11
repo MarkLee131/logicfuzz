@@ -15,6 +15,7 @@ class Function(Value):
         callback_type: Callback type (e.g., comparator, handler, reader, etc., optional)
     """
     token: str
+    type: PointerType
     addr: Address
     arg_types:  str
     ret_type:   str
@@ -40,7 +41,11 @@ class Function(Value):
             args_token = args_token.replace(" __va_list_tag *)", "va_list)")
 
         self.token = func_name
-        self.addr = None
+        # Preserve the original ``PointerType`` so ``get_type()`` can
+        # return it. Upstream Liberator dropped the parameter on the
+        # floor and ``get_type()`` referenced a non-existent
+        # ``self.buffer`` — AttributeError on call.
+        self.type = type
         self.arg_types = args_token
         self.ret_type = ret_token
 
@@ -48,16 +53,13 @@ class Function(Value):
         self.stub_code = None
         self.callback_type = None
 
-        self.addr   = Address.Address(token, self)
-
-        # print("Function")
-        # from IPython import embed; embed(); exit(1)
+        self.addr = Address.Address(token, self)
 
     def get_token(self):
         return self.token
 
     def get_type(self):
-        return self.buffer.get_type()
+        return self.type
 
     def __str__(self):
         return f"{self.__class__.__name__}(name={self.token})"

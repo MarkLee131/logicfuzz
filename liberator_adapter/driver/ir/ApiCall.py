@@ -41,15 +41,22 @@ class ApiCall(Statement):
         return enumerate(self.arg_types)
 
     def set_pos_arg_var(self, pos: int, var: Value, max_val: int = 0):
-        if pos < 0 or pos > len(self.arg_vars):
-            raise Exception(f"{pos} out of range [0, {len(self.arg_vars)}]")
+        # Upper bound used ``>`` upstream — pos == len(arg_vars) would
+        # pass validation but the assignment below would IndexError.
+        # Fixed to ``>=`` here.
+        if pos < 0 or pos >= len(self.arg_vars):
+            raise Exception(f"{pos} out of range [0, {len(self.arg_vars)})")
 
-        # I must ensure the value is coherent with the argument type
+        # Variable-vs-PointerType: a bare ``Variable`` (value) cannot
+        # satisfy a pointer-typed parameter; the caller wants its
+        # ``Address``. Real check.
         if isinstance(var, Variable) and isinstance(self.arg_types[pos], PointerType):
             raise Exception(f"{var} cannot be of type {self.arg_types[pos]}")
 
-        if isinstance(var, Address) and not isinstance(self.arg_types[pos], Type):
-            raise Exception(f"{var} cannot be of type {self.arg_types[pos]}")
+        # The mirror check (``Address`` passed against a non-Type) was
+        # dead in upstream — ``PointerType`` extends ``Type``, so every
+        # entry in ``arg_types`` already satisfies ``isinstance(..., Type)``
+        # and the negation never fires. Removed here.
 
         self.arg_vars[pos] = var
 

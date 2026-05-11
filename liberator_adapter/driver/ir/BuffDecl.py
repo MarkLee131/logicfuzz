@@ -12,9 +12,13 @@ class BuffDecl(Statement):
         # TODO: map buffer and input
         # self.buffer_map = {}
 
-    # for an element, the hash is just the key + type
+    # Hash by the underlying buffer's token + class name. Upstream
+    # Liberator's __hash__ referenced ``self.token`` directly, which
+    # this class never sets — any caller hashing a BuffDecl hit
+    # AttributeError. Latent because LFBackendDriver was dead and
+    # Statements aren't put in sets on the live render path.
     def __hash__(self):
-        return hash(self.token + str(self.__class__.__name__))
+        return hash(self.buffer.get_token() + str(self.__class__.__name__))
 
     def __str__(self):
         return f"{self.__class__.__name__}(name={self.buffer.get_token()})"

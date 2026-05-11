@@ -174,3 +174,43 @@ These were all masked in production by the adapter's call-site bug
 `_render_driver_fallback`). The 2026-05 backend refactor fixed the
 call-site bug and the six latent upstream issues in the same commit;
 see `docs/backend_merge_refactor_2026_05.md`.
+
+### IR / Statement substrate (`framework/driver/ir/`)
+
+Upstream Liberator's Statement IR ships several latent bugs that the
+adapter fixes in the 2026-05 IR refactor. All masked in production
+because LFBackendDriver was dead (caller bug on `public_headers_path`
+attribute, fixed in the 2026-05 backend refactor):
+
+  - **`Buffer.get_allocated_size` ships an uncommented IPython
+    embed** for the `b_t.get_size() is None` path. OSS-Fuzz
+    containers don't have IPython → ImportError; interactive runs
+    block on the REPL waiting for human input. **Now:** explicit
+    `Exception` naming the offending buffer, its type, and its
+    alloctype.
+  - **9 Statement subclasses have broken `__hash__`** referencing
+    `self.token` — never set in `__init__`, which only sets
+    `self.buffer`. Affects: `BuffDecl`, `BuffInit`, `AssertNull`,
+    `FileInit`, `ConstStringDecl`, `DynDblArrInit`, `DynArrayInit`,
+    `SetStringNull`, `SetNull`. **Now:** routed through
+    `self.buffer.get_token()`.
+  - **`Function.get_type` references non-existent `self.buffer`**
+    even though `__init__` accepts a `type: PointerType` parameter
+    that gets dropped on the floor. **Now:** `__init__` stores
+    `self.type = type`; `get_type` returns it.
+  - **`ApiCall.set_pos_arg_var` upper bound off-by-one**
+    (`pos > len(arg_vars)` instead of `>=`); `pos == len(arg_vars)`
+    passes validation but then IndexErrors at assignment. **Now:**
+    `>=`, error message updated to half-open interval.
+  - **`ApiCall.set_pos_arg_var` dead type check**
+    `isinstance(var, Address) and not isinstance(arg_types[pos],
+    Type)` — `PointerType` extends `Type`, so the negation never
+    fires. **Now:** removed with comment.
+  - **`Buffer.__getitem__/__setitem__` raise empty `KeyError`**
+    without the key. **Now:** `raise KeyError(key)`.
+  - **`Function.__init__` redundant `self.addr = None`** immediately
+    overwritten. **Now:** removed.
+
+Full per-fix detail + rollback recipe:
+`docs/ir_refactor_2026_05.md`.
+

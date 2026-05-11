@@ -25,7 +25,7 @@ class Buffer:
 
     def __getitem__(self, key):
         if key < 0 or key >= self.n_element:
-            raise KeyError
+            raise KeyError(key)
 
         self._init(key)
 
@@ -33,7 +33,7 @@ class Buffer:
 
     def __setitem__(self, key, value):
         if key < 0 or key >= self.n_element:
-            raise KeyError
+            raise KeyError(key)
 
         self.variables[key] = value
 
@@ -64,12 +64,23 @@ class Buffer:
     def get_allocated_size(self):
 
         b_t = self.type
-        if (isinstance(b_t, PointerType) and 
-            self.alloctype == AllocType.STACK and 
+        if (isinstance(b_t, PointerType) and
+            self.alloctype == AllocType.STACK and
             b_t.get_base_type().get_size() != 0):
             return self.n_element * b_t.get_base_type().get_size()
         else:
             if b_t.get_size() is None:
-                print("Is none?")
-                from IPython import embed; embed(); exit(1)
+                # Upstream Liberator shipped an uncommented
+                # ``from IPython import embed; embed(); exit(1)`` here.
+                # In OSS-Fuzz containers IPython is unavailable, so the
+                # debug shim raised ImportError; interactively it
+                # blocked the synthesis pipeline waiting for human
+                # input. Either way unusable in production — replaced
+                # with an explicit exception that names the offending
+                # buffer so the caller can localise the failure.
+                raise Exception(
+                    f"Buffer.get_allocated_size: type {b_t} has no size "
+                    f"(get_size() returned None) for buffer "
+                    f"{self.token!r} with alloctype {self.alloctype.name}"
+                )
             return self.n_element * b_t.get_size()
