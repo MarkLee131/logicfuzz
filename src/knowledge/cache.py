@@ -5,6 +5,7 @@ Layout:
         purpose.txt
         api_usage.json          # {api_name: usage_text}
         sequences.json          # [{key, status, diagnosis, repair, invariants}]
+        docs_priors.json        # T1: {readme_purpose, api_docstrings}
 
 Keys are content-hashed so source changes invalidate stale entries automatically.
 """
@@ -38,6 +39,7 @@ class KnowledgeCache:
         self.purpose_path = self.dir / "purpose.txt"
         self.api_path = self.dir / "api_usage.json"
         self.seq_path = self.dir / "sequences.json"
+        self.docs_priors_path = self.dir / "docs_priors.json"
 
     # ---- library purpose ----
     def load_purpose(self) -> Optional[str]:
@@ -98,3 +100,24 @@ class KnowledgeCache:
             )
         except OSError as exc:
             logger.warning("Failed to write sequence cache: %s", exc)
+
+    # ---- T1 docs priors (README + doxygen) ----
+    # Shape: {"readme_purpose": str, "api_docstrings": {api_name: docstring}}
+    def load_docs_priors(self) -> Dict[str, Any]:
+        if not self.docs_priors_path.exists():
+            return {}
+        try:
+            data = json.loads(self.docs_priors_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read docs_priors cache: %s", exc)
+            return {}
+
+    def save_docs_priors(self, priors: Dict[str, Any]) -> None:
+        try:
+            self.docs_priors_path.write_text(
+                json.dumps(priors, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("Failed to write docs_priors cache: %s", exc)

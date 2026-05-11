@@ -217,6 +217,32 @@ def _lifecycle_pair(name: str,
     return None
 
 
+# Minimum useful doxygen length. Below this, the comment is usually a
+# single-word stub like "Initialize" or "Free buffer" that the
+# deterministic role-based usage already captures. T1 review: under 40
+# chars carries almost no signal the LLM can act on.
+_DOXYGEN_MIN_USEFUL_CHARS = 40
+
+
+def _doc_derived_usage(api: Dict[str, Any], docstring: str) -> Optional[str]:
+    """Compose a usage line from a doxygen docstring + the API signature.
+
+    Returns ``None`` for short / vacuous docstrings so the call site
+    falls through to the LLM (which can do better than 5 words of
+    description). T1 prior: when we have a substantive doc, the LLM
+    is largely redundant for this API.
+    """
+    if not docstring or len(docstring.strip()) < _DOXYGEN_MIN_USEFUL_CHARS:
+        return None
+    sig = _format_signature(api)
+    text = docstring.strip()
+    # Cap doc length so a verbose doxygen block doesn't blow the
+    # Prototyper prompt budget downstream.
+    if len(text) > 600:
+        text = text[:600].rsplit(" ", 1)[0] + "..."
+    return f"{text} (doxygen) — signature: {sig}"
+
+
 def _deterministic_usage(api: Dict[str, Any],
                          condition_info: Dict[str, Any],
                          lifecycle_analysis: Dict[str, Any]) -> Optional[str]:
@@ -376,17 +402,30 @@ class Comprehender:
                         purpose: str,
                         condition_info: Optional[Dict[str, Any]] = None,
                         lifecycle_analysis: Optional[Dict[str, Any]] = None,
+                        api_docstrings: Optional[Dict[str, str]] = None,
                         ) -> Dict[str, str]:
-        """Per-API usage with deterministic-then-LLM layering. Cache-aware."""
+        """Per-API usage with cache → deterministic → doxygen → LLM layering.
+
+        ``api_docstrings`` (T1 prior, opt-in): map of API name →
+        doxygen description extracted by
+        ``src.knowledge.project_docs.extract_doxygen_comments``. When
+        an API has a substantive docstring we use it directly and
+        skip the LLM batch for that API — the doc is ground truth
+        the LLM can only paraphrase. Short / vacuous docstrings fall
+        through to the LLM unchanged.
+        """
         condition_info = condition_info or {}
         lifecycle_analysis = lifecycle_analysis or {}
+        api_docstrings = api_docstrings or {}
         cached_usages = self.cache.load_api_usages()
         usages: Dict[str, str] = {}
         api_lookup = {a.get("function_name", ""): a for a in project_apis}
 
         # Layer 1: cache hit → reuse
         # Layer 2: deterministic synthesis from static facts
-        # Layer 3: LLM batched fallback for the remainder
+        # Layer 3: doxygen-derived usage (T1 prior, opt-in)
+        # Layer 4: LLM batched fallback for the remainder
+        n_doc_used = 0
         need_llm: List[Dict[str, Any]] = []
         for name in api_names:
             if not name or name in usages:
@@ -401,7 +440,19 @@ class Comprehender:
             if det:
                 usages[name] = det
                 continue
+            doc = api_docstrings.get(name, "")
+            doc_usage = _doc_derived_usage(api, doc)
+            if doc_usage:
+                usages[name] = doc_usage
+                n_doc_used += 1
+                continue
             need_llm.append(api)
+
+        if n_doc_used:
+            logger.info(
+                "Comprehender-A: %d APIs resolved from doxygen "
+                "(LLM saved on these)", n_doc_used,
+            )
 
         if need_llm:
             self._llm_fill_api_usages(

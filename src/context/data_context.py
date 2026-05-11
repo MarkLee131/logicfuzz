@@ -258,7 +258,9 @@ class FuzzingContext:
                 use_cache: bool = True,
                 llm_client: Any = None,
                 closed_loop_iters: int = 0,
-                closed_loop_early_stop: int = 0) -> 'FuzzingContext':
+                closed_loop_early_stop: int = 0,
+                use_doxygen_priors: bool = False,
+                use_readme_purpose: bool = False) -> 'FuzzingContext':
         """
         Prepare all fuzzing data using Liberator project-level modeling.
 
@@ -860,8 +862,92 @@ class FuzzingContext:
                 '  6b/12 Comprehending %d unique APIs across %d sequences...',
                 len(unique_apis_in_sequences), len(api_sequences))
 
+            # T1 priors: extract README purpose + doxygen comments from
+            # ground-truth project sources before the LLM is consulted.
+            # Both flags are opt-in (default OFF) so the first 17-bench
+            # A/B run can measure their contribution against baseline.
+            # See docs/knowledge_t1_2026_05.md.
+            readme_excerpt = ""
+            api_docstrings: Dict[str, str] = {}
+            cache = None
+            if use_readme_purpose or use_doxygen_priors:
+                from src.knowledge.cache import KnowledgeCache
+                cache = KnowledgeCache(project_name)
+                cached_priors = cache.load_docs_priors()
+            else:
+                cached_priors = {}
+
+            if use_readme_purpose:
+                cached_readme = cached_priors.get('readme_purpose', '') if isinstance(cached_priors, dict) else ''
+                if cached_readme:
+                    readme_excerpt = cached_readme
+                    log.info('   📖 README purpose loaded from cache')
+                else:
+                    from src.knowledge.project_docs import extract_readme_purpose
+                    project_root_dir = Path(f"./results/{project_name}")
+                    readme_candidates = [
+                        project_root_dir / "src_ossfuzz" / project_name,
+                        project_root_dir / "src_ossfuzz",
+                    ]
+                    for cand in readme_candidates:
+                        if cand.exists():
+                            extracted = extract_readme_purpose(cand)
+                            if extracted:
+                                readme_excerpt = extracted
+                                break
+                    if readme_excerpt:
+                        log.info(
+                            '   📖 README purpose extracted (%d chars)',
+                            len(readme_excerpt),
+                        )
+
+            if use_doxygen_priors:
+                cached_docs = cached_priors.get('api_docstrings', {}) if isinstance(cached_priors, dict) else {}
+                if cached_docs:
+                    api_docstrings = cached_docs
+                    log.info(
+                        '   📖 Doxygen priors loaded from cache (%d APIs)',
+                        len(api_docstrings),
+                    )
+                else:
+                    try:
+                        local_meta = (
+                            generator.extract_metadata.get('local', {})
+                            if getattr(generator, 'extract_metadata', None)
+                            else {}
+                        )
+                        public_headers_file = local_meta.get('public_headers')
+                        public_header_names: List[str] = []
+                        if public_headers_file and os.path.exists(public_headers_file):
+                            with open(public_headers_file, 'r') as fh:
+                                public_header_names = [
+                                    ln.strip() for ln in fh if ln.strip()
+                                ]
+                        headers_dir = getattr(generator, 'headers_dir', None)
+                        if headers_dir and public_header_names and unique_apis_in_sequences:
+                            from src.knowledge.project_docs import extract_doxygen_comments
+                            api_docstrings = extract_doxygen_comments(
+                                headers_dir=Path(headers_dir),
+                                public_headers=public_header_names,
+                                api_names=unique_apis_in_sequences,
+                            )
+                    except Exception as exc:
+                        log.warning(
+                            'Doxygen extraction failed (T1 prior unused): %s', exc,
+                        )
+
+            # Persist T1 priors so subsequent runs skip the libclang walk.
+            if cache is not None and (readme_excerpt or api_docstrings):
+                cache.save_docs_priors({
+                    'readme_purpose': readme_excerpt,
+                    'api_docstrings': api_docstrings,
+                })
+
             comprehender = Comprehender(project_name)
-            purpose = comprehender.comprehend_purpose(library_name=project_name)
+            purpose = comprehender.comprehend_purpose(
+                library_name=project_name,
+                doc_excerpts=readme_excerpt,
+            )
 
             api_usages = comprehender.comprehend_apis(
                 api_names=unique_apis_in_sequences,
@@ -869,6 +955,7 @@ class FuzzingContext:
                 purpose=purpose,
                 condition_info=condition_info,
                 lifecycle_analysis=lifecycle_analysis_result,
+                api_docstrings=api_docstrings if use_doxygen_priors else None,
             )
             comprehension = LibraryComprehension(purpose=purpose, functions=api_usages)
             comprehension_dict = comprehension.to_dict()

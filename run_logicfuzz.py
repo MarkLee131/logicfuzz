@@ -1419,6 +1419,26 @@ def parse_args() -> argparse.Namespace:
                            'for 2 consecutive iterations (default: 0 = '
                            'exact saturation).')
 
+  # T1 knowledge-layer priors (opt-in). See
+  # docs/knowledge_layer_design_proposal_2026_05.md §10 M2 and
+  # docs/knowledge_t1_2026_05.md. Both default OFF so the first
+  # 17-bench A/B run can measure their contribution against the
+  # current LLM-from-signature / LLM-from-project-name baseline.
+  parser.add_argument('--use-doxygen-priors',
+                      action='store_true',
+                      dest='use_doxygen_priors',
+                      help='T1: extract /** */ comments from project headers '
+                           'via libclang and feed them to Comprehender-A as '
+                           'priors. When an API has a substantive docstring, '
+                           'the LLM call for that API is skipped.')
+  parser.add_argument('--use-readme-purpose',
+                      action='store_true',
+                      dest='use_readme_purpose',
+                      help='T1: extract a purpose paragraph from the project '
+                           "README and feed it to Comprehender's library "
+                           'purpose generation instead of relying on the '
+                           'LLM-from-project-name fallback.')
+
   # Evaluation profile shortcut. Bundles the flags that are individually
   # opt-in but should ALL be on when reporting "total coverage vs baseline"
   # numbers (PromeFuzz Table 2 etc.):
