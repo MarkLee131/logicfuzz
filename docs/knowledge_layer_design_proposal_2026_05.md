@@ -227,7 +227,87 @@ class LibraryKnowledge:
 
 ---
 
-## §10. Rollback / kill-switch
+## §10. Effort estimates and staged rollout
+
+These estimates assume one developer working full-time on this, with
+my-style implementation (defensive contracts, explicit failures,
+unit tests on a few benchmarks before full validation). Numbers are
+deliberately on the realistic side; double them for first-time
+infrastructure work.
+
+### Per-component effort
+
+| Tier | Component | Coding | Testing | Calendar |
+|---|---|---|---|---|
+| T1 | Doxygen extraction (libclang `cursor.raw_comment`, hook into HybridAPIExtractor, prompt integration) | 1.5-2 days | 1 day | ~3 days |
+| T1 | README ingestion (locate `README*`, strip markdown, extract purpose paragraph, prompt integration) | 0.5-1 day | 0.5 day | ~1.5 days |
+| **T1 total** | | | | **~1 week** |
+| T2 | `APIKnowledge` / `LibraryKnowledge` index (dataclass, assembly from 6 existing sources, cache file, FuzzingContext wiring) | 3-4 days | 1 day | ~5 days |
+| T2 | Test files as Prototyper reference (extend `_iter_driver_source_files`, ≥2-API filter, new prompt section) | 1-2 days | 0.5 day | ~2 days |
+| T2 | Raise driver cap + diversity sort | 0.5 day | — | ~0.5 day |
+| **T2 total** | | | | **~1.5 weeks** |
+| T3 | Lightweight RAG (`sentence-transformers` + numpy/FAISS, **NOT** langchain stack) | 1.5-2 weeks | 0.5-1 week (chunking + top-K tuning) | **~2-3 weeks** |
+| T4 | Crash-driven learner (dedup, LLM extraction, storage, feedback loop, validation) | 2-3 weeks | 1-2 weeks | **~3-5 weeks** plus 1-2 weeks waiting for crash data |
+
+### Calendar — solo, realistic
+
+| Scope | Total |
+|---|---|
+| T1 only | ~2 weeks (1 week coding + 1 week validation) |
+| T1 + T2 | ~5 weeks (3 weeks coding + 2 weeks validation overlap) |
+| T1 + T2 + T3 (if T1 justifies it) | ~10 weeks |
+| All four tiers | **~13-16 weeks (3-4 months)** |
+
+### Risk factors that can blow the estimate
+
+1. **Doxygen quality is project-dependent.** zlib / libxml2 have
+   rich docs; libucl / ffjpeg have almost none. If T1 shows <50%
+   API doc coverage on our benchmark set, T3 (RAG) becomes
+   mandatory rather than conditional. Adds 2-3 unbudgeted weeks.
+2. **README format heterogeneity.** Some libraries have 50-line
+   READMEs, others 5000-line build/install guides where the
+   purpose paragraph is buried. Robust extraction is harder than
+   it sounds.
+3. **Prompt regression risk.** Adding priors to the Comprehender
+   prompt may cause the LLM to over-trust incomplete docs and miss
+   real semantic info. T1 needs strict A/B against baseline before
+   defaults flip on.
+4. **Cache invalidation.** Per-source caching is necessary
+   (re-extracting doxygen every run is wasteful). Invalidation
+   rules must be designed per source — easy to get wrong.
+5. **Empirical validation is the bottleneck, not coding.** A full
+   24h × 17-benchmark run is ~17 GPU-days sequential or ~1 week
+   parallelized. Three validation cycles eats 3-4 weeks of calendar
+   regardless of coding speed.
+
+### Recommended staged rollout
+
+Do **not** commit to the full plan upfront. Ship in milestones,
+decide at each gate.
+
+| Milestone | Scope | When |
+|---|---|---|
+| **M1** | Run current dynamic baseline on 3-4 benchmarks (cjson + c-ares + libucl + libxml2). Populate §3 validation sections across the 14 existing refactor docs. No code changes — just empirical baseline. | ~1 week |
+| **M2** | Ship T1 behind `--use-doxygen-priors` and `--use-readme-purpose` flags (both OFF by default). A/B vs M1 baseline on the same 4 benchmarks. Decide: flip defaults ON, keep opt-in, or revert. | ~2-3 weeks after M1 |
+| **M3** | Based on M2 signal — three branches: (a) T1 helped and Prototyper/Fixer logs show ≥2 subsystem reads per agent → ship T2 (index + test files + driver cap). (b) T1 doxygen turned out sparse on a majority of benchmarks → skip T2, build T3 (lightweight RAG). (c) T1 saturated the gains → stop here, defer T2-T4 indefinitely. | ~4-6 weeks after M2 |
+| **M4 (conditional)** | T4 learner. Only after dynamic baseline accumulates ≥10 trials with crashes AND ≥2 crash classes recur >3× across trials. | post-M3 territory |
+
+**Realistic calendar to the M3 decision gate: ~7-10 weeks.**
+
+If M3 ends in branch (c) — stop — the total effort is ~5-6 weeks
+for a measurable content-quality improvement that closes the
+"library purpose + per-API usage is LLM-invented" gap.
+
+If M3 ends in branch (a) or (b), expect another 4-6 weeks to a full
+T1+T2 or T1+T3 architecture, on top of the M1+M2 4 weeks. Plan for
+**~3 months calendar** in those branches.
+
+T4 sits firmly in the "wait until we have data" bucket and should
+not be budgeted in any plan tighter than 6 months.
+
+---
+
+## §11. Rollback / kill-switch
 
 This is a proposal; nothing is implemented yet. If T1 ships and
 turns out to add noise rather than signal:
@@ -245,7 +325,7 @@ removed).
 
 ---
 
-## §11. Why this proposal stops here
+## §12. Why this proposal stops here
 
 We deliberately **do not** propose:
 
