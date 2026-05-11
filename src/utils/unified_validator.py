@@ -15,11 +15,8 @@ Benefits of consolidation:
 - Reduced code duplication
 """
 
-import json
 import logging
-import os
 import re
-import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -124,10 +121,17 @@ class UnifiedCodeValidator:
 
     Performs multiple validation checks in a single pass through the source code,
     providing unified reporting and consistent error handling.
-    """
 
-    # CGProcessor path for AST-based validation
-    DEFAULT_CGPROCESSOR_PATH = Path("/home/likaixuan/fuzzing/PromeFuzz/build/bin/cgprocessor")
+    AST-based target-API validation uses ``liberator_adapter.analysis.static_trace.FunctionBodyWalker``,
+    the same libclang-Python walker the automaton subsystem uses for
+    trace extraction. The earlier ``CGProcessor`` external-binary path
+    was replaced in the 2026-05 Supervisor+Validator refactor because:
+      * It was duplicating capability we already maintain in Python.
+      * Its default path was hardcoded to one developer's home directory,
+        so every other machine silently fell back to the naive regex check.
+      * Keeping two libclang-AST front-ends doubles the maintenance
+        surface for a code path with sub-second cost on single drivers.
+    """
 
     # =========================
     # Pattern Definitions
@@ -215,26 +219,79 @@ class UnifiedCodeValidator:
         r"error: [`'](\w+)[`'] undeclared",
     ]
 
-    # System functions to ignore in fake definition check
+    # System functions to ignore in fake definition check.
+    # 2026-05 Supervisor+Validator review (V5): expanded to cover the
+    # common libc surface that LLM-generated fuzz drivers actually use.
+    # Missing entries previously caused false positives that flagged
+    # legitimate fuzz driver code as containing "LLM-hallucinated
+    # functions".
     IGNORE_FUNCTIONS = {
+        # C++ ABI / unwinding
         '__stack_chk_fail', '__cxa_allocate_exception', '__cxa_throw',
         '__gxx_personality_v0', '__cxa_begin_catch', '__cxa_end_catch',
         '_Unwind_Resume', '__cxa_atexit', '__dso_handle',
-        'memcpy', 'memset', 'malloc', 'free', 'printf', 'strlen',
-        'strcpy', 'strncpy', 'strcmp', 'memmove', 'calloc', 'realloc',
+        # Memory / string / printf family
+        'memcpy', 'memset', 'memcmp', 'memmove',
+        'malloc', 'free', 'calloc', 'realloc', 'aligned_alloc', 'posix_memalign',
+        'printf', 'fprintf', 'sprintf', 'snprintf', 'vfprintf', 'vsnprintf',
+        'puts', 'fputs', 'fgets', 'fputc', 'fgetc', 'putchar', 'getchar',
+        'fread', 'fwrite', 'fseek', 'ftell', 'fopen', 'fclose', 'fflush', 'rewind',
+        'strlen', 'strcpy', 'strncpy', 'strcat', 'strncat',
+        'strcmp', 'strncmp', 'strcasecmp', 'strncasecmp',
+        'strchr', 'strrchr', 'strstr', 'strdup', 'strndup', 'strtok',
+        # Conversion
+        'atoi', 'atol', 'atoll', 'atof', 'strtol', 'strtoll', 'strtoul', 'strtoull',
+        'strtof', 'strtod',
+        # Process / exit
+        'exit', '_exit', 'abort', 'getenv', 'setenv', 'unsetenv',
+        # I/O
+        'open', 'close', 'read', 'write', 'lseek',
+        # Time
+        'time', 'clock', 'gettimeofday',
     }
 
-    # Whitelist for internal function check
-    FUNCTION_WHITELIST = {'__attribute__', '_Generic'}
+    # Whitelist for internal function check.
+    # 2026-05 Supervisor+Validator review (V4): the original
+    # ``\b_[a-z]\w+\(`` pattern over-matches common compiler intrinsics
+    # and language constructs. Add the false-positive surface here so
+    # those legitimate forms pass the internal-API check.
+    FUNCTION_WHITELIST = {
+        # Language constructs that look like _underscore functions
+        '__attribute__', '_Generic', '_Static_assert',
+        '_Atomic', '_Alignof', '_Alignas',
+        # Compiler intrinsics (GCC / Clang). Listed explicitly rather
+        # than wildcarded so we still catch genuinely-internal symbols
+        # like ``_internal_helper`` that LLMs do occasionally invent.
+        '__builtin_expect', '__builtin_unreachable', '__builtin_trap',
+        '__builtin_memcpy', '__builtin_memset', '__builtin_alloca',
+        '__builtin_strlen', '__builtin_constant_p',
+        '__builtin_choose_expr', '__builtin_types_compatible_p',
+        '__builtin_clz', '__builtin_ctz', '__builtin_popcount',
+        '__builtin_bswap16', '__builtin_bswap32', '__builtin_bswap64',
+        '__builtin_va_arg', '__builtin_va_end', '__builtin_va_start',
+        '__builtin_va_copy',
+        # Pragma / control
+        '_Pragma',
+        # libfuzzer entry point
+        'LLVMFuzzerTestOneInput', 'LLVMFuzzerInitialize',
+    }
 
     def __init__(self, cgprocessor_path: Optional[Path] = None):
         """
         Initialize the unified validator.
 
         Args:
-            cgprocessor_path: Optional path to CGProcessor binary for AST-based validation
+            cgprocessor_path: Kept for backward compatibility with
+                existing callers (e.g. ``execution.py`` still passes
+                the kwarg) but ignored — AST-based target-API
+                validation now goes through
+                ``FunctionBodyWalker`` (Python libclang). The CGProcessor
+                external-binary path was retired in the 2026-05 refactor.
         """
-        self.cgprocessor_path = Path(cgprocessor_path) if cgprocessor_path else self.DEFAULT_CGPROCESSOR_PATH
+        # The cgprocessor_path argument is intentionally ignored.
+        # Eat the parameter so existing callers don't break, but document
+        # that the AST path is libclang-Python now.
+        _ = cgprocessor_path
 
         # Compile regex patterns
         self._compile_patterns()
@@ -250,8 +307,16 @@ class UnifiedCodeValidator:
         self.undeclared_re = [re.compile(p, re.IGNORECASE) for p in self.UNDECLARED_PATTERNS]
 
     def is_cgprocessor_available(self) -> bool:
-        """Check if CGProcessor is available for AST-based validation."""
-        return self.cgprocessor_path.is_file()
+        """Always True now — AST-based validation goes through libclang-Python
+        (``FunctionBodyWalker``), which is in-process. Kept as a method for
+        backward compat with any caller that gated on it. The naive fallback
+        still runs as a last resort if libclang itself fails.
+        """
+        try:
+            import clang.cindex  # noqa: F401
+            return True
+        except Exception:
+            return False
 
     # =========================
     # Main Validation Entry Point
@@ -531,59 +596,82 @@ class UnifiedCodeValidator:
         target_apis: List[str],
         include_paths: Optional[List[str]]
     ) -> Tuple[List[str], List[str]]:
-        """AST-based target API check using CGProcessor."""
-        with tempfile.TemporaryDirectory(prefix="logicfuzz_ast_") as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            driver_path = tmp_path / "fuzz_target.cpp"
-            output_path = tmp_path / "calling_info.json"
+        """AST-based target API check using libclang Python via
+        ``FunctionBodyWalker`` — the same walker the automaton subsystem
+        uses. 2026-05 refactor replaced the external CGProcessor binary
+        path with this in-process implementation; see
+        ``docs/supervisor_validator_refactor_2026_05.md``.
+        """
+        try:
+            from liberator_adapter.analysis.static_trace import (
+                FunctionBodyWalker, _function_definitions,
+            )
+            from clang.cindex import Index, TranslationUnit
+        except Exception as exc:
+            logger.warning(
+                "libclang Python bindings unavailable (%s); "
+                "falling back to naive check", exc,
+            )
+            return self._check_target_apis_naive(self._remove_comments(code), target_apis)
 
-            driver_path.write_text(code)
+        # ``target_apis`` may include namespace prefixes (``foo::bar``); the
+        # walker matches by simple name, so expand both forms into a single
+        # ``public_apis`` set used as the membership filter.
+        target_set: Set[str] = set()
+        simple_to_full: Dict[str, str] = {}
+        for api in target_apis:
+            target_set.add(api)
+            simple = api.rsplit("::", 1)[-1] if "::" in api else api
+            target_set.add(simple)
+            simple_to_full.setdefault(simple, api)
 
-            # Build command
-            cmd_parts = [str(self.cgprocessor_path), str(driver_path), "-o", str(output_path), "--"]
-            if include_paths:
-                for path in include_paths:
-                    cmd_parts.append(f"-I{path}")
-            cmd_parts.append("-I/usr/include")
-
+        with tempfile.TemporaryDirectory(prefix="logicfuzz_walker_") as tmp_dir:
+            tmp_path = Path(tmp_dir) / "fuzz_target.cc"
+            tmp_path.write_text(code)
             try:
-                result = subprocess.run(
-                    " ".join(cmd_parts),
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=60
+                index = Index.create()
+                args: List[str] = []
+                if include_paths:
+                    args.extend(f"-I{p}" for p in include_paths)
+                args.append("-I/usr/include")
+                tu = index.parse(
+                    str(tmp_path),
+                    args=args,
+                    options=TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD,
                 )
 
-                if result.returncode != 0 or not output_path.exists():
-                    logger.warning(f"CGProcessor failed, falling back to naive check")
-                    return self._check_target_apis_naive(self._remove_comments(code), target_apis)
+                called: Set[str] = set()
+                for func in _function_definitions(tu):
+                    walker = FunctionBodyWalker(
+                        public_apis=target_set,
+                        file_str=str(tmp_path),
+                        func_name=func.spelling,
+                    )
+                    walker.seed_parameter_defs(func)
+                    from clang.cindex import CursorKind
+                    for child in func.get_children():
+                        if child.kind == CursorKind.COMPOUND_STMT:
+                            walker.walk(child)
+                            break
+                    for call in walker.calls:
+                        called.add(call.api_name)
+            except Exception as exc:
+                logger.warning(
+                    "libclang walker raised %r; falling back to naive check",
+                    exc,
+                )
+                return self._check_target_apis_naive(
+                    self._remove_comments(code), target_apis)
 
-                calling_info = json.loads(output_path.read_text())
-
-                # Extract called function names
-                called_names: Set[str] = set()
-                for info in calling_info.values():
-                    callee = info.get("calleeName", "")
-                    simple_name = callee.split("::")[-1] if "::" in callee else callee
-                    called_names.add(callee)
-                    called_names.add(simple_name)
-
-                # Match against target APIs
-                actual_called = []
-                missing = []
-                for api in target_apis:
-                    simple_api = api.split("::")[-1] if "::" in api else api
-                    if api in called_names or simple_api in called_names:
-                        actual_called.append(api)
-                    else:
-                        missing.append(api)
-
-                return actual_called, missing
-
-            except Exception as e:
-                logger.warning(f"CGProcessor error: {e}, falling back to naive check")
-                return self._check_target_apis_naive(self._remove_comments(code), target_apis)
+        actual_called: List[str] = []
+        missing: List[str] = []
+        for api in target_apis:
+            simple = api.rsplit("::", 1)[-1] if "::" in api else api
+            if api in called or simple in called:
+                actual_called.append(api)
+            else:
+                missing.append(api)
+        return actual_called, missing
 
     def _check_target_apis_naive(
         self,
