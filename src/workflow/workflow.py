@@ -4,14 +4,11 @@ import argparse
 from typing import Dict, Any
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 from src.workflow.state import FuzzingWorkflowState, create_initial_state
-from src.workflow.adapters import ConfigAdapter
 from src.workflow.nodes import (prototyper_node, fixer_node,
                                 crash_analyzer_node, execution_node,
                                 build_node, supervisor_node, route_condition)
 from experiment.benchmark import Benchmark
-from experiment.workdir import WorkDirs
 from src.workflow.memory import create_memory_checkpointer
 
 
@@ -19,8 +16,15 @@ class FuzzingWorkflow:
     """
     Main fuzzing workflow class that manages the LangGraph execution.
 
-    This class provides a high-level interface for running the fuzzing workflow
-    with proper configuration and state management.
+    This class provides a high-level interface for running the fuzzing
+    workflow with proper configuration and state management.
+
+    Pre-2026-05: this class shipped three workflow variants (``full`` /
+    ``simple`` / ``test``) and two top-level factory functions
+    (``create_fuzzing_workflow`` / ``create_simple_workflow``). Only the
+    ``full`` variant has been invoked anywhere in the tree; the simple /
+    test variants and the top-level factories were never reachable from
+    the CLI. Dropped as part of the workflow refactor.
     """
 
     def __init__(self,
@@ -41,36 +45,20 @@ class FuzzingWorkflow:
         self.model_name = model_name
         self.args = args
         self.workflow_graph = None
-        self.config = ConfigAdapter.create_config(model_name, args)
         self.shared_data = shared_data  # Store for agents to access
 
         # Create memory checkpointer for conversation persistence
         self.checkpointer = create_memory_checkpointer(
         ) if use_checkpointer else None
 
-    def create_workflow(self, workflow_type: str = "full") -> StateGraph:
-        """
-        Create the workflow graph.
-        
-        Args:
-            workflow_type: Type of workflow ("full", "simple", "test")
-            
-        Returns:
-            Configured LangGraph StateGraph
-        """
-        if workflow_type == "simple":
-            self.workflow_graph = self._create_simple_workflow()
-        elif workflow_type == "test":
-            self.workflow_graph = self._create_test_workflow()
-        else:
-            self.workflow_graph = self._create_full_workflow()
-
+    def create_workflow(self) -> StateGraph:
+        """Create the workflow graph (supervisor-routed full workflow)."""
+        self.workflow_graph = self._create_full_workflow()
         return self.workflow_graph
 
     def run(self,
             benchmark: Benchmark,
-            trial: int,
-            workflow_type: str = "full") -> Dict[str, Any]:
+            trial: int) -> Dict[str, Any]:
         """
         Run the fuzzing workflow for a benchmark.
         
@@ -91,7 +79,7 @@ class FuzzingWorkflow:
         if not self.workflow_graph:
             logger.info('📍 [workflow.run] Creating workflow graph...',
                         trial=trial)
-            self.create_workflow(workflow_type)
+            self.create_workflow()
             logger.info('📍 [workflow.run] Workflow graph created', trial=trial)
 
         # Create initial state (objects will be converted internally)
@@ -247,97 +235,3 @@ class FuzzingWorkflow:
         workflow.add_edge("crash_feasibility_analyzer", "supervisor")
 
         return workflow
-
-    def _create_simple_workflow(self) -> StateGraph:
-        """Create a simple linear workflow for basic testing."""
-        workflow = StateGraph(FuzzingWorkflowState)
-
-        # Add nodes
-        workflow.add_node("prototyper", prototyper_node)
-        workflow.add_node("build", build_node)
-
-        # Set entry point
-        workflow.set_entry_point("prototyper")
-
-        # Add linear edges
-        workflow.add_edge("prototyper", "build")
-        workflow.add_edge("build", END)
-
-        return workflow
-
-    def _create_test_workflow(self) -> StateGraph:
-        """Create a minimal workflow for unit testing."""
-        workflow = StateGraph(FuzzingWorkflowState)
-
-        # Add only prototyper for testing
-        workflow.add_node("prototyper", prototyper_node)
-
-        # Set entry and exit
-        workflow.set_entry_point("prototyper")
-        workflow.add_edge("prototyper", END)
-
-        return workflow
-
-
-def create_fuzzing_workflow() -> StateGraph:
-    """
-    Create the main fuzzing workflow graph.
-
-    Returns:
-        Configured LangGraph StateGraph for fuzzing workflow
-    """
-    workflow = StateGraph(FuzzingWorkflowState)
-
-    # Add nodes
-    workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("prototyper", prototyper_node)
-    workflow.add_node("fixer", fixer_node)
-    workflow.add_node("build", build_node)
-    workflow.add_node("execution", execution_node)
-    workflow.add_node("crash_analyzer", crash_analyzer_node)
-
-    # Set entry point
-    workflow.set_entry_point("supervisor")
-
-    # Add conditional edges from supervisor
-    workflow.add_conditional_edges(
-        "supervisor", route_condition, {
-            "prototyper": "prototyper",
-            "fixer": "fixer",
-            "build": "build",
-            "execution": "execution",
-            "crash_analyzer": "crash_analyzer",
-            "__end__": END
-        })
-
-    # Add edges back to supervisor from all nodes
-    workflow.add_edge("prototyper", "supervisor")
-    workflow.add_edge("fixer", "supervisor")
-    workflow.add_edge("build", "supervisor")
-    workflow.add_edge("execution", "supervisor")
-    workflow.add_edge("crash_analyzer", "supervisor")
-
-    return workflow
-
-
-def create_simple_workflow() -> StateGraph:
-    """
-    Create a simplified linear workflow for testing.
-
-    Returns:
-        Simple linear workflow: Prototyper -> Build
-    """
-    workflow = StateGraph(FuzzingWorkflowState)
-
-    # Add nodes
-    workflow.add_node("prototyper", prototyper_node)
-    workflow.add_node("build", build_node)
-
-    # Set entry point
-    workflow.set_entry_point("prototyper")
-
-    # Add linear edges
-    workflow.add_edge("prototyper", "build")
-    workflow.add_edge("build", END)
-
-    return workflow

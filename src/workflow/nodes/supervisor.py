@@ -144,11 +144,21 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
 
 
 def _end_workflow(reason: str, message: str, **extra) -> Dict[str, Any]:
-    """Helper to create END workflow response."""
+    """Helper to create END workflow response.
+
+    The ``reason`` argument is embedded in the assistant message so the
+    rationale shows up in trial logs / state dumps. The previous
+    ``termination_reason`` state field has been removed — it was never
+    read anywhere (the only reader was a dead ``is_terminal_state``
+    helper), and tagging a non-schema field on the way out just
+    obscured what state actually carries.
+    """
     result = {
         "next_action": "END",
-        "termination_reason": reason,
-        "messages": [{"role": "assistant", "content": message}]
+        "messages": [{
+            "role": "assistant",
+            "content": f"[{reason}] {message}",
+        }],
     }
     result.update(extra)
     return result
@@ -240,6 +250,19 @@ def _handle_optimization_phase(state: FuzzingWorkflowState, trial: int) -> str:
     """Handle OPTIMIZATION phase routing."""
     compile_success = state.get("compile_success")
     run_success = state.get("run_success")
+
+    # Stub-only binary detected during the last execution → regenerate
+    # from scratch rather than patch incrementally. The fixer's bias is
+    # toward fixing whatever compile/link error is in front of it; for
+    # a stub binary the source already compiles, so fixer is a wrong
+    # tool. The prototyper sees the stub-detection reason via run_error
+    # and can emit a fresh driver that resolves real headers.
+    if state.get("is_stub_binary"):
+        logger.info(
+            'Stub binary detected, routing to prototyper for regeneration',
+            trial=trial,
+        )
+        return "prototyper"
 
     # Code was modified (by improver/fixer) → need to rebuild
     if compile_success is None:

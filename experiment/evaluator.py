@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from typing import Optional
 
 from google.cloud import storage
@@ -16,6 +17,54 @@ from experiment.benchmark import Benchmark
 from experiment.builder_runner import BuildResult, RunResult, TriageResult  # TriageResult moved to builder_runner
 from experiment.fuzz_target_error import SemanticCheckResult
 from experiment.workdir import WorkDirs
+
+
+def _check_libfuzzer_entry_symbol(binary_path: str) -> bool:
+  """Verify ``LLVMFuzzerTestOneInput`` is *defined* in ``binary_path``.
+
+  Uses ``nm`` to read the binary's symbol table; the entry point must
+  appear with a capital ``T`` (global text symbol) or capital ``W``
+  (weakly defined, but still present). Lowercase ``t`` / ``w`` would
+  indicate a local-only definition that the OSS-Fuzz runner can't dispatch.
+  Undefined references (``U``) mean the link resolved against a weak
+  default — the symptom we're catching.
+
+  Returns True when the symbol is found defined. Returns True on any
+  ``nm`` failure (binary unreadable, ``nm`` not installed, timeout) so
+  the absence of the tool does not falsely report a missing symbol —
+  binary_exists already gates whether we trust this signal at all.
+  """
+  if not binary_path or not os.path.exists(binary_path):
+    return False
+  try:
+    proc = subprocess.run(
+        ['nm', '--defined-only', binary_path],
+        capture_output=True, text=True, timeout=30, check=False)
+  except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    return True  # tool unavailable / hung — don't pretend symbol is missing
+  if proc.returncode != 0:
+    # Stripped binaries return nonzero; fall back to `nm -D` (dynamic).
+    try:
+      proc = subprocess.run(
+          ['nm', '-D', '--defined-only', binary_path],
+          capture_output=True, text=True, timeout=30, check=False)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+      return True
+    if proc.returncode != 0:
+      return True  # truly stripped — can't tell, assume present
+  for line in proc.stdout.splitlines():
+    # nm output: "<addr> <type> <symbol>". Type letter at column 17ish
+    # in BSD format; we just split-and-match the trailing token.
+    parts = line.split()
+    if not parts:
+      continue
+    sym = parts[-1]
+    if sym == 'LLVMFuzzerTestOneInput' and len(parts) >= 2:
+      type_letter = parts[-2]
+      # T = global text, W = weak (still callable), t/w = local only.
+      if type_letter in ('T', 'W'):
+        return True
+  return False
 # Note: corpus_generator and crash_triager removed in LangGraph migration
 # These are only used in legacy triage/corpus generation code (not in LangGraph workflow)
 
@@ -165,38 +214,52 @@ class Evaluator:
 
   def build_only(self, generated_project_path: str) -> dict:
     """Builds a fuzz target without running it.
-    
+
     Args:
         generated_project_path: Path to the generated OSS-Fuzz project
-        
+
     Returns:
         Dictionary with build results containing:
         - success: bool indicating if build succeeded
         - errors: list of error messages
         - log: build log content
         - binary_exists: bool indicating if binary was created
+        - is_function_referenced: bool indicating that the built binary
+          actually defines ``LLVMFuzzerTestOneInput`` (nm-based check).
+          False when the symbol is missing, when ``nm`` is unavailable
+          this stays True so the absence of a tool doesn't pretend to
+          be a missing symbol.
     """
     project_name = os.path.basename(generated_project_path)
     log_path = os.path.join(self.work_dirs.run_logs, f'{project_name}-build.log')
-    
+
     # Build the target
     build_succeeded = self.builder_runner.build_target_local(
         project_name,
         log_path,
         sanitizer='address'
     )
-    
+
     # Read build log
     build_log = ""
     if os.path.exists(log_path):
       with open(log_path, 'r') as f:
         build_log = f.read()
-    
+
     # Check if binary exists
     outdir = builder_runner.get_build_artifact_dir(project_name, 'out')
     target_binary = os.path.join(outdir, self.benchmark.target_name)
     binary_exists = os.path.exists(target_binary)
-    overall_success = build_succeeded and binary_exists
+
+    # Symbol-table check: confirm LLVMFuzzerTestOneInput is *defined* in
+    # the binary (not just referenced). Catches link-time silent failures
+    # where the fuzzer entry point was treated as undefined-weak and the
+    # binary still produced — running it would do nothing useful.
+    is_function_referenced = True
+    if binary_exists:
+      is_function_referenced = _check_libfuzzer_entry_symbol(target_binary)
+
+    overall_success = build_succeeded and binary_exists and is_function_referenced
 
     # Parse errors from log whenever the overall build did not produce a
     # binary — covers (a) builder_runner returning False, and (b) the case
@@ -220,11 +283,23 @@ class Evaluator:
               f'Build did not produce a binary at {target_binary}; '
               f'build log was empty.')
 
+      # Surface the symbol-table failure mode explicitly so triage can
+      # classify it instead of dropping it into OTHER.
+      if binary_exists and not is_function_referenced:
+        errors.append(
+            f'Built binary {target_binary} does not define '
+            f'LLVMFuzzerTestOneInput as a global text symbol. The fuzz '
+            f'entry point was likely satisfied by a weak/undefined '
+            f'reference at link time. Verify the prototyper emitted a '
+            f'full LLVMFuzzerTestOneInput body and that no header guards '
+            f'are #ifdef-ing it out.')
+
     return {
         'success': overall_success,
         'errors': errors,
         'log': build_log,
-        'binary_exists': binary_exists
+        'binary_exists': binary_exists,
+        'is_function_referenced': is_function_referenced,
     }
 
   @staticmethod

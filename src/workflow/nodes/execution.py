@@ -25,19 +25,18 @@ def validate_target_api_calls(
     fuzz_target_source: str,
     context: Dict[str, Any],
     language: str = "c++",
-    cgprocessor_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Validate that the fuzz target actually calls the expected target APIs.
 
-    Uses UnifiedCodeValidator with PromeFuzz's CGProcessor (Clang AST-based)
-    for accurate validation, with fallback to naive string matching.
+    Uses UnifiedCodeValidator (libclang FunctionBodyWalker post-2026-05
+    V1-refactor) to check whether the driver's body actually references
+    the target API sequence.
 
     Args:
         fuzz_target_source: Source code of the fuzz target
         context: FuzzingContext dict containing api_sequences and header_info
         language: Target language ("c" or "c++")
-        cgprocessor_path: Optional path to CGProcessor binary
 
     Returns:
         Dict with validation results
@@ -83,11 +82,10 @@ def validate_target_api_calls(
     if "include_dirs" in header_info:
         include_paths.extend(header_info["include_dirs"])
 
-    # Use UnifiedCodeValidator
-    from pathlib import Path
-    validator = UnifiedCodeValidator(
-        cgprocessor_path=Path(cgprocessor_path) if cgprocessor_path else None
-    )
+    # Use UnifiedCodeValidator (CGProcessor pass-through removed in
+    # 2026-05 workflow refactor — the validator's cgprocessor_path
+    # argument has been a no-op since the V1 libclang-Python rewrite).
+    validator = UnifiedCodeValidator()
 
     result = validator.validate(
         code=fuzz_target_source,
@@ -330,28 +328,40 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     coverage_percent = 0.0
     coverage_diff = 0.0
     
-    # 🚨 STUB DETECTION: Check if fuzzer is only testing stub code
+    # 🚨 STUB DETECTION: Check if fuzzer is only testing stub code.
+    # Pre-2026-05 this returned ``compile_success=False`` to force the
+    # fixer loop, conflating "compilation failed" with "binary built but
+    # exercising trivial stubs". Now we set a dedicated ``is_stub_binary``
+    # flag and let the supervisor route to the prototyper for genuine
+    # regeneration instead of the fixer's incremental patches.
     MINIMUM_PCS_THRESHOLD = 10
     if run_result.total_pcs and run_result.total_pcs < MINIMUM_PCS_THRESHOLD:
         logger.warning(
             f'⚠️  Suspiciously low PC count ({run_result.total_pcs}), '
-            f'fuzzer may be testing stub code only. Marking as compilation failure.',
+            f'fuzzer appears to be exercising stub code only. Routing '
+            f'to prototyper for regeneration.',
             trial=trial
         )
-        # Return as compilation failure to trigger regeneration
         return {
-            "compile_success": False,
-            "build_errors": [
-                f"Stub code detected: total_pcs={run_result.total_pcs} < {MINIMUM_PCS_THRESHOLD}. "
-                f"The fuzzer appears to be testing fake/stub implementations instead of real project code. "
-                f"This usually happens when headers cannot be found and stub classes are generated as fallback. "
-                f"Please ensure correct header paths are used and avoid generating stub implementations."
-            ],
+            "is_stub_binary": True,
             "run_success": False,
+            "run_error": (
+                f"Stub code detected: total_pcs={run_result.total_pcs} "
+                f"< {MINIMUM_PCS_THRESHOLD}. The fuzzer was built and "
+                f"executed but the binary appears to exercise only "
+                f"fake/stub implementations instead of real project "
+                f"code. Likely cause: header paths could not resolve and "
+                f"the prototyper emitted stub class fallbacks. The "
+                f"prototyper will regenerate from scratch."
+            ),
             "messages": [{
                 "role": "assistant",
-                "content": f"Detected stub-only fuzzer (total_pcs={run_result.total_pcs}), requesting regeneration"
-            }]
+                "content": (
+                    f"Detected stub-only fuzzer "
+                    f"(total_pcs={run_result.total_pcs}); requesting "
+                    f"prototyper regeneration."
+                ),
+            }],
         }
     
     if run_result.total_pcs:
@@ -388,7 +398,14 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         except Exception as e:
             logger.warning(f'Failed to read run log from {run_result.log_path}: {e}', trial=trial)
     
-    # Extract crash information if any
+    # Extract crash information if any.
+    # TODO(2026-05 workflow review): error_message and stack_trace both
+    # populated from run_result.crash_info; downstream consumers see
+    # identical text in both fields. RunResult doesn't expose a
+    # dedicated stacktrace yet — either the run_result schema needs a
+    # `stacktrace` field carved out of the libFuzzer stderr, or one of
+    # these state keys should be dropped. Tracked in
+    # docs/workflow_refactor_2026_05.md §2.
     crash_info = {}
     if run_result.crashes:
         crash_info = {
@@ -566,7 +583,12 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
         "build_errors": build_result.get("errors", []),
         "compile_log": build_result.get("log", ""),
         "binary_exists": build_result.get("binary_exists", False),
-        "is_function_referenced": True,  # Assume function is referenced; real check happens during execution
+        # Real nm-based symbol check now happens inside evaluator.build_only
+        # (post-2026-05 workflow refactor). False here means the binary
+        # exists but ``LLVMFuzzerTestOneInput`` is not defined as a
+        # callable global symbol — typically a link-time silent failure.
+        "is_function_referenced":
+            build_result.get("is_function_referenced", True),
         "messages": [{
             "role": "assistant",
             "content": f"Build {'successful' if compile_success else 'failed'}"

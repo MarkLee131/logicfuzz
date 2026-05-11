@@ -282,7 +282,6 @@ def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
       final_state = workflow.run(
           benchmark=benchmark,
           trial=trial,
-          workflow_type='full'
       )
       workflow_end_time = time.time()
       workflow_duration = workflow_end_time - workflow_start_time

@@ -41,6 +41,12 @@ class FuzzingWorkflowState(TypedDict):
     compile_log: NotRequired[str]
     binary_exists: NotRequired[bool]
     is_function_referenced: NotRequired[bool]
+    # Set by execution_node when post-run total_pcs falls below the stub
+    # threshold — the binary was built and executed but exercised only
+    # trivial stub code. Routed by the supervisor to the prototyper for
+    # regeneration; distinct from compile_success which stays strictly
+    # about compilation. See 2026-05 workflow refactor.
+    is_stub_binary: NotRequired[bool]
 
     validation_error: NotRequired[str]  # Validation error message
     validation_failure_count: NotRequired[int]  # Number of validation failures
@@ -222,27 +228,6 @@ def create_initial_state(
         # Session memory toggle
         use_session_memory=use_session_memory,
     )
-
-
-def is_terminal_state(state: FuzzingWorkflowState) -> bool:
-    """Check if the workflow has reached a terminal state."""
-
-    # Check termination conditions
-    if state.get("termination_reason"):
-        return True
-
-    # Check maximum iterations
-    current_iter = state.get("current_iteration", 0)
-    max_iter = state.get("max_iterations", 5)
-    if current_iter >= max_iter:
-        return True
-
-    # Check if we have a successful result
-    if (state.get("compile_success") and state.get("coverage_results")
-            and state.get("coverage_results", {}).get("coverage", 0) > 0.8):
-        return True
-
-    return False
 
 
 def update_token_usage(state: FuzzingWorkflowState, agent_name: str,

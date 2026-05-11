@@ -4,8 +4,7 @@ Adapter layer for migrating original agents to LangGraph.
 This module provides the compatibility layer between LangGraph state management
 and the original agent system's Result objects.
 """
-import argparse
-from typing import Dict, Any, List, Optional
+from typing import Any, List, Optional
 
 from experiment.workdir import WorkDirs
 from experiment.benchmark import Benchmark
@@ -69,24 +68,25 @@ class StateAdapter:
                 state)
             result_history.append(build_result)
 
-        # Add RunResult if execution information exists
-        # 🔧 CRITICAL FIX: If we have execution results, the build MUST have succeeded
-        # Otherwise we wouldn't have cov_pcs/total_pcs data
+        # Add RunResult if execution information exists.
+        #
+        # Pre-2026-05 workflow refactor: this block included a
+        # ``compile_success_final = True if workflow_phase == optimization
+        # or total_pcs > 0`` patch. That was a band-aid for the stub
+        # detector in execution_node, which used to write
+        # ``compile_success=False`` for binaries that built fine but
+        # exercised only stub code. The refactor moved stub-detection to
+        # a dedicated ``is_stub_binary`` flag, so the AD1 patch is no
+        # longer needed — ``compile_success`` now reads cleanly from
+        # state.
         if state.get("run_success") is not None:
-            # If we reached execution phase (optimization), compilation must have succeeded
-            # Override compile_success if we have actual coverage data
-            compile_success_final = state.get("compile_success", False)
-            if state.get("workflow_phase") == "optimization" or state.get(
-                    "total_pcs", 0) > 0:
-                compile_success_final = True
-
             run_result = RunResult(
                 benchmark=benchmark,
                 trial=trial,
                 work_dirs=work_dirs,
                 fuzz_target_source=state.get("fuzz_target_source", ""),
                 build_script_source=state.get("build_script_source", ""),
-                compiles=compile_success_final,
+                compiles=state.get("compile_success", False),
                 run_error=state.get("run_error", ""),
                 run_log=state.get("run_log", ""),
                 artifact_path=state.get("artifact_path", ""),
@@ -195,27 +195,8 @@ class StateAdapter:
             chat_history={})
 
 
-class ConfigAdapter:
-    """
-    Adapter for managing configuration objects needed by original agents.
-
-    This handles the conversion between LangGraph's config system and
-    the original agents' parameter expectations.
-    """
-
-    @staticmethod
-    def create_config(model_name: str, args: argparse.Namespace,
-                      **kwargs) -> Dict[str, Any]:
-        """
-        Create a configuration dictionary for LangGraph nodes.
-
-        Args:
-            model_name: Name of the LLM model (e.g., "gpt-4o", "deepseek-chat")
-            args: Command line arguments
-            **kwargs: Additional configuration parameters
-
-        Returns:
-            Configuration dictionary for LangGraph
-        """
-        config = {"model_name": model_name, "args": args, **kwargs}
-        return config
+# ``ConfigAdapter`` lived here pre-2026-05 workflow refactor. Its only
+# call site assigned its return value to ``FuzzingWorkflow.config``
+# without ever reading it again; the actual LangGraph config dict is
+# built inline in ``FuzzingWorkflow.run`` at the ``invoke()`` site.
+# Removed.
