@@ -258,6 +258,44 @@ Comprehender-A: 9 APIs resolved from doxygen (LLM saved on these)
 The doxygen-priors path (added by T1) saved 9 LLM calls. See
 `docs/knowledge_t1_2026_05.md` §3 for the per-hypothesis breakdown.
 
+### c-ares run1 (2026-05-11) addendum
+
+**Q2 (Comprehender-B strength gate) — first empirical validation
+in production.**
+
+```
+Comprehender-B prefilter: prefilter_VALID=8, LLM_calls=2
+✅ Comprehender-B: 10 sequences judged (2 INVALID, 0 SUBOPTIMAL)
+```
+
+c-ares automaton has 24 merged states (vs cjson's 2). The strength
+gate `AutomatonAcceptanceGuard.is_strong()` evidently returned True
+on c-ares (sufficient evidence to trust the acceptance scores), so
+the prefilter ran and **shortcut 8 of 10 sequences** to VALID
+without LLM evaluation. Two sequences fell through to LLM and were
+classified INVALID.
+
+Comparison to cjson (`prefilter_VALID=0, LLM_calls=10`): same gate
+correctly returned **False** on cjson's 2-state automaton (too
+weak to trust), letting all sequences through to LLM. The gate's
+calibration appears correct: trust the prefilter when automaton is
+rich enough, fall back to LLM when it isn't.
+
+**LLM call savings on Comprehender-B**: cjson 0% saved (10/10 LLM),
+c-ares 80% saved (2/10 LLM). Q2 fix is contributing meaningful cost
+reduction on projects with substantive test corpora.
+
+### CL2 / CL5 / C2 / C4 / C5 on c-ares
+
+  - CL2/CL5: closed-loop still off in c-ares run1 (no
+    `--closed-loop`). Same as cjson.
+  - C2: no `unparsable response` warnings on c-ares.
+  - C4: c-ares `purpose.txt` cached with real LLM output, not the
+    generic fallback. Cluster C4 fix path not exercised in negative
+    direction (LLM didn't return empty).
+  - C5: Comprehender-A reported 20/20 APIs annotated; no
+    signature-fallback warnings.
+
 After the 17-benchmark dynamic run:
 
 ### CL2: trajectory JSON shape

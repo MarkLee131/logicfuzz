@@ -190,6 +190,41 @@ visibility fix is working.
 Not exercised on cjson (single-handle library; no multi-handle
 sequences in the L4 pool to graft).
 
+### c-ares run1 (2026-05-11) addendum — calibration is universal
+
+c-ares produced a **24-state** merged automaton (vs cjson's 2) with
+**58 observed APIs**. EDSM: `251 → 24 states (oracle yes=0, no=0,
+?=6303)` — same evidence-only mode, larger trace base. Yet:
+
+```
+⚠️ Skeleton synthesis attrition on 10 sequences:
+  automaton_pruned=10 (acceptance_score < 0.6), z3_rejected=0, emitted=0
+```
+
+**Same 10/10 prune rate as cjson.** This is the strong evidence the
+calibration finding needs: the 0.6 threshold is not a small-automaton
+artifact. Even a 24-state automaton with 58 observed APIs produces
+acceptance scores too low to clear 0.6 on L4-ranked candidates.
+
+Hypothesis refinement: the acceptance_score is likely close to
+`fraction_of_apis_in_observed_set / sequence_length`, which for a
+typical 4-5 step L4 candidate where 2-3 APIs are off-protocol
+gives scores in the 0.4-0.6 range. The threshold needs to drop to
+~0.3-0.4 to admit useful candidates on real benchmarks.
+
+**Recommendation (unchanged from cjson finding):** scale threshold
+by automaton strength OR drop the default from 0.6 to ~0.35. A
+follow-up commit should add a `--phase-h-threshold` CLI knob so
+operators can tune per-bench without recompiling.
+
+### Cluster A (EDSM oracle log visibility) — confirmed on c-ares too
+
+c-ares logged `EDSM: 251 → 24 states (oracle yes=0, no=0, ?=6303)`
+— cluster A's visibility fix produces consistent output across
+benchmarks. The `?=N` field grows with trace count and is the
+strongest signal that the oracle is off (no positive/negative
+votes); useful telemetry.
+
 After the 17-benchmark dynamic run, populate.
 
 ### EDSM oracle warning rate

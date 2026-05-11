@@ -202,6 +202,26 @@ Need a benchmark where ≥1 skeleton survives Phase H. Candidates:
 c-ares (richer tests/, larger automaton) or libxml2 (heavyweight,
 many init/destroy pairs).
 
+### c-ares run1 (2026-05-11) addendum — synthesis cluster still unreachable
+
+c-ares ran with 24-state automaton (vs cjson 2), confirmed via the
+new attrition telemetry:
+```
+⚠️ Skeleton synthesis attrition on 10 sequences:
+  automaton_pruned=10 (acceptance_score < 0.6), z3_rejected=0, emitted=0
+```
+
+**Same 10/10 pruned outcome as cjson — Z3 correctness fixes still
+not validated empirically.** The richer automaton didn't help Phase H
+admit any candidates. See `docs/automaton_refactor_2026_05.md` §3 for
+the calibration analysis.
+
+Action needed before synthesis cluster A/C can be empirically
+validated: either drop the Phase H default threshold, or pick a
+benchmark with an unusually rich test suite where 0.6 is achievable.
+libxml2 might do; libucl probably won't.
+
+
 This section is the placeholder for post-refactor measurements. After
 running the 17-benchmark suite end-to-end with the refactor in place,
 populate the table below and note any per-project regressions.

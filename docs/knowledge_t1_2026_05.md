@@ -226,6 +226,50 @@ plumbing is correct end-to-end and produces measurable content
 quality lift (driver memory-management rules now grounded in
 doxygen, not LLM-fabricated).
 
+### c-ares run1 (2026-05-11) addendum — doc-sparse counterpoint
+
+| Hypothesis | Predicted | c-ares actual | Cross-bench verdict |
+|---|---|---|---|
+| M2.1 README hit rate | ≥70% bench-wide | 1/1 (332 chars, denser than cjson) | **2/2 = 100%** so far |
+| M2.2 Doxygen API coverage | 10-80% | **0/20 (0%)** | cjson 51.5% + c-ares 0% → median 25.75%, **below 30% T3 trigger** |
+| M2.3 Comprehender-A LLM reduction | 30-50% on doc-rich | **0 APIs saved** (no docstrings to short-circuit) | 27% + 0% = 13.5% avg; doc-dependent as predicted |
+| M2.4 Trial-1 compile success | +5% absolute | 1/1, build success, 0 errors | 2/2 (cjson + c-ares) |
+| M2.5 Crash quality | Fewer false-positive memory crashes | 0 crashes, clean run | n/a |
+
+### Decision gate trigger: T3 RAG path is now indicated
+
+Per §3 M2.6 decision tree with 2 benchmarks:
+  - **Skip to T3 RAG if M2.1 < 50% AND/OR M2.2 median < 30%** ← **TRIGGERED**
+
+Doxygen median across cjson + c-ares is 25.75%, below the 30%
+threshold. The branch (b) escalation from §6 of
+`docs/knowledge_layer_design_proposal_2026_05.md` becomes the
+indicated next step IF the third benchmark (libucl) confirms the
+pattern.
+
+Alternative: §10A's operator-prepared documentation pages (added to
+the proposal after the cjson run as a followup direction) may be
+the right answer for c-ares-shaped projects where the upstream simply
+doesn't carry per-API documentation. RAG over README + tests/ might
+help; manual curation might help more. Decision deferred until
+libucl run is in.
+
+### Comprehender-B strength-gate validation (cross-doc; see comprehender_closedloop §4)
+
+c-ares Comprehender-B prefilter: **`prefilter_VALID=8, LLM_calls=2`**
+(cjson was 0/10). The strength gate added in cluster Q2 of the
+2026-05 comprehender refactor is now empirically validated as
+saving LLM cost on richer-automaton projects (c-ares: 24 merged
+states). On the weak-automaton cjson, the gate correctly recognized
+the automaton was too weak and let all sequences through to LLM.
+
+### Phase H threshold calibration (cross-doc; see automaton_refactor §3 / synthesis_refactor §3)
+
+c-ares: 10/10 candidates automaton-pruned (acceptance_score < 0.6),
+**same outcome as cjson**. cjson had 2 merged states, c-ares has 24
+— yet both fail to clear 0.6. This is **strong evidence the 0.6
+threshold is universally too strict**, not a small-automaton artifact.
+
 ### Original hypothesis section — kept for future runs
 
 ### M2.1: README purpose hit rate

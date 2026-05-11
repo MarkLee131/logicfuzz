@@ -290,6 +290,69 @@ reaching the cjson header on the parse path.
 No `__builtin_*` / common-libc symbols were flagged as undefined in
 run4; both whitelist additions appear to be doing their job.
 
+### Fix landed (2026-05-11): AST+naive union
+
+Root cause analysis (via direct libclang reproduction): TWO bugs.
+
+1. **Empty include_paths.** `execution.py`'s `validate_target_api_calls`
+   built include_paths from `os.path.dirname(header)` over
+   `header_info['project_headers']`. Those entries are bare basenames
+   like `cJSON.h` → dirname is `""` → include_paths always `[]`.
+   libclang parsed the driver without the project header on `-I`,
+   hit a fatal `'stddef.h' file not found` diagnostic, and bailed
+   on most of the function body. Only 3-9 CALL_EXPRs survived (the
+   resolvable system calls). Fix: `data_context` Step 7 now writes
+   `extract_metadata['local']['source_dir']` into
+   `header_info['include_dirs']`; execution.py prioritizes that.
+
+2. **libclang AST quirk on init-side calls.** Even with the header
+   visible, function calls on the RHS of variable declarations
+   (`struct cJSON *json = cJSON_ParseWithOpts(...)`) **do not
+   emit `CALL_EXPR` cursors at all**. Same pattern for
+   `char *json_data = (char *)malloc(...)`. Verified by direct
+   probe: of 11 actual calls in the cjson driver, libclang found
+   9 (missed both init-side calls). Fix: `_check_target_apis`
+   now runs both AST and naive regex checks and takes the
+   **union**. Naive lexical match (on comment-stripped code)
+   catches whatever libclang misses.
+
+Plus a token-based fallback in `FunctionBodyWalker._try_extract_callee`
+for the case where libclang DOES emit a CALL_EXPR but leaves
+`cursor.spelling` and `child.spelling` empty: walk
+`cursor.get_tokens()`, return the first identifier-shaped token
+that isn't a reserved C/C++ keyword. Belt-and-suspenders.
+
+**Verified on cjson trial 01**: union returns 100% coverage
+(3/3 target APIs called) both with and without include_paths.
+Original 0/3 false negative is gone.
+
+### c-ares run1 (2026-05-11) addendum — fix-effect validation
+
+```
+Target API check (AST+naive): 0/2 APIs called (0.0%)
+Target API validation: 0.0% coverage, 2 APIs missing:
+  ['ares_create_query', 'ares_free_string']
+```
+
+The c-ares 0/2 looks like the cjson false-negative resurfaced — but
+**it's actually correct now**. The generated driver calls
+`ares_parse_a_reply`, `ares_parse_txt_reply`, `ares_parse_soa_reply`,
+etc. — not `ares_create_query` or `ares_free_string`. The
+Prototyper deviated from the suggested target sequence (a
+Prototyper behaviour issue, not a validator issue).
+
+So the AST+naive union fix is working correctly on both
+benchmarks: cjson now reports the correct 100%, c-ares correctly
+reports 0% accurate (and the Prototyper's deviation is the real
+issue to investigate, separate from validator).
+
+### V1 method-tag change
+
+The new log line reads `Target API check (AST+naive): ...` instead
+of just `(AST)`. Trial logs will show this consistently; if a single
+check (AST-only OR naive-only) ever finds the calls when the other
+doesn't, the tag still surfaces which contributed.
+
 ### V1: CGProcessor availability
 
 Hypothesis: setting `LOGICFUZZ_CGPROCESSOR` to a real path
