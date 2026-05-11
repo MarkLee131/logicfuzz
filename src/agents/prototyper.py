@@ -218,8 +218,98 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                 f'{len(hole_comments)} HOLE comments remain: {hole_comments[:2]}',
                 trial=self.trial)
 
+        # Post-merge fixup #1: resolve the __MIN_SIZE__ placeholder using the
+        # actual data[N] indices that the LLM (or HoleFiller) wrote.
+        result = self._fixup_min_size_guard(result)
+
+        # Post-merge fixup #2: structural sanity check on the merged driver.
+        self._validate_filled_driver(result)
+
         logger.info(f'Hole filling complete: {filled_count} holes filled', trial=self.trial)
         return result
+
+    def _fixup_min_size_guard(self, code: str) -> str:
+        """Resolve the __MIN_SIZE__ placeholder emitted by SkeletonRenderer.
+
+        Scans the merged driver for `data[N]` references with a literal N,
+        and rewrites `if (size < __MIN_SIZE__)` to `if (size < max(N)+1)`.
+
+        Why this lives here, not in the skeleton:
+          The skeleton is rendered before holes are filled, so it does not
+          know how many fuzz-input bytes the final driver will read. Hardcoding
+          `size < 1` (the pre-fix behavior) caused immediate heap-buffer-overflow
+          when drivers reached data[0..N].
+
+        Fallback policy:
+          - If __MIN_SIZE__ is missing (e.g., LLM produced a full driver via
+            complete-code mode and skipped the skeleton template), this is a no-op.
+          - If __MIN_SIZE__ is present but no literal `data[N]` is found, we
+            default to 1 to preserve old behavior (no regression on drivers
+            that genuinely don't read from data[]).
+          - If `data[i]` (variable index) is seen alongside literal indices,
+            we still use literal max — we cannot statically bound non-constant
+            indices, but the LLM is expected to range-check those itself.
+        """
+        import re
+
+        if '__MIN_SIZE__' not in code:
+            return code
+
+        # Match data[<digits>], allowing whitespace.
+        indices = [int(m) for m in re.findall(r'\bdata\s*\[\s*(\d+)\s*\]', code)]
+        min_size = max(indices) + 1 if indices else 1
+
+        # Warn (don't fail) when non-constant indices appear without a
+        # surrounding bounds check — purely informational, the driver may still
+        # be safe if it has its own guards.
+        non_const = re.findall(r'\bdata\s*\[\s*([A-Za-z_]\w*)\s*\]', code)
+        if non_const:
+            logger.warning(
+                f'Driver uses non-constant data[] indices ({sorted(set(non_const))[:5]}); '
+                f'static min-size guard set to {min_size} but runtime bounds remain '
+                f"the LLM's responsibility",
+                trial=self.trial)
+
+        new_code = code.replace('__MIN_SIZE__', str(min_size))
+        logger.info(
+            f'Resolved __MIN_SIZE__ -> {min_size} '
+            f'(max data[] index = {max(indices) if indices else "none"})',
+            trial=self.trial)
+        return new_code
+
+    def _validate_filled_driver(self, code: str) -> None:
+        """Sanity-check the merged driver. Logs warnings only — never raises.
+
+        We intentionally don't fail here: downstream compile/run will reject
+        broken drivers anyway, and the supervisor decides whether to regenerate.
+        The point is to make pipeline failures visible instead of silent.
+        """
+        import re
+
+        problems = []
+
+        if 'LLVMFuzzerTestOneInput' not in code:
+            problems.append('missing LLVMFuzzerTestOneInput entry point')
+
+        # Any leftover __MIN_SIZE__ would compile-fail loudly; flag it now.
+        if '__MIN_SIZE__' in code:
+            problems.append('__MIN_SIZE__ placeholder still present after fixup')
+
+        # Any leftover skeleton hole placeholders.
+        leftover_pattern = (
+            r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|'
+            r'CLEANUP|ARRLEN|ERRHANDLE|COMPLEX_HOLE)_[\w]+__'
+        )
+        leftover_holes = re.findall(leftover_pattern, code)
+        if leftover_holes:
+            problems.append(
+                f'{len(leftover_holes)} unfilled hole(s): {leftover_holes[:3]}'
+            )
+
+        if problems:
+            logger.warning(
+                f'Driver validation issues: {"; ".join(problems)}',
+                trial=self.trial)
 
     # =========================================================================
     # Main Execution

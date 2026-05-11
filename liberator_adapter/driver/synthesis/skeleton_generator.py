@@ -968,8 +968,13 @@ class SkeletonRenderer:
         lines.append("")
         lines.append("int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {")
 
-        # 4. Minimum size check
-        lines.append("    if (size < 1) return 0;")
+        # 4. Minimum size check.
+        # Emit a placeholder; the actual minimum is resolved post-merge once we
+        # know which data[N] indices the LLM/HoleFiller actually used.
+        # (See _merge_holes_into_skeleton._fixup_min_size_guard in prototyper.)
+        # The previous literal `if (size < 1)` caused immediate heap-buffer-
+        # overflow on any driver that read past data[0].
+        lines.append("    if (size < __MIN_SIZE__) return 0;")
         lines.append("")
 
         # 5. Variable declarations
