@@ -1,36 +1,48 @@
 """Phase G: closed-loop CBFactory feedback driver.
 
-Runs N feedback iterations on top of an initial driver-synthesis pass. Each
-iteration:
+Runs N feedback iterations on top of an initial driver-synthesis pass.
+Each iteration:
 
 1. Materializes "evidence sequences" from the prior round's drivers. By
-   default we take every driver's ``api_sequence`` as a positive trace —
+   default every driver's ``api_sequence`` contributes a positive trace —
    the driver was emitted by CBFactory under the type / lifecycle /
    state-machine / Z3-acceptance constraints, so it represents a working
-   protocol the project's static analysis already endorsed.
-   When preflight is wired (``preflight_runner``), only drivers that pass
-   a libFuzzer smoke test contribute traces.
+   protocol the project's static analysis already endorsed. When
+   ``preflight_runner`` is wired, only drivers passing a libFuzzer smoke
+   test contribute traces.
 2. Feeds the evidence into the project automaton via
    :py:meth:`AutomatonArtifact.update_with_traces` (incremental EDSM).
-3. Re-runs L4 ``select_top_k_sequences`` with the updated automaton — the
-   acceptance score, sample paths, creator-grafts, and Phase E post-parse
-   extensions all read the grown PTA.
-4. Re-runs CBFactory synthesis. Phase H ``AutomatonAcceptanceGuard``
-   tightens automatically as ``observed_apis`` and ``n_merged_states``
-   cross strength thresholds.
-5. Records per-iteration deltas (Δmerged_states, Δtraces, Δcoverage when
-   coverage data is available, n_drivers_added).
-6. Early-stops when ``Δmerged_states ≤ early_stop_delta`` for two
+3. Calls the caller-supplied ``resynthesize_fn`` to produce a fresh
+   driver batch under the updated automaton. The synthesis path
+   currently consumes the artifact via CBFactory's Phase H
+   ``AutomatonAcceptanceGuard`` (hard-pruning candidates below the
+   acceptance threshold). Other L4 signals the artifact carries —
+   ``acceptance_score`` as secondary sort axis, ``sample_accepting_paths``
+   pool injection, ``graft_creator_prefix``, ``post_parse_extensions`` —
+   are NOT re-applied here; doing so would make consecutive iters
+   produce identical deterministic top-K (no novelty → automaton
+   saturates instantly → defeats the multi-iter feedback design). The
+   random-walk path inside CBFactory provides the per-iter diversity
+   that keeps the automaton evolving. If a future refactor introduces a
+   "weighted random sample from L4 top-K + sample_paths injection"
+   strategy, the 4 signals can be re-applied without breaking the
+   diversity property — see ``docs/comprehender_closedloop_refactor_2026_05.md``
+   §2 for the open design question.
+4. Records per-iteration deltas (Δmerged_states, Δtraces, n_drivers
+   synthesized, automaton strength).
+5. Early-stops when ``|Δmerged_states| ≤ early_stop_delta`` for two
    consecutive iterations — the automaton has saturated.
 
-This is the runtime side of A2DG (automaton-augmented driver generation).
-The static side is :py:func:`learn_project_automaton` (one-shot from
-project tests). Together they form the design-doc Phase 3 closed loop.
+This is the runtime side of A2DG (automaton-augmented driver
+generation). The static side is :py:func:`learn_project_automaton`
+(one-shot from project tests). Together they form the design-doc
+Phase 3 closed loop.
 
 Reference:
 - Lang/Pearlmutter/Price 1998 §6 (incremental EDSM updates).
-- Khuller/Moss/Naor 1999 (budgeted max-coverage; the L4 selection
-  driving each iteration's K stays the same (1−1/e)-greedy).
+- Khuller/Moss/Naor 1999 (budgeted max-coverage; the (1−1/e)-greedy
+  used by L4 in the initial pass, not re-applied per-iter — see the
+  Step 3 note above).
 """
 from __future__ import annotations
 
@@ -53,7 +65,16 @@ PreflightRunner = Callable[
 
 @dataclass
 class IterationRecord:
-    """Per-iteration trajectory entry."""
+    """Per-iteration trajectory entry.
+
+    The earlier schema carried ``guard_pruned`` / ``guard_passed`` fields,
+    but the closed-loop has no handle to the production CBFactory's
+    ``Z3GuidedSynthesisController.automaton_guard`` (it's instantiated
+    per-CBFactory-call inside the caller's ``resynthesize_fn``). The
+    probe guard we created here was never fed candidates, so the metrics
+    were always 0. Dropped in the 2026-05 Comprehender+Closed-loop
+    review — better to omit the field than report a misleading constant.
+    """
 
     iteration: int
     n_evidence_traces: int
@@ -63,8 +84,6 @@ class IterationRecord:
     n_drivers_passed_preflight: int
     automaton_strong: bool
     guard_threshold: float
-    guard_pruned: int
-    guard_passed: int
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -76,8 +95,6 @@ class IterationRecord:
             "n_drivers_passed_preflight": self.n_drivers_passed_preflight,
             "automaton_strong": self.automaton_strong,
             "guard_threshold": round(self.guard_threshold, 4),
-            "guard_pruned": self.guard_pruned,
-            "guard_passed": self.guard_passed,
         }
 
 
@@ -238,11 +255,14 @@ def run_closed_loop(
             # Treat all synthesized drivers as "passed" when no preflight.
             n_passed_new = len(new_drivers)
 
-        # 5. Record metrics.
+        # 5. Record metrics. The guard probe gives us a *snapshot* of
+        # how the production guard would currently classify the
+        # artifact (strong / threshold); per-iteration prune/pass
+        # counts live inside the CBFactory the caller spawned, which we
+        # don't have a handle to. See IterationRecord docstring for the
+        # rationale behind dropping the unreachable counters.
         guard_strong = False
         guard_threshold = 0.0
-        guard_pruned = 0
-        guard_passed = 0
         try:
             from liberator_adapter.constraints.z3_guided_synthesis import (
                 AutomatonAcceptanceGuard,
@@ -264,8 +284,6 @@ def run_closed_loop(
             n_drivers_passed_preflight=n_passed_new,
             automaton_strong=guard_strong,
             guard_threshold=guard_threshold,
-            guard_pruned=guard_pruned,
-            guard_passed=guard_passed,
         )
         result.iterations.append(record)
         log.info(
@@ -275,6 +293,20 @@ def run_closed_loop(
             record.delta_merged_states, record.n_drivers_synthesized,
             record.n_drivers_passed_preflight, record.automaton_strong,
         )
+
+        # Per-iteration persist. The earlier code only persisted at the
+        # final return statement; an interrupted run lost the entire
+        # trajectory. Now we flush after every iteration so a long
+        # closed-loop can be partially recovered. 2026-05 review (CL5).
+        if persist_dir is not None:
+            try:
+                persist_dir.mkdir(parents=True, exist_ok=True)
+                import json as _json
+                (persist_dir / "closed_loop_trajectory.json").write_text(
+                    _json.dumps(result.to_dict(), indent=2),
+                )
+            except Exception as exc:
+                log.warning("[closed-loop iter %d] persist failed: %s", it, exc)
 
         # 6. Early-stop check.
         if abs(record.delta_merged_states) <= early_stop_delta:

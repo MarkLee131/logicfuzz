@@ -101,24 +101,75 @@ _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTAL
 
 
 def _extract_json_block(text: str) -> Optional[Any]:
-    """Pull a fenced JSON object/array out of an LLM response. Tolerant."""
+    """Pull a fenced JSON object/array out of an LLM response. Tolerant.
+
+    Fallback search (no markdown fence) uses **balanced bracket scanning**
+    rather than a regex. The 2026-05 review caught that the earlier
+    greedy ``re.search(r"\\{.*\\}")`` could span across multiple JSON
+    blocks, capturing arbitrary prose between them. Balanced scan stops
+    at the first complete object/array.
+    """
     if not text:
         return None
     m = _FENCED_JSON_RE.search(text)
     payload = m.group(1) if m else text.strip()
-    # If still wrapped in extra prose, find the outermost {...} or [...].
+    # If still wrapped in extra prose, find the first complete {...} or
+    # [...] via balanced bracket scanning (handles nested braces; the
+    # earlier ``re.search(r"\{.*\}", ..., DOTALL)`` would have captured
+    # everything from the first ``{`` to the LAST ``}`` in the text,
+    # which is wrong when multiple JSON blocks share the response).
     if not payload.lstrip().startswith(("{", "[")):
-        first_obj = re.search(r"\{.*\}", payload, re.DOTALL)
-        first_arr = re.search(r"\[.*\]", payload, re.DOTALL)
-        candidates = [c for c in (first_obj, first_arr) if c]
-        if not candidates:
+        payload = _first_balanced_json(payload)
+        if payload is None:
             return None
-        payload = min(candidates, key=lambda c: c.start()).group(0)
     try:
         return json.loads(payload)
     except json.JSONDecodeError as exc:
         logger.warning("LLM returned non-JSON: %s", exc)
         return None
+
+
+def _first_balanced_json(text: str) -> Optional[str]:
+    """Find the first complete JSON object or array via bracket counting.
+
+    Quote-aware so braces inside strings don't break the count. Returns
+    the substring spanning the first complete top-level ``{...}`` or
+    ``[...]``, or ``None`` if no balanced span exists.
+    """
+    n = len(text)
+    i = 0
+    while i < n:
+        ch = text[i]
+        if ch not in "{[":
+            i += 1
+            continue
+        opener = ch
+        closer = "}" if opener == "{" else "]"
+        depth = 0
+        j = i
+        in_str = False
+        escape = False
+        while j < n:
+            c = text[j]
+            if in_str:
+                if escape:
+                    escape = False
+                elif c == "\\":
+                    escape = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == opener:
+                depth += 1
+            elif c == closer:
+                depth -= 1
+                if depth == 0:
+                    return text[i:j + 1]
+            j += 1
+        # Unbalanced — give up
+        return None
+    return None
 
 
 def _format_signature(api: Dict[str, Any]) -> str:
@@ -185,6 +236,32 @@ def _deterministic_usage(api: Dict[str, Any],
     if pair:
         parts.append(pair + ".")
     return " ".join(parts) if parts else None
+
+
+def _automaton_is_strong(acceptance_fn: Any) -> bool:
+    """Best-effort strength check for the automaton behind ``acceptance_fn``.
+
+    ``acceptance_fn`` is typically ``AutomatonArtifact.acceptance_score``,
+    a bound method. We pull the artifact off the bound method and consult
+    ``AutomatonAcceptanceGuard`` for its strength verdict — same policy
+    the L4 ranker uses to decide whether to trust the automaton signal.
+
+    Defensive fallback: any failure (unbound function, missing artifact,
+    guard ctor exception) → return ``True`` so we DON'T silently disable
+    the prefilter for a callable we just can't introspect. The downstream
+    LLM call is the safety net.
+    """
+    try:
+        artifact = getattr(acceptance_fn, "__self__", None)
+        if artifact is None:
+            return True
+        from liberator_adapter.constraints.z3_guided_synthesis import (
+            AutomatonAcceptanceGuard,
+        )
+        guard = AutomatonAcceptanceGuard(artifact=artifact)
+        return guard.is_strong()
+    except Exception:
+        return True
 
 
 def _build_static_facts(condition_info: Dict[str, Any],
@@ -280,7 +357,12 @@ class Comprehender:
         )
         purpose = self._invoke(system, user).strip()
         if not purpose:
-            purpose = (
+            # LLM returned nothing (transient failure, rate limit, or
+            # provider down). Synthesize a generic fallback so callers
+            # still see *some* purpose, but DO NOT cache it — the next
+            # run will retry the LLM rather than reading the generic
+            # template forever. 2026-05 review (C4).
+            return (
                 f"{library_name}: a C/C++ library; usage inferred from API "
                 f"signatures and OSS-Fuzz harness patterns."
             )
@@ -357,10 +439,25 @@ class Comprehender:
             raw = self._invoke(system, user)
             parsed = _extract_json_block(raw)
             if not isinstance(parsed, dict):
+                # Batch parse failed (LLM error / malformed JSON / network).
+                # Previously this just `continue`d, leaving every API in
+                # the batch without a usage — Prototyper then saw
+                # "(no usage available)" for all of them and lost the
+                # static-fact signal we had cheaply. Now we synthesize a
+                # signature-only fallback per API so downstream agents
+                # at least see the API shape. 2026-05 review (C5).
                 logger.warning(
-                    "Comprehender-A: unparsable response for batch starting at %d",
-                    batch_start,
+                    "Comprehender-A: unparsable response for batch starting at %d; "
+                    "writing signature-only fallback for %d APIs",
+                    batch_start, len(batch),
                 )
+                for api in batch:
+                    name = api.get("function_name", "")
+                    if name and name not in out:
+                        out[name] = (
+                            f"signature: {_format_signature(api)}"
+                            " (usage detail unavailable; LLM call failed)"
+                        )
                 continue
             for api in batch:
                 name = api.get("function_name", "")
@@ -369,6 +466,14 @@ class Comprehender:
                 value = parsed.get(name)
                 if isinstance(value, str) and value.strip():
                     out[name] = value.strip()
+                elif name not in out:
+                    # LLM parsed but didn't return an entry for this API.
+                    # Signature-only fallback (same rationale as the
+                    # batch-fail branch above). 2026-05 review (C5).
+                    out[name] = (
+                        f"signature: {_format_signature(api)}"
+                        " (usage detail unavailable; LLM omitted this entry)"
+                    )
 
     # ---------------------------------------------------------------- B.sequence
     def comprehend_sequences(self,
@@ -424,7 +529,15 @@ class Comprehender:
             # automaton. Anything less than full acceptance defers to LLM —
             # the automaton's training corpus is inevitably incomplete and
             # an unobserved sequence is not the same as an invalid one.
-            if automaton_acceptance_fn is not None:
+            #
+            # Strength gate (2026-05 Comprehender+Closed-loop review, Q2):
+            # only trust the positive prefilter when the underlying automaton
+            # has accumulated enough evidence to be strong (matches the
+            # L4-side ``AutomatonAcceptanceGuard.is_strong()`` policy).
+            # Weak automatons can produce false-positive acc=1.0 on short
+            # sequences whose APIs happen to have been observed early.
+            if (automaton_acceptance_fn is not None
+                    and _automaton_is_strong(automaton_acceptance_fn)):
                 try:
                     acc = automaton_acceptance_fn(seq_list)
                 except Exception:
