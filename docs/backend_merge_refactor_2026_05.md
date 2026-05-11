@@ -205,9 +205,61 @@ each, well below the system tmp budget. Defer.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
 
-After the 17-benchmark dynamic run:
+**cjson run4 (2026-05-11) — LFBackendDriver did NOT run on this trial.**
+
+### Critical finding: LFBackendDriver was not invoked
+
+The §3 hypothesis was that the resurrected LFBackendDriver would emit
+`MIN_SEED_SIZE` macros etc. into trial outputs. **On cjson the driver
+never ran** because Phase H's `AutomatonAcceptanceGuard` pruned all 10
+L4 candidate sequences:
+
+```
+⚠️ Skeleton synthesis attrition on 10 sequences:
+  automaton_pruned=10 (acceptance_score < 0.6),
+  z3_rejected=0 (infeasible under type/lifecycle/provenance),
+  emitted=0
+```
+
+`skeleton_drivers=0` at Phase G gate. Trial 01's driver came from the
+Prototyper directly (LLM-from-scratch), not from a skeleton template.
+
+This is **not a LFBackendDriver bug** — the renderer is reachable when
+skeletons exist. It is **valid evidence that the Phase H threshold
+0.6 is too strict for cjson's 2-state automaton** (54 unique APIs
+observed but EDSM collapsed traces aggressively). Worth correlating
+with `docs/automaton_refactor_2026_05.md` §3 — the automaton
+acceptance signal calibration is the real issue here, not the
+backend renderer.
+
+### Indirect validation of A2 (call-site rewire)
+
+Step 10 `_generate_cbfactory_drivers` ran without the pre-fix silent
+fallback. The fact that `_synthesize_skeletons_per_sequence` even
+reached the per-sequence loop (and emitted the attrition log)
+confirms the call site reads the canonical
+`extract_metadata['local']['public_headers']` correctly. If the
+old `getattr(generator, 'public_headers_path', None) = None` bug
+were still in place, the surrounding `try/except` would have
+silently set `backend=None` and we'd see no attrition log.
+
+### A1 (cleanbuffer_emit GLOBAL), A3 (deterministic walk), A4
+(stmt_emit error), A5 (stub_functions list iteration), A6 (dead attrs),
+A7 (error wording)
+
+**All unreachable on cjson run4** because LFBackendDriver was not
+invoked. These fixes remain unvalidated empirically; they only show up
+when a benchmark produces skeletons.
+
+### MM1 (dict path exact stem)
+
+merge_drivers was not invoked in run4 (single trial; no merge stage
+ran). Validation pending a `--merge-drivers` or `--eval` profile run
+with multiple successful trials.
+
+### Original hypothesis section — kept for future runs
 
 ### A2: LFBackendDriver actually executing
 

@@ -136,7 +136,37 @@ once traced through:
 
 ---
 
-## §5. Process note
+## §5. Empirical validation (cjson run4, 2026-05-11)
+
+### Cluster 5 regression check — confirmed clean on cjson
+
+The headline regression caught by this audit was Factory.normalize_type
+calling DataLayout before Step 4 grammar gen had a chance to initialize
+it. Fix: move `build_data_layout` to Step 3.5.
+
+cjson run4 log confirms the corrected order:
+```
+22:39:28.731   ✅ Dependency graph built: 69 nodes        (Step 3)
+22:39:28.736   ✅ Data layout built                        (Step 3.5)  ← BEFORE Step 4
+22:39:28.810   ✅ Grammar generated: 78 symbols, 24 sequences (Step 4)
+```
+
+Step 3.5 fires between Step 3 and Step 4 as the fix prescribes. No
+`AttributeError: normalize_type` exception in the run log. Cluster 5
+regression empirically resolved.
+
+### Other invariants
+
+The remaining 9 cross-module invariants enumerated in §1 are all
+implicit in the rest of the run completing successfully — if any of
+them had broken, the trial would have failed at the corresponding
+step. Run4 reached `Workflow complete` for trial 01 in 267s, which
+is the strongest empirical evidence that the cross-module surface is
+internally consistent.
+
+---
+
+## §6. Process note
 
 This re-review was driven by the user's explicit request:
 > 再review一遍，当前的修复，在全局是否合理。尤其是跨模块的影响

@@ -170,7 +170,35 @@ empty-stub path now.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
+
+**cjson run4 (2026-05-11) — DriverEnhancer unreachable on this trial.**
+
+DriverEnhancer is the callback-stub source after HoleFiller deletion.
+Stubs are generated when CBFactory emits a skeleton with callback
+holes. On cjson run4 the automaton pruned all 10 candidates
+pre-skeleton (`emitted=0`), so:
+
+  - No skeleton flowed to LFBackendDriver
+  - No `emit_stub_functions` path was taken
+  - DriverEnhancer's signature-aware fallback (issue #1) was not invoked
+  - READER template (issue #2) was not invoked
+  - `enhance_context_get_function_pointer` removal (issue #3) has no
+    live-path effect either way
+
+### Negative evidence
+
+No `Default callback stub` / `Enhanced callback stub` log markers in
+run4 — consistent with the no-skeleton outcome. No exceptions either.
+
+### Required for DriverEnhancer validation
+
+Need a benchmark where:
+1. Phase H accepts ≥1 skeleton (loosen automaton threshold or use a
+   project with denser tests/)
+2. The skeleton has callbacks (API takes a comparator/visitor func ptr)
+
+c-ares with `ares_query` callbacks would be a stronger test.
 
 After the 17-benchmark dynamic run:
 

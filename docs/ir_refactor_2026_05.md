@@ -169,9 +169,38 @@ ordering is preserved. Flag for future tidy-up.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
 
-After the 17-benchmark dynamic run:
+**cjson run4 (2026-05-11) — all IR fixes unreachable on this trial.**
+
+LFBackendDriver did not run (Phase H pruned all 10 candidates;
+`skeleton_drivers=0`). The IR is only exercised by LFBackendDriver,
+so IR1 (Buffer IPython embed), IR2 (broken `__hash__`), IR3
+(`Function.get_type`), IR4 (`set_pos_arg_var` off-by-one), IR5
+(dead Address check), IR6 (KeyError args), IR7 (dead `last_stmt`),
+IR8 (Address token) are all **untested empirically on cjson**.
+
+### Negative evidence (no failure modes surfaced)
+
+run4 log shows **zero** occurrences of:
+  - `AttributeError: 'BuffDecl' object has no attribute 'token'` (or
+    any of the 9 patched classes)
+  - `AttributeError: 'Function' object has no attribute 'buffer'`
+  - `ImportError: No module named IPython`
+  - `IndexError` in any `set_pos_arg_var`-style flow
+
+This is consistent with LFBackendDriver not running (none of these
+paths reachable) AND consistent with the fixes being correct. Cannot
+distinguish from the cjson data alone.
+
+### Required for IR validation
+
+Need a benchmark where Phase H accepts at least 1 skeleton — likely a
+benchmark with stronger automaton signal (more diverse trace
+language). c-ares or libxml2 with rich `tests/` directories should
+produce skeletons.
+
+### Original hypothesis section — kept for future runs
 
 ### IR1: clean `Buffer.get_allocated_size` failure
 

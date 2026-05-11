@@ -923,13 +923,39 @@ class FuzzingContext:
                                 public_header_names = [
                                     ln.strip() for ln in fh if ln.strip()
                                 ]
-                        headers_dir = getattr(generator, 'headers_dir', None)
+                        # libclang doxygen walk needs a HOST-side directory
+                        # containing the headers. Probe in priority order:
+                        # explicit ``headers_dir`` from metadata → the host
+                        # source dir fetched from the OSS-Fuzz image →
+                        # ``generator.headers_dir`` attribute (rare/none).
+                        # ``generator.headers_dir`` is never set as an
+                        # instance attribute on ProjectDriverGenerator —
+                        # the var lives only as a local inside
+                        # ``_ensure_sources`` — so the getattr fallback is
+                        # primarily for documentation, not production.
+                        headers_dir = (
+                            local_meta.get('headers_dir')
+                            or local_meta.get('source_dir')
+                            or getattr(generator, 'headers_dir', None)
+                        )
                         if headers_dir and public_header_names and unique_apis_in_sequences:
                             from src.knowledge.project_docs import extract_doxygen_comments
                             api_docstrings = extract_doxygen_comments(
                                 headers_dir=Path(headers_dir),
                                 public_headers=public_header_names,
                                 api_names=unique_apis_in_sequences,
+                            )
+                        else:
+                            # Surface the skip path so silent empty results
+                            # in docs_priors.json don't look like "doxygen
+                            # ran and found nothing" when it didn't run at all.
+                            log.warning(
+                                'Doxygen extraction skipped: headers_dir=%s, '
+                                'public_header_names=%d entries, '
+                                'unique_apis_in_sequences=%d',
+                                headers_dir if headers_dir else 'None',
+                                len(public_header_names),
+                                len(unique_apis_in_sequences),
                             )
                     except Exception as exc:
                         log.warning(

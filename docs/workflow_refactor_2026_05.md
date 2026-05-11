@@ -180,9 +180,65 @@ change, which sits below the workflow layer. Defer to a
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
 
-After the 17-benchmark dynamic run:
+**cjson run4 (2026-05-11) — workflow refactor partial validation.**
+
+### Real `is_function_referenced` check
+
+`build_only` returned the new `is_function_referenced` key in run4
+(visible in `Build result: success=True, binary_exists=True, errors=0`).
+nm-based symbol check passed for trial 01 — `LLVMFuzzerTestOneInput` was
+defined as expected. Pre-fix the build would have reported success
+unconditionally; this confirms the wiring works. **No nm false-rejects
+in run4** — no `Built binary X does not define LLVMFuzzerTestOneInput`
+error lines.
+
+### `is_stub_binary` routing
+
+**Not triggered in run4.** Trial 01 produced a binary with healthy PC
+count (cov_pcs=25.76%-of-total, well above the 10-PC stub threshold).
+The pre-fix conflation (`total_pcs < 10` → `compile_success=False` →
+fixer) would also have not fired on this trial since it's a real driver.
+
+The is_stub_binary path remains untested empirically; needs a project
+where the Prototyper accidentally generates stub-only code to validate.
+
+### Dead-code removal (W1+W2+W3, S1+S2)
+
+run4 imported `src.workflow.workflow.FuzzingWorkflow` cleanly; no
+`ImportError` / `AttributeError` for the deleted symbols
+(`create_fuzzing_workflow`, `_create_simple_workflow`, `is_terminal_state`,
+`ConfigAdapter`). Trial 01 ran to completion in 267s without invoking
+any of the deleted paths.
+
+### AD1 removal: `RunResult.compiles` accuracy
+
+Trial 01 reached the optimization phase
+(`Compilation successful, switching workflow_phase to optimization`)
+without the AD1 `compile_success_final` patch — `compile_success` flowed
+truthfully from execution to adapter. Confirmed clean.
+
+### E1 (cgprocessor_path drop)
+
+`validate_target_api_calls` ran without the dead `cgprocessor_path`
+kwarg. **However** the validator reported a likely-false-negative for
+trial 01:
+
+```
+Target API check (AST): 0/3 APIs called (0.0%)
+Target API validation: 0.0% coverage, 3 APIs missing:
+  ['cJSON_ParseWithOpts', 'cJSON_AddArrayToObject', 'cJSON_AddBoolToObject']
+```
+
+The generated driver clearly DOES call all 3 APIs (verified by reading
+`fuzz_targets/01.fuzz_target`). This points at a real bug in
+UnifiedCodeValidator's FunctionBodyWalker (introduced by the 2026-05
+supervisor_validator refactor V1) — the libclang-Python AST walk is
+missing call-expressions in this driver. **Flagged for follow-up
+review of UnifiedCodeValidator AST traversal.**
+
+### Original hypothesis section — kept for future runs
 
 ### Real `is_function_referenced` surfacing failures
 

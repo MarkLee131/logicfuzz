@@ -156,7 +156,51 @@ These were noted during review but **not** addressed in this refactor:
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
+
+**cjson run4 (2026-05-11) — synthesis cluster fixes mostly unreachable.**
+
+### Skeleton synthesis attrition (the load-bearing telemetry)
+
+```
+⚠️ Skeleton synthesis attrition on 10 sequences:
+  automaton_pruned=10 (acceptance_score < 0.6),
+  z3_rejected=0,
+  emitted=0
+```
+
+This is the new telemetry surface that the synthesis refactor added
+(splitting Phase H pre-prune from Z3 rejection). On cjson the
+breakdown is unambiguous: **automaton is the bottleneck, not Z3**.
+Pre-refactor (single counter), we wouldn't have known.
+
+### Cluster B1 (HoleFiller deletion + silent-fallback removal)
+
+HoleFiller path is gone; CBFactory uses `create_skeleton_for_sequence`
+directly. No `HoleFiller` import errors in run4.
+
+### Cluster B4 (entry-point safety net)
+
+Not triggered. The safety net fires when L1 admits zero entry points;
+on cjson L1 found 5 and L4 produced 10.
+
+### Cluster C (Z3 correctness fixes)
+
+Z3 ran zero rejections (`z3_rejected=0`) — not because the fixes are
+broken, but because the candidates were pruned upstream by the
+automaton guard before reaching Z3. Z3 correctness on cjson:
+unobservable until automaton threshold is loosened or a richer
+benchmark exercises it.
+
+### Cluster A (silent-fallback removal)
+
+Equivalent: no candidates reached Z3. Untested on cjson.
+
+### Next benchmark for synthesis validation
+
+Need a benchmark where ≥1 skeleton survives Phase H. Candidates:
+c-ares (richer tests/, larger automaton) or libxml2 (heavyweight,
+many init/destroy pairs).
 
 This section is the placeholder for post-refactor measurements. After
 running the 17-benchmark suite end-to-end with the refactor in place,

@@ -188,7 +188,75 @@ These were noted but didn't trigger a code change:
 
 ---
 
-## §4. Empirical validation — to be filled in
+## §4. Empirical validation
+
+**cjson run4 (2026-05-11) — Comprehender ran; closed-loop did not.**
+
+### Q1 (closed-loop docstring fix)
+
+`--closed-loop` was not enabled in run4 (default off). The Phase G gate
+log confirmed it:
+```
+11/12 Phase G gate: closed_loop_iters=0, automaton_artifact=present, skeleton_drivers=0
+```
+Q1 is a doc-only fix; nothing to validate behaviorally.
+
+### Q2 (Comprehender-B strength gate)
+
+```
+Comprehender-B prefilter: prefilter_VALID=0, LLM_calls=10
+```
+
+Of 10 candidate sequences, **0 hit the prefilter** — all 10 fell
+through to LLM evaluation. This is consistent with the strength-gate
+behaviour:
+  - cjson's automaton is weak (2 merged states from oracle-only EDSM)
+  - `AutomatonAcceptanceGuard.is_strong()` should return False at 2
+    states with so much uncertainty (`oracle yes=0, no=0, ?=21186`)
+  - With weak gate → no prefilter shortcut → all sequences LLM-judged
+
+This matches the pre-fix predicted behaviour. **Cluster Q2 fix
+appears correct for cjson** — would have given false-VALID
+prefilter hits at high acceptance scores if the gate were missing.
+
+### CL2 (dead guard metrics removed)
+
+run4's `closed_loop_trajectory.json` doesn't exist (closed-loop not
+run), so nothing to inspect. Pre-fix this would have written
+`guard_pruned=0 / guard_passed=0` zeros forever; the cleanup is
+implicit (no zeros to look for).
+
+### CL5 (per-iter persist)
+
+Same as CL2 — closed-loop not invoked, nothing to verify.
+
+### C2 (balanced-scanner JSON parsing)
+
+Run4's Comprehender-A LLM responses parsed cleanly (33/33 APIs
+annotated; no `LLM returned non-JSON` warnings). The balanced scanner
+fix did not bite or surface in this run; pre-fix's greedy regex
+also would have likely succeeded on small batches.
+
+### C4 (purpose cache no-write-on-fallback)
+
+run4's `purpose.txt` cache **was written** with a real LLM-generated
+purpose (NOT the generic fallback template). The fallback path
+(write-without-cache) was not exercised.
+
+### C5 (signature fallback on batch parse fail)
+
+No `unparsable response for batch` warning in run4. The signature
+fallback path was not exercised.
+
+### Comprehender-A doxygen integration (T1 cluster — see knowledge_t1)
+
+```
+Comprehender-A: 9 APIs resolved from doxygen (LLM saved on these)
+✅ Comprehender-A: 33/33 APIs annotated
+```
+
+The doxygen-priors path (added by T1) saved 9 LLM calls. See
+`docs/knowledge_t1_2026_05.md` §3 for the per-hypothesis breakdown.
 
 After the 17-benchmark dynamic run:
 

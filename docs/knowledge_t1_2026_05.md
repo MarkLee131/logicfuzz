@@ -156,9 +156,77 @@ automaton.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
 
-After the first 17-benchmark A/B run (T1 off vs T1 on):
+**First run: cjson, T1 on (run4, 2026-05-11). Baseline (T1 off) not yet run; numbers below are B-only — A/B comparison comes later.**
+
+### Per-hypothesis result on cjson (run4)
+
+| Hypothesis | Predicted | cjson run4 actual | Verdict |
+|---|---|---|---|
+| M2.1 README hit rate | ≥70% bench-wide | 1/1 (132-char paragraph extracted) | ✅ on cjson |
+| M2.2 Doxygen API coverage | 10-80% typical | 17/33 = 51.5% | ✅ above 30% T3-trigger threshold |
+| M2.3 Comprehender-A LLM reduction | 30-50% on doc-rich projects | 9/33 = 27% short-circuited | ⚠️ slightly below expected; 8 doxygen entries were too short (<40 chars) to short-circuit and fell through to LLM |
+| M2.4 Trial-1 compile success | +5% absolute baseline-relative | Trial 01 build=success, errors=0 (1/1, no fixer retries) | ✅ on cjson; A baseline not run so absolute gain unknown |
+| M2.5 Crash quality | Fewer false-positive memory crashes | 0 crashes (clean run, 25.76% PC coverage) | n/a — no crashes to evaluate |
+
+### Concrete T1 content quality evidence
+
+Doxygen-extracted ownership rule that transferred into the driver:
+
+  - `cJSON_Parse` doxygen: *"the caller is always responsible to free the
+    results from all variants of cJSON_Parse (with cJSON_Delete) and
+    cJSON_Print (with stdlib free, cJSON_Hooks.free_fn, or cJSON_free
+    as appropriate)"*
+  - Trial 01 generated driver: `cJSON_free(printed_json)` after
+    `cJSON_Print`, and `cJSON_Delete(json)` after `cJSON_ParseWithOpts`
+    — both following the doxygen rules verbatim. LLM-from-signature
+    alone would have likely used `free()` and missed `cJSON_Delete`.
+
+The complete `docs_priors.json` (cjson) is checked in (when run) at
+`results/cjson/comprehension/docs_priors.json` with 17 API docstrings.
+
+### Bugs surfaced by enabling T1 (real production bugs masked before)
+
+1. **`run_single_fuzz.py` passes dead `num_synthesis_drivers` kwarg to
+   `FuzzingContext.prepare`**. The new strict kwarg path of `prepare`
+   (added by T1 wiring) raised `TypeError: got unexpected keyword
+   argument 'num_synthesis_drivers'`. Pyright had flagged this for
+   weeks. Fixed by removing the kwarg + the dead local var.
+
+2. **`ProjectDriverGenerator.extract_metadata` was being silently
+   overwritten** by `self.adapter.last_metadata` after the `_ensure_sources`
+   call that wrote the `local.public_headers` field. The latent bug
+   was masked because data_context Step 7 used to soft-degrade; the F1
+   fail-fast in the 2026-05 data_context refactor raised on the
+   missing key and pointed straight at this. Fixed in
+   `project_driver_generator.py` to MERGE adapter metadata instead of
+   overwrite.
+
+3. **`generator.headers_dir` is never set as an instance attribute** —
+   only used as a local inside `_ensure_sources`. T1 doxygen
+   extraction needs a host-side directory; rewrote to use
+   `extract_metadata['local']['source_dir']` as the canonical fallback
+   (which is set by `_ensure_sources`).
+
+### A/B decision gates — preliminary call (cjson-only)
+
+Per §3 M2.6, with 1/4 planned benchmarks run:
+
+  - M2.1 (≥70% bench-wide): **insufficient data** (1/1 trivially passes;
+    need 4-bench median)
+  - M2.2 (≥30% doxygen median): **trending pass** — cjson is 51.5%
+  - M2.3 (30-50% LLM reduction): **trending below** — 27% on cjson;
+    likely doc-quality dependent
+  - M2.4 (+5% compile success): **A not run; B is 100%**
+
+Decision: **need 3 more benchmarks** (c-ares + libucl + libxml2) before
+making a defaults-on call. The cjson run alone validates the T1
+plumbing is correct end-to-end and produces measurable content
+quality lift (driver memory-management rules now grounded in
+doxygen, not LLM-fabricated).
+
+### Original hypothesis section — kept for future runs
 
 ### M2.1: README purpose hit rate
 

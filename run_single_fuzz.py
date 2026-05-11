@@ -201,10 +201,12 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
   project_name = benchmark.project
 
   try:
-    # Get synthesis settings from args if available
-    # Note: Synthesis is always enabled (CBFactory + LLM refinement)
-    num_synthesis_drivers = getattr(args, 'num_synthesis_drivers', 5) if args else 5
     # Phase G closed-loop knobs (only active when --closed-loop is also set)
+    # ``num_synthesis_drivers`` was removed: per CLAUDE.md, --num-samples is
+    # auto-resolved to ``len(skeleton_drivers)`` at runtime — one trial per
+    # Z3-validated skeleton. The old hardcoded knob was dead-arg-passed for
+    # months until --use-doxygen-priors first triggered a strict-kwarg path
+    # in prepare() that surfaced the latent TypeError. Cleared here.
     closed_loop_iters = (
         getattr(args, 'closed_loop_iters', 0)
         if (args and getattr(args, 'closed_loop', False)) else 0
@@ -226,7 +228,6 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       project_name=project_name,
       benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
       logger_instance=None,  # Use standard logging - no trial concept here
-      num_synthesis_drivers=num_synthesis_drivers,
       llm_client=llm_client,  # Pass LLM for driver knowledge extraction
       closed_loop_iters=closed_loop_iters,
       closed_loop_early_stop=closed_loop_early_stop,

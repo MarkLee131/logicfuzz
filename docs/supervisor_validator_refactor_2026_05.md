@@ -245,7 +245,50 @@ we can't tune it.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
+
+**cjson run4 (2026-05-11) — UnifiedCodeValidator AST check has a REAL BUG.**
+
+### V1 FunctionBodyWalker — false negative on cjson trial 01
+
+The post-2026-05 V1 refactor replaced CGProcessor with the in-process
+`FunctionBodyWalker` (libclang Python). On cjson trial 01:
+
+```
+INFO unified_validator - _check_target_apis:
+  Target API check (AST): 0/3 APIs called (0.0%)
+WARNING [logger.warning:150]:
+  Target API validation: 0.0% coverage, 3 APIs missing:
+  ['cJSON_ParseWithOpts', 'cJSON_AddArrayToObject', 'cJSON_AddBoolToObject']
+```
+
+The generated driver `01.fuzz_target` **clearly calls all three** —
+visual inspection of the source shows `cJSON_ParseWithOpts(json_data,
+NULL, flags)`, `cJSON_AddArrayToObject(json, "array")`, and
+`cJSON_AddBoolToObject(array, "bool", 1)` as direct call expressions.
+
+**The libclang-Python AST walk is missing call-expressions**, likely
+because:
+- The driver uses `struct cJSON *json = ...` instead of `cJSON *json`,
+  which may confuse the walker's symbol resolution.
+- Or the walker is filtering on the wrong cursor kind.
+- Or the project's headers aren't on the parse path so calls resolve
+  as `OVERLOADED_DECL_REF`-style unknown.
+
+**Severity: HIGH** — this is exactly the kind of regression we
+predicted in cluster F (lapse in CGProcessor → FunctionBodyWalker
+equivalence). The supervisor uses target_api_validation to route the
+Fixer; burning fixer retries on a driver that's already correct is a
+real cost.
+
+Tracked for follow-up: investigate `FunctionBodyWalker` cursor traversal
+and confirm whether `args = ["-I", str(headers_root), ...]` is
+reaching the cjson header on the parse path.
+
+### V4/V5 (whitelist additions)
+
+No `__builtin_*` / common-libc symbols were flagged as undefined in
+run4; both whitelist additions appear to be doing their job.
 
 ### V1: CGProcessor availability
 

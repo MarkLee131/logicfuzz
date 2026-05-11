@@ -188,7 +188,47 @@ either the `base.py:from src.workflow.state` or
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
+
+**cjson run4 (2026-05-11) — agent fixes partially exercised.**
+
+### Cluster B (Prototyper validator dead-code, silent-fallback removal)
+
+Trial 01 ran Prototyper once successfully:
+```
+<PROTOTYPER R0> tools=0 content=1926 chars
+Generated code passed API validation
+Prototyper node completed, returning fuzz_target_source (length=1202)
+```
+
+No silent fallback warnings; the dead-code branch (removed in cluster
+B) is not reachable in the live path.
+
+### Cluster A (8KB truncation alignment)
+
+8000-char cap is in effect. No truncation logs fired in run4 (per-tool
+outputs stayed under cap).
+
+### Cluster C (Improver hallucination-validation gate)
+
+Improver ran once for trial 01 (low coverage_diff → coverage_analyzer →
+improver):
+```
+Improver node completed
+```
+No `validator_error:` tag emitted — improver's `_validate_api_usage`
+hook returned clean.
+
+### Cluster F (LLM transient-network retry)
+
+Not triggered (single retry per agent invocation succeeded; no
+5xx/timeout/RateLimit in run4).
+
+### Truncation TODO (user-flagged)
+
+Run4 didn't surface a case that would benefit from semantic-boundary
+truncation, head+tail keep, etc. (all outputs fit under 8KB). Defer
+until a benchmark surfaces the cap actively truncating.
 
 After running the 17-benchmark dynamic run, populate.
 

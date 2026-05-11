@@ -131,7 +131,64 @@ These were noted in the review but not fixed this pass.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
+
+**cjson run4 (2026-05-11) — automaton learned but Phase H threshold too strict.**
+
+### Learning succeeded
+
+```
+[cjson] running EDSM (oracle=evidence-only)...
+[cjson] EDSM: 254 → 2 states (oracle yes=0, no=0, ?=21186)
+✅ Automaton signal active: {'enabled': True, 'merged_states': 2,
+   'observed_apis': 54, 'sample_paths': 8,
+   'post_extend_enabled': True, 'post_extend_added': 100}
+```
+
+EDSM collapsed 254 PTA states → 2 merged states. 54 unique APIs
+observed across cjson's `tests/` directory. Post-parse extension added
+100 transitions. Cluster B (caching of `acceptance_rate` /
+`acceptance_score`) ran without exception.
+
+### Critical finding: 2-state automaton too strict for Phase H
+
+```
+⚠️ Skeleton synthesis attrition on 10 sequences:
+  automaton_pruned=10 (acceptance_score < 0.6),
+  z3_rejected=0,
+  emitted=0
+```
+
+`AutomatonAcceptanceGuard.is_strong()` evidently returned True (otherwise
+the prefilter wouldn't gate), but 0.6 is too high for cjson's
+collapsed 2-state automaton — **every** candidate from L4 was pruned.
+The downstream effect: zero skeletons, LFBackendDriver never ran,
+Prototyper had to generate from scratch.
+
+This is calibration data, not a bug. Possible interpretations:
+  - The 0.6 threshold was chosen for projects with richer automatons
+    (5-15 merged states). At 2 states the acceptance scores are too
+    discrete (likely binary 0/1) to land above 0.6 on candidates that
+    don't perfectly match an observed prefix.
+  - Or the cjson PTA→EDSM collapse is over-aggressive; the LLM oracle
+    is off (`oracle yes=0, no=0`), so EDSM relies on evidence-only
+    merges. With sparse trace count, every state pair looks
+    inconclusive (`?=21186`) and gets merged.
+
+**Recommendation for follow-up tuning** (not this commit): scale the
+threshold by `merged_states` (e.g. `threshold * f(n_states)` with
+`f(2) ≈ 0.3, f(8) ≈ 0.6, f(15) ≈ 0.7`). Or enable the LLM oracle for
+small-trace projects to break the all-merge tie-breaks.
+
+### Cluster A (EDSM oracle log visibility)
+
+The `oracle=evidence-only` log line did surface — cluster A's
+visibility fix is working.
+
+### Cluster C2 (multi-handle graft) / E (default policy)
+
+Not exercised on cjson (single-handle library; no multi-handle
+sequences in the L4 pool to graft).
 
 After the 17-benchmark dynamic run, populate.
 

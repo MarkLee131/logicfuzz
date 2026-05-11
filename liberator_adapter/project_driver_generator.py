@@ -128,9 +128,23 @@ class ProjectDriverGenerator:
             bc_file=bc_file,
             compile_project=compile_project
         )
-        # Save extraction metadata (e.g., apis_llvm/conditions/data_layout paths)
+        # Save extraction metadata (e.g., apis_llvm/conditions/data_layout
+        # paths). Pre-2026-05 this overwrote ``self.extract_metadata`` with
+        # the adapter's ``last_metadata``, which silently nuked the
+        # ``local`` sub-dict that ``_ensure_sources`` wrote earlier with
+        # ``public_headers`` / ``headers_dir`` / ``source_dir``. The bug
+        # was latent because data_context.Step 7 used to soft-degrade to
+        # empty headers; the F1 fail-fast in the 2026-05 data_context
+        # refactor now raises, exposing this. Fix: merge instead of
+        # overwrite, preserving the local sub-dict.
         try:
-            self.extract_metadata = getattr(self.adapter, "last_metadata", {}) or {}
+            adapter_meta = getattr(self.adapter, "last_metadata", {}) or {}
+            preserved_local = (self.extract_metadata or {}).get("local", {})
+            self.extract_metadata = dict(adapter_meta)
+            if preserved_local:
+                merged_local = dict(self.extract_metadata.get("local", {}) or {})
+                merged_local.update(preserved_local)
+                self.extract_metadata["local"] = merged_local
         except Exception:
             self.extract_metadata = {}
         

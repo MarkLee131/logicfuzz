@@ -171,9 +171,55 @@ defensive hardening; flag only if a regression test exposes it.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
 
-After the 17-benchmark dynamic run:
+**cjson run4 (2026-05-11) — F1+F4+F5 partial validation.**
+
+### F1 fail-fast: **TRIGGERED AS DESIGNED, exposed a real production bug**
+
+First cjson run with T1 priors hit the Step 7 strict check:
+
+```
+ERROR: Failed to prepare project-level fuzzing context: Project 'cjson'
+has no public_headers file. The Clang/LLVM hybrid extractor was supposed
+to record it as generator.extract_metadata['local']['public_headers'].
+Either re-run extraction (drop --disable-llvm-extraction), or
+pre-populate <work_dir>/public_headers.txt and set the metadata key
+manually before invoking prepare().
+```
+
+Root cause: `ProjectDriverGenerator.extract_metadata` was being silently
+overwritten by `self.adapter.last_metadata` after `_ensure_sources` had
+already written the `local.public_headers` key. Pre-F1, Step 7 would
+have soft-degraded to empty project_headers and Prototyper would have
+seen `(no project headers)` in the prompt without anyone noticing.
+
+The F1 strict check did exactly what was designed: it caught a real
+production bug at a recoverable, pre-LLM stage and pointed the operator
+directly at the broken contract. Fixed by changing the overwrite to a
+merge in `project_driver_generator.py:131-145`.
+
+After fix, run4 Step 7 logged `✅ Loaded 1 project headers from
+results/cjson/public_headers.txt` and the pipeline continued normally.
+
+### F4: Step 7 cleanup — no "No existing fuzzer headers found" warning
+
+Confirmed in run4 log: zero occurrences of the legacy soft-degrade
+warning. Step 7 logs straight `✅ Loaded N project headers from <path>`.
+
+### F5: log denominator consistency
+
+Confirmed: all step lines in run4 read `N/12`. No `N/10` or `11/11`.
+
+### F3 (deferred) — 5e2 / 5f ordering
+
+run4 emits `5e2/12 Learning project-adaptive automaton ...` AFTER `5f/12
+Ranking sequences by coverage potential ...`. CLAUDE.md still claims
+"5e2 runs after 5f" — but the actual code logs them interleaved as
+documented in §2 of this refactor. Cosmetic mismatch confirmed; no
+functional impact.
+
+### Original hypothesis section — kept for future runs
 
 ### F1: corpus-driven prompt augmentation
 

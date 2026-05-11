@@ -131,7 +131,34 @@ mis-tune; no real call site needs longer.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
+
+**cjson run4 (2026-05-11) — execution-tool consolidation untested empirically.**
+
+### Per-stream truncation visibility
+
+Trial 01 executed once successfully (no crashes, coverage_diff < 1%
+threshold so coverage_analyzer ran). No `(truncated N chars)` indicator
+appeared in the run log because:
+  - cjson is small; no individual tool call produced >8KB output
+  - The trial didn't crash, so CrashAnalyzer/CrashFeasibilityAnalyzer
+    never engaged their truncation-heavy bash flows
+
+The consolidation (E1+E2: shared `format_bash_result`) ran without
+exception in the few BashExecuteTool invocations that did happen
+(coverage_analyzer's grep over coverage report).
+
+### E3 async TODO
+
+No async invocations on cjson (the workflow is synchronous). The
+TODO comments remain documentation-only.
+
+### Next benchmark for execution validation
+
+Need a benchmark that crashes, so CrashAnalyzer's per-stream truncation
+is exercised. c-ares historically has more sanitizer triggers on
+random input than cjson; worth checking.
+
 
 After the 17-benchmark dynamic run:
 

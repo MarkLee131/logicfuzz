@@ -151,7 +151,59 @@ shows the looseness costs coverage.
 
 ---
 
-## §3. Empirical validation — to be filled in
+## §3. Empirical validation
+
+**cjson run4 (2026-05-11) — L1-L5 pipeline behavior partially observed.**
+
+### L1 Entry Point filter
+
+```
+✅ Entry Point analysis: 5/78 (6.4%) APIs are Entry Points
+✅ L1 Entry Point filter: 24 -> 5 sequences
+```
+
+L1 admits 5 of 78 cjson APIs as entry points. Grammar's 24 sequences
+replaced by entry-point-focused sequences. The
+`c_buffer_must_be_const=False` admission policy (cluster-3 fix) did
+NOT cause L1 over-admission.
+
+### L2 Lifecycle
+
+```
+✅ Lifecycle analysis: 1 pairs found (1 init, 1 destroy)
+```
+
+One init/destroy pair (likely `cJSON_Parse` ↔ `cJSON_Delete`).
+L2's `auto_complete` strictness (cluster-2 fix) — not exercised on
+cjson at this scale.
+
+### L3 State Machine
+
+```
+✅ State Machine analysis: 10 APIs with constraints, 1 resource types
+```
+
+State machine running cleanly. No `_derive_from_condition_info` dead-code
+errors (cluster-3 fix confirmed).
+
+### L5 + L4 Ranking
+
+```
+✅ L5 Coverage-Aware: 5 -> 5 sequences (avg novelty: 1.00)
+✅ L4 Coverage Ranking: 5 -> 10 sequences (covering 33 unique APIs)
+```
+
+L5 retained all 5 (no OSS-Fuzz coverage to filter against, novelty
+defaults to 1.0). L4 expanded 5 → 10 via automaton sample-paths
+injection.
+
+### Phase H bottleneck
+
+The 10 L4 sequences then enter Phase H, where the
+AutomatonAcceptanceGuard pruned all 10
+(`automaton_pruned=10, z3_rejected=0, emitted=0`). Pre-filter survives;
+post-filter is the bottleneck. See
+docs/automaton_refactor_2026_05.md §3.
 
 After running the 17-benchmark suite end-to-end with this refactor,
 populate the table below.
