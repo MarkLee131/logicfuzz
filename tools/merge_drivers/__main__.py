@@ -280,11 +280,17 @@ def _cmd_pipeline(args: argparse.Namespace) -> int:
         # may reorder by filename. Build dict path list aligned to that.
         if args.dict:
             user_dicts = {Path(d) for d in args.dict}
+            # Match dict-to-driver on exact stem only. The previous
+            # ``startswith(driver_id)`` fallback paired ``10.dict`` with
+            # driver_id ``"1"`` (any string-prefix match), silently
+            # misrouting dictionaries between sub-drivers.
             dict_paths: Optional[List[Optional[Path]]] = [
-                next((p for p in user_dicts
-                      if p.stem == d.driver_path.stem
-                      or p.name.startswith(d.driver_id)),
-                     None)
+                next(
+                    (p for p in user_dicts
+                     if p.stem == d.driver_path.stem
+                     or p.stem == d.driver_id),
+                    None,
+                )
                 for d in drv.drivers
             ]
         else:

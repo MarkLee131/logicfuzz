@@ -902,51 +902,64 @@ class FuzzingContext:
         # === Step 7: Build the project's compile header_info ===
         # This is the set of #includes the synthesised drivers must emit to
         # see the target project's API surface. Source-of-truth is the
-        # ``public_headers.txt`` produced by the Clang/LLVM hybrid
-        # extractor (Liberator path); we start from a minimal libc set
-        # and augment with the public headers discovered locally.
+        # ``public_headers.txt`` produced by the Clang/LLVM hybrid extractor
+        # (Liberator path) and recorded by ``ProjectDriverGenerator`` as
+        # ``extract_metadata['local']['public_headers']``.
+        #
+        # FAIL-FAST contract: public_headers MUST exist by this stage —
+        # either auto-extracted upstream or pre-provided. If missing, raise
+        # immediately rather than degrading to an empty project_headers
+        # list. Pre-LLM, so the failure is recoverable by re-running
+        # extraction or providing the file manually.
         #
         # Distinct from Step 8's ``existing_fuzzer_headers`` (which carries
         # reference ``#include`` lines from real OSS-Fuzz drivers and feeds
         # the Prototyper's include-path-hint block).
         log.debug('  7/12 Building project header_info...')
-        try:
-            header_info = {
-                'standard_headers':
-                ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
-                'project_headers': [],
-            }
 
-            # Augment project_headers from public_headers.txt produced by
-            # the Clang/LLVM hybrid extractor.
-            if not header_info.get('project_headers'):
-                try:
-                    # Try to get from generator's extract_metadata
-                    if hasattr(generator, 'extract_metadata') and generator.extract_metadata:
-                        local_meta = generator.extract_metadata.get('local', {})
-                        public_headers_path = local_meta.get('public_headers')
-                        if public_headers_path:
-                            import os
-                            if os.path.exists(public_headers_path):
-                                with open(public_headers_path, 'r') as f:
-                                    public_headers = [h.strip() for h in f.readlines() if h.strip()]
-                                if public_headers:
-                                    header_info['project_headers'] = public_headers
-                                    log.info(f"   ✅ Loaded {len(public_headers)} project headers from {public_headers_path}")
-                except Exception as ph_err:
-                    log.debug(f"Could not load public_headers from generator: {ph_err}")
-        except Exception as e:
-            log.warning(f"Failed to extract headers: {e}, using minimal set")
-            header_info = {
-                'standard_headers':
-                ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
-                'project_headers': []
-            }
+        public_headers_path: Optional[str] = None
+        if (hasattr(generator, 'extract_metadata')
+                and generator.extract_metadata):
+            local_meta = generator.extract_metadata.get('local', {}) or {}
+            public_headers_path = local_meta.get('public_headers')
 
-        if not header_info:
+        if not public_headers_path:
             raise ValueError(
-                f"Header extraction returned empty for project '{project_name}'. "
-                f"This is required for compilation.")
+                f"Project '{project_name}' has no public_headers file. "
+                f"The Clang/LLVM hybrid extractor was supposed to record "
+                f"it as generator.extract_metadata['local']['public_headers']. "
+                f"Either re-run extraction (drop --disable-llvm-extraction), "
+                f"or pre-populate <work_dir>/public_headers.txt and set the "
+                f"metadata key manually before invoking prepare()."
+            )
+        if not os.path.exists(public_headers_path):
+            raise ValueError(
+                f"Project '{project_name}' public_headers path "
+                f"{public_headers_path!r} does not exist on disk. "
+                f"Re-run extraction or restore the file before invoking "
+                f"prepare()."
+            )
+
+        with open(public_headers_path, 'r') as f:
+            public_headers = [h.strip() for h in f if h.strip()]
+        if not public_headers:
+            raise ValueError(
+                f"Project '{project_name}' public_headers file "
+                f"{public_headers_path!r} is empty. The extractor produced "
+                f"a header list with zero entries; without project headers "
+                f"the synthesised driver cannot #include the target API. "
+                f"Re-run extraction or hand-edit the file."
+            )
+
+        header_info = {
+            'standard_headers':
+            ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
+            'project_headers': public_headers,
+        }
+        log.info(
+            f"   ✅ Loaded {len(public_headers)} project headers from "
+            f"{public_headers_path}"
+        )
 
         # === Step 8: Extract existing fuzzer headers (for reference) ===
         log.debug('  8/12 Extracting existing fuzzer headers...')
@@ -2314,19 +2327,30 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
             seeds_dir = os.path.join(tmpdir, 'seeds')
             os.makedirs(seeds_dir, exist_ok=True)
 
-            # Setup backend for rendering (if headers available)
+            # Setup the LFBackendDriver renderer. ``public_headers`` reads
+            # from the canonical source — ProjectDriverGenerator records it
+            # under ``extract_metadata['local']['public_headers']``. The
+            # pre-2026-05 code read ``generator.public_headers_path``, an
+            # attribute that has NEVER existed; the resulting None crashed
+            # LFBackendDriver.__init__ on every run and the surrounding
+            # try/except silently routed every CBFactory call to
+            # ``_render_driver_fallback`` instead. Step 7's fail-fast
+            # check now guarantees the path exists, so this construction
+            # cannot legitimately fail — let it surface if it does.
             backend = None
             if hasattr(generator, 'headers_dir') and generator.headers_dir:
-                try:
-                    backend = LFBackendDriver(
-                        working_dir=tmpdir,
-                        seeds_dir=seeds_dir,
-                        num_seeds=1,
-                        headers_dir=generator.headers_dir,
-                        public_headers=getattr(generator,
-                                               'public_headers_path', None))
-                except Exception as e:
-                    log.debug(f"Backend setup failed (will use fallback): {e}")
+                local_meta = (
+                    generator.extract_metadata.get('local', {})
+                    if getattr(generator, 'extract_metadata', None)
+                    else {}
+                )
+                public_headers_file = local_meta.get('public_headers')
+                backend = LFBackendDriver(
+                    working_dir=tmpdir,
+                    seeds_dir=seeds_dir,
+                    num_seeds=1,
+                    headers_dir=generator.headers_dir,
+                    public_headers=public_headers_file)
 
             # Generate drivers (skeleton mode or full driver mode)
             for i in range(num_drivers):

@@ -131,3 +131,46 @@ computed by upstream `RunningContext.try_to_get_var` and rendered as
 `ret_<prev_api>` references; only callbacks / buffer sizes / loop
 conditions remain as `__HOLE_*__` placeholders for the LLM. See
 `liberator_adapter/driver/synthesis/`.
+
+### Backend renderer (`framework/backend/libfuzz/LFBackendDriver.py`)
+
+Upstream's `LFBackendDriver` carries several latent bugs that the
+adapter has now fixed (2026-05 backend refactor). All shared
+because the adapter is a near-clean fork of upstream's file (~55
+lines of diff vs ~895 LOC):
+
+  - **`cleanbuffer_emit` falls through on `AllocType.GLOBAL`** —
+    returns `None`, which crashes the caller `stmt_emit`'s
+    `"\t" + None` string concat with `TypeError`. Upstream
+    `buffdecl_emit` admits GLOBAL buffers, so a `CleanBuffer` on a
+    global buffer is a reachable code path that crashes the
+    renderer. **Now:** GLOBAL is folded into the HEAP branch (same
+    array-of-pointers + `_shadow` layout); unknown alloctypes raise
+    explicitly.
+  - **`emit_stub_functions` iterates a `List` as a `Dict`** —
+    `Driver.stub_functions` is typed `List[Function]`, but the body
+    does `for _, f in stub_functions.items()`, which raises
+    `AttributeError` on a list. **Now:** iterates the list
+    directly.
+  - **`os.walk` non-deterministic order** — driver `#include` order
+    depends on filesystem entry order, breaking
+    repro-by-driver-bytes. **Now:** `sorted(os.walk(...))` +
+    `sorted(f_names)`.
+  - **Dead class attributes `last_stmt = None` and
+    `LFBackendDriver.drv = driver`** — set but never read; the
+    `drv` write also retains the most-recently-emitted driver on
+    the class for the process lifetime. **Now:** removed.
+  - **`stmt_emit` raises bare `NotImplementedError`** — no info on
+    which `Statement` subclass was unhandled, expensive to debug.
+    **Now:** `NotImplementedError(f'stmt_emit: unhandled {type(stmt).__name__}')`.
+  - **`dyn{,dbl}arrinit_emit` error wording** — error message says
+    `sizeof({buff_i}) is incomplete` but it's the *pointee type*
+    that is incomplete. **Now:** the error spells out the incomplete
+    pointee type.
+
+These were all masked in production by the adapter's call-site bug
+(reading a never-set attribute `generator.public_headers_path` → None
+→ `LFBackendDriver.__init__` crash → silent fallback to
+`_render_driver_fallback`). The 2026-05 backend refactor fixed the
+call-site bug and the six latent upstream issues in the same commit;
+see `docs/backend_merge_refactor_2026_05.md`.
