@@ -191,11 +191,10 @@ class FuzzingContext:
                 'project_headers': []
             }
 
-            # Existing fuzzer headers - try to load or use empty
-            existing_fuzzer_headers = {
-                'standard_headers': [],
-                'project_headers': []
-            }
+            # Existing fuzzer headers — disk-backed extractor; empty if the
+            # human-written-targets corpus hasn't been downloaded yet.
+            existing_fuzzer_headers = _extract_existing_fuzzer_headers(
+                project_name, log)
 
             # Z3-validated skeleton drivers — optional, may not exist in older
             # caches. A cache HIT can skip CBFactory entirely, which is the
@@ -344,7 +343,7 @@ class FuzzingContext:
             f'📦 Preparing project-level fuzzing context for {project_name}')
 
         # === Step 1: Create ProjectDriverGenerator ===
-        log.debug('  1/10 Creating ProjectDriverGenerator...')
+        log.debug('  1/12 Creating ProjectDriverGenerator...')
         try:
             if not benchmark:
                 raise ValueError(
@@ -364,7 +363,7 @@ class FuzzingContext:
                 f"This is required for project-level modeling.") from e
 
         # === Step 2: Extract all APIs ===
-        log.debug('  2/10 Extracting all APIs from project...')
+        log.debug('  2/12 Extracting all APIs from project...')
         try:
             all_apis = generator.extract_all_apis()
             if not all_apis:
@@ -399,7 +398,7 @@ class FuzzingContext:
                 f"This is an internal error in ProjectDriverGenerator.") from e
 
         # === Step 3: Build dependency graph ===
-        log.debug('  3/10 Building type dependency graph...')
+        log.debug('  3/12 Building type dependency graph...')
         try:
             dep_graph = generator.build_dependency_graph()
 
@@ -430,7 +429,7 @@ class FuzzingContext:
         # first. Moved up from former Step 5 position. Only depends on
         # extract_metadata (set in Step 2) and self.adapter (init time),
         # so safe to run here.
-        log.debug('  3.5/10 Building data layout...')
+        log.debug('  3.5/12 Building data layout...')
         try:
             generator.build_data_layout()
             log.info('   ✅ Data layout built')
@@ -440,7 +439,7 @@ class FuzzingContext:
             )
 
         # === Step 4: Generate grammar (API sequences) ===
-        log.debug('  4/10 Generating grammar and API sequences...')
+        log.debug('  4/12 Generating grammar and API sequences...')
         try:
             grammar = generator.build_grammar()
 
@@ -474,7 +473,7 @@ class FuzzingContext:
             )
 
         # === Step 5b: Build condition manager ===
-        log.debug('  5b/10 Building condition manager...')
+        log.debug('  5b/12 Building condition manager...')
         try:
             condition_manager = generator.build_condition_manager()
             log.info('   ✅ Condition manager built')
@@ -514,7 +513,7 @@ class FuzzingContext:
                 condition_info = {}
 
         # === Step 5c: L1 Entry Point Analysis (Progressive Filter Pipeline) ===
-        log.debug('  5c/10 Analyzing Entry Points (L1 filter)...')
+        log.debug('  5c/12 Analyzing Entry Points (L1 filter)...')
         entry_point_analysis_result = {}
         try:
             from liberator_adapter.constraints import (
@@ -610,7 +609,7 @@ class FuzzingContext:
             log.warning(f"Entry Point analysis failed (non-critical): {e}")
 
         # === Step 5d: L2 Lifecycle Analysis (Progressive Filter Pipeline) ===
-        log.debug('  5d/10 Analyzing Lifecycle pairs (L2 filter)...')
+        log.debug('  5d/12 Analyzing Lifecycle pairs (L2 filter)...')
         lifecycle_analysis_result = {}
         try:
             from liberator_adapter.constraints import (
@@ -657,7 +656,7 @@ class FuzzingContext:
             log.warning(f"Lifecycle analysis failed (non-critical): {e}")
 
         # === Step 5e: L3 State Machine Analysis (Progressive Filter Pipeline) ===
-        log.debug('  5e/10 Analyzing State Machine (L3 filter)...')
+        log.debug('  5e/12 Analyzing State Machine (L3 filter)...')
         state_machine_analysis_result = {}
         try:
             from liberator_adapter.constraints import (
@@ -707,7 +706,7 @@ class FuzzingContext:
         # === Step 5f: L4/L5 Coverage Ranking (Progressive Filter Pipeline) ===
         # L4: Rank sequences by diversity and entry point position
         # L5: Coverage-aware filtering to avoid re-testing already covered code
-        log.debug('  5f/10 Ranking sequences by coverage potential (L4/L5)...')
+        log.debug('  5f/12 Ranking sequences by coverage potential (L4/L5)...')
         coverage_ranking_result = {}
 
         # Fetch the only OSS-Fuzz-specific input we still need: per-function
@@ -745,9 +744,9 @@ class FuzzingContext:
                     if (src_root / p).exists() and (src_root / p).is_dir()
                 ]
                 if not consumer_paths:
-                    log.debug('  5e2/10 No consumer-path dirs under %s; skipping automaton', src_root)
+                    log.debug('  5e2/12 No consumer-path dirs under %s; skipping automaton', src_root)
                 else:
-                    log.debug('  5e2/10 Learning project-adaptive automaton (consumer_paths=%s)...',
+                    log.debug('  5e2/12 Learning project-adaptive automaton (consumer_paths=%s)...',
                               consumer_paths)
                     output_dir = project_root_dir / "automaton"
                     automaton_artifact = learn_project_automaton(
@@ -772,7 +771,7 @@ class FuzzingContext:
                         len(automaton_artifact.observed_apis()),
                     )
             else:
-                log.debug('  5e2/10 No src_ossfuzz/%s; skipping automaton learning', project_name)
+                log.debug('  5e2/12 No src_ossfuzz/%s; skipping automaton learning', project_name)
         except Exception as exc:
             log.warning('Automaton learning failed (non-critical): %s', exc)
             automaton_artifact = None
@@ -858,7 +857,7 @@ class FuzzingContext:
                 api for seq in api_sequences for api in seq if api
             })
             log.debug(
-                '  6b/10 Comprehending %d unique APIs across %d sequences...',
+                '  6b/12 Comprehending %d unique APIs across %d sequences...',
                 len(unique_apis_in_sequences), len(api_sequences))
 
             comprehender = Comprehender(project_name)
@@ -900,27 +899,26 @@ class FuzzingContext:
         except Exception as e:
             log.warning(f"Knowledge comprehension failed (non-critical): {e}")
 
-        # === Step 7: Extract header information ===
-        log.debug('  7/10 Extracting headers...')
+        # === Step 7: Build the project's compile header_info ===
+        # This is the set of #includes the synthesised drivers must emit to
+        # see the target project's API surface. Source-of-truth is the
+        # ``public_headers.txt`` produced by the Clang/LLVM hybrid
+        # extractor (Liberator path); we start from a minimal libc set
+        # and augment with the public headers discovered locally.
+        #
+        # Distinct from Step 8's ``existing_fuzzer_headers`` (which carries
+        # reference ``#include`` lines from real OSS-Fuzz drivers and feeds
+        # the Prototyper's include-path-hint block).
+        log.debug('  7/12 Building project header_info...')
         try:
-            # For project-level, use existing fuzzer headers as reference
-            # This provides headers commonly used in the project
-            header_info = _extract_existing_fuzzer_headers(project_name, log)
+            header_info = {
+                'standard_headers':
+                ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
+                'project_headers': [],
+            }
 
-            # If no headers found, create minimal structure
-            if not header_info or (not header_info.get('standard_headers')
-                                   and not header_info.get('project_headers')):
-                log.warning(
-                    "No existing fuzzer headers found, using minimal header set"
-                )
-                header_info = {
-                    'standard_headers':
-                    ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
-                    'project_headers': []
-                }
-
-            # If project_headers is empty, try to load from generated public_headers.txt
-            # produced by the Clang/LLVM hybrid extractor.
+            # Augment project_headers from public_headers.txt produced by
+            # the Clang/LLVM hybrid extractor.
             if not header_info.get('project_headers'):
                 try:
                     # Try to get from generator's extract_metadata
@@ -951,7 +949,7 @@ class FuzzingContext:
                 f"This is required for compilation.")
 
         # === Step 8: Extract existing fuzzer headers (for reference) ===
-        log.debug('  8/10 Extracting existing fuzzer headers...')
+        log.debug('  8/12 Extracting existing fuzzer headers...')
         try:
             existing_fuzzer_headers = _extract_existing_fuzzer_headers(
                 project_name, log)
@@ -966,7 +964,7 @@ class FuzzingContext:
         # NOTE: LLM disabled - using heuristics only for pattern analysis
         # Each analyzer (VarLen, Loop, Callback, TLV) has built-in heuristic fallbacks
         log.debug(
-            '  9/10 Analyzing special patterns (VarLen/Loop/Callback/TLV) using heuristics...'
+            '  9/12 Analyzing special patterns (VarLen/Loop/Callback/TLV) using heuristics...'
         )
         pattern_analysis = {}
         try:
@@ -1064,7 +1062,7 @@ class FuzzingContext:
         #     (viability analysis self-decides, no numeric cap).
         #   - The resulting skeleton's structure derives from CBFactory's
         #     varlen / typestate analysis, not from regex on type strings.
-        log.debug('  10/10 Generating Z3-validated skeleton drivers...')
+        log.debug('  10/12 Generating Z3-validated skeleton drivers...')
         skeleton_drivers = []
         filtered_api_sequences: List[List[Any]] = []  # consumed by Step 11
         try:
@@ -1125,7 +1123,7 @@ class FuzzingContext:
         # value here is the automaton mutation it preserves through
         # ``persist_dir`` and through the artifact passed by reference.
         log.info(
-            "  11/11 Phase G gate: closed_loop_iters=%d, "
+            "  11/12 Phase G gate: closed_loop_iters=%d, "
             "automaton_artifact=%s, skeleton_drivers=%d",
             closed_loop_iters,
             "present" if automaton_artifact is not None else "None",
@@ -1318,15 +1316,127 @@ def _fetch_oss_fuzz_function_coverage(
     return coverage
 
 
+_DRIVER_SIGNATURE_RE = re.compile(
+    r"LLVMFuzzerTestOneInput|extern\s+\"C\"\s+int\s+LLVMFuzzer")
+_DRIVER_INCLUDE_RE = re.compile(
+    r'^\s*#\s*include\s+([<"])([^>"]+)[>"]', re.MULTILINE)
+_DRIVER_FILE_EXTS = ('.c', '.cc', '.cpp', '.cxx', '.c++')
+
+
+def _resolve_drivers_root(project_name: str) -> Optional[Path]:
+    """Locate the on-disk corpus of human-written fuzz drivers for a project.
+
+    The corpus is populated by ``data_prep/extract_all_fuzz_drivers.py`` (GCS
+    pull from ``oss-fuzz-llm-public/human_written_targets/``). We probe in
+    order:
+
+      1. ``$LOGICFUZZ_DRIVERS_ROOT/{project_name}/`` (operator override)
+      2. ``./extracted_fuzz_drivers/{project_name}/`` (script default,
+         relative to current working directory)
+      3. ``<repo_root>/extracted_fuzz_drivers/{project_name}/`` (script
+         default when run from anywhere else in the tree)
+
+    Returns the first existing directory, or ``None`` if no corpus is
+    available — callers are expected to degrade gracefully (the
+    pre-resurrection behaviour was to return empty unconditionally).
+    """
+    repo_root = Path(__file__).resolve().parent.parent.parent
+
+    candidates: List[Path] = []
+    env_root = os.environ.get('LOGICFUZZ_DRIVERS_ROOT')
+    if env_root:
+        candidates.append(Path(env_root) / project_name)
+    candidates.append(Path('extracted_fuzz_drivers') / project_name)
+    candidates.append(repo_root / 'extracted_fuzz_drivers' / project_name)
+
+    for cand in candidates:
+        if cand.is_dir():
+            return cand
+    return None
+
+
+def _iter_driver_source_files(root: Path) -> List[Path]:
+    """List driver source files under ``root``.
+
+    A file is a driver iff it (a) has a C/C++ source extension and (b)
+    contains the ``LLVMFuzzerTestOneInput`` entry point. Filename pattern
+    alone is unreliable — OSS-Fuzz drivers don't all match ``*_fuzzer.*``
+    (some use ``fuzz_*.cc``, ``*_harness.cc``, plain ``main.cc``, etc.).
+    """
+    drivers: List[Path] = []
+    for path in sorted(root.rglob('*')):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in _DRIVER_FILE_EXTS:
+            continue
+        try:
+            text = path.read_text(encoding='utf-8', errors='ignore')
+        except OSError:
+            continue
+        if _DRIVER_SIGNATURE_RE.search(text):
+            drivers.append(path)
+    return drivers
+
+
 def _extract_existing_fuzzer_headers(
         project_name: str, log: logging.Logger) -> Dict[str, List[str]]:
-    """Existing-fuzzer header extraction was removed with FuzzIntrospector.
+    """Extract ``#include`` directives used by the project's existing fuzzers.
 
-    Project headers are now derived from the local public_headers.txt produced
-    by the Clang/LLVM hybrid extractor (see data_context._extract_existing_*
-    fallback in `prepare()`).
+    Disk-backed: reads driver sources downloaded by
+    ``data_prep/extract_all_fuzz_drivers.py``. Returns
+    ``{'standard_headers': ['<stdio.h>', ...], 'project_headers':
+    ['cJSON.h', ...]}`` — angle-bracket and quote-form includes split for
+    the prototyper's include-path context (it renders project headers
+    as ``#include "..."`` references).
+
+    Returns empty lists when the corpus is unavailable; this preserves
+    the call-site behaviour the wiring assumes. Operators wanting the
+    feature run the download script once and set
+    ``LOGICFUZZ_DRIVERS_ROOT`` or place the corpus at
+    ``./extracted_fuzz_drivers/{project}/``.
     """
-    return {'standard_headers': [], 'project_headers': []}
+    root = _resolve_drivers_root(project_name)
+    if root is None:
+        log.debug(
+            "No existing-fuzzer corpus for '%s' (looked under "
+            "LOGICFUZZ_DRIVERS_ROOT / ./extracted_fuzz_drivers/; run "
+            "data_prep/extract_all_fuzz_drivers.py to populate)",
+            project_name,
+        )
+        return {'standard_headers': [], 'project_headers': []}
+
+    standard: Set[str] = set()
+    project: Set[str] = set()
+    driver_files = _iter_driver_source_files(root)
+    for path in driver_files:
+        try:
+            text = path.read_text(encoding='utf-8', errors='ignore')
+        except OSError:
+            continue
+        for delim, header in _DRIVER_INCLUDE_RE.findall(text):
+            header = header.strip()
+            if not header:
+                continue
+            # Strip leading ./ or directory components for the quote-form
+            # references — the prototyper uses these as include name hints,
+            # not literal paths.
+            if delim == '<':
+                standard.add(f'<{header}>')
+            else:
+                project.add(header)
+
+    headers = {
+        'standard_headers': sorted(standard),
+        'project_headers': sorted(project),
+    }
+    if driver_files:
+        log.info(
+            "   📚 Loaded %d existing fuzzer driver(s) for header reference "
+            "(%d standard, %d project includes) from %s",
+            len(driver_files), len(headers['standard_headers']),
+            len(headers['project_headers']), root,
+        )
+    return headers
 
 
 def _strip_license_header(source: str) -> str:
@@ -1407,12 +1517,70 @@ def _extract_existing_driver_knowledge(project_name: str,
                                        log: logging.Logger,
                                        llm_client: Any = None,
                                        max_drivers: int = 3) -> Dict[str, Any]:
-    """Existing-fuzzer source extraction was removed with FuzzIntrospector.
+    """Load existing OSS-Fuzz drivers and optionally run LLM pattern analysis.
 
-    Without FI we cannot enumerate harness paths nor stream their source from a
-    central index. Callers fall back to an empty knowledge dict.
+    Disk-backed: reads driver sources downloaded by
+    ``data_prep/extract_all_fuzz_drivers.py``. Returns:
+
+        {
+          'driver_sources': [{'path': <abs path>, 'source': <full text>}, ...],
+          'analysis': {                       # only when llm_client is given
+              'core_functionality': str,
+              'setup_teardown': str,
+              'code_patterns': str,
+          } | None,
+        }
+
+    The Prototyper renders ``driver_sources`` as ``<reference_drivers>`` and
+    ``analysis`` as ``<core_apis>`` / ``<code_patterns>`` / ``<setup_teardown>``
+    blocks in the prompt (see ``prototyper._format_driver_knowledge``).
+
+    Returns empty when the corpus is unavailable; callers degrade
+    gracefully (the formatter emits no block at all).
     """
-    return {'driver_sources': [], 'analysis': None}
+    root = _resolve_drivers_root(project_name)
+    if root is None:
+        log.debug(
+            "No existing-fuzzer corpus for '%s' driver-knowledge extraction "
+            "(LOGICFUZZ_DRIVERS_ROOT not set, ./extracted_fuzz_drivers/ "
+            "absent); falling back to empty knowledge",
+            project_name,
+        )
+        return {'driver_sources': [], 'analysis': None}
+
+    driver_files = _iter_driver_source_files(root)
+    if not driver_files:
+        log.debug(
+            "Corpus for '%s' exists at %s but no driver sources detected "
+            "(no file matched LLVMFuzzerTestOneInput)",
+            project_name, root,
+        )
+        return {'driver_sources': [], 'analysis': None}
+
+    driver_sources: List[Dict[str, str]] = []
+    for path in driver_files[:max_drivers]:
+        try:
+            text = path.read_text(encoding='utf-8', errors='ignore')
+        except OSError as e:
+            log.debug("Skipping driver %s: %s", path, e)
+            continue
+        driver_sources.append({'path': str(path), 'source': text})
+
+    log.info(
+        "   📚 Loaded %d existing driver(s) for knowledge extraction from %s",
+        len(driver_sources), root,
+    )
+
+    analysis: Optional[Dict[str, str]] = None
+    if llm_client is not None and driver_sources:
+        try:
+            analysis = _analyze_driver_patterns(
+                driver_sources, project_name, llm_client, log)
+        except Exception as e:
+            log.warning(f"LLM pattern analysis failed (non-critical): {e}")
+            analysis = None
+
+    return {'driver_sources': driver_sources, 'analysis': analysis}
 
 
 def _analyze_driver_patterns(driver_sources: List[Dict[str, str]],
