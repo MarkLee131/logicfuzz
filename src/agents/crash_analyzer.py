@@ -12,7 +12,7 @@ from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.execution import BashExecuteTool, GDBExecuteTool
+from src.tools.execution import BashExecuteTool, GDBExecuteTool, format_bash_result
 from experiment.workdir import WorkDirs
 
 
@@ -69,13 +69,11 @@ class LangGraphCrashAnalyzer(LangGraphAgent, ToolCallingMixin):
         return self.truncate_tool_output("\n".join(lines))
 
     def _execute_bash(self, command: str) -> str:
-        proc = self.bash_tool.execute(command)
-        parts = [f"$ {command}", f"exit={proc.returncode}"]
-        if proc.stdout:
-            parts.append(proc.stdout.strip())
-        if proc.stderr:
-            parts.append(f"STDERR: {proc.stderr.strip()}")
-        return self.truncate_tool_output("\n".join(parts))
+        # Per-stream truncation in ``format_bash_result`` supersedes the
+        # earlier joined ``truncate_tool_output`` call — see the 2026-05
+        # execution review for the rationale (stderr was being eaten by
+        # a long stdout before reaching the LLM).
+        return format_bash_result(command, self.bash_tool.execute(command))
 
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         from tool.container_tool import ProjectContainerTool

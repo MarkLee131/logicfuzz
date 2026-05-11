@@ -13,7 +13,7 @@ from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.agents.utils import parse_tag
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.execution import BashExecuteTool
+from src.tools.execution import BashExecuteTool, format_bash_result
 
 
 class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
@@ -68,15 +68,7 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         return ''
 
     def _execute_bash(self, command: str) -> str:
-        result = self.inspect_tool.execute(command)
-        stdout = (result.stdout or "").strip()[:8000]
-        stderr = (result.stderr or "").strip()[:8000]
-        parts = [f"$ {command}", f"exit={result.returncode}"]
-        if stdout:
-            parts.append(stdout)
-        if stderr:
-            parts.append(f"STDERR: {stderr}")
-        return "\n".join(parts)
+        return format_bash_result(command, self.inspect_tool.execute(command))
 
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         from tool.container_tool import ProjectContainerTool

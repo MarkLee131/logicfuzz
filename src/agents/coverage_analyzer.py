@@ -11,7 +11,7 @@ from src.workflow.state import FuzzingWorkflowState, add_coverage_attempt
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.execution import BashExecuteTool
+from src.tools.execution import BashExecuteTool, format_bash_result
 
 
 class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
@@ -66,20 +66,7 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
         return result
 
     def _execute_bash(self, command: str) -> str:
-        result = self.inspect_tool.execute(command)
-        # Apply the 8KB cap at the tool boundary to match the rest of the
-        # agent suite (cluster A of the 2026-05 Agent review). The shared
-        # ToolCallingMixin._truncate also caps at 8KB at the message
-        # boundary, but a per-stream cap here keeps single-call output
-        # from dominating the combined message before mixin truncation.
-        stdout = (result.stdout or "").strip()[:8000]
-        stderr = (result.stderr or "").strip()[:8000]
-        parts = [f"$ {command}", f"exit={result.returncode}"]
-        if stdout:
-            parts.append(stdout)
-        if stderr:
-            parts.append(f"STDERR: {stderr}")
-        return "\n".join(parts)
+        return format_bash_result(command, self.inspect_tool.execute(command))
 
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         from tool.container_tool import ProjectContainerTool

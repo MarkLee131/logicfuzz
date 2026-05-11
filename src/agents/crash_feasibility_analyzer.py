@@ -15,7 +15,7 @@ from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
 from src.agents.tool_calling_mixin import ToolCallingMixin
 from src.utils.prompt_loader import get_prompt_manager
-from src.tools.execution import BashExecuteTool
+from src.tools.execution import BashExecuteTool, format_bash_result
 
 
 class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
@@ -99,36 +99,7 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
     # =========================================================================
 
     def _execute_bash(self, command: str) -> str:
-        """Execute bash command."""
-        result = self.inspect_tool.execute(command)
-        return self._format_bash_result(result)
-
-    def _format_bash_result(self, result: Any) -> str:
-        """Format bash execution result."""
-        if hasattr(result, 'stdout'):
-            stdout = result.stdout.strip() if result.stdout else ""
-            stderr = result.stderr.strip() if result.stderr else ""
-
-            # Limit output size. 8KB matches CLAUDE.md and the shared
-            # truncate helpers in base.py / tool_calling_mixin.py
-            # (cluster A of the 2026-05 Agent review).
-            max_output_len = 8000
-            if len(stdout) > max_output_len:
-                stdout = stdout[:max_output_len] + f'\n... (truncated {len(stdout) - max_output_len} chars)'
-            if len(stderr) > max_output_len:
-                stderr = stderr[:max_output_len] + f'\n... (truncated {len(stderr) - max_output_len} chars)'
-
-            result_parts = [f"Command: {result.args}"]
-            result_parts.append(f"Return code: {result.returncode}")
-
-            if stdout:
-                result_parts.append(f"STDOUT:\n{stdout}")
-            if stderr:
-                result_parts.append(f"STDERR:\n{stderr}")
-
-            return "\n".join(result_parts)
-
-        return str(result)
+        return format_bash_result(command, self.inspect_tool.execute(command))
 
     # =========================================================================
     # Main Execution
