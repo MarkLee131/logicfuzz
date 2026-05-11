@@ -29,6 +29,22 @@ class DataLayout:
     def instance(cls):
         if cls._instance is None:
             cls._instance = cls.__new__(cls)
+            # Default-empty state so the singleton is usable even when
+            # ``setup()`` is skipped (degraded clang-only mode after an
+            # LLVM bitcode extraction timeout). Pre-2026-05-12 this
+            # produced ``AttributeError: 'DataLayout' object has no
+            # attribute 'incomplete_types'`` deep in GrammarGenerator,
+            # masking the upstream timeout. Surfaced on libucl when the
+            # 600s LLVM wall-time killed the extractor and the
+            # ``data layout files not provided, using default`` warning
+            # branch was taken.
+            cls._instance.layout = {}
+            cls._instance.apis_clang = {}
+            cls._instance.apis_llvm = {}
+            cls._instance.incomplete_types = []
+            cls._instance.data_layout = {}
+            cls._instance.enum_type = []
+            cls._instance.clang_to_llvm_struct = {}
         return cls._instance
 
     def setup(self, apis_clang_p: str, apis_llvm_p: str,
