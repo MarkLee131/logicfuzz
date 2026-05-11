@@ -69,18 +69,43 @@ def validate_target_api_calls(
             "report": "No target APIs in sequence"
         }
 
-    # Extract include paths from header_info
+    # Extract include paths from header_info.
+    #
+    # 2026-05 fix (UnifiedCodeValidator AST false-negative): the previous
+    # code computed `os.path.dirname(header)` for each entry in
+    # `project_headers`, but those entries are bare basenames like
+    # `cJSON.h` whose dirname is the empty string — so include_paths
+    # always ended up `[]` for the typical OSS-Fuzz benchmark. libclang
+    # then parsed the driver without the project header on the search
+    # path and most call-expressions degraded to unresolved expressions
+    # (empty `cursor.spelling`), causing AST target-API check to
+    # falsely report 0/N coverage. Real source dir lives at
+    # `context.source_dir` (set by ProjectDriverGenerator._ensure_sources)
+    # OR the upstream caller of validate_target_api_calls passes
+    # include_dirs explicitly.
     header_info = context.get("header_info", {})
-    include_paths = []
+    include_paths: List[str] = []
 
+    # Primary: explicit include_dirs override (rare; for testing).
+    if "include_dirs" in header_info:
+        for d in header_info["include_dirs"]:
+            if d and d not in include_paths:
+                include_paths.append(d)
+
+    # Secondary: source_dir recorded by ProjectDriverGenerator's
+    # _ensure_sources. This is the host-side path where the headers
+    # named in `project_headers` actually live.
+    source_dir = context.get("source_dir")
+    if source_dir and source_dir not in include_paths:
+        include_paths.append(source_dir)
+
+    # Tertiary: dirname of each project header — only useful when
+    # headers carry a non-empty directory component (e.g. `subdir/api.h`).
     if "project_headers" in header_info:
         for header in header_info["project_headers"]:
             header_dir = os.path.dirname(header)
             if header_dir and header_dir not in include_paths:
                 include_paths.append(header_dir)
-
-    if "include_dirs" in header_info:
-        include_paths.extend(header_info["include_dirs"])
 
     # Use UnifiedCodeValidator (CGProcessor pass-through removed in
     # 2026-05 workflow refactor — the validator's cgprocessor_path

@@ -307,6 +307,47 @@ not be budgeted in any plan tighter than 6 months.
 
 ---
 
+## §10A. Future direction — operator-prepared documentation pages (2026-05 followup)
+
+User note (2026-05-11, after first dynamic run): the tool can be
+augmented further by **operator-curated documentation pages** rather
+than relying solely on whatever README / doxygen the upstream
+project ships. The workflow shape:
+
+  1. Operator hand-prepares 1-3 page bundles per target library
+     covering: library purpose, primary parser entry point(s), key
+     ownership rules, typical usage example. Format TBD —
+     markdown most likely; could include extracted-and-curated
+     doxygen too.
+  2. Tool ingests these as a **higher-priority prior** than raw
+     README / doxygen (which are currently T1's sources).
+  3. Comprehender's per-API usage layering becomes:
+     cache → deterministic → **operator-doc** → doxygen → README →
+     LLM-from-signature.
+
+Trade-offs vs T3 (RAG):
+  - **Pro**: operator already understands the library; the
+    extracted content is by-design fuzz-driver-relevant, not
+    incidentally so. T3 RAG retrieves *whatever the docs say*,
+    which may or may not be useful.
+  - **Pro**: lower runtime cost (no embedding, no vector store).
+  - **Con**: human curation per benchmark doesn't scale. T1
+    auto-extraction works on 100 benchmarks; this requires
+    1-2 hours of operator time per benchmark.
+  - **Con**: introduces a "preparation step" before the tool
+    runs, breaking the current zero-touch "run on a yaml" UX.
+
+**Decision deferred until after c-ares analysis** (the doc-sparse
+counterpoint to cjson). If c-ares shows that T1's README + doxygen
+priors are insufficient on a sparse-doc benchmark, this becomes
+the next investment. If T1 works fine on c-ares too, operator-doc
+preparation is overkill.
+
+Tracking: implement after the c-ares + libucl A/B completes (per
+§10 M3 plan).
+
+---
+
 ## §11. Rollback / kill-switch
 
 This is a proposal; nothing is implemented yet. If T1 ships and

@@ -563,18 +563,59 @@ class UnifiedCodeValidator:
         target_apis: List[str],
         include_paths: Optional[List[str]]
     ) -> Tuple[List[ValidationIssue], List[str], List[str], float]:
-        """Check if target APIs are actually called."""
+        """Check if target APIs are actually called.
+
+        Strategy: **union of AST + naive regex**, not "AST first, naive
+        fallback". libclang has a confirmed quirk where function calls
+        on the RHS of variable declarations
+        (``struct cJSON *json = cJSON_ParseWithOpts(...)``) do not emit
+        ``CALL_EXPR`` cursors, even when the surrounding declaration
+        parses fine. The pre-2026-05 "AST first" strategy would
+        confidently report 0/3 target APIs for a driver that clearly
+        called all 3 — burning fixer retries on a correct driver.
+
+        Naive regex check is conservative (lexical match, false
+        positives on identifiers in strings / comments are mitigated by
+        the pre-stripped ``code_no_comments``). Union is robust: if
+        either check finds the call, it's called.
+
+        Reported method tag: "AST+naive" so trial logs make the union
+        explicit.
+        """
         issues = []
 
-        # Try AST-based validation first
+        # AST check (best when libclang resolves; misses RHS-init calls)
+        ast_called: List[str] = []
+        ast_missing: List[str] = []
         if self.is_cgprocessor_available():
-            actual_called, missing = self._check_target_apis_ast(code, target_apis, include_paths)
-            method = "AST"
-        else:
-            actual_called, missing = self._check_target_apis_naive(code_no_comments, target_apis)
-            method = "naive"
+            try:
+                ast_called, ast_missing = self._check_target_apis_ast(
+                    code, target_apis, include_paths)
+            except Exception as exc:
+                logger.warning(
+                    "AST target-API check raised %r; treating as 0/N", exc,
+                )
 
-        # Create issues for missing APIs
+        # Naive regex check — always run, never miss a textually-present call
+        naive_called, naive_missing = self._check_target_apis_naive(
+            code_no_comments, target_apis)
+
+        # Union (preserve target_apis order so reports are stable)
+        called_set = set(ast_called) | set(naive_called)
+        actual_called: List[str] = [a for a in target_apis if a in called_set]
+        missing: List[str] = [a for a in target_apis if a not in called_set]
+
+        # Tag method for logs: which check(s) contributed
+        if ast_called and naive_called:
+            method = "AST+naive"
+        elif ast_called:
+            method = "AST"
+        elif naive_called:
+            method = "naive"
+        else:
+            method = "AST+naive"  # both ran, both missed — still a union
+
+        # Create issues for the truly-missing APIs
         for api in missing:
             issues.append(ValidationIssue(
                 category=ValidationCategory.MISSING_TARGET_API,
@@ -586,7 +627,10 @@ class UnifiedCodeValidator:
 
         coverage = len(actual_called) / len(target_apis) if target_apis else 1.0
 
-        logger.info(f"Target API check ({method}): {len(actual_called)}/{len(target_apis)} APIs called ({coverage:.1%})")
+        logger.info(
+            f"Target API check ({method}): {len(actual_called)}/{len(target_apis)} "
+            f"APIs called ({coverage:.1%})"
+        )
 
         return issues, actual_called, missing, coverage
 

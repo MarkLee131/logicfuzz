@@ -1064,14 +1064,29 @@ class FuzzingContext:
                 f"Re-run extraction or hand-edit the file."
             )
 
+        # Host-side directory where ``project_headers`` actually live.
+        # The headers in ``public_headers.txt`` are bare basenames
+        # (e.g. ``cJSON.h``); downstream consumers (UnifiedCodeValidator
+        # libclang walk, LFBackendDriver) need a directory to put on the
+        # -I include path. Source-of-truth is the same
+        # ``extract_metadata['local']['source_dir']`` that ``_ensure_sources``
+        # records when it fetches source from the OSS-Fuzz container.
+        source_dir = None
+        if (hasattr(generator, 'extract_metadata')
+                and generator.extract_metadata):
+            local_meta_for_src = generator.extract_metadata.get('local', {}) or {}
+            source_dir = local_meta_for_src.get('source_dir')
+
         header_info = {
             'standard_headers':
             ['<stddef.h>', '<stdint.h>', '<stdlib.h>', '<string.h>'],
             'project_headers': public_headers,
+            'include_dirs': [source_dir] if source_dir else [],
         }
         log.info(
             f"   ✅ Loaded {len(public_headers)} project headers from "
             f"{public_headers_path}"
+            + (f" (-I {source_dir})" if source_dir else "")
         )
 
         # === Step 8: Extract existing fuzzer headers (for reference) ===

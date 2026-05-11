@@ -42,6 +42,27 @@ SRC_C_EXTS = {".c"}
 SRC_CXX_EXTS = {".cc", ".cpp", ".cxx", ".cppm"}
 SRC_EXTS = SRC_C_EXTS | SRC_CXX_EXTS
 
+# C/C++ reserved keywords excluded from the token-based callee fallback
+# in ``FunctionBodyWalker._try_extract_callee``. Mostly defensive — a
+# well-formed ``identifier(args)`` call won't have a keyword as its
+# first identifier token, but cast-style calls like
+# ``((cast_t)func)(args)`` or sizeof-expr arguments could otherwise
+# trip us up.
+_C_RESERVED_KEYWORDS = frozenset({
+    "if", "else", "for", "while", "do", "switch", "case", "default",
+    "break", "continue", "return", "goto", "sizeof", "typedef",
+    "struct", "union", "enum", "static", "extern", "register", "auto",
+    "const", "volatile", "restrict", "inline", "void", "char", "short",
+    "int", "long", "signed", "unsigned", "float", "double", "_Bool",
+    "_Complex", "_Atomic", "_Alignof", "_Alignas", "_Generic",
+    "_Thread_local", "_Noreturn",
+    # C++ extras
+    "class", "namespace", "template", "typename", "new", "delete",
+    "this", "operator", "public", "private", "protected", "virtual",
+    "friend", "explicit", "mutable", "using", "throw", "try", "catch",
+    "nullptr", "true", "false",
+})
+
 
 @dataclass
 class CallSite:
@@ -182,12 +203,31 @@ class FunctionBodyWalker:
             self.var_to_call[var_name] = call_id
 
     def _try_extract_callee(self, call_cursor: Cursor) -> Optional[str]:
-        """Return the simple callee name of a CallExpr if recognizable."""
-        # Method calls: cursor.spelling is the method name.
-        # Function calls: walk children for first DeclRefExpr / MemberRefExpr.
+        """Return the simple callee name of a CallExpr if recognizable.
+
+        Resolution order (descending fidelity):
+          1. ``cursor.spelling`` — method calls and well-resolved
+             function calls.
+          2. Walk children for the first ``DECL_REF_EXPR`` /
+             ``MEMBER_REF_EXPR`` with a non-empty ``spelling``.
+          3. Recurse into ``UNEXPOSED_EXPR`` children.
+          4. **Token fallback (2026-05 fix)**: when the call sits on
+             the right-hand side of a variable initialization with a
+             struct-typed target (``struct cJSON *json = cJSON_ParseWithOpts(...)``)
+             AND the project header isn't on the parse path, libclang
+             leaves both ``spelling`` and ``referenced`` empty on the
+             function child. The lexical token stream still carries
+             the identifier — first identifier-shaped token at the
+             call's location is the callee name. Cheaper than a full
+             re-parse with discovered include paths, and accurate for
+             the standard ``identifier(args)`` call form.
+        """
+        # Step 1: direct spelling.
         spelling = call_cursor.spelling
         if spelling:
             return spelling
+
+        # Step 2/3: walk children.
         for child in call_cursor.get_children():
             if child.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
                 if child.spelling:
@@ -196,6 +236,24 @@ class FunctionBodyWalker:
                 inner = self._try_extract_callee(child)
                 if inner:
                     return inner
+
+        # Step 4: token fallback.
+        try:
+            tokens = list(call_cursor.get_tokens())
+        except Exception:
+            return None
+        for tok in tokens:
+            spelling = tok.spelling
+            # Identifier tokens carry the function name. The first
+            # identifier in the call's token stream is the callee; the
+            # opening ``(`` follows directly. We reject obvious keywords
+            # to avoid mis-parsing on cast-style calls like
+            # ``(funcptr_t)(...)`` where the first token might be ``(``.
+            if not spelling or not spelling[0].isalpha() and spelling[0] != '_':
+                continue
+            if spelling in _C_RESERVED_KEYWORDS:
+                continue
+            return spelling
         return None
 
     def _arg_var_name(self, arg_cursor: Cursor) -> Optional[str]:
