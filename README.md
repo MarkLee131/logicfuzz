@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">LogicFuzz</h1>
   <p align="center">
-    <strong>LLM-Powered Agentic Fuzz Driver Generation for C/C++ Libraries</strong>
+    <strong>Knowledge-Driven Neuro-Symbolic Fuzz Driver Generation over Structured API Program Spaces</strong>
   </p>
   <p align="center">
     <a href="#installation"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
@@ -59,7 +59,7 @@ LogicFuzz automatically generates high-quality fuzz drivers (harnesses) for C/C+
 
 ```bash
 # Clone the repository
-git clone https://github.com/anthropics/logicfuzz.git
+git clone https://github.com/Marklee131/logicfuzz.git
 cd logicfuzz
 
 # Create virtual environment

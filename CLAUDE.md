@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Neuro-symbolic fuzz driver generation for C/C++ libraries.
+Knowledge-Driven Neuro-Symbolic Fuzz Driver Generation over Structured API Program Spaces
 
 ## Commands
 

@@ -1,9 +1,6 @@
 results/
 results-*/
-fuzz-introspector/
-oss-fuzz/
 oss-fuzz-data/
-venv/
 .venv/
 __pycache__/
 *.log
