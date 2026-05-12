@@ -202,6 +202,42 @@ Need a benchmark where ≥1 skeleton survives Phase H. Candidates:
 c-ares (richer tests/, larger automaton) or libxml2 (heavyweight,
 many init/destroy pairs).
 
+### cjson run5 (2026-05-12) addendum — Phase H redesigned, Z3 is new bottleneck
+
+After cjson + c-ares + lcms all hitting 10/10 automaton-pruned, the
+Phase H acceptance gate was redesigned to **positive-only**
+(commit 6c59206b). Acceptance score is now telemetry-only; rejection
+is left to Z3 (which has actual semantic grounds — type / lifecycle
+/ provenance).
+
+cjson run5 confirmed:
+```
+📊 Skeleton synthesis on 10 sequences:
+  automaton_low_score=10 (informational; score < 0.6, not pruned)
+  z3_rejected=10 (real infeasibility: type/lifecycle/provenance)
+  emitted=0
+```
+
+Phase H redesign validated — all 10 candidates flow through to Z3
+instead of being pre-pruned. **But Z3 now rejects 10/10 with empty
+violations** (`first violations: []`):
+
+```
+INFO CBFactory - create_skeleton_for_sequence: Z3 rejected
+viable-candidate sequence ['cJSON_CreateNull', 'cJSON_Delete', ...];
+first violations: []
+```
+
+Empty violations list suggests **fail-open behaviour** inside
+CBFactory's create_skeleton_for_sequence — same pattern as cluster A
+silent-fallback (originally fixed in this refactor) but at a
+different layer. The Z3 cluster A/C fixes documented in this doc
+are still **unreachable empirically**; the upstream blocker shifted
+from Phase H to Z3 wrapper.
+
+**Action item (deferred to a follow-up commit):** locate the Z3
+rejection path inside CBFactory and audit for silent fall-through.
+
 ### c-ares run1 (2026-05-11) addendum — synthesis cluster still unreachable
 
 c-ares ran with 24-state automaton (vs cjson 2), confirmed via the
