@@ -270,6 +270,41 @@ c-ares: 10/10 candidates automaton-pruned (acceptance_score < 0.6),
 — yet both fail to clear 0.6. This is **strong evidence the 0.6
 threshold is universally too strict**, not a small-automaton artifact.
 
+### c-ares run2 (2026-05-12 post-fix) addendum — 3-bench T1 final picture
+
+After Phase H positive-only + Improver rollback fixes (commit
+6c59206b), c-ares re-ran with the same T1 flags:
+
+| Bench | README | Doxygen | LLM saved | Trial-1 compile | Final cov | line_diff |
+|---|---|---|---|---|---|---|
+| cjson run4 | 132 chars | 17/33 (51.5%) | 9 APIs | ✅ | 25.76% | 0.00% |
+| cjson run5 | 132 chars | 17/33 (51.5%) | 9 APIs | ✅ | 25.84% | 0% |
+| c-ares run1 | 332 chars | 0/20 (0%) | 0 | ✅ | 8.07% | 2.01% |
+| c-ares run2 | 332 chars | 0/20 (0%) | 0 | ✅ | 11.21% | 0.12% |
+| lcms | 428 chars | 0/47 (0%) | 0 | ✅ | 0.97% | 0% |
+
+**Doxygen median: 0% across {cjson, c-ares×2, lcms}** — cjson is
+the outlier, all 3 other benches have 0% project doxygen. Strong
+evidence T1 doxygen path is project-quality-dependent.
+
+**M2.6 decision-gate triggered** (per §6 of
+`knowledge_layer_design_proposal_2026_05.md`):
+  - Doxygen median <30% → escalate to **T3 RAG OR §10A
+    operator-prepared docs OR multi-hop reasoning per
+    `multihop_reasoning_design_proposal_2026_05.md`**
+  - README hit rate 4/4 = 100% → **README priors are
+    clear-default-on candidate**
+
+Empirical recommendation: README on by default; doxygen behind
+`--use-doxygen-priors` flag (current behaviour); next investment is
+T3 / §10A / multi-hop for the doc-sparse majority of projects.
+
+**§10B emergency mode reinforced**: cjson line_diff=0%, c-ares
+0.12%/2.01%, lcms 0% — across 4 of 4 runs our coverage is
+essentially re-covering what existing OSS-Fuzz drivers already
+covered. The emergency-mode design proposal in §10B of the
+knowledge layer design doc has now 4/4 supporting data points.
+
 ### Original hypothesis section — kept for future runs
 
 ### M2.1: README purpose hit rate
