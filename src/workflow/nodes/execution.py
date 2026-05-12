@@ -394,16 +394,22 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         logger.info(f'Coverage: {coverage_percent:.2%} ({run_result.cov_pcs}/{run_result.total_pcs})', 
                    trial=trial)
     
+    baseline_available = False
     if run_result.coverage_summary:
         generated_target_name = os.path.basename(benchmark.target_path)
         from experiment import evaluator as evaluator_lib
         total_lines = evaluator_lib.compute_total_lines_without_fuzz_targets(
             run_result.coverage_summary, generated_target_name)
-        
-        # Load existing textcov and compute diff
+
+        # Load existing textcov and compute diff. ``existing_textcov`` is
+        # the union of lines already covered by the project's
+        # hand-written OSS-Fuzz driver(s) — the baseline we should be
+        # adding on top of.
         existing_textcov = evaluator.load_existing_textcov()
+        baseline_available = (existing_textcov is not None
+                              and existing_textcov.covered_lines > 0)
         run_result.coverage.subtract_covered_lines(existing_textcov)
-        
+
         if total_lines:
             coverage_diff = run_result.coverage.covered_lines / total_lines
             logger.info(f'Coverage diff: {coverage_diff:.2%}', trial=trial)
@@ -460,6 +466,48 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     
     # Increment iteration counter (each execution in optimization phase counts as one iteration)
     current_iteration = state.get("current_iteration", 0) + 1
+
+    # §10B v1 baseline-regression alert (2026-05-12). When the project
+    # ships an existing OSS-Fuzz driver (the gold standard hand-written
+    # by library experts) and our generated driver contributes almost
+    # no NEW coverage beyond what the baseline already covers, that's
+    # evidence we DROPPED context (existing driver structure, input
+    # encoding pattern, multi-mode print pathways, ...). v1: detect +
+    # emit structured alert + clear warning log. v2 (auto-re-prototype
+    # with diff feedback) deferred per design proposal §10B.
+    #
+    # Threshold rationale: 0.005 (= 0.5% new coverage). Empirical: cjson
+    # run4/5 line_diff=0%, c-ares run1=2.01%, c-ares run2=0.12%, lcms=0%
+    # — 4 of 5 runs at or below 0.5%. The threshold therefore catches
+    # the dominant failure mode without over-firing on the rare
+    # high-novelty trial.
+    baseline_regression_alert = None
+    _ABS_LINE_DIFF_THRESHOLD = 0.005
+    if (baseline_available and isinstance(coverage_diff, float)
+            and coverage_diff < _ABS_LINE_DIFF_THRESHOLD):
+        baseline_regression_alert = {
+            "reason": "line_coverage_diff_below_threshold",
+            "line_diff": round(coverage_diff, 6),
+            "threshold": _ABS_LINE_DIFF_THRESHOLD,
+            "coverage_percent": round(coverage_percent, 6),
+            "baseline_compared": True,
+            "trial": trial,
+            "iteration": current_iteration,
+        }
+        logger.warning(
+            '🚨 BASELINE-REGRESSION ALERT (§10B v1): '
+            'line_diff=%.2f%% < threshold=%.2f%%. '
+            'Our driver covered %.2f%% PC, but added essentially no '
+            'NEW lines beyond the existing OSS-Fuzz baseline driver. '
+            'Likely cause: we dropped structural context from the '
+            'baseline (input encoding, print modes, init/teardown '
+            'pattern). Inspect `fuzz_targets/%02d.fuzz_target` vs the '
+            'existing OSS-Fuzz fuzzer source. v2 auto-diff loop is '
+            'deferred — see docs/knowledge_layer_design_proposal_2026_05.md §10B.',
+            coverage_diff * 100, _ABS_LINE_DIFF_THRESHOLD * 100,
+            coverage_percent * 100, trial,
+            trial=trial,
+        )
 
     # Improver-rollback gate (2026-05-12). When the supervisor routed the
     # previous turn through the improver, it snapshotted the pre-rewrite
@@ -528,6 +576,8 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         # decided, the snapshot has served its purpose.
         "improver_baseline_coverage": None,
         "improver_baseline_source": None,
+        # §10B v1 alert (None when no regression). Surfaced in trial summary.
+        "baseline_regression_alert": baseline_regression_alert,
         "messages": [{
             "role": "assistant",
             "content": f"Execution {'successful' if run_result.succeeded else 'failed'}"

@@ -59,6 +59,16 @@ class FuzzingWorkflowState(TypedDict):
     improver_baseline_source: NotRequired[str]
     improver_rolled_back: NotRequired[bool]
 
+    # §10B v1 baseline-regression alert (2026-05-12). Set by
+    # execution_node when ``line_coverage_diff`` falls below 0.5% AND
+    # the project ships an OSS-Fuzz baseline driver. Indicates our
+    # generated driver contributed essentially no NEW coverage beyond
+    # what the baseline already covers — strong signal that we
+    # dropped critical context. v1 only emits the alert; v2 will
+    # route to a diagnostic re-prototype loop. See
+    # docs/knowledge_layer_design_proposal_2026_05.md §10B.
+    baseline_regression_alert: NotRequired[Dict[str, Any]]
+
     validation_error: NotRequired[str]  # Validation error message
     validation_failure_count: NotRequired[int]  # Number of validation failures
 

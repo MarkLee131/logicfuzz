@@ -307,7 +307,7 @@ not be budgeted in any plan tighter than 6 months.
 
 ---
 
-## §10B. Future direction — emergency-mode on baseline regression (2026-05-12 followup)
+## §10B. Emergency-mode on baseline regression (v1 LANDED 2026-05-12; v2 deferred)
 
 User observation (2026-05-12, post cjson/c-ares/lcms runs):
 
@@ -335,7 +335,34 @@ The current workflow has **no automatic alarm** when this happens. We
 silently report "successful" trials that contributed zero new
 coverage.
 
-**Proposed mechanism (sketch — not implemented yet)**:
+### v1 (LANDED 2026-05-12)
+
+Detection + alert only:
+
+  - `execution_node` computes `line_coverage_diff` (already had this).
+    When `baseline_textcov` is non-empty AND `line_coverage_diff <
+    0.005` (0.5%), it sets the new state field
+    `baseline_regression_alert` with `{reason, line_diff, threshold,
+    coverage_percent, baseline_compared, trial, iteration}`.
+  - A clear warning is logged with the 🚨 prefix so operators can
+    grep trial logs for the alert.
+  - State surfaces the alert through to `StateAdapter.state_to_result_history`
+    so per-trial summaries include it.
+
+Threshold rationale: across cjson run4/run5, c-ares run1/run2, lcms
+run1 — 4 of 5 had `line_diff` at or below 0.5%. The threshold
+catches the dominant failure mode without over-firing on rare
+high-novelty trials.
+
+What v1 does NOT do (yet — v2 territory):
+
+  - Does **not** automatically re-prototype with structural feedback.
+    The alert exists for operator visibility; pipeline continues
+    normally.
+  - Does **not** diff our driver vs the existing OSS-Fuzz driver.
+    That comparison is what v2 will add as a diagnostic agent.
+
+**Proposed v2 mechanism (sketch — not implemented yet)**:
 
   1. Post-execution, compute `new_cov - baseline_cov` AND
      `new_cov / baseline_cov`. Both are already computed for the
