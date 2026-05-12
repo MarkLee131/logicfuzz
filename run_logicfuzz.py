@@ -1439,6 +1439,20 @@ def parse_args() -> argparse.Namespace:
                            'purpose generation instead of relying on the '
                            'LLM-from-project-name fallback.')
 
+  # Multi-hop reasoning for Prototyper (opt-in). See
+  # docs/multihop_reasoning_design_proposal_2026_05.md.
+  parser.add_argument('--multihop-prototyper',
+                      action='store_true',
+                      dest='multihop_prototyper',
+                      help='Multi-hop: append a 4-hop reasoning directive '
+                           '(Hop 1 assess priors / Hop 2 extract patterns / '
+                           'Hop 3 design / Hop 4 implement + verify) to the '
+                           'Prototyper user prompt. LLM must explicitly '
+                           'reason about which priors to use vs reject. '
+                           'Per-trial reasoning chain dumped to '
+                           'logs/trial_NN/reasoning_chain.json. ~1.5x token '
+                           'cost; default OFF until A/B vs single-shot.')
+
   # Evaluation profile shortcut. Bundles the flags that are individually
   # opt-in but should ALL be on when reporting "total coverage vs baseline"
   # numbers (PromeFuzz Table 2 etc.):

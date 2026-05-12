@@ -17,6 +17,70 @@ from src.utils.prompt_loader import get_prompt_manager
 from data_prep.api_classifier import classify_project_apis
 
 
+# Multi-hop reasoning directive (2026-05-12). Appended to the
+# Prototyper user prompt when the operator sets
+# ``--multihop-prototyper``. The base prompt already carries the priors
+# (library_purpose, api_sequences, existing_driver_knowledge, etc.);
+# this block just reshapes the OUTPUT into 4 audit-able hops. See
+# docs/multihop_reasoning_design_proposal_2026_05.md §2 + §4 Mode A.
+_MULTIHOP_DIRECTIVE = """
+
+<multihop_reasoning>
+Before writing any code in <fuzz_target>, work through these 4 hops
+in order. Each hop produces a structured output; skipping hops or
+generating code directly from priors is a failure mode this
+directive exists to prevent. The hops make your WEIGHTING of the
+priors above auditable.
+
+Critical: you ARE allowed to REJECT priors. If the existing driver
+is too narrow / outdated, label it `not_useful` in Hop 1 with a
+one-line reason. Forcing usage of irrelevant priors is worse than
+ignoring them.
+
+Output your response with these tagged sections in order:
+
+<hop1_assess>
+For each prior available (existing_driver_knowledge, comprehension,
+api_sequences, skeleton_drivers, automaton sample_paths, project_analysis,
+api_classification, header_info), output one line:
+  prior_name: useful | partially_useful | not_useful — <one-line reason>
+You MUST label at least one prior as `not_useful` if >=5 priors are
+present. Be selective, not exhaustive.
+</hop1_assess>
+
+<hop2_extract>
+For each prior marked useful or partially_useful in Hop 1, list the
+CONCRETE pattern / fact you will incorporate. One line each:
+  from <prior>: <specific pattern>
+Examples: ownership rules, input-encoding contracts, paired
+init/destroy, multi-mode pathways the baseline tests.
+Aim for 3-8 lines.
+</hop2_extract>
+
+<hop3_design>
+Sketch the driver as numbered pseudo-code steps (10-25 lines). Each
+step references the Hop 2 pattern it implements:
+  1. <action>     [from Hop 2: <pattern>]
+  2. <action>     [from Hop 2: <pattern>]
+  ...
+</hop3_design>
+
+<hop4_verify>
+After your <fuzz_target> block below, list each Hop 2 pattern with
+its source-line reference:
+  - <pattern>: line N
+Or note `dropped — <reason>` for patterns you decided not to keep
+after seeing the implementation constraints. Self-audit only.
+</hop4_verify>
+
+The standard <fuzz_target>...</fuzz_target> block carrying the
+complete driver code goes between <hop3_design> and <hop4_verify>.
+Same constraints as single-shot: 30-60 lines, MIN 5 different APIs,
+extern "C" for C libraries, MAX 15 lines of input generation.
+</multihop_reasoning>
+"""
+
+
 class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     """Prototyper agent that generates fuzz drivers from pre-fetched context."""
 
@@ -45,14 +109,22 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         Supports two output modes:
         1. Hole-filling mode: JSON hole fillings in <hole_fillings> tags
         2. Complete code mode: Full code in <fuzz_target> tags
+
+        Multi-hop reasoning sections (hop1_assess / hop2_extract /
+        hop3_design / hop4_verify) are extracted opportunistically and
+        bundled under ``reasoning_chain`` — present when the LLM
+        followed the multi-hop directive, empty dict otherwise.
+        Bookkeeping only; does not affect code extraction.
         """
         # Try hole-filling mode first (preferred in skeleton template mode)
         hole_fillings = self._parse_hole_fillings(content)
+        reasoning_chain = self._parse_reasoning_chain(content)
         if hole_fillings:
             return {
                 'hole_fillings': hole_fillings,
                 'mode': 'hole_filling',
-                'raw_response': content
+                'raw_response': content,
+                'reasoning_chain': reasoning_chain,
             }
 
         # Fallback: complete code mode
@@ -60,8 +132,28 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         return {
             'fuzz_target_code': fuzz_target_code,
             'mode': 'complete_code',
-            'raw_response': content
+            'raw_response': content,
+            'reasoning_chain': reasoning_chain,
         }
+
+    def _parse_reasoning_chain(self, content: str) -> Dict[str, str]:
+        """Extract multi-hop reasoning sections when present.
+
+        Returns ``{"hop1_assess": str, "hop2_extract": str,
+        "hop3_design": str, "hop4_verify": str}``. Missing hops map to
+        empty strings. Empty dict when no hops present in response —
+        which is the common case for single-shot mode.
+        """
+        out: Dict[str, str] = {}
+        for tag in ("hop1_assess", "hop2_extract", "hop3_design",
+                    "hop4_verify"):
+            try:
+                value = parse_tag(content, tag) or ""
+            except Exception:
+                value = ""
+            if value:
+                out[tag] = value
+        return out
 
     def _parse_hole_fillings(self, content: str) -> Dict[str, str]:
         """Parse JSON hole fillings from LLM response.
@@ -636,6 +728,15 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 synthesis_base_text, srs_specification, skeleton_code,
                 additional_context)
 
+        # Multi-hop reasoning directive (2026-05-12, opt-in via CLI flag
+        # ``--multihop-prototyper``). Appended AFTER the base prompt so the
+        # full context (priors + critical_rule + output_format) still
+        # flows in; the directive just reshapes the OUTPUT to be 4 hops.
+        # See docs/multihop_reasoning_design_proposal_2026_05.md.
+        use_multihop = bool(getattr(self.args, 'multihop_prototyper', False))
+        if use_multihop:
+            base_prompt += _MULTIHOP_DIRECTIVE
+
         prompt = build_prompt_with_session_memory(state,
                                                   base_prompt,
                                                   agent_name=self.name)
@@ -714,6 +815,38 @@ Output your fuzz driver code inside <fuzz_target> tags.
             "api_validation_warnings": validation_warnings
         }
 
+        # Multi-hop reasoning chain (opt-in via --multihop-prototyper).
+        # The full Hop 1-4 audit log is dumped to disk per trial; the
+        # state carries only the summary (per-hop char counts) so the
+        # workflow state doesn't balloon. Reasoning chain present only
+        # when the LLM actually followed the directive structure.
+        reasoning_chain = parsed_result.get('reasoning_chain') or {}
+        if reasoning_chain:
+            chain_summary = {tag: len(text)
+                             for tag, text in reasoning_chain.items()}
+            state_update["reasoning_chain_summary"] = chain_summary
+            logger.info(
+                f'[multihop] reasoning chain captured: '
+                f'hop1={chain_summary.get("hop1_assess", 0)} chars, '
+                f'hop2={chain_summary.get("hop2_extract", 0)} chars, '
+                f'hop3={chain_summary.get("hop3_design", 0)} chars, '
+                f'hop4_verify={chain_summary.get("hop4_verify", 0)} chars',
+                trial=self.trial,
+            )
+            self._dump_reasoning_chain(reasoning_chain)
+        elif use_multihop:
+            # Operator asked for multihop but LLM didn't follow the
+            # structure — flag it so trial logs surface "directive
+            # ignored" cases.
+            logger.warning(
+                '[multihop] --multihop-prototyper was set but the LLM '
+                'response did not include any of hop1_assess / '
+                'hop2_extract / hop3_design / hop4_verify tags. '
+                'Treating as single-shot output. Worth tightening the '
+                'directive if this is common.',
+                trial=self.trial,
+            )
+
         if is_regeneration:
             prototyper_regenerate_count = state.get(
                 "prototyper_regenerate_count", 0)
@@ -727,6 +860,46 @@ Output your fuzz driver code inside <fuzz_target> tags.
         self._langgraph_logger.flush_agent_logs(self.name)
 
         return state_update
+
+    def _dump_reasoning_chain(self, reasoning_chain: Dict[str, str]) -> None:
+        """Persist the multi-hop reasoning chain to disk for audit.
+
+        Writes ``reasoning_chain.json`` under the per-trial log dir
+        (created by ``LangGraphLogger`` for this trial). Failures here
+        are non-critical — the reasoning chain is auditable telemetry,
+        not a hard pipeline dependency.
+        """
+        import json
+        from pathlib import Path
+
+        try:
+            work_dirs = getattr(self.args, 'work_dirs', None)
+            if work_dirs is None:
+                return
+            base = getattr(work_dirs, 'base', None)
+            if base is None:
+                return
+            trial_dir = (Path(str(base)) / 'logs'
+                         / f'trial_{self.trial:02d}')
+            trial_dir.mkdir(parents=True, exist_ok=True)
+            out_path = trial_dir / 'reasoning_chain.json'
+            payload = {
+                "agent": self.name,
+                "trial": self.trial,
+                "hops": reasoning_chain,
+            }
+            out_path.write_text(json.dumps(payload, indent=2,
+                                            ensure_ascii=False),
+                                encoding='utf-8')
+            logger.debug(
+                f'[multihop] reasoning chain dumped to {out_path}',
+                trial=self.trial,
+            )
+        except Exception as exc:
+            logger.debug(
+                f'[multihop] failed to dump reasoning chain: {exc}',
+                trial=self.trial,
+            )
 
     def _build_fallback_prompt(self, benchmark, include_path_context,
                                api_sequences_text, project_apis_text,

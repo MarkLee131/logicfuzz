@@ -59,6 +59,14 @@ class FuzzingWorkflowState(TypedDict):
     improver_baseline_source: NotRequired[str]
     improver_rolled_back: NotRequired[bool]
 
+    # Multi-hop reasoning chain summary (2026-05-12, opt-in via
+    # --multihop-prototyper). Per-hop character counts for the Hop 1-4
+    # tagged sections in the Prototyper LLM response. Full content is
+    # dumped per-trial to logs/trial_NN/reasoning_chain.json. Empty
+    # dict when the LLM didn't follow the directive (or single-shot
+    # mode). See docs/multihop_reasoning_design_proposal_2026_05.md.
+    reasoning_chain_summary: NotRequired[Dict[str, int]]
+
     # §10B v1 baseline-regression alert (2026-05-12). Set by
     # execution_node when ``line_coverage_diff`` falls below 0.5% AND
     # the project ships an OSS-Fuzz baseline driver. Indicates our
