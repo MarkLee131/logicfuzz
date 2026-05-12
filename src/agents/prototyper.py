@@ -532,6 +532,14 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         driver_knowledge_text = self._format_driver_knowledge(
             existing_driver_knowledge)
 
+        # §10B v2 (2026-05-12): when the BaselineDiffAnalyzer produced
+        # recovery hints, render them as a high-priority block. Empty
+        # string when no diff is available — the normal first-time
+        # generation path. The block goes FIRST inside reference_information
+        # so it visibly dominates the prior priors the LLM saw last time.
+        baseline_recovery_text = self._format_baseline_recovery(
+            state.get("baseline_diff_analysis"))
+
         # The Z3-validated skeleton rendered as "base for refinement". The
         # LLM is told to refine THIS specific driver (preserve API order,
         # fix compilation, improve coverage). Mutually consistent with
@@ -611,7 +619,7 @@ Before writing any code, think about:
 </step1_understand_project>
 
 <reference_information>
-
+{baseline_recovery_text}
 <include_paths>
 {include_path_context}
 </include_paths>
@@ -1473,6 +1481,90 @@ Output your fuzz driver code inside <fuzz_target> tags.
     # The dead ``unauthorized_apis = ['ares_parse_a_reply', ...]`` hardcode
     # from the deleted method is also gone — same pattern as the L2
     # c-ares-specific patterns we already flagged for generalisation.
+
+    def _format_baseline_recovery(
+            self,
+            diff_analysis: Optional[Dict[str, Any]]) -> str:
+        """Render §10B v2 BaselineDiffAnalyzer hints as a prompt block.
+
+        Empty string on first-pass generation (no diff yet). When
+        the supervisor routed through the diff loop, this block goes
+        FIRST inside ``<reference_information>`` so the LLM sees
+        the recovery instructions before the priors that produced
+        the regression. The verdict gates how directive we are:
+
+          - recover: "you MUST address these gaps"
+          - baseline_too_narrow: hints surfaced but caller
+            acknowledges baseline is shallow
+          - inconclusive: hints surfaced as advisory only
+          - skipped / missing: empty string (no block)
+        """
+        if not diff_analysis:
+            return ""
+        status = diff_analysis.get("status", "ok")
+        if status != "ok":
+            return ""
+
+        verdict = (diff_analysis.get("verdict") or "inconclusive").lower()
+        missing_apis = diff_analysis.get("missing_apis") or []
+        missing_patterns = diff_analysis.get("missing_patterns") or []
+        encoding_gaps = (diff_analysis.get("input_encoding_gaps") or "").strip()
+        constraints = diff_analysis.get("suggested_constraints") or []
+
+        if not (missing_apis or missing_patterns
+                or encoding_gaps or constraints):
+            return ""
+
+        if verdict == "recover":
+            preamble = (
+                "Your previous driver compiled and ran but added almost "
+                "no NEW coverage over the existing OSS-Fuzz baseline. "
+                "A diff against the baseline driver surfaced the gaps "
+                "below. You MUST address them in this regeneration.")
+        elif verdict == "baseline_too_narrow":
+            preamble = (
+                "The previous driver under-performed vs the baseline, "
+                "but the baseline itself looks narrow. Hints below are "
+                "advisory — prefer reaching new code over copying "
+                "the baseline's shape.")
+        else:
+            preamble = (
+                "The previous driver under-performed vs the baseline. "
+                "Diff hints are surfaced below as advisory.")
+
+        lines = [
+            "",
+            "<baseline_regression_recovery>",
+            preamble,
+            f"verdict: {verdict}",
+            "",
+        ]
+        if missing_apis:
+            lines.append("<missing_apis>")
+            for api in missing_apis[:12]:
+                lines.append(f"- {api}")
+            lines.append("</missing_apis>")
+            lines.append("")
+        if missing_patterns:
+            lines.append("<missing_patterns>")
+            for pat in missing_patterns[:10]:
+                lines.append(f"- {pat}")
+            lines.append("</missing_patterns>")
+            lines.append("")
+        if encoding_gaps and encoding_gaps.lower() != "equivalent":
+            lines.append("<input_encoding_gaps>")
+            lines.append(encoding_gaps)
+            lines.append("</input_encoding_gaps>")
+            lines.append("")
+        if constraints:
+            lines.append("<suggested_constraints>")
+            for con in constraints[:10]:
+                lines.append(f"- {con}")
+            lines.append("</suggested_constraints>")
+            lines.append("")
+        lines.append("</baseline_regression_recovery>")
+        lines.append("")
+        return "\n".join(lines)
 
     def _format_driver_knowledge(self, driver_knowledge: Dict[str,
                                                               Any]) -> str:

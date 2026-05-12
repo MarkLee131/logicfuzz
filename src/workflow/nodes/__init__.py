@@ -11,6 +11,7 @@ from src.workflow.nodes.improver import improver_node
 from src.workflow.nodes.crash_analyzer import crash_analyzer_node
 from src.workflow.nodes.coverage_analyzer import coverage_analyzer_node
 from src.workflow.nodes.crash_feasibility_analyzer import crash_feasibility_analyzer_node
+from src.workflow.nodes.baseline_diff_analyzer import baseline_diff_analyzer_node
 
 # Build and execution nodes don't use LLM, keep as is
 from src.workflow.nodes.execution import execution_node, build_node
@@ -25,6 +26,7 @@ __all__ = [
     'crash_analyzer_node',
     'coverage_analyzer_node',
     'crash_feasibility_analyzer_node',
+    'baseline_diff_analyzer_node',
     'execution_node',
     'build_node',
     'supervisor_node',

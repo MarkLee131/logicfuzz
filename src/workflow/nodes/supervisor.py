@@ -64,6 +64,7 @@ MAX_NODE_VISITS = 6                  # Loop detection threshold
 MAX_COVERAGE_IMPROVE_ITERATIONS = 1  # coverage_analyzer and improver run at most once
 MAX_FIXER_INVOCATIONS = 3            # Hard cap on total fixer invocations per trial
 LINE_COVERAGE_THRESHOLD = 0.1        # 10% real project coverage to consider "good"
+MAX_BASELINE_DIFF_RETRIES = 1        # §10B v2: one diff→re-prototype loop per trial
 
 
 def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str, Any]:
@@ -126,6 +127,23 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
         result["error_triage"] = triage_result.to_dict()
         logger.debug(f'Passing error triage to fixer: primary={triage_result.primary_category}, '
                     f'strategy={triage_result.recommended_strategy}', trial=trial)
+
+    # §10B v2: when we routed Prototyper because the diff-analyzer
+    # just produced a baseline_diff_analysis, increment the retry
+    # counter so the regression-recovery loop is hard-capped at
+    # MAX_BASELINE_DIFF_RETRIES per trial. The counter lives in the
+    # supervisor (not in the prototyper / analyzer) so the routing
+    # layer remains the single source of truth for the budget.
+    if next_action == "prototyper" and state.get("baseline_diff_analysis") \
+            and state.get("baseline_regression_alert"):
+        diff_retries = state.get("baseline_diff_retry_count", 0)
+        if diff_retries < MAX_BASELINE_DIFF_RETRIES:
+            result["baseline_diff_retry_count"] = diff_retries + 1
+            logger.info(
+                '§10B v2: routing to prototyper after diff analysis '
+                f'(retry {diff_retries + 1}/{MAX_BASELINE_DIFF_RETRIES})',
+                trial=trial,
+            )
 
     # When routing to improver, snapshot the pre-rewrite coverage and
     # source so execution_node can rollback if the improver degrades
@@ -373,6 +391,48 @@ def _handle_coverage_improvement(state: FuzzingWorkflowState, trial: int) -> str
         logger.info(f'Good coverage achieved (line_diff={coverage_diff:.2%})', trial=trial)
         return "END"
 
+    # §10B v2 baseline-regression recovery (2026-05-12). When the
+    # execution node fired ``baseline_regression_alert``, give the
+    # trial ONE shot at recovery before falling through to
+    # coverage_analyzer / improver: run the BaselineDiffAnalyzer to
+    # extract concrete diff hints, then re-route to Prototyper with
+    # those hints in context. Capped at MAX_BASELINE_DIFF_RETRIES per
+    # trial.
+    #
+    # Order rationale: improver tweaks the existing driver locally;
+    # the diff loop regenerates it from scratch with new context.
+    # The regression alert says the local minimum is bad, so a
+    # global re-prototype is the higher-value first move. If it also
+    # under-performs (alert fires again), we'll be over budget on
+    # the retry and fall through to the local improver path below.
+    alert = state.get("baseline_regression_alert")
+    if alert:
+        context = state.get("context", {}) or {}
+        knowledge = context.get("existing_driver_knowledge", {}) or {}
+        has_baseline = bool(knowledge.get("driver_sources"))
+        diff_retries = state.get("baseline_diff_retry_count", 0)
+        if has_baseline and diff_retries < MAX_BASELINE_DIFF_RETRIES:
+            diff_analysis = state.get("baseline_diff_analysis")
+            if not diff_analysis:
+                logger.info(
+                    '§10B v2: baseline-regression alert active, '
+                    f'line_diff={coverage_diff:.2%}; routing to '
+                    'baseline_diff_analyzer for recovery hints',
+                    trial=trial,
+                )
+                return "baseline_diff_analyzer"
+            # Diff already produced this iteration → consume it via a
+            # fresh prototyper pass. ``supervisor_node`` increments
+            # ``baseline_diff_retry_count`` when this routing decision
+            # lands.
+            logger.info(
+                '§10B v2: baseline_diff_analysis available '
+                f'(verdict={diff_analysis.get("verdict", "?")}); '
+                'routing to prototyper for regeneration',
+                trial=trial,
+            )
+            return "prototyper"
+
     # Try coverage_analyzer (once)
     coverage_analysis = state.get("coverage_analysis")
     if not coverage_analysis:
@@ -417,6 +477,7 @@ def route_condition(state: FuzzingWorkflowState) -> str:
         "crash_analyzer": "crash_analyzer",
         "coverage_analyzer": "coverage_analyzer",
         "crash_feasibility_analyzer": "crash_feasibility_analyzer",
+        "baseline_diff_analyzer": "baseline_diff_analyzer",
         "END": "__end__"
     }
 

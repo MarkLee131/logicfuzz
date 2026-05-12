@@ -192,6 +192,7 @@ class FuzzingWorkflow:
         from src.workflow.nodes import coverage_analyzer_node
         from src.workflow.nodes import crash_feasibility_analyzer_node
         from src.workflow.nodes import improver_node
+        from src.workflow.nodes import baseline_diff_analyzer_node
 
         workflow = StateGraph(FuzzingWorkflowState)
 
@@ -206,6 +207,8 @@ class FuzzingWorkflow:
         workflow.add_node("coverage_analyzer", coverage_analyzer_node)
         workflow.add_node("crash_feasibility_analyzer",
                           crash_feasibility_analyzer_node)
+        workflow.add_node("baseline_diff_analyzer",
+                          baseline_diff_analyzer_node)
 
         # Set entry point
         workflow.set_entry_point("supervisor")
@@ -221,6 +224,7 @@ class FuzzingWorkflow:
                 "crash_analyzer": "crash_analyzer",
                 "coverage_analyzer": "coverage_analyzer",
                 "crash_feasibility_analyzer": "crash_feasibility_analyzer",
+                "baseline_diff_analyzer": "baseline_diff_analyzer",
                 "__end__": END
             })
 
@@ -233,5 +237,6 @@ class FuzzingWorkflow:
         workflow.add_edge("crash_analyzer", "supervisor")
         workflow.add_edge("coverage_analyzer", "supervisor")
         workflow.add_edge("crash_feasibility_analyzer", "supervisor")
+        workflow.add_edge("baseline_diff_analyzer", "supervisor")
 
         return workflow

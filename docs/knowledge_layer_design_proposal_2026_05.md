@@ -307,7 +307,7 @@ not be budgeted in any plan tighter than 6 months.
 
 ---
 
-## §10B. Emergency-mode on baseline regression (v1 LANDED 2026-05-12; v2 deferred)
+## §10B. Emergency-mode on baseline regression (v1 LANDED 2026-05-12; v2 LANDED 2026-05-12)
 
 User observation (2026-05-12, post cjson/c-ares/lcms runs):
 
@@ -354,45 +354,80 @@ run1 — 4 of 5 had `line_diff` at or below 0.5%. The threshold
 catches the dominant failure mode without over-firing on rare
 high-novelty trials.
 
-What v1 does NOT do (yet — v2 territory):
+### v2 (LANDED 2026-05-12)
 
-  - Does **not** automatically re-prototype with structural feedback.
-    The alert exists for operator visibility; pipeline continues
-    normally.
-  - Does **not** diff our driver vs the existing OSS-Fuzz driver.
-    That comparison is what v2 will add as a diagnostic agent.
+Closes the loop from "alert → operator-visibility" to "alert →
+auto-recover". Implementation:
 
-**Proposed v2 mechanism (sketch — not implemented yet)**:
+  - **`LangGraphBaselineDiffAnalyzer`** (`src/agents/baseline_diff_analyzer.py`):
+    stateless single-LLM-call agent. Inputs: our driver source, the
+    baseline driver source (from `existing_driver_knowledge.driver_sources[0]`),
+    the regression-alert payload, and the project API list.
+    Outputs structured XML tags:
+      - `<missing_apis>` — APIs in baseline absent from ours
+      - `<missing_patterns>` — structural patterns dropped
+      - `<input_encoding_gaps>` — how baseline derives input from
+        `data, size` vs how we do
+      - `<suggested_constraints>` — actionable, library-specific
+        imperatives for the re-prototype
+      - `<verdict>` — `recover | baseline_too_narrow | inconclusive`
+    Verdict gates the directive level in the recovery prompt; the
+    baseline is allowed to be the wrong target.
 
-  1. Post-execution, compute `new_cov - baseline_cov` AND
-     `new_cov / baseline_cov`. Both are already computed for the
-     `line_coverage_diff` field; this just adds an absolute-ratio gate.
-  2. If `new_cov < baseline_cov × 0.9` (i.e., 10%+ regression),
-     emit a structured `coverage_regression_alert` event.
-  3. Coverage-regression alert hands off to a new diagnostic loop:
-     - Compare our driver source to the existing driver source
-       (we already load `existing_driver_knowledge.driver_sources`
-       in Step 12, but the Prototyper doesn't ALWAYS use it as
-       a constraint — it's an "advisory" reference).
-     - Diff at the structural level: which APIs does the existing
-       driver call that ours doesn't? Which init/teardown patterns
-       differ?
-     - If significant gap → re-prototype with a stricter prompt that
-       requires the structural pattern match.
+  - **Supervisor wiring** (`src/workflow/nodes/supervisor.py`):
+    `_handle_coverage_improvement` consults `baseline_regression_alert`
+    BEFORE the standard `coverage_analyzer → improver → END` path.
+    If alert is set, the project has an OSS-Fuzz baseline, AND
+    `baseline_diff_retry_count < MAX_BASELINE_DIFF_RETRIES` (=1):
+      1. First pass: route to `baseline_diff_analyzer`. Agent writes
+         `baseline_diff_analysis` and returns to supervisor.
+      2. Second pass: supervisor sees the diff is present and routes
+         to `prototyper`, simultaneously incrementing
+         `baseline_diff_retry_count`. The counter lives in the
+         routing layer, not the analyzer agent, so the budget is
+         single-source-of-truth.
+    On the third loop (after the regenerated driver builds+runs
+    again), if the alert STILL fires, retry_count is now 1 so the
+    branch falls through to the normal coverage_analyzer/improver
+    path. Hard ceiling: one diff loop per trial.
+
+  - **Prototyper consumption** (`src/agents/prototyper.py`):
+    `_format_baseline_recovery` renders the analyzer's output as a
+    `<baseline_regression_recovery>` block. The block sits FIRST
+    inside `<reference_information>` so it visibly dominates the
+    same priors that produced the regression. Empty string when
+    `baseline_diff_analysis` is absent — preserves the unchanged
+    first-pass generation path.
+
+**State surface**:
+  - `baseline_diff_analysis: Dict` — analyzer output (see above)
+  - `baseline_diff_retry_count: int` — capped at 1 per trial
+
+**Rationale for routing the recovery via Prototyper, not Improver**:
+the improver tweaks the existing driver locally; the alert says
+the local minimum is bad, so a global re-prototype is the
+higher-value first move. The Improver remains in the workflow but
+runs only if the diff-recovery exhausts its budget and coverage
+still hasn't improved.
 
 **Why this is worth doing**:
 
   - It's the natural empirical floor — we should never *regress* vs
     what the library author shipped.
   - The signal is cheap to compute (we already have baseline cov).
-  - The fix loop (re-prototype with more constraints) reuses
-    existing machinery.
+  - The recovery loop reuses existing machinery (Prototyper) with
+    one new analyzer node.
 
-**Deferred until**: T1 evaluation completes. The 4-bench validation
-will give us 4 concrete `baseline_cov - new_cov` deltas to size
-the threshold. If the average gap is 5%, the 10% threshold is fine.
-If average is 15%, we need a different threshold or a different
-intervention.
+### Empirical validation (placeholder)
+
+Tracking column to fill in from the next 3-bench run (cjson +
+c-ares + lcms) with v2 enabled:
+
+| Project | run | alert fired? | diff verdict | post-recovery line_diff |
+|---------|-----|--------------|--------------|-------------------------|
+| cjson   | TBD | TBD          | TBD          | TBD                     |
+| c-ares  | TBD | TBD          | TBD          | TBD                     |
+| lcms    | TBD | TBD          | TBD          | TBD                     |
 
 Tracked alongside §10A operator-doc-prep — both are knowledge-
 augmentation directions for the case where T1's automatic

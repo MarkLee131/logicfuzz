@@ -72,10 +72,28 @@ class FuzzingWorkflowState(TypedDict):
     # the project ships an OSS-Fuzz baseline driver. Indicates our
     # generated driver contributed essentially no NEW coverage beyond
     # what the baseline already covers — strong signal that we
-    # dropped critical context. v1 only emits the alert; v2 will
-    # route to a diagnostic re-prototype loop. See
+    # dropped critical context. v1 only emits the alert; v2 wires it
+    # into a BaselineDiffAnalyzer → Prototyper recovery loop (capped
+    # at 1 retry per trial). See
     # docs/knowledge_layer_design_proposal_2026_05.md §10B.
     baseline_regression_alert: NotRequired[Dict[str, Any]]
+
+    # §10B v2 BaselineDiffAnalyzer output (2026-05-12). Set by the
+    # BaselineDiffAnalyzer node after a regression alert fires. The
+    # Prototyper consumes this on the next pass and renders it into
+    # a ``<baseline_regression_recovery>`` block. Structure:
+    # ``{status, missing_apis: List[str], missing_patterns: List[str],
+    #    input_encoding_gaps: str, suggested_constraints: List[str],
+    #    verdict: 'recover' | 'baseline_too_narrow' | 'inconclusive'}``.
+    baseline_diff_analysis: NotRequired[Dict[str, Any]]
+
+    # §10B v2 retry counter (2026-05-12). Incremented by the
+    # supervisor when it routes Prototyper following a successful
+    # diff-analyzer turn. Hard-capped at 1 per trial; further
+    # regression alerts fall through to coverage_analyzer / improver
+    # / END as usual. The cap is here, not in the analyzer agent,
+    # so the routing layer remains the single source of truth.
+    baseline_diff_retry_count: NotRequired[int]
 
     validation_error: NotRequired[str]  # Validation error message
     validation_failure_count: NotRequired[int]  # Number of validation failures

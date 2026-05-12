@@ -8,6 +8,7 @@ from src.agents.improver import LangGraphImprover
 from src.agents.coverage_analyzer import LangGraphCoverageAnalyzer
 from src.agents.crash_analyzer import LangGraphCrashAnalyzer
 from src.agents.crash_feasibility_analyzer import LangGraphCrashFeasibilityAnalyzer
+from src.agents.baseline_diff_analyzer import LangGraphBaselineDiffAnalyzer
 from src.agents.project_analyzer import ProjectAnalyzer
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "LangGraphCoverageAnalyzer",
     "LangGraphCrashAnalyzer",
     "LangGraphCrashFeasibilityAnalyzer",
+    "LangGraphBaselineDiffAnalyzer",
     "ProjectAnalyzer",
 ]
