@@ -127,6 +127,20 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
         logger.debug(f'Passing error triage to fixer: primary={triage_result.primary_category}, '
                     f'strategy={triage_result.recommended_strategy}', trial=trial)
 
+    # When routing to improver, snapshot the pre-rewrite coverage and
+    # source so execution_node can rollback if the improver degrades
+    # coverage (2026-05-12 improver-rollback fix). c-ares trial 01 saw
+    # iter1 11.17% → iter2 8.07% with no recourse pre-fix.
+    if next_action == "improver":
+        result["improver_baseline_coverage"] = state.get("coverage_percent", 0.0)
+        result["improver_baseline_source"] = state.get("fuzz_target_source", "")
+        logger.debug(
+            f'Snapshotting improver baseline: coverage='
+            f'{result["improver_baseline_coverage"]:.2%}, '
+            f'source_len={len(result["improver_baseline_source"])}',
+            trial=trial,
+        )
+
     # When routing to fixer after crash analysis, pass crash info for context
     if next_action == "fixer" and state.get("context_analysis") is not None:
         crash_fix_retry_count = state.get("crash_fix_retry_count", 0) + 1
@@ -368,7 +382,13 @@ def _handle_coverage_improvement(state: FuzzingWorkflowState, trial: int) -> str
         else:
             logger.info(f'Coverage analyzer already ran {coverage_analyzer_visits} time(s), skipping', trial=trial)
 
-    # Try improver (once) if coverage_analysis suggests improvement
+    # Try improver (once) if coverage_analysis suggests improvement.
+    # Snapshot the pre-improver coverage so execution_node can rollback
+    # the driver source if the rewrite degrades coverage (2026-05-12).
+    # Empirical motivation: c-ares trial 01 iter1 11.17% → iter2 8.07%
+    # (improver rewrote the driver more narrowly and lost 27% relative
+    # coverage with no recourse). The rollback baseline lives in state
+    # so execution_node can compare without re-querying.
     if coverage_analysis and coverage_analysis.get("improve_required", False):
         if improver_visits < MAX_COVERAGE_IMPROVE_ITERATIONS:
             logger.info('Coverage analysis suggests improvement, routing to improver', trial=trial)

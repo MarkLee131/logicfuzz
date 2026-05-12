@@ -2258,12 +2258,24 @@ def _synthesize_skeletons_per_sequence(
 
     skeletons: List[Dict[str, Any]] = []
     z3_rejected = 0
-    automaton_pruned = 0
-    # When the CBFactory has an AutomatonAcceptanceGuard wired in, sequences
-    # whose automaton acceptance_score < threshold are dropped BEFORE Z3
-    # ever runs. We pre-compute the score per sequence so the helper can
-    # report "X pruned by automaton, Y rejected by Z3" — without this
-    # split the two failure modes are indistinguishable in logs.
+    automaton_low_score = 0
+    # **Positive-only automaton signal** (2026-05-12 redesign): the
+    # acceptance_score is computed for telemetry but is NOT used to
+    # reject candidates. Rationale: the project automaton is trained
+    # from a finite test corpus and represents a *subset* of valid
+    # library usage. A sequence not present in the automaton is not
+    # necessarily invalid — it may be a novel-but-correct combination
+    # that the project's tests just don't exercise. Hard-rejecting on
+    # "not seen" starved cjson / c-ares / lcms uniformly (10/10 prune
+    # on all three benches; see docs/automaton_refactor §3 + §4 calibration
+    # finding). Real infeasibility (type / lifecycle / provenance) is
+    # left to Z3 below, which has actual semantic grounds for rejection.
+    #
+    # The score is still useful as: (a) a positive-only L4 ranking boost
+    # (already wired in coverage_ranker.py), (b) a Comprehender-B prefilter
+    # for fast-path VALID labeling, and (c) telemetry here to track how
+    # many candidates would have been filtered under the old policy —
+    # useful for re-evaluating whether to ever re-enable rejection.
     artifact_for_score = automaton_artifact if automaton_artifact is not None else None
     for i, target_seq in enumerate(target_sequences):
         try:
@@ -2272,15 +2284,17 @@ def _synthesize_skeletons_per_sequence(
                     score = float(
                         artifact_for_score.acceptance_score(target_seq))
                     if score < float(automaton_threshold):
-                        automaton_pruned += 1
+                        # Telemetry only — do not skip. The candidate proceeds
+                        # to CBFactory + Z3 like any other.
+                        automaton_low_score += 1
                         log.debug(
-                            "[skeleton-helper] automaton pruned seq %s "
-                            "(score=%.3f < threshold=%.2f)",
+                            "[skeleton-helper] low automaton score (informational) "
+                            "for seq %s: score=%.3f < threshold=%.2f",
                             [api.function_name for api in target_seq],
                             score, automaton_threshold)
-                        continue
                 except Exception:
-                    # Score computation failed — fall through to Z3.
+                    # Score computation failed — treat as unscored; forward
+                    # the candidate unchanged.
                     pass
 
             skeleton = factory.create_skeleton_for_sequence(target_seq)
@@ -2333,12 +2347,13 @@ def _synthesize_skeletons_per_sequence(
                 f"({[api.function_name for api in target_seq]}): {e}")
 
     total = len(target_sequences)
-    if automaton_pruned or z3_rejected:
+    if automaton_low_score or z3_rejected:
         log.info(
-            f"   ⚠️ Skeleton synthesis attrition on {total} sequences: "
-            f"automaton_pruned={automaton_pruned} (acceptance_score < "
-            f"{automaton_threshold}), z3_rejected={z3_rejected} "
-            f"(infeasible under type/lifecycle/provenance), "
+            f"   📊 Skeleton synthesis on {total} sequences: "
+            f"automaton_low_score={automaton_low_score} (informational; "
+            f"score < {automaton_threshold}, not pruned), "
+            f"z3_rejected={z3_rejected} (real infeasibility: "
+            f"type/lifecycle/provenance), "
             f"emitted={len(skeletons)}")
     return skeletons
 

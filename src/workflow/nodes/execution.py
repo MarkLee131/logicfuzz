@@ -461,6 +461,46 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     # Increment iteration counter (each execution in optimization phase counts as one iteration)
     current_iteration = state.get("current_iteration", 0) + 1
 
+    # Improver-rollback gate (2026-05-12). When the supervisor routed the
+    # previous turn through the improver, it snapshotted the pre-rewrite
+    # coverage and source into state. We now compare and, if the new
+    # coverage dropped >15% relative, restore the previous driver.
+    # c-ares trial 01 motivation: iter1 11.17% → improver → iter2 8.07%
+    # (27% relative drop) was kept silently pre-fix. Threshold 0.85 means
+    # we tolerate noise but reject substantive regressions.
+    #
+    # Rollback action: revert ``fuzz_target_source`` to the baseline
+    # source, restore the baseline coverage in state, and clear the
+    # baseline keys so this branch doesn't double-fire on subsequent
+    # executions. We do NOT re-run build (the binary at $OUT is for the
+    # improved driver; supervisor will route to build on next loop).
+    final_coverage_percent = coverage_percent
+    final_fuzz_target_source = fuzz_target_source
+    rollback_applied = False
+    improver_baseline = state.get("improver_baseline_coverage")
+    improver_baseline_src = state.get("improver_baseline_source")
+    if (improver_baseline is not None and improver_baseline_src
+            and improver_baseline > 0.0):
+        ratio = coverage_percent / improver_baseline if improver_baseline > 0 else 1.0
+        if ratio < 0.85:
+            logger.warning(
+                'Improver-rollback triggered: coverage dropped '
+                f'{improver_baseline:.2%} → {coverage_percent:.2%} '
+                f'(ratio={ratio:.2f} < 0.85). Reverting to '
+                'pre-improver driver.',
+                trial=trial,
+            )
+            final_coverage_percent = improver_baseline
+            final_fuzz_target_source = improver_baseline_src
+            rollback_applied = True
+        else:
+            logger.debug(
+                'Improver-rollback gate passed: coverage '
+                f'{improver_baseline:.2%} → {coverage_percent:.2%} '
+                f'(ratio={ratio:.2f} ≥ 0.85). Keeping rewrite.',
+                trial=trial,
+            )
+
     # Create state update
     state_update = {
         "run_success": run_result.succeeded if hasattr(run_result, 'succeeded') else True,
@@ -470,7 +510,7 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         "crash_info": crash_info,
         "crash_func": run_result.semantic_check.crash_func if (hasattr(run_result, 'semantic_check') and run_result.semantic_check) else "",
         "coverage_summary": run_result.coverage_summary,
-        "coverage_percent": coverage_percent,
+        "coverage_percent": final_coverage_percent,
         "line_coverage_diff": coverage_diff,
         "no_coverage_improvement_count": no_improvement_count,  # Track consecutive iterations without improvement
         "current_iteration": current_iteration,  # Increment iteration counter
@@ -484,17 +524,25 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         "crash_analysis": None,
         "context_analysis": None,
         "coverage_analysis": None,
+        # Clear baseline keys regardless of rollback outcome — we've now
+        # decided, the snapshot has served its purpose.
+        "improver_baseline_coverage": None,
+        "improver_baseline_source": None,
         "messages": [{
             "role": "assistant",
             "content": f"Execution {'successful' if run_result.succeeded else 'failed'}"
         }]
     }
-    
+    if rollback_applied:
+        state_update["fuzz_target_source"] = final_fuzz_target_source
+        state_update["improver_rolled_back"] = True
+
     logger.info(f'Execution completed: success={state_update["run_success"]}, '
-               f'crashes={state_update["crashes"]}, coverage={coverage_percent:.2%}, '
-               f'iteration={current_iteration}',
+               f'crashes={state_update["crashes"]}, coverage={final_coverage_percent:.2%}, '
+               f'iteration={current_iteration}'
+               + (' [improver rolled back]' if rollback_applied else ''),
                trial=trial)
-    
+
     return state_update
 
 def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str, Any]:

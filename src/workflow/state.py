@@ -48,6 +48,17 @@ class FuzzingWorkflowState(TypedDict):
     # about compilation. See 2026-05 workflow refactor.
     is_stub_binary: NotRequired[bool]
 
+    # Improver-rollback machinery (2026-05-12). When supervisor routes
+    # to improver, it snapshots pre-rewrite coverage + source into these
+    # keys. After the next execution, ``execution_node`` compares new
+    # coverage to baseline and either keeps the rewrite or restores the
+    # baseline source (when new < baseline × 0.85). The keys are then
+    # cleared. ``improver_rolled_back`` set by execution_node to surface
+    # the rollback decision in trial summaries.
+    improver_baseline_coverage: NotRequired[float]
+    improver_baseline_source: NotRequired[str]
+    improver_rolled_back: NotRequired[bool]
+
     validation_error: NotRequired[str]  # Validation error message
     validation_failure_count: NotRequired[int]  # Number of validation failures
 

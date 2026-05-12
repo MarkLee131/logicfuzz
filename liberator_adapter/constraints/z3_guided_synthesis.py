@@ -184,7 +184,8 @@ class AutomatonAcceptanceGuard:
         self.unsat_relax_count = int(unsat_relax_count)
         self.relax_step = float(relax_step)
         self._consecutive_reject = 0
-        self.n_pruned = 0
+        self.n_pruned = 0           # preserved for telemetry continuity (always 0 post-2026-05-12)
+        self.n_low_score = 0        # new: candidates that would have been pruned
         self.n_passed = 0
         self.n_relaxes = 0
         self.n_errors = 0
@@ -205,46 +206,50 @@ class AutomatonAcceptanceGuard:
         return self._strong
 
     def admits(self, candidate_sequence: List[str]) -> bool:
-        """``True`` iff guard is weak (always admit) or sequence acceptance
-        clears the *current* threshold. Side-effects: increments stats and
-        auto-relaxes on consecutive rejects.
+        """Positive-only signal: always returns True (2026-05-12 redesign).
+
+        Pre-redesign behaviour: rejected ``score < self.threshold`` when
+        ``is_strong()``. Empirically (cjson run4, c-ares run1, lcms run1)
+        this rejected 10/10 candidates uniformly across all three
+        benchmarks regardless of automaton size (cjson 2-state, c-ares
+        24-state, lcms 26-state). Root cause: the project automaton is
+        trained from a finite test corpus and only represents a *subset*
+        of valid library usage. ``score < threshold`` means "not in the
+        observed subset", not "invalid". Real infeasibility (type /
+        lifecycle / provenance) is the Z3 solver's job downstream.
+
+        We still compute the score (for telemetry — operators can decide
+        to re-enable filtering by raising the threshold above the typical
+        novel-but-valid range) and surface it via ``stats()``. But we
+        never reject the candidate here — Z3 has actual semantic
+        grounds, this layer doesn't.
+
+        ``stats().pruned`` is preserved for telemetry continuity but
+        always reads 0 under the new behaviour.
         """
-        if not self._strong or self.artifact is None:
+        if self.artifact is None:
             self.n_passed += 1
             return True
         try:
             score = float(self.artifact.acceptance_score(candidate_sequence))
         except Exception as exc:
-            logger.debug("[AutomatonGuard] acceptance_score raised %s; "
-                         "fail-open admit", exc)
+            logger.debug("[AutomatonGuard] acceptance_score raised %s", exc)
             self.n_errors += 1
-            self.n_passed += 1
-            return True
-        if score >= self.threshold:
-            self.n_passed += 1
-            self._consecutive_reject = 0
-            return True
-        self.n_pruned += 1
-        self._consecutive_reject += 1
-        if self._consecutive_reject >= self.unsat_relax_count:
-            new_thr = max(0.0, self.threshold - self.relax_step)
-            if new_thr < self.threshold:
-                self.threshold = new_thr
-                self.n_relaxes += 1
-                self._consecutive_reject = 0
-                logger.info(
-                    "[AutomatonGuard] %d consecutive rejects → relax "
-                    "threshold to %.3f",
-                    self.unsat_relax_count, self.threshold,
-                )
-        return False
+            score = -1.0  # below any threshold; for telemetry below
+        # Telemetry: split "would-have-pruned" vs "always-passed" so we
+        # can still measure how often candidates fell below the threshold.
+        if score >= 0.0 and score < self.threshold:
+            self.n_low_score += 1
+        self.n_passed += 1
+        return True
 
     def stats(self) -> Dict[str, Any]:
         return {
             "strong": self._strong,
             "threshold": round(self.threshold, 4),
             "initial_threshold": round(self.initial_threshold, 4),
-            "pruned": self.n_pruned,
+            "pruned": self.n_pruned,         # always 0 in positive-only mode
+            "low_score": self.n_low_score,    # informational: "would have pruned"
             "passed": self.n_passed,
             "relaxes": self.n_relaxes,
             "errors": self.n_errors,
