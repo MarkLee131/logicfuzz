@@ -307,6 +307,72 @@ not be budgeted in any plan tighter than 6 months.
 
 ---
 
+## §10B. Future direction — emergency-mode on baseline regression (2026-05-12 followup)
+
+User observation (2026-05-12, post cjson/c-ares/lcms runs):
+
+> 如果遇到对项目的driver，coverage甚至不如现有driver，我们需要开启紧急
+> 提升模式去思考为啥。 这意味着，我们可能丢弃了很重要的上下文信息
+
+**Principle**: the project's existing OSS-Fuzz driver is the gold
+standard — hand-written by library experts who know the project's
+real entry points, formats, and required state setup. When LogicFuzz's
+generated driver covers **less** than that baseline, the gap is not
+acceptable as "we're doing different work"; it means we **dropped
+context** the existing driver had.
+
+Empirical motivation (preliminary):
+
+  - c-ares trial 01: 11.17% PC iter1, 8.07% PC iter2, **line_diff=2.01%**
+    (only 2% new coverage relative to baseline). Most coverage is just
+    re-covering what the existing fuzzer already does.
+  - lcms trial 01: 0.99% PC. Existing lcms fuzzer covers much more.
+    Our driver is exploring a tiny corner.
+  - cjson trial 01 (run4): 25.76% PC, **line_diff=0.00%**. We re-covered
+    only what the existing fuzzer covers — added nothing new.
+
+The current workflow has **no automatic alarm** when this happens. We
+silently report "successful" trials that contributed zero new
+coverage.
+
+**Proposed mechanism (sketch — not implemented yet)**:
+
+  1. Post-execution, compute `new_cov - baseline_cov` AND
+     `new_cov / baseline_cov`. Both are already computed for the
+     `line_coverage_diff` field; this just adds an absolute-ratio gate.
+  2. If `new_cov < baseline_cov × 0.9` (i.e., 10%+ regression),
+     emit a structured `coverage_regression_alert` event.
+  3. Coverage-regression alert hands off to a new diagnostic loop:
+     - Compare our driver source to the existing driver source
+       (we already load `existing_driver_knowledge.driver_sources`
+       in Step 12, but the Prototyper doesn't ALWAYS use it as
+       a constraint — it's an "advisory" reference).
+     - Diff at the structural level: which APIs does the existing
+       driver call that ours doesn't? Which init/teardown patterns
+       differ?
+     - If significant gap → re-prototype with a stricter prompt that
+       requires the structural pattern match.
+
+**Why this is worth doing**:
+
+  - It's the natural empirical floor — we should never *regress* vs
+    what the library author shipped.
+  - The signal is cheap to compute (we already have baseline cov).
+  - The fix loop (re-prototype with more constraints) reuses
+    existing machinery.
+
+**Deferred until**: T1 evaluation completes. The 4-bench validation
+will give us 4 concrete `baseline_cov - new_cov` deltas to size
+the threshold. If the average gap is 5%, the 10% threshold is fine.
+If average is 15%, we need a different threshold or a different
+intervention.
+
+Tracked alongside §10A operator-doc-prep — both are knowledge-
+augmentation directions for the case where T1's automatic
+extraction is insufficient.
+
+---
+
 ## §10A. Future direction — operator-prepared documentation pages (2026-05 followup)
 
 User note (2026-05-11, after first dynamic run): the tool can be
