@@ -411,6 +411,21 @@ def _handle_coverage_improvement(state: FuzzingWorkflowState, trial: int) -> str
         knowledge = context.get("existing_driver_knowledge", {}) or {}
         has_baseline = bool(knowledge.get("driver_sources"))
         diff_retries = state.get("baseline_diff_retry_count", 0)
+        if not has_baseline:
+            # Silent fall-through used to make v2 misses invisible in logs.
+            # Surface them so an operator can see "alert fired but no
+            # baseline corpus available" rather than guessing why v2
+            # routing didn't kick in. The corpus comes from
+            # ``data_prep/extract_all_fuzz_drivers.py``; without it,
+            # Step 12 in data_context returns empty driver_sources.
+            logger.info(
+                '§10B v2 SKIP: alert active but no baseline driver '
+                'corpus available (existing_driver_knowledge.driver_sources '
+                'is empty). Falling through to coverage_analyzer. Run '
+                'data_prep/extract_all_fuzz_drivers.py or set '
+                'LOGICFUZZ_DRIVERS_ROOT to enable v2 recovery.',
+                trial=trial,
+            )
         if has_baseline and diff_retries < MAX_BASELINE_DIFF_RETRIES:
             diff_analysis = state.get("baseline_diff_analysis")
             if not diff_analysis:

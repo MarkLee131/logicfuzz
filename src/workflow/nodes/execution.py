@@ -495,15 +495,17 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
             "iteration": current_iteration,
         }
         logger.warning(
-            '🚨 BASELINE-REGRESSION ALERT (§10B v1): '
+            '🚨 BASELINE-REGRESSION ALERT (§10B): '
             'line_diff=%.2f%% < threshold=%.2f%%. '
             'Our driver covered %.2f%% PC, but added essentially no '
             'NEW lines beyond the existing OSS-Fuzz baseline driver. '
             'Likely cause: we dropped structural context from the '
             'baseline (input encoding, print modes, init/teardown '
-            'pattern). Inspect `fuzz_targets/%02d.fuzz_target` vs the '
-            'existing OSS-Fuzz fuzzer source. v2 auto-diff loop is '
-            'deferred — see docs/knowledge_layer_design_proposal_2026_05.md §10B.',
+            'pattern). Supervisor will attempt §10B v2 auto-recovery '
+            '(BaselineDiffAnalyzer → re-prototype) when baseline driver '
+            'sources are available; otherwise inspect '
+            '`fuzz_targets/%02d.fuzz_target` vs the existing OSS-Fuzz '
+            'fuzzer source manually.',
             coverage_diff * 100, _ABS_LINE_DIFF_THRESHOLD * 100,
             coverage_percent * 100, trial,
             trial=trial,
