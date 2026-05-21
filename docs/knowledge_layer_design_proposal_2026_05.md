@@ -418,16 +418,74 @@ still hasn't improved.
   - The recovery loop reuses existing machinery (Prototyper) with
     one new analyzer node.
 
-### Empirical validation (placeholder)
+### Empirical validation (2026-05-21 v2 A/B run)
 
-Tracking column to fill in from the next 3-bench run (cjson +
-c-ares + lcms) with v2 enabled:
+3-bench run (cjson + c-ares + lcms), v2 enabled, single trial each,
+2-iteration cap. `--multihop-prototyper`, `--use-doxygen-priors`,
+`--use-readme-purpose`. Baseline-driver corpus extracted via
+`data_prep/extract_all_fuzz_drivers.py` (cjson 2, c-ares 3, lcms 15).
 
-| Project | run | alert fired? | diff verdict | post-recovery line_diff |
-|---------|-----|--------------|--------------|-------------------------|
-| cjson   | TBD | TBD          | TBD          | TBD                     |
-| c-ares  | TBD | TBD          | TBD          | TBD                     |
-| lcms    | TBD | TBD          | TBD          | TBD                     |
+| Project | iter1 PC | line_diff | alert? | verdict | iter2 PC | line_diff | net Δ |
+|---------|----------|-----------|--------|---------|----------|-----------|-------|
+| cjson   | 25.76%   | 0.00%     | ✅     | recover           | 24.12% | 0.00% | −1.64% PC |
+| c-ares  |  8.63%   | 0.09%     | ✅     | recover           |  8.37% | 0.13% | −0.26% PC / **+0.04% line_diff** |
+| lcms    |  0.97%   | 0.00%     | ✅     | baseline_too_narrow |  0.97% | 0.00% | 0 |
+
+**What works as designed.** Mechanism fires end-to-end on every alert:
+execution → supervisor (§10B v2 routing) → BaselineDiffAnalyzer (verdict
+extracted) → prototyper regeneration → re-execution. Retry counter caps
+at 1/1 — second alert in the same trial falls through to coverage_analyzer
+(see `logs/ab_2026_05_21_v2/{cjson,c-ares,lcms}.log`).
+
+Verdict distribution: 2× recover, 1× baseline_too_narrow. The
+baseline_too_narrow on lcms is *correct* — the lcms baseline is the
+union of 15 hand-written fuzzers covering different lcms entry points
+(`cms_cgats`, `cms_devicelink`, `cms_md5`, `cms_postscript`,
+`cms_transform_*`…) at 63.67% line coverage; our single auto-generated
+driver caught one entry point at 1.77%. No single-driver regeneration
+can close that gap; this needs `--merge-drivers` and multiple trials.
+
+**What didn't.** PC coverage *fell* on cjson (−1.64%) and c-ares
+(−0.26%) after recovery. Two factors:
+
+1. The BaselineDiffAnalyzer's `verdict=recover` is over-confident.
+   On cjson we already match baseline within 1.03% line coverage
+   (998/2321 = 43.00% vs 1022/2321 = 44.03%); the analyzer should
+   have output `baseline_too_narrow` like it did for lcms but
+   instead suggested regeneration that lost lines.
+2. The regenerated driver doesn't reuse the structural pieces of the
+   prior driver that were already paying off — the recovery prompt
+   adds *new* suggestions but the prototyper still starts from the
+   skeleton, not from the prior trial's source.
+
+c-ares is the one mild positive: `line_diff` ticked up 0.09 → 0.13%
+(novel lines beyond baseline), even though PC dipped. So the recovery
+*did* steer the driver toward un-baseline-covered code, just not enough
+to dominate the regression of the dropped lines.
+
+**Comparison to baseline driver coverage (line-level, OSS-Fuzz bucket):**
+
+| Project | Our line cov | Baseline line cov | Gap |
+|---------|-------------|-------------------|-----|
+| cjson   | 998/2321 = 43.00%   | 1022/2321 = 44.03%  | −1.03% (parity) |
+| c-ares  | 1959/17916 = 10.93% | 7019/18076 = 38.83% | −27.90% |
+| lcms    | 302/17100 = 1.77%   | 13139/20636 = 63.67% | −61.90% |
+
+The two large gaps are **single-driver vs N-driver-union** by
+construction — the OSS-Fuzz baseline numbers are unions of all
+hand-written fuzzers, not a single-driver benchmark.
+
+**Open follow-ups (not blockers for shipping v2):**
+
+- Tighten BaselineDiffAnalyzer's verdict cutoff so `recover` only
+  fires when there's genuine missing structural context, not when
+  we're already at parity with baseline (cjson case).
+- Pass the prior trial's source into the diff-aware regeneration
+  prompt so the prototyper *extends* the working driver instead of
+  rebuilding from scratch.
+- Re-test §10B v2 under `--merge-drivers` so multi-driver runs (lcms)
+  can actually exercise the recovery — current single-driver harness
+  caps coverage at one entry point regardless of v2 behaviour.
 
 Tracked alongside §10A operator-doc-prep — both are knowledge-
 augmentation directions for the case where T1's automatic

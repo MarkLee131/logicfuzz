@@ -294,6 +294,39 @@ the final driver sources and per-trial coverage.
 | Multi-hop **strictly worse** (loses on ≥2 of 3) | Abort. Document why the reasoning chain didn't translate to better code. Revisit the design (maybe Mode B is needed, or the Hop structure is wrong). |
 | Multi-hop **comparable** on coverage but reasoning_chain.json is much more useful for debugging | Ship behind opt-in flag `--multihop-prototyper`. Default off until more bench data accumulates. |
 
+### First-run observations (2026-05-21, multihop ON only)
+
+A/B not yet complete — we have the multihop-ON arm but no
+multihop-OFF parallel run to compare against. Logged here as
+single-arm data; the OFF arm + decision-gate evaluation follows.
+
+Single trial per project, multihop ON + doxygen + readme priors,
+2-iter cap. Logs: `logs/ab_2026_05_21_v2/{cjson,c-ares,lcms}.log`.
+
+| Project | iter1 PC | iter2 PC | iter1 line_diff | final line_diff | trial-1 compile? |
+|---------|----------|----------|-----------------|-----------------|------------------|
+| cjson   | 25.76%   | 24.12%   | 0.00%           | 0.00%           | ✅ |
+| c-ares  | 8.63%    | 8.37%    | 0.09%           | 0.13%           | ✅ |
+| lcms    | 0.97%    | 0.97%    | 0.00%           | 0.00%           | ✅ |
+
+Compile success rate trial-1: 3/3. (For comparison, the prior
+2026-05-12 single-shot runs without multihop also compiled
+trial-1 on all three; multihop doesn't appear to regress compile
+rate.)
+
+Coverage is dominated by §10B v2 recovery, not multihop (the
+recovery loop re-prototypes between iter1 and iter2). To
+isolate multihop's contribution we need:
+
+  1. multihop ON, §10B v2 OFF (control: pure multihop)
+  2. multihop OFF, §10B v2 OFF (baseline: vanilla)
+  3. multihop ON, §10B v2 ON (this run — already collected)
+  4. multihop OFF, §10B v2 ON
+
+§10B v2 fires on the same trials regardless of multihop, so
+arms 1+2 give us the per-bench multihop delta cleanly. Tracked
+in §6 evaluation methodology — A/B not yet a decision point.
+
 ---
 
 ## §7. Risks and mitigations
