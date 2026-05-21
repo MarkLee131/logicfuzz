@@ -20,6 +20,10 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Dict, Set, Optional, Any, Tuple
 
+from liberator_adapter.analysis.usedef import (
+    APIEffect, UseDefGraph, Typestate, ViolationKind, ViolationRecord,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -163,6 +167,9 @@ class StateMachineAnalysis:
 
     # Analysis metadata
     total_apis: int = 0
+
+    # Cached typestate graph (built lazily on first ``validate_sequence``).
+    _typestate_graph: Optional[Any] = field(default=None, repr=False, compare=False)
 
     def get_constraint(self, api_name: str) -> Optional[StateConstraint]:
         """Get state constraint for an API."""
@@ -338,117 +345,54 @@ class StateMachineAnalyzer:
 
         return analysis
 
-    # NOTE: see the matching comment in
-    # ``liberator_adapter/constraints/lifecycle_analyzer.py``. This
-    # ``validate_sequence`` is a parallel encoding of
-    # ``liberator_adapter/analysis/usedef.py::Typestate.check``; both are
-    # correct but duplicated. Consolidation tracked in CLAUDE.md TODO.
-
     def validate_sequence(
         self,
         sequence: List[str],
         analysis: StateMachineAnalysis,
         strict: bool = False
     ) -> StateMachineValidationResult:
-        """
-        Validate a sequence against the state machine.
+        """Validate a sequence against the state machine.
 
-        Args:
-            sequence: List of API names.
-            analysis: StateMachineAnalysis from analyze().
-            strict: If True, treat warnings as errors.
+        Delegates the walk to ``Typestate.check`` (``liberator_adapter/
+        analysis/usedef.py``). This module owns the *domain model* —
+        how ``StateConstraint`` preconditions/postconditions become
+        USE/DEF/KILL effects, and how ``ViolationRecord``s map back to
+        ``StateViolation``s — while the walker itself is shared.
 
-        Returns:
-            StateMachineValidationResult with violations and suggestions.
+        ``strict`` toggles REINIT_WITHOUT_DESTROY reporting (the legacy
+        walker only emitted it under ``strict=True``; we filter it out
+        in the translation step when ``strict`` is false).
         """
-        # Initialize all resource states to UNINITIALIZED
+        graph = self._ensure_typestate_graph(analysis)
+        records = Typestate(graph).check(sequence)
+
+        violations: List[StateViolation] = []
+        suggested_fixes: List[str] = []
         resource_states: Dict[str, ResourceState] = {
             rt: ResourceState.UNINITIALIZED for rt in analysis.resource_types
         }
-        violations = []
-        suggested_fixes = []
 
-        for pos, api_name in enumerate(sequence):
+        # Pre-compute the resource state trajectory once so the final
+        # ``resource_states`` field carries the same information the legacy
+        # walker exposed (last-seen state per resource type).
+        for api_name in sequence:
             constraint = analysis.get_constraint(api_name)
             if not constraint:
                 continue
-
-            # Check preconditions
-            for resource_type, required_state in constraint.preconditions.items():
-                actual_state = resource_states.get(resource_type, ResourceState.UNINITIALIZED)
-
-                if required_state == ResourceState.INITIALIZED:
-                    if actual_state == ResourceState.UNINITIALIZED:
-                        violations.append(StateViolation(
-                            violation_type=ViolationType.USE_BEFORE_INIT,
-                            api_name=api_name,
-                            resource_type=resource_type,
-                            expected_state=required_state,
-                            actual_state=actual_state,
-                            position=pos,
-                            message=f"{api_name} requires {resource_type} to be initialized"
-                        ))
-                        suggested_fixes.append(
-                            f"Add init API for {resource_type} before position {pos}"
-                        )
-
-                    elif actual_state == ResourceState.DESTROYED:
-                        violations.append(StateViolation(
-                            violation_type=ViolationType.USE_AFTER_DESTROY,
-                            api_name=api_name,
-                            resource_type=resource_type,
-                            expected_state=required_state,
-                            actual_state=actual_state,
-                            position=pos,
-                            message=f"{api_name} uses {resource_type} after it was destroyed"
-                        ))
-
-            # Apply postconditions (state transitions)
             for resource_type, new_state in constraint.postconditions.items():
-                old_state = resource_states.get(resource_type, ResourceState.UNINITIALIZED)
-
-                # Check for re-initialization without destroy (potential leak)
-                if new_state == ResourceState.INITIALIZED and old_state == ResourceState.INITIALIZED:
-                    if strict:
-                        violations.append(StateViolation(
-                            violation_type=ViolationType.REINIT_WITHOUT_DESTROY,
-                            api_name=api_name,
-                            resource_type=resource_type,
-                            expected_state=ResourceState.UNINITIALIZED,
-                            actual_state=old_state,
-                            position=pos,
-                            message=f"{api_name} re-initializes {resource_type} without destroying first"
-                        ))
-
-                # Check for double destroy
-                if new_state == ResourceState.DESTROYED and old_state == ResourceState.DESTROYED:
-                    violations.append(StateViolation(
-                        violation_type=ViolationType.DOUBLE_DESTROY,
-                        api_name=api_name,
-                        resource_type=resource_type,
-                        expected_state=ResourceState.INITIALIZED,
-                        actual_state=old_state,
-                        position=pos,
-                        message=f"{api_name} destroys already-destroyed {resource_type}"
-                    ))
-
-                # Check for destroy before init
-                if new_state == ResourceState.DESTROYED and old_state == ResourceState.UNINITIALIZED:
-                    violations.append(StateViolation(
-                        violation_type=ViolationType.DESTROY_BEFORE_INIT,
-                        api_name=api_name,
-                        resource_type=resource_type,
-                        expected_state=ResourceState.INITIALIZED,
-                        actual_state=old_state,
-                        position=pos,
-                        message=f"{api_name} destroys uninitialized {resource_type}"
-                    ))
-
-                # Update state
                 resource_states[resource_type] = new_state
 
-        is_valid = len(violations) == 0
+        for r in records:
+            translated = self._translate(r, strict=strict)
+            if translated is None:
+                continue
+            violations.append(translated)
+            if translated.violation_type == ViolationType.USE_BEFORE_INIT:
+                suggested_fixes.append(
+                    f"Add init API for {r.handle} before position {r.position}"
+                )
 
+        is_valid = len(violations) == 0
         return StateMachineValidationResult(
             is_valid=is_valid,
             violations=violations,
@@ -459,6 +403,87 @@ class StateMachineAnalyzer:
                 'resources_tracked': len(analysis.resource_types),
             }
         )
+
+    @staticmethod
+    def _translate(
+        record: ViolationRecord, *, strict: bool
+    ) -> Optional[StateViolation]:
+        """Map a generic ``ViolationRecord`` into the L3 vocabulary.
+
+        Returns ``None`` when the violation isn't part of L3's surface
+        (e.g. UNCLOSED_RESOURCE / UNOPENED_CLOSE belong to L2) or when
+        REINIT is suppressed because the caller asked for non-strict mode.
+        """
+        kind_map = {
+            ViolationKind.USE_BEFORE_INIT: ViolationType.USE_BEFORE_INIT,
+            ViolationKind.DESTROY_BEFORE_INIT: ViolationType.DESTROY_BEFORE_INIT,
+            ViolationKind.DOUBLE_DESTROY: ViolationType.DOUBLE_DESTROY,
+            ViolationKind.USE_AFTER_DESTROY: ViolationType.USE_AFTER_DESTROY,
+            ViolationKind.REINIT_WITHOUT_DESTROY: ViolationType.REINIT_WITHOUT_DESTROY,
+        }
+        vtype = kind_map.get(record.kind)
+        if vtype is None:
+            return None
+        if vtype == ViolationType.REINIT_WITHOUT_DESTROY and not strict:
+            return None
+        # The generic walker exposes ResourceLifecycleState; L3's StateViolation
+        # carries ResourceState. The two enums share value strings, so the
+        # round-trip is lossless when the record's expected/actual are set.
+        def _to_resource_state(v) -> ResourceState:
+            if v is None:
+                return ResourceState.UNINITIALIZED
+            return ResourceState(v.value)
+        return StateViolation(
+            violation_type=vtype,
+            api_name=record.api_name,
+            resource_type=record.handle,
+            expected_state=_to_resource_state(record.expected),
+            actual_state=_to_resource_state(record.actual),
+            position=record.position,
+        )
+
+    @staticmethod
+    def _ensure_typestate_graph(analysis: StateMachineAnalysis) -> UseDefGraph:
+        """Build (and cache) a ``UseDefGraph`` from L3 constraints.
+
+        Per ``StateConstraint``:
+          - postcond ``X → INITIALIZED`` → ``def_`` X
+          - postcond ``X → DESTROYED``   → ``kill`` X
+            (``Typestate.check`` flags DESTROY_BEFORE_INIT / DOUBLE_DESTROY
+            from the KILL alone — no need to also emit a USE, which would
+            falsely report USE_AFTER_DESTROY on the second destroy.)
+          - precond  ``X = INITIALIZED`` → ``use`` X
+        """
+        if analysis._typestate_graph is not None:
+            return analysis._typestate_graph
+
+        effects: List[APIEffect] = []
+        for name, constraint in analysis.constraints.items():
+            use: Set[str] = set()
+            def_: Set[str] = set()
+            kill: Set[str] = set()
+            for rt, required in constraint.preconditions.items():
+                if required == ResourceState.INITIALIZED:
+                    use.add(rt)
+            for rt, target in constraint.postconditions.items():
+                if target == ResourceState.INITIALIZED:
+                    def_.add(rt)
+                elif target == ResourceState.DESTROYED:
+                    kill.add(rt)
+            # If destroy has both a USE-precondition and a KILL postcondition,
+            # drop the USE so the second destroy doesn't trigger a spurious
+            # USE_AFTER_DESTROY (the KILL alone yields DOUBLE_DESTROY).
+            if kill and use & kill:
+                use -= kill
+            effects.append(APIEffect(
+                name=name,
+                use=frozenset(use),
+                def_=frozenset(def_),
+                kill=frozenset(kill),
+            ))
+        graph = UseDefGraph(effects)
+        analysis._typestate_graph = graph
+        return graph
 
     def filter_sequences(
         self,

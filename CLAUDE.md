@@ -165,7 +165,13 @@ in numerical order.
 single USE/DEF/KILL summary per API (`APIEffect`) feeds the L4 ranker,
 the prototyper (via the automaton), and the comprehender. **Not its own
 filter** — consolidates the model formerly re-implemented inside each Lx.
-L1/L2/L3 still carry their own matchers (open TODO).
+L1 (handle classification) and L2/L3 (per-sequence validation) both
+delegate here: L1 calls `consumed_handle_keys / extract_produced_handles
+/ UseDefGraph.roots`; L2/L3 build a per-analysis `UseDefGraph` from their
+domain model (lifecycle pairs / state constraints) and call
+`Typestate.check`. Domain-specific *discovery* still lives in each Lx
+file (name patterns, semantic patterns, condition_info sinks); the
+*walker* is now shared.
 
 **Entry Point Categories** (L1):
 - `C_BUFFER_WITH_SIZE`: (const uint8_t* data, size_t size)
@@ -277,7 +283,7 @@ issues pass to the Fixer.
 
 ## Open TODOs
 
-- Migrate L1/L2/L3 onto shared `UseDefGraph + Typestate`. Today only the automaton consumes the new analysis module; each Lx still carries its own matcher.
+- L1/L2/L3 already delegate their typestate walkers / handle classification to `UseDefGraph + Typestate` (2026-05-21); remaining domain-specific *discovery* (name patterns, semantic patterns, condition_info sinks) stays in each Lx by design.
 - LLM equivalence oracle production throttling (`enable_llm_oracle=False` in `data_context.py:Step 5e2` until cost-aware pacing lands).
 - libaom path resolution — `src_ossfuzz/libaom/` layout doesn't match the consumer-paths probe.
 - Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.

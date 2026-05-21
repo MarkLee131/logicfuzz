@@ -20,6 +20,10 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import List, Dict, Set, Optional, Any, Tuple
 
+from liberator_adapter.analysis.usedef import (
+    APIEffect, UseDefGraph, Typestate, ViolationKind,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,6 +116,13 @@ class LifecycleAnalysis:
 
     # Analysis metadata
     total_apis: int = 0
+
+    # Cached typestate graph derived from ``pairs`` (built lazily on first
+    # ``validate_sequence`` call). Not persisted by ``to_dict`` — it's a
+    # pure function of the pair set and reconstructible on demand.
+    _typestate_graph: Optional[Any] = field(default=None, repr=False, compare=False)
+    _resource_to_inits: Optional[Dict[str, List[str]]] = field(
+        default=None, repr=False, compare=False)
 
     def __post_init__(self):
         """Build lookup dictionaries from pairs."""
@@ -320,73 +331,55 @@ class LifecycleAnalyzer:
 
         return analysis
 
-    # NOTE: ``validate_sequence`` and ``filter_sequences`` below maintain a
-    # local resource-state walker. The same walk is implemented more
-    # generally in ``liberator_adapter/analysis/usedef.py`` (``Typestate.check``).
-    # Both implementations are *correct* and produce equivalent verdicts on
-    # the projects we test against, but they are *parallel* code paths.
-    # Consolidation onto ``Typestate.check`` is tracked in CLAUDE.md TODO
-    # ("L2/L3 → UseDefGraph + Typestate migration"); deferred until either
-    # path needs a behaviour change. Touching this file should prefer
-    # extending ``Typestate.check`` instead, then translating its
-    # ``ViolationRecord`` output into ``LifecycleValidationResult`` here.
-
     def validate_sequence(self,
                           sequence: List[str],
                           analysis: LifecycleAnalysis) -> LifecycleValidationResult:
+        """Validate a sequence's lifecycle correctness.
+
+        Delegates the actual walk to ``Typestate.check`` so the typestate
+        semantics live in exactly one place (see ``liberator_adapter/
+        analysis/usedef.py``). This module owns only the L2 *domain model*
+        — how lifecycle pairs become USE/DEF/KILL effects, and how
+        ``ViolationRecord``s map back to ``LifecycleValidationResult``.
+
+        Keying difference vs. the legacy walker: open counts are kept per
+        *resource type* rather than per *init-API name*. For consistent pair
+        sets the two are equivalent — see ``_build_typestate_graph`` below
+        for the encoding. ``unclosed_resources`` is reported in terms of the
+        init APIs the caller cares about (recovered via the resource→inits
+        inverse map cached on the analysis).
         """
-        Validate a sequence's lifecycle correctness.
+        graph = self._ensure_typestate_graph(analysis)
+        violations = Typestate(graph).check(sequence)
 
-        Checks:
-        1. Resources opened by init APIs are closed by destroy APIs
-        2. No destroy without corresponding init
+        unclosed_inits: List[str] = []
+        unopened_closes: List[str] = []
+        for v in violations:
+            if v.kind == ViolationKind.UNCLOSED_RESOURCE:
+                # Map resource → an init API that produces it. First pick is
+                # deterministic (init_to_destroy is dict-ordered by pair
+                # insertion, which mirrors the discovery order).
+                init_candidates = (analysis._resource_to_inits or {}).get(
+                    v.handle, []
+                )
+                if init_candidates:
+                    unclosed_inits.append(init_candidates[0])
+            elif v.kind in (ViolationKind.UNOPENED_CLOSE,
+                            ViolationKind.DESTROY_BEFORE_INIT,
+                            ViolationKind.DOUBLE_DESTROY):
+                unopened_closes.append(v.api_name)
 
-        Args:
-            sequence: List of API names.
-            analysis: LifecycleAnalysis from analyze().
-
-        Returns:
-            LifecycleValidationResult with validation details.
-        """
-        # Track open resources: init_api -> count
-        open_resources = {}
-        unopened_closes = []
-
-        for api in sequence:
-            if api in analysis.init_apis:
-                # Resource opened
-                open_resources[api] = open_resources.get(api, 0) + 1
-
-            elif api in analysis.destroy_apis:
-                # Resource closed - find matching init
-                matching_inits = analysis.get_init_for_destroy(api)
-                closed = False
-
-                for init_api in matching_inits:
-                    if open_resources.get(init_api, 0) > 0:
-                        open_resources[init_api] -= 1
-                        closed = True
-                        break
-
-                if not closed and matching_inits:
-                    # Closing something that wasn't opened
-                    unopened_closes.append(api)
-
-        # Find unclosed resources
-        unclosed = [api for api, count in open_resources.items() if count > 0]
-
-        # Suggest cleanup APIs for unclosed resources
-        suggested_cleanup = []
-        for init_api in unclosed:
+        suggested_cleanup: List[str] = []
+        for init_api in unclosed_inits:
             destroy_apis = analysis.get_destroy_for_init(init_api)
             if destroy_apis:
                 suggested_cleanup.append(destroy_apis[0])
 
-        is_valid = len(unclosed) == 0 and len(unopened_closes) == 0
+        is_valid = not unclosed_inits and not unopened_closes
 
         return LifecycleValidationResult(
             is_valid=is_valid,
-            unclosed_resources=unclosed,
+            unclosed_resources=unclosed_inits,
             unopened_closes=unopened_closes,
             suggested_cleanup=suggested_cleanup,
             details={
@@ -395,6 +388,57 @@ class LifecycleAnalyzer:
                 'destroy_calls': sum(1 for api in sequence if api in analysis.destroy_apis),
             }
         )
+
+    @staticmethod
+    def _ensure_typestate_graph(analysis: LifecycleAnalysis) -> UseDefGraph:
+        """Build (and cache on the analysis) a ``UseDefGraph`` for L2 pairs.
+
+        Encoding:
+        - init API → ``APIEffect(def_={resource_type})``
+        - destroy API → ``APIEffect(kill={resource_type})``
+          (``Typestate.check`` raises DESTROY_BEFORE_INIT from KILL alone
+          when ``state==UNINITIALIZED ∧ opens==0``; adding USE here would
+          falsely flag double-destroy as USE_AFTER_DESTROY too.)
+
+        A single API can appear in multiple pairs (e.g. one destroy paired
+        with several inits sharing a resource); the effects merge by set
+        union, matching the legacy walker's "any matching init counts".
+        """
+        if analysis._typestate_graph is not None:
+            return analysis._typestate_graph
+
+        accumulated: Dict[str, Dict[str, Set[str]]] = {}
+        resource_to_inits: Dict[str, List[str]] = {}
+
+        def _slot(api_name: str) -> Dict[str, Set[str]]:
+            return accumulated.setdefault(api_name, {
+                'use': set(), 'def_': set(), 'kill': set(),
+            })
+
+        for pair in analysis.pairs:
+            init_api = pair.init_api
+            destroy_api = pair.destroy_api
+            resource_type = pair.resource_type or f"resource_{init_api}"
+            _slot(init_api)['def_'].add(resource_type)
+            _slot(destroy_api)['kill'].add(resource_type)
+            # Insertion-order list, deduped.
+            inits = resource_to_inits.setdefault(resource_type, [])
+            if init_api not in inits:
+                inits.append(init_api)
+
+        effects = [
+            APIEffect(
+                name=name,
+                use=frozenset(slot['use']),
+                def_=frozenset(slot['def_']),
+                kill=frozenset(slot['kill']),
+            )
+            for name, slot in accumulated.items()
+        ]
+        graph = UseDefGraph(effects)
+        analysis._typestate_graph = graph
+        analysis._resource_to_inits = resource_to_inits
+        return graph
 
     def filter_sequences(self,
                          sequences: List[List[str]],

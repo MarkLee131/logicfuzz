@@ -10,3 +10,5 @@ __pycache__/
 .DS_Store
 logicfuzz.env
 /docs/papers/*
+# Background A/B validation logs (per-run, not for git history)
+logs/ab_*/
