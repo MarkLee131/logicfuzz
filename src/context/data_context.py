@@ -1231,9 +1231,13 @@ class FuzzingContext:
             # still see it even if Planner setup fails.
             planner_idioms_payload: Optional[Dict[str, Any]] = None
             try:
-                from src.knowledge.idiom_distiller import distill_idioms
+                # F3 (2026-05-23): Step 10 owns the canonical idiom
+                # distillation pass — it loads driver sources, distills
+                # once, AND persists ``state/idioms.json``. Step 12 then
+                # receives the dict via ``precomputed_idioms=`` and
+                # skips the redundant re-distill.
+                from src.knowledge.idiom_distiller import distill_and_persist
                 from src.state.path_planner import plan_and_persist
-                # Load baseline driver sources for distillation.
                 early_root = _resolve_drivers_root(project_name)
                 if early_root is not None:
                     early_files = _iter_driver_source_files(early_root)
@@ -1248,7 +1252,8 @@ class FuzzingContext:
                         except OSError:
                             continue
                     if early_sources:
-                        early_lib = distill_idioms(project_name, early_sources)
+                        early_lib = distill_and_persist(
+                            project_name, early_sources)
                         planner_idioms_payload = early_lib.to_dict()
                 # Plan: rerank + maybe synthesise.
                 seqs_as_names = [
@@ -1378,7 +1383,12 @@ class FuzzingContext:
                 project_name=project_name,
                 log=log,
                 llm_client=llm_client,
-                max_drivers=3)
+                max_drivers=3,
+                # F3 (2026-05-23): pass Step 10's distilled idioms so
+                # Step 12 doesn't redo the work; if Step 10 didn't run
+                # (planner_idioms_payload still None) Step 12 distills
+                # fresh.
+                precomputed_idioms=planner_idioms_payload)
             if existing_driver_knowledge.get('driver_sources'):
                 num_drivers = len(existing_driver_knowledge['driver_sources'])
                 has_analysis = bool(existing_driver_knowledge.get('analysis'))
@@ -1718,7 +1728,8 @@ def _strip_license_header(source: str) -> str:
 def _extract_existing_driver_knowledge(project_name: str,
                                        log: logging.Logger,
                                        llm_client: Any = None,
-                                       max_drivers: int = 3) -> Dict[str, Any]:
+                                       max_drivers: int = 3,
+                                       precomputed_idioms: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Load existing OSS-Fuzz drivers and optionally run LLM pattern analysis.
 
     Disk-backed: reads driver sources downloaded by
@@ -1796,8 +1807,13 @@ def _extract_existing_driver_knowledge(project_name: str,
     # Phase B — Synthesis Distillation. Run on the FULL driver set so
     # libraries with many baseline drivers (lcms: 15) yield rich idiom
     # libraries instead of being capped at the LLM-prompt budget.
-    idiom_library_dict: Optional[Dict[str, Any]] = None
-    if all_driver_sources:
+    #
+    # F3 (2026-05-23): if Step 10 already distilled idioms for the
+    # Planner, reuse them rather than re-running the same regex pass.
+    # The Step 10 distillation also persists idioms.json, so this
+    # function can skip both the compute and the write.
+    idiom_library_dict: Optional[Dict[str, Any]] = precomputed_idioms
+    if idiom_library_dict is None and all_driver_sources:
         try:
             from src.knowledge.idiom_distiller import distill_and_persist
             idiom_library = distill_and_persist(project_name, all_driver_sources)
@@ -1806,6 +1822,11 @@ def _extract_existing_driver_knowledge(project_name: str,
             log.warning(
                 f"Idiom distillation failed for {project_name} "
                 f"(non-critical): {exc}")
+    elif idiom_library_dict is not None:
+        log.debug(
+            "Reusing precomputed idioms for %s (Phase B F3 dedupe): "
+            "%d idioms", project_name,
+            idiom_library_dict.get('idiom_count', 0))
 
     return {
         'driver_sources': driver_sources,
