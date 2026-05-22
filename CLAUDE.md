@@ -53,15 +53,11 @@ justification + future-work plan lives in `docs/`:
 
 | Doc | Subsystem | Status |
 |-----|-----------|--------|
-| `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) **and** the PromeFuzz-derived knowledge layer (comprehender shipped, ConstraintLearner design-only). Includes empirical justification across 25 benchmarks, A/B outcomes, future work. | shipped + forward-looking |
-| `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`); preflight + coverage-aware selection + weighted CDF dispatch + tail selector + corpus union. | shipped |
+| `docs/system_design_status.md` | **Canonical current state.** 5-phase status, 11 cross-phase information-flow gaps, decision queue (Tier 1 = 4 small fixes, Tier 2 = Phase E/CEGAR/L2 idioms, Tier 3 = WorkingMemory). Updated as the system evolves; historical proposals and refactor logs live in git history. | canonical |
+| `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) **and** the PromeFuzz-derived knowledge layer (comprehender shipped, ConstraintLearner design-only). Includes empirical justification across 25 benchmarks, A/B outcomes, future work. | living |
+| `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`); preflight + coverage-aware selection + weighted CDF dispatch + tail selector + corpus union. | living |
 | `docs/upstream_liberator_diffs.md` | Upstream `reference/liberator` issues that the adapter has already fixed (or has a clear path to fix). Adapter-side bugs are NOT recorded here — they are work-in-progress fix items. | living |
-| `docs/llm_vs_traditional_choices.md` | For every place LogicFuzz invokes an LLM (Prototyper, Fixer, Crash{,Feasibility}Analyzer, Coverage{Analyzer,Improver}, Comprehender, ProjectAnalyzer): what symbolic alternative was considered, why LLM won, what we'd lose by reverting, and the falsifiable measurement that would prove the LLM choice wrong. | living |
-| `docs/review_and_fix_log_2026_05.md` | **Canonical hand-off from static review → dynamic-run validation.** Per-fix table with file:symbol, what changed, expected dynamic-run observable. List of components NOT YET reviewed with priority rationale (L5 coverage_aware_filter, provenance_checker, special_patterns). | living |
-| `docs/driver_vs_baseline_2026_05_12.md` | Diagnostic analysis: why a generated driver under-performed vs the hand-written baseline on cjson run5. Side-by-side diff, "lost context" enumeration, intervention list. Triggered the §10B work in `knowledge_layer_design_proposal_2026_05.md`. | analytical |
-| `docs/knowledge_layer_design_proposal_2026_05.md` | T1/T2/T3 knowledge-layer roadmap. §10A operator-doc preparation (deferred); §10B baseline-regression detection + auto-recovery (v1 + v2 LANDED but under reconsideration — see §3 empirical validation 2026-05-21). | active design |
-| `docs/multihop_reasoning_design_proposal_2026_05.md` | Multi-hop reasoning Mode A for Prototyper (single LLM call with XML-tagged hops). LANDED behind `--multihop-prototyper` opt-in. Single-arm 2026-05-21 data; 4-arm A/B (multihop × §10B) still pending. | active design |
-| `docs/z3_skeleton_synthesis_problem_2026_05.md` | Root-cause analysis of the cjson/lcms "0 Z3-validated skeletons" bottleneck and its fix (position-indexed lifecycle validation). Includes domain framing, classical-literature anchors (CEGIS / MaxSMT / CEGAR / SyGuS), cjson `conditions.json` empirical evidence, post-fix result table, and an expert-discussion question list. | shipped + reference |
+| `docs/llm_vs_traditional_choices.md` | For every place LogicFuzz invokes an LLM: what symbolic alternative was considered, why LLM won, what we'd lose by reverting, and the falsifiable measurement that would prove the LLM choice wrong. | living |
 
 ## Architecture
 
