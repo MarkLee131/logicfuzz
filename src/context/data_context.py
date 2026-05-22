@@ -1721,7 +1721,28 @@ def _extract_existing_driver_knowledge(project_name: str,
             log.warning(f"LLM pattern analysis failed (non-critical): {e}")
             analysis = None
 
-    return {'driver_sources': driver_sources, 'analysis': analysis}
+    # Phase B — Synthesis Distillation. Extract structured, actionable
+    # idioms from the baseline driver source. These complement the
+    # free-form LLM ``analysis`` (which summarises) with **specific
+    # patterns** the Prototyper is told to reproduce (min-size guards,
+    # null-termination requirements, context-NULL-pass, etc.). See
+    # ``src/knowledge/idiom_distiller.py`` and the Phase A→E roadmap.
+    idiom_library_dict: Optional[Dict[str, Any]] = None
+    if driver_sources:
+        try:
+            from src.knowledge.idiom_distiller import distill_and_persist
+            idiom_library = distill_and_persist(project_name, driver_sources)
+            idiom_library_dict = idiom_library.to_dict()
+        except Exception as exc:
+            log.warning(
+                f"Idiom distillation failed for {project_name} "
+                f"(non-critical): {exc}")
+
+    return {
+        'driver_sources': driver_sources,
+        'analysis': analysis,
+        'idioms': idiom_library_dict,
+    }
 
 
 def _analyze_driver_patterns(driver_sources: List[Dict[str, str]],

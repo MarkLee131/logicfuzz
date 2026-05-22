@@ -1624,8 +1624,72 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 lines.append("</driver>")
             lines.append("</reference_drivers>")
 
+        # Phase B — Distilled idioms. These are *structured* patterns
+        # the baseline drivers consistently use; surface them as
+        # actionable directives (not just "look at this for inspiration")
+        # so the LLM applies the same shape rather than re-inventing.
+        idioms_block = self._format_library_idioms(
+            driver_knowledge.get('idioms'))
+        if idioms_block:
+            lines.append("")
+            lines.append(idioms_block)
+
         lines.append("</existing_driver_knowledge>")
         return "\n".join(lines)
+
+    def _format_library_idioms(
+        self, idioms_payload: Optional[Dict[str, Any]],
+    ) -> str:
+        """Format the Phase B distilled-idiom block.
+
+        Group by IdiomKind for compactness; each idiom contributes one
+        line of rationale + a verbatim snippet. The LLM gets a
+        prioritised, dedup'd checklist.
+        """
+        if not idioms_payload:
+            return ""
+        idioms = idioms_payload.get('idioms') or []
+        if not idioms:
+            return ""
+
+        # Priority order: highest-leverage idioms first so they land in
+        # the LLM's attention budget. Within a kind, source-order.
+        priority = [
+            'min_size_guard',
+            'null_termination_required',
+            'context_null_pass',
+            'buffer_copy',
+            'null_terminate_input',
+            'data_offset_parse',
+            'header_flag_demux',
+            'header_body_split',
+            'size_cap',
+            'cleanup_pair',
+        ]
+        by_kind: Dict[str, list] = {}
+        for i in idioms:
+            by_kind.setdefault(i['kind'], []).append(i)
+
+        out = ["<library_idioms>"]
+        out.append(
+            "REQUIRED: the baseline driver(s) for this project use the "
+            "following idioms. Your generated driver MUST reproduce the "
+            "ones that apply to its API calls — they encode hard-won "
+            "knowledge about how to shape fuzzer input for this library.")
+        out.append("")
+        for kind in priority:
+            entries = by_kind.get(kind, [])
+            if not entries:
+                continue
+            # Show up to 3 per kind to bound prompt size.
+            out.append(f'<idiom kind="{kind}">')
+            for e in entries[:3]:
+                out.append(f"  • {e['rationale']}")
+                out.append(f"    Example: {e['snippet']}")
+                out.append(f"    (from {e['source_driver']})")
+            out.append("</idiom>")
+        out.append("</library_idioms>")
+        return "\n".join(out)
 
     def _format_include_path_context(
             self, target_path: str, existing_fuzzer_headers: Dict[str,
