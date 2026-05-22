@@ -2249,6 +2249,24 @@ def _synthesize_skeletons_per_sequence(
         automaton_threshold=automaton_threshold,
     )
 
+    # Phase A — Candidate Repair Engine. When CBFactory rejects a
+    # candidate (lifecycle UNSAT or RunningContext binding fail), try to
+    # repair it instead of dropping immediately. Currently only
+    # graft_creator_prefix is wired (the most common L4 failure mode);
+    # the engine is designed to accept more strategies (topological
+    # reorder, nullable-handle fill, sketch fill) without restructuring
+    # callers. See ``liberator_adapter/analysis/candidate_repair.py``.
+    from liberator_adapter.analysis.candidate_repair import RepairEngine, RepairLog
+    graft_fn = (automaton_artifact.graft_creator_prefix
+                if automaton_artifact is not None
+                else None)
+    repair_engine = RepairEngine(graft_fn=graft_fn)
+    repair_log = RepairLog()
+    # Name → Api object lookup so we can rebuild an Api list from a
+    # name list returned by graft. Keys may overlap across project
+    # versions but within a single FuzzingContext they're stable.
+    api_by_name = {a.function_name: a for a in generator.all_apis}
+
     # ``target_path`` is no longer needed for renderer dispatch — the
     # generated skeleton always emits ``#ifdef __cplusplus`` extern "C"
     # guards (OSS-Fuzz drives clang++ on .c files too). Kept here only
@@ -2298,14 +2316,56 @@ def _synthesize_skeletons_per_sequence(
                     pass
 
             skeleton = factory.create_skeleton_for_sequence(target_seq)
+            used_sequence = target_seq
+            repair_trace = None
             if skeleton is None:
-                # Z3 rejected or skeleton infrastructure unavailable. The
-                # CBFactory method already logs a precise reason. Note:
-                # automaton-pruned sequences were already dropped above,
-                # so this counter only reflects Z3 / SKELETON_AVAILABLE
-                # failures.
-                z3_rejected += 1
-                continue
+                # Phase A — try to repair before giving up. The repair
+                # engine drives strategies (currently only graft); each
+                # produces a candidate sequence that is re-validated by
+                # the same factory call.
+                seq_names = [a.function_name for a in target_seq]
+                # Stash for the revalidation callback so the success branch
+                # doesn't have to recompute. List-of-one keeps closure cell
+                # mutable without function-attribute gymnastics.
+                stash: List[Any] = [None, None]  # [skeleton, apis]
+
+                def _revalidate(names: List[str]) -> bool:
+                    apis = [api_by_name[n] for n in names if n in api_by_name]
+                    if len(apis) != len(names):
+                        return False
+                    s = factory.create_skeleton_for_sequence(apis)
+                    if s is None:
+                        return False
+                    stash[0] = s
+                    stash[1] = apis
+                    return True
+
+                repair_trace = repair_engine.attempt(
+                    seq_names, _revalidate, candidate_index=i)
+                if repair_trace.final_success:
+                    skeleton = stash[0]
+                    used_sequence = stash[1]
+                    log.info(
+                        f"   🔧 Repaired sequence {i}: original {seq_names} "
+                        f"→ {repair_trace.final_sequence} "
+                        f"(strategy={repair_trace.attempts[-1].strategy.value})")
+                repair_log.record(repair_trace)
+                if skeleton is None:
+                    # Truly unrepairable. The CBFactory method already logged
+                    # a precise reason for the original rejection.
+                    z3_rejected += 1
+                    continue
+            else:
+                # Accepted unmodified — still record so the counters
+                # reflect the full denominator.
+                from liberator_adapter.analysis.candidate_repair import (
+                    CandidateRepairTrace)
+                repair_log.record(CandidateRepairTrace(
+                    candidate_index=i,
+                    original_sequence=[a.function_name for a in target_seq],
+                    final_success=True,
+                    final_sequence=[a.function_name for a in target_seq],
+                ))
 
             try:
                 rendered_code = render_skeleton(skeleton, mark_holes=True)
@@ -2338,6 +2398,8 @@ def _synthesize_skeletons_per_sequence(
                     'driver_size': driver_size,
                     'num_apis_used': len(api_seq),
                     'num_holes': len(holes_info),
+                    'repair': repair_trace.to_dict()
+                        if repair_trace and repair_trace.attempts else None,
                 },
             })
         except Exception as e:
@@ -2355,6 +2417,30 @@ def _synthesize_skeletons_per_sequence(
             f"z3_rejected={z3_rejected} (real infeasibility: "
             f"type/lifecycle/provenance), "
             f"emitted={len(skeletons)}")
+
+    # Persist the repair log for Phase B/C/D consumption and operator
+    # inspection. Keep best-effort — telemetry failure must not break
+    # synthesis. Location follows the shared-state convention:
+    # ``results/<project>/state/repair_log.json``.
+    try:
+        from pathlib import Path
+        project_name = getattr(benchmark, 'project', None) \
+            or getattr(benchmark, 'project_name', None) or 'unknown'
+        repair_log_path = Path('results') / project_name / 'state' / 'repair_log.json'
+        repair_log.persist(repair_log_path)
+        summary = repair_log.to_dict()['summary']
+        if (summary['candidates_repaired_success']
+                + summary['candidates_unrepairable']) > 0:
+            log.info(
+                f"   🔧 Repair: {summary['candidates_repaired_success']}/"
+                f"{summary['candidates_total']} repaired, "
+                f"{summary['candidates_unrepairable']} unrepairable; "
+                f"strategies attempted={summary['by_strategy_attempt']}, "
+                f"succeeded={summary['by_strategy_success']}; "
+                f"log at {repair_log_path}")
+    except Exception as exc:
+        log.warning(f"RepairLog persist failed (non-critical): {exc}")
+
     return skeletons
 
 
