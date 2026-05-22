@@ -1418,28 +1418,54 @@ class CBFactory(Factory):
         if not api_sequence:
             return {}
 
+        seq_names = [a.function_name for a in api_sequence]
         rng_ctx = RunningContext()
         drv_calls: List[Tuple[Api, ApiCall]] = []
 
-        for api in api_sequence:
+        for pos, api in enumerate(api_sequence):
             cond = self.conditions.get_function_conditions(api.function_name)
             if cond is None:
                 # Missing FunctionConditions for this API — upstream
                 # cannot wire it. Treat as infeasible on this path.
+                logger.info(
+                    "[CBFactory.binding] reject seq=%s at pos=%d (%s): "
+                    "no FunctionConditions for this API",
+                    seq_names, pos, api.function_name,
+                )
                 return None
             call = Factory.api_to_apicall(api)
             try:
                 rng_ctx_next, unsat = self.try_to_instantiate_api_call(
                     call, cond, rng_ctx)
             except Exception as exc:
-                logger.debug(
-                    "RunningContext instantiation crashed on %s: %s",
-                    api.function_name, exc)
+                logger.info(
+                    "[CBFactory.binding] reject seq=%s at pos=%d (%s): "
+                    "try_to_instantiate_api_call crashed: %s: %s",
+                    seq_names, pos, api.function_name,
+                    type(exc).__name__, exc,
+                )
                 return None
             if unsat:
-                logger.debug(
-                    "RunningContext rejected %s with %d unsat var(s)",
-                    api.function_name, len(unsat))
+                # ``unsat`` is a Set[Variable] (per try_to_instantiate_api_call
+                # return type) — iterate, don't slice. Take the first ≤5
+                # via iteration so set / list / tuple all work uniformly.
+                unsat_iter = iter(unsat)
+                sample = []
+                for _ in range(5):
+                    try:
+                        v = next(unsat_iter)
+                    except StopIteration:
+                        break
+                    try:
+                        sample.append(str(v)[:80])
+                    except Exception:
+                        sample.append(f"<{type(v).__name__}>")
+                logger.info(
+                    "[CBFactory.binding] reject seq=%s at pos=%d (%s): "
+                    "RunningContext has %d unsat var(s); sample=%s",
+                    seq_names, pos, api.function_name,
+                    len(unsat), sample,
+                )
                 return None
             drv_calls.append((api, call))
             rng_ctx = rng_ctx_next
