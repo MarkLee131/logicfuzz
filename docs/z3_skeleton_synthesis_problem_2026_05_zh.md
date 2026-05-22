@@ -408,8 +408,48 @@ def _is_lifetime_managed(type_str: str) -> bool:
 只把 lifetime-managed 类型放进 `creatable_types`。其他类型在 `uses_j & creatable_types`
 那一步就自然过滤掉。
 
-实测确认：lcms 风格的 entry-point + c-string-returning API 组合从 0 通过率变成正常通过；
-cjson 7/10 不变；真 struct handle 上的 USE-before-CREATE 仍然正确拒绝。
+实测确认（离线 smoke）：lcms 风格的 entry-point + c-string-returning API 组合从 0 通过率
+变成正常通过；cjson 7/10 不变；真 struct handle 上的 USE-before-CREATE 仍然正确拒绝。
+
+### 6.6 lcms 完整流水实测：撞到第二个独立失败模式
+
+`#73` 落地后清 lcms 缓存重跑 `--eval`（`logs/lcms_post73/lcms.log`，2026-05-22 19:20）。
+结果：**仍然 emitted=0**。
+
+但**原因不是 #73 没起作用**。日志 grep 后发现：
+
+```
+z3_rejected=10
+但 "Z3 rejected viable-candidate" 只打了 1 条
+```
+
+剩下 9 条没在 lifecycle 层拒，是在更后面的 `_compute_arg_bindings_via_running_context`
+（RunningContext 的 alias/binding 推导）里**默默返回 None**，外层
+`_synthesize_skeletons_per_sequence` 不分青红皂白都计成 `z3_rejected += 1`。
+
+那 1 条**真的** lifecycle 拒绝：
+```
+cmsReverseToneCurve 在位置 4 用 %struct._cms_curve_struct*，但前 4 个 API
+(cmsGBDFree, cmsCreateNULLProfile, cmsSetDeviceClass, cmsCreateInkLimitingDeviceLink)
+都不创建 curve_struct
+```
+这条是 L4 random walk 的真错序列，应该拒（性质和 cjson 那 3 条被拒的 USE-before-CREATE
+一模一样）。
+
+剩下 9 条 → **第二个独立失败模式，跟 #4 / #73 无关**：RunningContext 在
+`try_to_instantiate_api_call` 阶段对 lcms 的某种 API 形态推导不出参数绑定，silently
+返回 None。这是个跟约束求解完全分离的故障路径，要单独立 task 去查（已记为 task #75）。
+
+**修正后的结论矩阵**：
+
+| 项目 | #4 前 | #4 后 | #73 后 | 备注 |
+|------|-------|-------|--------|------|
+| cjson | 0/10 | 7/10 ✅ | 7/10 | #4 直接解决，#73 不影响（没踩 i8* 拖入） |
+| c-ares | 5/5 | 5/5 | 5/5 | 一直没问题 |
+| lcms | 0/10 | 0/10 | **0/10 + 1 真错** | #73 让 1 条暴露真问题，9 条仍卡在 RunningContext binding（task #75） |
+
+#73 的修复**在离线 smoke 里被验证有效**（i8* 类型在 entry-point 位置 0 不再卡），
+但 lcms 的完整流水还有第二个瓶颈。不是 #4/#73 的失败，是另一个相邻但独立的故障路径。
 
 ---
 
