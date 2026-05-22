@@ -439,6 +439,31 @@ class Z3SequenceValidator:
         """
         violations: List[str] = []
 
+        # Types that come from outside the sequence (fuzzer input, primitive
+        # return values, length parameters) rather than from a project-managed
+        # creator. Lifecycle preconditions don't apply to them.
+        #
+        # Heuristic: anything that isn't an LLVM struct/class pointer is
+        # treated as primitive. The condition_extractor (Liberator) writes
+        # type strings in LLVM IR notation — ``i8*`` for ``char*``,
+        # ``%struct.<name>*`` for project-defined record types,
+        # ``%class.<name>*`` for C++ classes. The cjson side passed
+        # already with the original creatable-types filter (no API there
+        # returns ``i8*``), but lcms has c-string-returning APIs
+        # (``cmsMLUgetASCII``, etc.) that drag ``i8*`` into ``creatable``,
+        # which then forces entry-point APIs like ``cmsOpenProfileFromMem``
+        # to fail the "needs prior creator" check on their fuzzer-input
+        # buffer arg. That's a false positive — i8* doesn't have an
+        # ownership / lifetime contract worth enforcing.
+        #
+        # Real handles (``%struct.cJSON*``, ``%struct._cms_curve_struct*``,
+        # …) keep flowing through the check.
+        def _is_lifetime_managed(type_str: str) -> bool:
+            if not type_str:
+                return False
+            ts = type_str.strip()
+            return ts.startswith("%struct.") or ts.startswith("%class.")
+
         # Pre-extract per-position role sets.
         def _role_sets(api: Api) -> Tuple[Set[str], Set[str], Set[str]]:
             """Return (creates, uses, deletes) type-string sets for this API."""
@@ -469,16 +494,22 @@ class Z3SequenceValidator:
         per_position = [_role_sets(api) for api in api_sequence]
 
         # "Creatable-in-sequence" filter: a USE/DELETE of type T is only
-        # treated as a lifecycle dependency when some API in *this* sequence
-        # creates T. Types nobody creates (fuzzer-input primitives like
-        # ``i8*`` for ``const char*`` parser inputs, integer-return APIs)
-        # come from outside the sequence and don't require a creator.
-        # This matches the legacy encoding's implicit filter
-        # (``set(creates) & set(uses)`` per-sequence) — see §3.6 of
-        # ``docs/z3_skeleton_synthesis_problem_2026_05.md``.
+        # treated as a lifecycle dependency when (a) some API in *this*
+        # sequence creates T, AND (b) T is a lifetime-managed type
+        # (struct/class pointer). Types nobody creates (integer returns,
+        # length parameters) and primitive byte buffers (``i8*`` etc.
+        # serve both as fuzzer input and as opaque output buffers, with
+        # no useful ownership contract) come from outside the sequence
+        # and don't require a creator. This matches the legacy encoding's
+        # implicit filter (``set(creates) & set(uses)`` per-sequence)
+        # while also handling the lcms case where ``i8*`` is dragged
+        # into ``creatable`` by c-string-returning APIs — see
+        # ``docs/z3_skeleton_synthesis_problem_2026_05_zh.md`` §6.
         creatable_types: Set[str] = set()
         for creates_at_pos, _, _ in per_position:
-            creatable_types |= creates_at_pos
+            for T in creates_at_pos:
+                if _is_lifetime_managed(T):
+                    creatable_types.add(T)
 
         # Track which creatable types have been instantiated at any prior position.
         ever_created: Set[str] = set()

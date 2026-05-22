@@ -373,15 +373,43 @@ def _check_lifecycle_position_indexed(api_sequence, function_conditions):
 
 ### 6.4 测试
 
-新增 `tests/test_p1_z3_position_indexed_lifecycle.py`，7 个测试钉住核心边界：
+新增 `tests/test_p1_z3_position_indexed_lifecycle.py`，11 个测试钉住核心边界：
 
 - 链式构造器序列必须 pass（legacy 必 UNSAT 的 cjson Add* 模式）
-- USE-before-CREATE 必须 reject
-- DELETE-before-CREATE 必须 reject
-- fuzzer-input 原始类型（`i8*`）单独出现必须 pass（不要求前置创建）
+- USE-before-CREATE / DELETE-before-CREATE 必须 reject
+- fuzzer-input 原始类型（`i8*`）单独出现必须 pass
 - 重复链式构造器必须 pass（之前因 first-occurrence-pin 必 UNSAT）
+- **byte-buffer 豁免**（2026-05-22 残留 fix）：
+  - entry-point API 在位置 0 用 `i8*` 必须 pass（lcms `cmsOpenProfileFromMem` 场景）
+  - 即使序列里有 API 返回 `i8*`（`cmsMLUgetASCII` 把 i8* 拖进 creatable），
+    其他位置用 i8* 仍然免检
+  - 真 handle 类型（`%struct.*`）必须仍然受 lifecycle 检查
 
-全套 73/73 通过。
+全套 77/77 通过。
+
+### 6.5 lcms 残留：byte-buffer 类型豁免（commit `<待填>` ）
+
+第一版 #4 在 lcms 上仍然 0/10：lcms 有 c-string 返回的 API（`cmsMLUgetASCII` 等）
+返回 `i8*`，把它拖进了 `creatable` 集合，于是 entry-point `cmsOpenProfileFromMem`
+在位置 0 用 fuzzer 输入 `i8*` 时被判"前面没人造"。
+
+修法：lifecycle 检查只对**生命周期管理类型**（`%struct.*` / `%class.*` 指针）启用。
+原始字节缓冲（`i8*` / `char*` / `void*` / `uint8_t*` 等在 LLVM IR 里都映射成
+`i8*`）没有有意义的所有权契约，一律免 lifecycle 检查。
+
+判定函数加在 `_check_lifecycle_position_indexed` 里：
+
+```python
+def _is_lifetime_managed(type_str: str) -> bool:
+    ts = type_str.strip()
+    return ts.startswith("%struct.") or ts.startswith("%class.")
+```
+
+只把 lifetime-managed 类型放进 `creatable_types`。其他类型在 `uses_j & creatable_types`
+那一步就自然过滤掉。
+
+实测确认：lcms 风格的 entry-point + c-string-returning API 组合从 0 通过率变成正常通过；
+cjson 7/10 不变；真 struct handle 上的 USE-before-CREATE 仍然正确拒绝。
 
 ---
 
@@ -440,10 +468,3 @@ def _check_lifecycle_position_indexed(api_sequence, function_conditions):
 - Lynce, I. & Marques-Silva, J. (2004). On Computing Minimum Unsatisfiable Cores. *SAT*.
 - Clarke, E. M., Grumberg, O., Jha, S., Lu, Y. & Veith, H. (2000). Counterexample-Guided Abstraction Refinement. *CAV*.
 - SyGuS-IF 标准：https://sygus.org/
-
-LogicFuzz 内部交叉参考：
-- 英文版同主题文档：`docs/z3_skeleton_synthesis_problem_2026_05.md`
-- 当前 Z3 编码源代码：`liberator_adapter/constraints/z3_solver.py`
-- 失败诊断器：`liberator_adapter/constraints/z3_guided_synthesis.py::UnsatCoreDiagnoser`
-- CLAUDE.md "Failed Attempts / Lessons" 段（已更新到 2026-05-22 修复状态）
-- L4 候选缓存：`results/<project>/static_analysis/filtered_sequences.json`
