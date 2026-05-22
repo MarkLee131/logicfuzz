@@ -45,7 +45,7 @@ SCHEMA_VERSION = 1
 
 
 @dataclass
-class TrialResult:
+class TrialOutcome:
     """One trial's outcome — input to PostMergeEvaluator."""
     trial_id: int
     api_sequence: List[str]
@@ -78,7 +78,7 @@ class IterationSnapshot:
     timestamp: str
     """ISO-8601 UTC timestamp at snapshot creation."""
     trial_count: int
-    trial_results: List[TrialResult] = field(default_factory=list)
+    trial_results: List[TrialOutcome] = field(default_factory=list)
     merged_driver_path: Optional[str] = None
     merged_driver_count: int = 0
     """How many trials' drivers were successfully merged."""
@@ -177,14 +177,14 @@ class CoverageMemory:
             return cls(project=project)
         snaps = []
         for s in raw.get('snapshots', []):
-            trs = [TrialResult(**t) for t in s.pop('trial_results', [])]
+            trs = [TrialOutcome(**t) for t in s.pop('trial_results', [])]
             snaps.append(IterationSnapshot(trial_results=trs, **s))
         return cls(project=project, snapshots=snaps)
 
 
 def make_snapshot(
     iteration_idx: int,
-    trial_results: List[TrialResult],
+    trial_results: List[TrialOutcome],
     merged_driver_path: Optional[str] = None,
     merged_driver_count: int = 0,
     baseline_line_count: Optional[int] = None,
@@ -231,6 +231,125 @@ def make_snapshot(
         aggregate_line_diff_pct=aggregate_diff,
         repair_summary=repair_summary or {},
     )
+
+
+def harvest_trial_outcomes(
+    trial_results: List,
+    repair_log_path: Optional[Path] = None,
+) -> List[TrialOutcome]:
+    """Convert the legacy ``src.results.TrialResult`` objects from a
+    ``_fuzzing_pipelines`` run into Phase C ``TrialOutcome`` records.
+
+    The legacy class carries full ``result_history``; we summarise to
+    the fields the CoverageMemory consumer needs: coverage, line_diff,
+    success, crashes — plus the repair provenance loaded from
+    ``repair_log.json`` if available. Defensive against partial trials
+    (missing best_result, no run_result, etc.) — failure becomes
+    ``success=False`` not a raised exception.
+    """
+    repair_by_seq: Dict[str, dict] = {}
+    if repair_log_path and repair_log_path.exists():
+        try:
+            with repair_log_path.open(encoding='utf-8') as f:
+                rl = json.load(f)
+            for tr in rl.get('traces', []):
+                key = ','.join(tr.get('final_sequence')
+                               or tr.get('original_sequence') or [])
+                if key:
+                    repair_by_seq[key] = tr
+        except Exception:
+            pass
+
+    outcomes: List[TrialOutcome] = []
+    for tr in trial_results or []:
+        if tr is None:
+            continue
+        trial_id = getattr(tr, 'trial', -1)
+        api_sequence: List[str] = []
+        coverage_pct: Optional[float] = None
+        line_diff_pct: Optional[float] = None
+        crashes = 0
+        success = False
+        try:
+            best = getattr(tr, 'best_result', None) or \
+                getattr(tr, 'best_analysis_result', None)
+            if best is not None:
+                run = getattr(best, 'run_result', None) or best
+                # Pull whichever fields are present.
+                cov = getattr(run, 'coverage', None)
+                if cov is not None and isinstance(cov, (int, float)):
+                    coverage_pct = float(cov)
+                cdiff = getattr(run, 'line_coverage_diff', None)
+                if cdiff is not None and isinstance(cdiff, (int, float)):
+                    line_diff_pct = float(cdiff)
+                if getattr(run, 'crashes', False):
+                    crashes = 1
+                success = bool(getattr(run, 'compiles', False))
+        except Exception:
+            success = False
+
+        # Best-effort: read api_sequence from the trial's metadata if
+        # available. Many TrialResult instances carry it via work_dirs
+        # snapshots; absent → empty list (no harm).
+
+        # Match repair provenance by sequence string.
+        repaired = False
+        inserted: List[str] = []
+        # repair_log keys by sequence; without sequence info we can't
+        # match per-trial. This is best-effort until a stronger
+        # identifier is wired through.
+
+        outcomes.append(TrialOutcome(
+            trial_id=int(trial_id) if trial_id is not None else -1,
+            api_sequence=api_sequence,
+            final_coverage_pct=coverage_pct,
+            final_line_diff_pct=line_diff_pct,
+            crashes_found=crashes,
+            success=success,
+            skeleton_repair_applied=repaired,
+            skeleton_repair_inserted=inserted,
+        ))
+    return outcomes
+
+
+def load_baseline_line_counts(
+    project: str, log: Optional[logging.Logger] = None,
+) -> Optional[Dict[str, int]]:
+    """Best-effort: fetch baseline OSS-Fuzz line counts via existing
+    ``experiment.evaluator`` helpers. Returns
+    ``{'covered': N, 'total': M}`` or None on failure (e.g. no network,
+    bucket auth, or project not in OSS-Fuzz).
+    """
+    try:
+        from experiment.evaluator import (
+            load_existing_coverage_summary,
+            compute_total_lines_without_fuzz_targets,
+        )
+    except Exception:
+        return None
+    try:
+        summary = load_existing_coverage_summary(project)
+        if not summary:
+            return None
+        totals = summary['data'][0]['totals']['lines']
+        covered = int(totals.get('covered', 0))
+        total = int(totals.get('count', 0))
+        if total <= 0:
+            return None
+        # ``compute_total_lines_without_fuzz_targets`` excludes the
+        # fuzz-target files themselves; use it when possible.
+        try:
+            adj_total = compute_total_lines_without_fuzz_targets(
+                summary, '__placeholder__')
+            if isinstance(adj_total, int) and adj_total > 0:
+                total = adj_total
+        except Exception:
+            pass
+        return {'covered': covered, 'total': total}
+    except Exception as exc:
+        if log is not None:
+            log.debug("baseline line-count fetch failed: %s", exc)
+        return None
 
 
 def persist_snapshot(

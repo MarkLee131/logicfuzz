@@ -1698,18 +1698,29 @@ def _extract_existing_driver_knowledge(project_name: str,
         )
         return {'driver_sources': [], 'analysis': None}
 
-    driver_sources: List[Dict[str, str]] = []
-    for path in driver_files[:max_drivers]:
+    # Load ALL driver files for Phase B distillation (deterministic
+    # regex, no token cost). The Prototyper-facing
+    # ``driver_sources`` and ``analysis`` paths still cap at
+    # ``max_drivers`` to keep LLM prompt size bounded — those
+    # consume tokens proportional to source length. lcms has 15
+    # baseline drivers but only 3 land in the Prototyper prompt; we
+    # don't want to throw away the other 12 drivers' idiom signal.
+    all_driver_sources: List[Dict[str, str]] = []
+    for path in driver_files:
         try:
             text = path.read_text(encoding='utf-8', errors='ignore')
         except OSError as e:
             log.debug("Skipping driver %s: %s", path, e)
             continue
-        driver_sources.append({'path': str(path), 'source': text})
+        all_driver_sources.append({'path': str(path), 'source': text})
+
+    # The Prototyper-facing slice is bounded by ``max_drivers``.
+    driver_sources = all_driver_sources[:max_drivers]
 
     log.info(
-        "   📚 Loaded %d existing driver(s) for knowledge extraction from %s",
-        len(driver_sources), root,
+        "   📚 Loaded %d existing driver(s) for Prototyper context "
+        "(%d total available for distillation) from %s",
+        len(driver_sources), len(all_driver_sources), root,
     )
 
     analysis: Optional[Dict[str, str]] = None
@@ -1721,17 +1732,14 @@ def _extract_existing_driver_knowledge(project_name: str,
             log.warning(f"LLM pattern analysis failed (non-critical): {e}")
             analysis = None
 
-    # Phase B — Synthesis Distillation. Extract structured, actionable
-    # idioms from the baseline driver source. These complement the
-    # free-form LLM ``analysis`` (which summarises) with **specific
-    # patterns** the Prototyper is told to reproduce (min-size guards,
-    # null-termination requirements, context-NULL-pass, etc.). See
-    # ``src/knowledge/idiom_distiller.py`` and the Phase A→E roadmap.
+    # Phase B — Synthesis Distillation. Run on the FULL driver set so
+    # libraries with many baseline drivers (lcms: 15) yield rich idiom
+    # libraries instead of being capped at the LLM-prompt budget.
     idiom_library_dict: Optional[Dict[str, Any]] = None
-    if driver_sources:
+    if all_driver_sources:
         try:
             from src.knowledge.idiom_distiller import distill_and_persist
-            idiom_library = distill_and_persist(project_name, driver_sources)
+            idiom_library = distill_and_persist(project_name, all_driver_sources)
             idiom_library_dict = idiom_library.to_dict()
         except Exception as exc:
             log.warning(

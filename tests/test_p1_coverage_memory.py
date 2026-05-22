@@ -19,7 +19,7 @@ from src.state.coverage_memory import (  # noqa: E402
     SCHEMA_VERSION,
     CoverageMemory,
     IterationSnapshot,
-    TrialResult,
+    TrialOutcome,
     make_snapshot,
     persist_snapshot,
 )
@@ -31,10 +31,10 @@ from src.state.coverage_memory import (  # noqa: E402
 
 def test_make_snapshot_derives_baseline_ratio():
     trs = [
-        TrialResult(trial_id=1, api_sequence=['a', 'b'],
+        TrialOutcome(trial_id=1, api_sequence=['a', 'b'],
                     final_coverage_pct=0.20, final_line_diff_pct=0.02,
                     success=True),
-        TrialResult(trial_id=2, api_sequence=['c'],
+        TrialOutcome(trial_id=2, api_sequence=['c'],
                     final_coverage_pct=0.25, final_line_diff_pct=0.05,
                     success=True),
     ]
@@ -49,7 +49,7 @@ def test_make_snapshot_derives_baseline_ratio():
 
 
 def test_make_snapshot_no_baseline_leaves_ratio_none():
-    trs = [TrialResult(trial_id=1, api_sequence=['a'],
+    trs = [TrialOutcome(trial_id=1, api_sequence=['a'],
                        final_coverage_pct=0.30, success=True)]
     snap = make_snapshot(iteration_idx=0, trial_results=trs)
     assert snap.coverage_ratio_to_baseline is None
@@ -58,9 +58,9 @@ def test_make_snapshot_no_baseline_leaves_ratio_none():
 
 def test_failed_trials_excluded_from_aggregate():
     trs = [
-        TrialResult(trial_id=1, api_sequence=['a'],
+        TrialOutcome(trial_id=1, api_sequence=['a'],
                     final_coverage_pct=0.50, success=False),  # excluded
-        TrialResult(trial_id=2, api_sequence=['b'],
+        TrialOutcome(trial_id=2, api_sequence=['b'],
                     final_coverage_pct=0.10, success=True),
     ]
     snap = make_snapshot(iteration_idx=0, trial_results=trs)
@@ -82,7 +82,7 @@ def test_persist_roundtrip_preserves_snapshots():
         path = Path(td) / 'state' / 'coverage_memory.json'
         snap = make_snapshot(
             iteration_idx=0,
-            trial_results=[TrialResult(
+            trial_results=[TrialOutcome(
                 trial_id=1, api_sequence=['cJSON_Parse'],
                 final_coverage_pct=0.25, success=True,
                 skeleton_repair_applied=True,
@@ -135,11 +135,11 @@ def test_schema_mismatch_starts_fresh():
 def test_persist_snapshot_helper_appends_existing():
     with tempfile.TemporaryDirectory() as td:
         state_dir = Path(td) / 'state'
-        s1 = make_snapshot(0, [TrialResult(trial_id=1, api_sequence=['a'],
+        s1 = make_snapshot(0, [TrialOutcome(trial_id=1, api_sequence=['a'],
                                            final_coverage_pct=0.1, success=True)])
         mem = persist_snapshot('p', s1, state_dir=state_dir)
         assert len(mem.snapshots) == 1
-        s2 = make_snapshot(1, [TrialResult(trial_id=2, api_sequence=['b'],
+        s2 = make_snapshot(1, [TrialOutcome(trial_id=2, api_sequence=['b'],
                                            final_coverage_pct=0.2, success=True)])
         mem = persist_snapshot('p', s2, state_dir=state_dir)
         assert len(mem.snapshots) == 2

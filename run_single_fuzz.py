@@ -546,8 +546,24 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
 
   # Optional: merge successful trials into a single multi-task harness.
   # See docs/merge_drivers.md and the --merge-drivers flag in run_logicfuzz.
+  merged_path: Optional[str] = None
   if getattr(args, 'merge_drivers', False):
-    _maybe_merge_drivers(benchmark, work_dirs, trial_results)
+    merged_path = _maybe_merge_drivers(benchmark, work_dirs, trial_results)
+
+  # Phase C foundation — persist a post-merge IterationSnapshot. The
+  # snapshot is the evaluation unit Phase D Planner / Phase E Adaptive
+  # Shape will read from. Failing softly (best-effort telemetry; no
+  # workflow blocking).
+  try:
+    _persist_phase_c_snapshot(
+        benchmark=benchmark,
+        trial_results=trial_results,
+        merged_path=merged_path,
+    )
+  except Exception as exc:
+    logger.warning(
+        f"Phase C snapshot persist failed (non-critical): {exc}",
+        trial=0)
 
   logger.info('📍 [_fuzzing_pipelines] Creating BenchmarkResult...', trial=0)
   result = BenchmarkResult(benchmark=benchmark,
@@ -637,6 +653,70 @@ def _maybe_merge_drivers(benchmark: Benchmark,
         f'merge_drivers: synthesis failed ({type(exc).__name__}: {exc}); '
         f'main run unaffected', trial=0)
     return None
+
+
+def _persist_phase_c_snapshot(
+    benchmark: Benchmark,
+    trial_results: List,
+    merged_path: Optional[str],
+) -> None:
+  """Phase C foundation — write an ``IterationSnapshot`` to
+  ``results/<project>/state/coverage_memory.json`` summarising this
+  run's trials, the merge outcome, repair telemetry from Phase A, and
+  the ratio-to-baseline derived from OSS-Fuzz's published coverage.
+
+  Single-iteration snapshots are the current MVP; appending across
+  iterations is what the future CEGAR loop driver will do. Phase D
+  Planner / Phase E Adaptive Shape consume the latest snapshot for
+  candidate-plan decisions.
+
+  Best-effort: failures here become a warning, never block the run.
+  """
+  from pathlib import Path
+  from src.state.coverage_memory import (
+      harvest_trial_outcomes,
+      load_baseline_line_counts,
+      make_snapshot,
+      persist_snapshot,
+  )
+
+  project = getattr(benchmark, 'project', None) or 'unknown'
+  state_dir = Path('results') / project / 'state'
+  repair_log_path = state_dir / 'repair_log.json'
+
+  outcomes = harvest_trial_outcomes(trial_results, repair_log_path)
+  baseline = load_baseline_line_counts(project, log=logger)
+
+  # Pull repair summary (top-level counts) from the repair log if present.
+  repair_summary: dict = {}
+  if repair_log_path.exists():
+    try:
+      import json
+      with repair_log_path.open(encoding='utf-8') as f:
+        rl = json.load(f)
+      repair_summary = rl.get('summary', {}) or {}
+    except Exception:
+      pass
+
+  merged_count = 0
+  if merged_path:
+    merged_dir = Path(merged_path) / 'synthesized'
+    if merged_dir.exists():
+      merged_count = len([p for p in merged_dir.iterdir()
+                         if p.is_file() and p.name != 'entry.c'
+                         and p.name != 'entry.cpp'])
+
+  snap = make_snapshot(
+      iteration_idx=0,  # MVP: single-iter; CEGAR loop will bump this
+      trial_results=outcomes,
+      merged_driver_path=merged_path,
+      merged_driver_count=merged_count,
+      baseline_line_count=(baseline['total'] if baseline else None),
+      baseline_covered_lines=(baseline['covered'] if baseline else None),
+      repair_summary=repair_summary,
+  )
+  persist_snapshot(project, snap, state_dir=state_dir)
+
 
 def run(benchmark: Benchmark, model_name: str, args: argparse.Namespace,
         work_dirs: WorkDirs) -> Optional[AggregatedResult]:
