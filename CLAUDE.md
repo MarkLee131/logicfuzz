@@ -61,6 +61,7 @@ justification + future-work plan lives in `docs/`:
 | `docs/driver_vs_baseline_2026_05_12.md` | Diagnostic analysis: why a generated driver under-performed vs the hand-written baseline on cjson run5. Side-by-side diff, "lost context" enumeration, intervention list. Triggered the §10B work in `knowledge_layer_design_proposal_2026_05.md`. | analytical |
 | `docs/knowledge_layer_design_proposal_2026_05.md` | T1/T2/T3 knowledge-layer roadmap. §10A operator-doc preparation (deferred); §10B baseline-regression detection + auto-recovery (v1 + v2 LANDED but under reconsideration — see §3 empirical validation 2026-05-21). | active design |
 | `docs/multihop_reasoning_design_proposal_2026_05.md` | Multi-hop reasoning Mode A for Prototyper (single LLM call with XML-tagged hops). LANDED behind `--multihop-prototyper` opt-in. Single-arm 2026-05-21 data; 4-arm A/B (multihop × §10B) still pending. | active design |
+| `docs/z3_skeleton_synthesis_problem_2026_05.md` | Root-cause analysis of the cjson/lcms "0 Z3-validated skeletons" bottleneck and its fix (position-indexed lifecycle validation). Includes domain framing, classical-literature anchors (CEGIS / MaxSMT / CEGAR / SyGuS), cjson `conditions.json` empirical evidence, post-fix result table, and an expert-discussion question list. | shipped + reference |
 
 ## Architecture
 
@@ -289,7 +290,6 @@ issues pass to the Fixer.
 - libaom path resolution — `src_ossfuzz/libaom/` layout doesn't match the consumer-paths probe.
 - Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
 - TLV-aware seed generation based on format analysis.
-- Index `order_var` by sequence position in CBFactory's Z3 model (currently keyed by API name; repeated APIs deduped at the boundary instead — see Failed Attempts below).
 
 ## Implementation Flow
 
@@ -335,24 +335,32 @@ avoid touching what the baseline already covers).
 or `LOGICFUZZ_DISABLE_COVERAGE_FILTER=1` for paper comparisons where
 total coverage is the metric.
 
-### CBFactory's "one position per API" Z3 model (papered over)
+### CBFactory's "one position per API" Z3 model (resolved 2026-05-22)
 
-`api_vars` and `order_vars` are keyed by API name (`Bool("api_called_X")`,
-`Int("order_X")`). Synthesis genuinely produces sequences with repeated
-APIs (e.g. `cJSON_Print` called multiple times) and `_try_find_init_chain`
-routes through the same API as a producer for several types — both
-legitimate but incompatible with one-var-per-name. Z3 raised
-`b'named assertion defined twice'` in three places.
+The legacy `Z3SequenceValidator` keyed `api_vars` / `order_vars` by API
+name (`Bool("api_called_X")`, `Int("order_X")`). Repeated APIs were
+deduped at the boundary, but more pathologically the lifecycle encoder
+quantified order constraints over the API-name set
+("∀c ∈ creates[T], u ∈ uses[T]: order_c < order_u"). For chained-builder
+APIs that serve as *both* creator and user of the same type (cjson's
+`cJSON_Add*` family — returns a new node AND mutates the parent), the
+all-pairs expansion generated cyclic constraints and forced 10/10
+cjson sequences UNSAT. Same expected on lcms.
 
-**Mitigation (applied):**
-- Per-checkpoint dedup of `(api, type)` and `(api, position)` pairs in
-  `IncrementalZ3Solver` (`add_resource_required` / `add_resource_produced`
-  / `add_api_called`).
-- Idempotent guard in `CBFactory._track_api_in_z3` so the init-chain
-  recursion can revisit an already-tracked API without re-asserting.
-- Dedup of repeated names in post-hoc `Z3SequenceValidator.add_api_sequence_constraint`.
+**Proper fix (landed `f7001cf7`):** position-indexed lifecycle
+validation in `Z3SequenceValidator._check_lifecycle_position_indexed`.
+For each position j with USE on T, deterministically check that some
+k < j has CREATE on T. No Z3 solver call needed for the lifecycle
+family (it collapses to an O(n²) walk over a fixed sequence). Z3 is
+retained only for length-dependency constraints.
 
-**Proper fix (open TODO):** index `order_var` by sequence position rather than API name.
+The `add_api_sequence_constraint`, `add_access_order_constraint`, and
+`_add_lifecycle_constraints` methods were deleted in the same commit
+along with the "papered over" boundary-dedup hacks. Empirical result on
+cjson's 10 L4-ranked sequences: 0/10 → 7/10 SAT (the 3 remaining
+rejections are true USE-before-CREATE null-deref hazards). See
+`docs/z3_skeleton_synthesis_problem_2026_05.md` §3.6 for the root-cause
+analysis and §6.5 for the post-fix result.
 
 ### libucl indirect entry point (added to L1)
 
