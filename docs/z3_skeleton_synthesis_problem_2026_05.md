@@ -469,6 +469,101 @@ doing alongside #2 + #4.
 
 ---
 
+## §6.5. 2026-05-22 update: #4 implementation outcome
+
+`Z3SequenceValidator.validate_sequence` was rewritten on 2026-05-22
+(commit `f7001cf7`) to use position-indexed lifecycle semantics
+(§5.2). The legacy code's `add_api_sequence_constraint`,
+`add_access_order_constraint`, and `_add_lifecycle_constraints`
+were deleted entirely — they had no callers outside the validator
+itself once the position-indexed walker replaced them. Z3 is
+retained only for the length-dependency family.
+
+Empirical result on cjson's 10 L4-ranked sequences (the same set
+that produced 0/10 SAT under the legacy encoding):
+
+| Outcome | Legacy | Position-indexed |
+|---|---|---|
+| SAT (sequence admitted as buildable) | 0 | **7** |
+| Rejected — true USE-before-CREATE | 0 | 3 |
+| Rejected — cyclic over-constraint (false positive) | 10 | 0 |
+
+The 3 remaining rejections are real null-deref hazards:
+
+- **seq 3**: `[cJSON_IsArray, cJSON_ParseWithLength, ...]` — `IsArray`
+  dereferences a `cJSON*` before any creator runs.
+- **seq 6**: `[cJSON_DetachItemViaPointer, cJSON_CreateNumber, ...]` —
+  `DetachItemViaPointer` mutates a `cJSON*` that doesn't exist yet.
+- **seq 9**: `[cJSON_IsInvalid, cJSON_IsFalse, ...]` — same pattern,
+  multiple `cJSON*` predicates fire before any creator.
+
+These rejections are *correct* — L4's random-walk generator
+occasionally emits genuinely broken orderings; rejecting them and
+letting L4 retry is the right policy.
+
+### What this means for §10B v1/v2 and the multi-trial story
+
+With #4 landed, the chain that was previously broken:
+
+```
+L4 generates 10 candidates
+     ↓
+Z3 rejects 10 (cyclic over-constraint)
+     ↓
+0 skeletons in cache
+     ↓
+num_samples = 1 (fallback)
+     ↓
+1 trial / project
+     ↓
+merge has 1 driver to merge → no diversity
+     ↓
+§10B v1 fires per-trial, can't tell the difference between
+"single-trial noise" and "real coverage gap"
+```
+
+is now:
+
+```
+L4 generates 10 candidates
+     ↓
+Z3 (lifecycle deterministic walk) admits 7 valid sequences
+     ↓
+7 skeletons in cache  
+     ↓
+num_samples = 7 (post 1f0438e3)
+     ↓
+7 trials × diverse skeletons / project
+     ↓
+merge combines 7 drivers → real diversity
+     ↓
+§10B v1 can fire on post-merge coverage (right granularity)
+```
+
+### Is #2 still needed?
+
+The original case for #2 (MaxSMT / soft constraints) was: "the
+hard-constraint encoding rejects too aggressively; switch to soft
+to admit max-partial-sat." With #4 the rejection is no longer
+aggressive — it's correct. The 3 remaining cjson rejections would
+genuinely null-deref if admitted; admitting them with a soft penalty
+would push broken drivers downstream into the LLM, costing tokens
+and producing bad coverage.
+
+There is still a future case for #2 — specifically for projects where
+the length-dependency family produces UNSAT under legitimate inputs
+— but the immediate "0-skeleton problem" that motivated this analysis
+is **resolved by #4 alone** for cjson and (predicted, pending live
+run) for lcms.
+
+Recommendation: do not implement #2 immediately. Add it only if a
+later A/B reveals length-dep over-rejection or another constraint
+family hard-rejecting valid sequences. The expert discussion in §6
+remains relevant for future calibration but is no longer time-
+critical.
+
+---
+
 ## §7. References
 
 - Bjørner, N. & Phan, A.-D. (2014). νZ - An Optimizing SMT Solver. *TACAS*.
