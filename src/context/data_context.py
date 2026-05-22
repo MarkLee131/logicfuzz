@@ -1219,6 +1219,62 @@ class FuzzingContext:
             else:
                 log.warning('   ⚠️ No valid filtered sequences, falling back to auto-generation')
 
+            # Phase D — Path-aware Planner. Read Phase B idioms (run
+            # distillation early; deterministic, no token cost) and
+            # rerank / synthesise candidates. Idiom-aligned candidates
+            # come first → graft + Z3 get the strongest signal first;
+            # CONTEXT_NULL_PASS-implicated APIs missing from L4 get a
+            # synthesised entry that downstream LLM can flesh out.
+            try:
+                from src.knowledge.idiom_distiller import distill_idioms
+                from src.state.path_planner import plan_and_persist
+                # Load baseline driver sources for distillation.
+                planner_idioms_payload = None
+                early_root = _resolve_drivers_root(project_name)
+                if early_root is not None:
+                    early_files = _iter_driver_source_files(early_root)
+                    early_sources = []
+                    for p in early_files:
+                        try:
+                            early_sources.append({
+                                'path': str(p),
+                                'source': p.read_text(
+                                    encoding='utf-8', errors='ignore'),
+                            })
+                        except OSError:
+                            continue
+                    if early_sources:
+                        early_lib = distill_idioms(project_name, early_sources)
+                        planner_idioms_payload = early_lib.to_dict()
+                # Plan: rerank + maybe synthesise.
+                seqs_as_names = [
+                    [a.function_name for a in s] for s in filtered_api_sequences]
+                project_api_names = {a.function_name for a in generator.all_apis}
+                planned_names, _ledger = plan_and_persist(
+                    project=project_name,
+                    target_sequences=seqs_as_names,
+                    idioms_payload=planner_idioms_payload,
+                    project_api_names=project_api_names,
+                )
+                # Translate back to Api objects, preserving the planner's
+                # ordering and appending any synthesised one-element
+                # sequences that resolve to known APIs.
+                name_to_api = {a.function_name: a for a in generator.all_apis}
+                planned_api_sequences: List[List[Any]] = []
+                for names in planned_names:
+                    apis = [name_to_api[n] for n in names if n in name_to_api]
+                    if apis:
+                        planned_api_sequences.append(apis)
+                if planned_api_sequences:
+                    filtered_api_sequences = planned_api_sequences
+                    log.info(
+                        f'   🧭 Planner: {len(planned_api_sequences)} candidates '
+                        f'(rerank+synthesis applied)')
+            except Exception as exc:
+                log.warning(
+                    f"Path-aware planner failed (non-critical, falling back "
+                    f"to L4 order): {exc}")
+
             skeleton_drivers = _synthesize_skeletons_per_sequence(
                 generator=generator,
                 target_sequences=filtered_api_sequences,
