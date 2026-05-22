@@ -201,52 +201,44 @@ over this JSON.
 
 ---
 
-## Components NOT YET reviewed (and why each matters)
+## Components STILL pending review (2026-05-22 status)
 
-These are next in line. Each has a one-sentence "why it matters for
-driver quality" hook so the prioritization is grounded in expected
-impact, not just LOC count.
+Out of the original 11-item "Components NOT YET reviewed" list (kept
+in git history at `15daf73b^:docs/review_and_fix_log_2026_05.md`), all
+**11 have been reviewed** in the 2026-05-11 / 12 / 21 refactor wave
+— see commits `5ef8e127` (DriverEnhancer), `aaad86e1` (Agent),
+`e4d754d3` (Automaton), `0ea457e7` + `63fe5015` (UnifiedCodeValidator
++ Supervisor), `a1246373` (data_context + LFBackendDriver +
+merge_drivers), `82e277cf` (Workflow), `de9357ca` (Tools layer),
+plus the comprehender-paired review and `8e5ddbe5` (L2/L3 typestate
+migration).
 
-| Component | File / dir | LOC | Why it matters |
-|---|---|---|---|
-| **DriverEnhancer** | `liberator_adapter/driver/driver_enhancer.py` | TBD | After deleting `CallbackStubLibrary`, this is the **sole source** of callback stubs and the VarLen fallback. Quality of callback stubs directly determines whether libfuzzer can actually exercise APIs that take comparators / VIO callbacks. |
-| **Agent internals** | `src/agents/{fixer,coverage_analyzer,crash_analyzer,crash_feasibility_analyzer,improver,project_analyzer}.py` | ~3000 | We documented the *intent* of each LLM call in `llm_vs_traditional_choices.md`. Now verify the **implementation actually realises that intent** (right prompt template, right tool calls, right response parsing) — same exercise we did at the Prototyper boundary. |
-| **Comprehender (Stage A + B)** | `src/knowledge/comprehender.py` + `cache.py` | TBD | Stage B's per-sequence semantic verdict primes the Prototyper context. Bad output here propagates to *every* driver. Empirical claim from `llm_vs_traditional_choices.md` §E: "disabling Stage B introduces ~30% nonsense sequences" — need to confirm the live code matches. |
-| **Automaton subsystem** | `liberator_adapter/analysis/{pta,edsm,project_automaton,usedef,static_trace,llm_oracle}.py` | TBD | L4 + Phase G + Phase H Z3 guard all consume this. We reviewed the *consumers* in L1-L5 review; not the *producer* algorithm. Bug here means L4 ranking is off and closed-loop chases a wrong target. Already has its own doc `docs/automaton.md`. |
-| **UnifiedCodeValidator** | `src/utils/unified_validator.py` | TBD | Single-pass validator (per CLAUDE.md replaces 4 prior validators). Catches fake-defs / language-mismatch / internal-API / hallucination. If this gate is faulty, malformed LLM output reaches the builder. |
-| **data_context.py 12-step pipeline** | `src/context/data_context.py` | ~2400 | Glue between every component. We touched only Step 10/11 during refactor; the other 9 steps have implicit dependencies / SSOT mutation patterns we haven't audited. |
-| **Closed-loop orchestrator** | `src/closed_loop.py` | TBD | Phase G: each iteration generates evidence drivers, updates automaton, re-runs L4. Bug here taints automaton evolution; once tainted, all subsequent skeletons degrade. |
-| **Workflow / Supervisor** | `src/workflow/nodes/supervisor.py` | TBD | Per-trial state machine: routes between Prototyper / Fixer / Crash / Coverage agents; enforces retry caps; detects loops. Wrong routing = wasted trials. |
-| **Tools layer** | `src/tools/execution.py` | TBD | `BashExecuteTool`, `GDBExecuteTool` — the ReAct primitives every agent uses. Output-truncation policy (8KB per CLAUDE.md) directly affects what agents see. |
-| **`LFBackendDriver`** | `liberator_adapter/backend/...` | TBD | Renders the `Driver` IR into actual libfuzzer-compatible C/C++ + writes corpus + headers. Last transformation before compile; bugs here are most visible. |
-| **`merge_drivers`** | `tools/merge_drivers/` | TBD | Multi-driver harness merger run at the evaluation tail. CLAUDE.md has a dedicated `docs/merge_drivers.md`. Affects only the merged-driver evaluation profile (`--merge-drivers`), not per-trial drivers. |
+The remaining ⏳ items are the **three deferred** entries from the
+"Reviewed subsystems" table at the top of this doc:
 
----
+| Component | File | LOC | Why it matters | Why deferred |
+|---|---|---|---|---|
+| **L5 `coverage_aware_filter`** | `liberator_adapter/constraints/coverage_aware_filter.py` | 275 | Pre-L4 novelty gate against existing OSS-Fuzz coverage. Controls how aggressively we skip "redundant" sequences. Threshold normalization affects whether we're too strict on small projects. | Normalization deferred — needs A/B on production-eval vs paper-eval profiles before deciding the right shape (currently `--no-coverage-filter` toggles a hard on/off). |
+| **`provenance_checker`** | `liberator_adapter/constraints/provenance_checker.py` | 250 | L0 type-DAG admit/reject gate. Permissiveness directly determines L0 pool size; too strict drops legitimate creator/consumer links. | Permissiveness rules deferred — current heuristics work on the 5 test projects; tweaking risks unintended ripple in L0 candidate set without bench data. |
+| **`special_patterns`** | `liberator_adapter/constraints/special_patterns.py` | 1199 | VarLenAnalyzer + special-case patterns for non-standard `(buf, size)` signatures (e.g. iov, callback-with-userdata). Affects which APIs L1 admits as indirect entry points. | Deep review pending — largest unreviewed unit (1199 LOC); structural-only check done. Real audit needs a benchmark exercising VarLen patterns (libpcap, mbedtls iov APIs) which the current 5-project bench doesn't include. |
 
-## Recommended next-review order
+All three are **non-blocking** — their current implementation works
+on the 5 reference benchmarks (cjson, c-ares, lcms, libucl, ffjpeg).
+Review is on the back-burner until a benchmark surfaces a concrete
+failure mode in one of them.
 
-Based on the "why it matters" column:
+### What's freshly under reconsideration (not the same as "unreviewed")
 
-1. **DriverEnhancer** — small (1-2 hours), high impact, isolated. The
-   callback stub chain we just made the sole production source. Audit
-   correctness before relying on it.
-2. **UnifiedCodeValidator** — the gate that decides what reaches the
-   builder. Small (probably ~500 LOC), high impact: if it lets bad
-   output through, the Fixer agent has to clean up; if it rejects too
-   aggressively, retries are wasted.
-3. **Comprehender** — Stage A/B prime every Prototyper call. Quality
-   of context = quality of output. Tied to `llm_vs_traditional_choices.md`
-   §E.
-4. **Automaton subsystem internals** — heavier (~2000 LOC), but the
-   *producer* of signals L4/Phase G/Phase H all consume. Has its own
-   doc already so the architecture is documented; review focus would
-   be implementation-vs-doc correspondence.
-5. **Agent internals** (Fixer, CoverageAnalyzer, Improver, Crash*) —
-   biggest LOC, but parallel structures (all use ToolCallingMixin
-   ReAct loops). Can do one in depth and skim the rest.
-6. **data_context.py 12-step pipeline + closed_loop + supervisor** —
-   glue code review. Worth doing last because by then we have a
-   sharper sense of what each step needs.
-7. **`LFBackendDriver` + tools layer + `merge_drivers`** — output /
-   utility layer. Important but lower coupling to driver quality
-   than the producers above.
+- **§10B v1/v2** (`src/workflow/nodes/execution.py` baseline-regression
+  alert + `src/workflow/nodes/baseline_diff_analyzer.py` recovery
+  loop). Code shipped (commits `9b2cf883`, `f6dd60b6`), but the
+  2026-05-21 A/B run revealed the design is built on the wrong
+  evaluation granularity (per-trial line_diff rather than post-merge
+  ratio). See `docs/knowledge_layer_design_proposal_2026_05.md` §10B
+  for the empirical findings; the architectural critique is in the
+  pub-llm working notes and will likely lead to revert or substantial
+  scope reduction once the 2026-05-22 `--eval` A/B finishes.
+
+- **Multi-hop reasoning Mode A** (`src/agents/prototyper.py`,
+  commit `64599154`). Single-arm data only; needs 4-arm
+  (multihop × §10B) A/B to isolate the contribution. Pending.
