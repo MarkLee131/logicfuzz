@@ -47,7 +47,7 @@ import re
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set
 
 logger = logging.getLogger(__name__)
 
@@ -221,12 +221,23 @@ class RepairEngine:
     for which idiom kinds inform creator choice.
     """
 
+    # ``MAX_GRAFT_RETRIES`` (F2 2026-05-23): per-candidate cap on how
+    # many distinct grafted-creator combinations to try before giving
+    # up. Top-K=3 in graft_creator_prefix bounds the per-position
+    # alternatives, but multi-handle sequences can multiply quickly —
+    # cap so a stubborn candidate doesn't burn budget.
+    MAX_GRAFT_RETRIES = 4
+
     def __init__(
         self,
         graft_fn: Optional[Callable[..., Optional[List[str]]]] = None,
         idioms_payload: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self._strategies: List[Callable[[List[str]], Optional[RepairAttempt]]] = []
+        # ``_strategies`` items are generators yielding zero or more
+        # ``RepairAttempt`` per candidate. The engine walks each
+        # generator until one yields an attempt that revalidates.
+        self._strategies: List[Callable[[List[str]],
+                                         Iterable[RepairAttempt]]] = []
         self._idiom_blessed: Set[str] = extract_idiom_blessed_apis(idioms_payload)
         if graft_fn is not None:
             self._strategies.append(self._make_graft_strategy(graft_fn))
@@ -234,43 +245,84 @@ class RepairEngine:
     def _make_graft_strategy(
         self,
         graft_fn: Callable[..., Optional[List[str]]],
-    ) -> Callable[[List[str]], Optional[RepairAttempt]]:
-        """Wrap ``graft_fn`` with an idiom-aware prefer filter when
-        Phase B idioms are present. If the underlying graft_fn doesn't
-        accept a ``prefer_filter`` keyword (older API), we fall back to
-        calling it without — graft just won't have idiom guidance.
+    ) -> Callable[[List[str]], Iterable[RepairAttempt]]:
+        """Wrap ``graft_fn`` to yield up to ``MAX_GRAFT_RETRIES`` repair
+        attempts per candidate — each with a different set of grafted
+        creators.
+
+        Loop:
+          1. Try idiom-blessed roots (F1).
+          2. If revalidate fails, exclude the chosen creators and ask
+             graft again for an alternative.
+          3. After the engine's outer loop sees revalidate fail, the
+             engine calls the generator again (via ``next``); we then
+             yield the next attempt with the failed creators excluded.
+
+        Backward compat: if the underlying ``graft_fn`` doesn't accept
+        ``exclude_filter`` (older API), we degrade gracefully —
+        yield the single F1-only attempt.
         """
         blessed = self._idiom_blessed
+        max_retries = self.MAX_GRAFT_RETRIES
 
-        def strategy(seq: List[str]) -> Optional[RepairAttempt]:
-            grafted: Optional[List[str]] = None
+        def _call_graft(
+            seq: List[str],
+            excluded: Set[str],
+        ) -> Optional[List[str]]:
+            """Call graft_fn with whatever kwargs it accepts."""
+            kwargs: Dict[str, Any] = {}
             if blessed:
-                # Try idiom-preferring path first.
-                try:
-                    grafted = graft_fn(
-                        seq,
-                        prefer_filter=lambda name: name in blessed,
-                    )
-                except TypeError:
-                    # graft_fn doesn't support prefer_filter — older API.
-                    grafted = graft_fn(seq)
-            else:
-                grafted = graft_fn(seq)
-            if grafted is None or grafted == seq:
-                return None
-            inserted = [a for a in grafted if a not in seq]
-            # If we got an idiom-blessed creator, note it in rationale.
-            blessed_hits = [a for a in inserted if a in blessed]
-            return RepairAttempt(
-                strategy=RepairStrategy.GRAFT_CREATOR_PREFIX,
-                original_sequence=list(seq),
-                repaired_sequence=list(grafted),
-                inserted_apis=inserted,
-                success=False,  # caller flips to True after re-validation
-                rejection_reason=(
-                    f"idiom-blessed: {blessed_hits}" if blessed_hits else ""
-                ),
-            )
+                kwargs['prefer_filter'] = lambda name: name in blessed
+            if excluded:
+                kwargs['exclude_filter'] = lambda name: name in excluded
+            if not kwargs:
+                return graft_fn(seq)
+            try:
+                return graft_fn(seq, **kwargs)
+            except TypeError:
+                # Older API; degrade — drop kwargs incrementally.
+                if 'exclude_filter' in kwargs:
+                    kwargs.pop('exclude_filter')
+                    try:
+                        return graft_fn(seq, **kwargs)
+                    except TypeError:
+                        pass
+                return graft_fn(seq)
+
+        def strategy(seq: List[str]) -> Iterable[RepairAttempt]:
+            excluded: Set[str] = set()
+            previous_inserted: Optional[List[str]] = None
+            for retry_idx in range(max_retries):
+                grafted = _call_graft(seq, excluded)
+                if grafted is None or grafted == seq:
+                    return
+                inserted = [a for a in grafted if a not in seq]
+                if not inserted:
+                    return
+                # If we already excluded these inserts but graft returned
+                # the same answer, the underlying API is ignoring our
+                # exclude_filter (legacy graft, or a stuck strategy).
+                # Stop retrying — further iterations would be noise.
+                if retry_idx > 0 and previous_inserted == inserted:
+                    return
+                previous_inserted = list(inserted)
+                blessed_hits = [a for a in inserted if a in blessed]
+                note_parts = []
+                if blessed_hits:
+                    note_parts.append(f"idiom-blessed: {blessed_hits}")
+                if retry_idx > 0:
+                    note_parts.append(f"retry #{retry_idx} (excluding {sorted(excluded)})")
+                yield RepairAttempt(
+                    strategy=RepairStrategy.GRAFT_CREATOR_PREFIX,
+                    original_sequence=list(seq),
+                    repaired_sequence=list(grafted),
+                    inserted_apis=inserted,
+                    success=False,  # engine flips after revalidation
+                    rejection_reason="; ".join(note_parts),
+                )
+                # If this attempt didn't succeed, exclude its inserts
+                # before the next iteration so we try a different root.
+                excluded.update(inserted)
         return strategy
 
     def attempt(
@@ -281,10 +333,13 @@ class RepairEngine:
     ) -> CandidateRepairTrace:
         """Run strategies until one yields a re-validatable sequence.
 
+        Strategies are now generators yielding zero or more
+        ``RepairAttempt`` per candidate (Phase A F2, 2026-05-23). The
+        engine walks each generator, revalidates each yielded attempt,
+        and stops at the first acceptance.
+
         ``revalidate`` is the caller's "would this new sequence pass the
-        validator stack now?" predicate. Returns ``True`` iff the
-        repaired sequence is acceptable; the engine records the result
-        on the attempt and stops.
+        validator stack now?" predicate.
         """
         seq_list = list(seq)
         trace = CandidateRepairTrace(
@@ -292,20 +347,26 @@ class RepairEngine:
             original_sequence=seq_list,
         )
         for strategy in self._strategies:
-            attempt = strategy(seq_list)
-            if attempt is None:
-                continue
-            try:
-                accepted = bool(revalidate(attempt.repaired_sequence or []))
-            except Exception as exc:
-                accepted = False
-                attempt.rejection_reason = f"revalidate raised {type(exc).__name__}: {exc}"
-            attempt.success = accepted
-            if not accepted and not attempt.rejection_reason:
-                attempt.rejection_reason = "revalidate returned False"
-            trace.attempts.append(attempt)
-            if accepted:
-                trace.final_success = True
-                trace.final_sequence = attempt.repaired_sequence
-                return trace
+            for attempt in strategy(seq_list):
+                # ``attempt`` is a fresh RepairAttempt; revalidate, then
+                # decide whether to keep looking.
+                try:
+                    accepted = bool(revalidate(attempt.repaired_sequence or []))
+                except Exception as exc:
+                    accepted = False
+                    extra = (f"revalidate raised "
+                             f"{type(exc).__name__}: {exc}")
+                    attempt.rejection_reason = (
+                        attempt.rejection_reason + " | " + extra
+                        if attempt.rejection_reason else extra
+                    )
+                attempt.success = accepted
+                if not accepted and not attempt.rejection_reason:
+                    attempt.rejection_reason = "revalidate returned False"
+                trace.attempts.append(attempt)
+                if accepted:
+                    trace.final_success = True
+                    trace.final_sequence = attempt.repaired_sequence
+                    return trace
+            # Strategy exhausted; try next strategy.
         return trace

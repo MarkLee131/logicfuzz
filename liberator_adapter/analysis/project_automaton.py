@@ -186,6 +186,7 @@ class AutomatonArtifact:
         self,
         sequence: List[str],
         prefer_filter: Optional[Callable[[str], bool]] = None,
+        exclude_filter: Optional[Callable[[str], bool]] = None,
     ) -> Optional[List[str]]:
         """Try to ground an unaccepted candidate by prepending creator(s).
 
@@ -205,6 +206,14 @@ class AutomatonArtifact:
         lcms, ``cmsFreeToneCurveTriple`` is mod/ref-tagged CREATE but
         Phase B idioms know the true creator is ``cmsCreateContext`` and
         can vote it ahead.
+
+        ``exclude_filter`` (Phase A F2, 2026-05-23): roots for which
+        ``exclude_filter(name)`` returns ``True`` are removed BEFORE
+        consulting ``prefer_filter``. Used by RepairEngine's retry loop:
+        when a graft attempt revalidates to False, the engine excludes
+        the chosen root on the next attempt so it can try a different
+        producer. Without exclude_filter, the engine would re-pick the
+        same top-1 root repeatedly.
 
         Returns the grafted sequence on success, ``None`` if no graft could
         be made (no `graph` attribute, no unmet handles, or no producer
@@ -229,6 +238,10 @@ class AutomatonArtifact:
                 # type-feasible).
                 roots = [r for r in roots
                          if r not in seq_set and r not in creators_to_prepend]
+                # Phase A F2: drop roots the caller's retry loop has
+                # already tried and seen fail.
+                if exclude_filter is not None:
+                    roots = [r for r in roots if not exclude_filter(r)]
                 if not roots:
                     continue
                 # Phase A F1: idiom-aware preference. Try preferred roots

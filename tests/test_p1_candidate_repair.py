@@ -242,6 +242,145 @@ def test_no_idioms_engine_works_normally():
 
 
 # ---------------------------------------------------------------------------
+# F2 (2026-05-23): intra-engine retry — graft tries multiple roots
+# ---------------------------------------------------------------------------
+
+def test_graft_retries_with_exclude_filter():
+    """When the first graft attempt fails revalidation, the engine
+    excludes that root and retries with a different one. This is the
+    F2 acceptance test: a graft path where root[0] is feasible but
+    revalidate-rejected, and root[1] is the right answer.
+    """
+    call_count = {'n': 0}
+
+    def graft_fn(seq, prefer_filter=None, exclude_filter=None):
+        # Two-root behaviour: top-1 is 'bad_root', top-2 is 'good_root'.
+        candidates = ['bad_root', 'good_root']
+        if exclude_filter is not None:
+            candidates = [r for r in candidates if not exclude_filter(r)]
+        if prefer_filter is not None:
+            preferred = [r for r in candidates if prefer_filter(r)]
+            if preferred:
+                candidates = preferred
+        call_count['n'] += 1
+        if not candidates:
+            return None
+        return [candidates[0]] + list(seq)
+
+    # revalidate accepts ONLY sequences with good_root
+    eng = RepairEngine(graft_fn=graft_fn)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: 'good_root' in s,
+        candidate_index=0,
+    )
+    assert trace.final_success
+    assert trace.final_sequence == ['good_root', 'useX']
+    # Two attempts recorded: first with bad_root (failed), second with good_root.
+    assert len(trace.attempts) == 2
+    assert trace.attempts[0].inserted_apis == ['bad_root']
+    assert trace.attempts[0].success is False
+    assert trace.attempts[1].inserted_apis == ['good_root']
+    assert trace.attempts[1].success is True
+    # graft_fn was called twice (initial + retry).
+    assert call_count['n'] == 2
+
+
+def test_graft_retry_caps_at_max_retries():
+    """If every root revalidates to False, the engine stops at
+    MAX_GRAFT_RETRIES rather than looping forever."""
+    def graft_fn(seq, prefer_filter=None, exclude_filter=None):
+        # Always returns a fresh unique creator name; revalidate
+        # always rejects.
+        excluded = set()
+        if exclude_filter is not None:
+            # Walk a deterministic pool
+            for i in range(20):
+                name = f'root_{i}'
+                if not exclude_filter(name):
+                    return [name] + list(seq)
+            return None
+        return ['root_0'] + list(seq)
+
+    eng = RepairEngine(graft_fn=graft_fn)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: False,
+        candidate_index=0,
+    )
+    assert not trace.final_success
+    assert len(trace.attempts) == RepairEngine.MAX_GRAFT_RETRIES
+
+
+def test_graft_first_try_success_no_retry():
+    """If the first graft attempt revalidates True, we stop — no retry."""
+    call_count = {'n': 0}
+
+    def graft_fn(seq, prefer_filter=None, exclude_filter=None):
+        call_count['n'] += 1
+        return ['creator_X'] + list(seq)
+
+    eng = RepairEngine(graft_fn=graft_fn)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: 'creator_X' in s,
+        candidate_index=0,
+    )
+    assert trace.final_success
+    assert len(trace.attempts) == 1
+    assert call_count['n'] == 1  # no retry
+
+
+def test_graft_retry_with_legacy_api_no_exclude_filter_kwarg():
+    """If graft_fn doesn't accept exclude_filter, the engine detects
+    that retries yield the same answer and stops — no infinite loop,
+    no spurious extra attempts recorded."""
+    call_count = {'n': 0}
+
+    def legacy_graft(seq):
+        call_count['n'] += 1
+        return ['always_same_root'] + list(seq)
+
+    eng = RepairEngine(graft_fn=legacy_graft)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: False,  # always reject
+        candidate_index=0,
+    )
+    assert not trace.final_success
+    # Only one ATTEMPT is recorded (the same-answer detection stops the
+    # retry loop before yielding a redundant second attempt).
+    assert len(trace.attempts) == 1
+    # graft_fn is called twice: once for the initial attempt, once for
+    # the retry that turns up the same answer and triggers stop. Two is
+    # the minimum to detect saturation on a legacy graft API.
+    assert call_count['n'] == 2
+
+
+def test_graft_retry_attempt_records_carry_excluded_set():
+    """The retry attempts' rejection_reason should mention which roots
+    were excluded so operators can debug retry decisions."""
+    def graft_fn(seq, prefer_filter=None, exclude_filter=None):
+        # Always returns next-numbered root not in excluded
+        for i in range(5):
+            name = f'r{i}'
+            if exclude_filter is None or not exclude_filter(name):
+                return [name] + list(seq)
+        return None
+
+    eng = RepairEngine(graft_fn=graft_fn)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: 'r2' in s,  # only r2 accepted
+        candidate_index=0,
+    )
+    assert trace.final_success
+    # The retry attempts (idx 1+) carry "retry #N" + excluded set in
+    # the rejection_reason.
+    assert any('retry #' in a.rejection_reason for a in trace.attempts[1:])
+
+
+# ---------------------------------------------------------------------------
 # RepairLog aggregation
 # ---------------------------------------------------------------------------
 
