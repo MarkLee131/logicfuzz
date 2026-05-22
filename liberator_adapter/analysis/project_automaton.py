@@ -22,7 +22,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from liberator_adapter.analysis.edsm import EDSMResult, incremental_merge, merge
 from liberator_adapter.analysis.llm_oracle import LLMEquivalenceOracle
@@ -182,7 +182,11 @@ class AutomatonArtifact:
                 paths.append(walk)
         return paths
 
-    def graft_creator_prefix(self, sequence: List[str]) -> Optional[List[str]]:
+    def graft_creator_prefix(
+        self,
+        sequence: List[str],
+        prefer_filter: Optional[Callable[[str], bool]] = None,
+    ) -> Optional[List[str]]:
         """Try to ground an unaccepted candidate by prepending creator(s).
 
         Walks ``sequence`` in order, tracking which handles have been DEF'd
@@ -191,10 +195,16 @@ class AutomatonArtifact:
         producer is prepended once; multiple unmet handles produce a chain
         of creators (deduped, in discovery order).
 
-        The previous implementation returned after grafting the FIRST unmet
-        handle — sequences that needed two or more upstream creators (e.g.
-        a parser that takes a context AND a config handle, both produced
-        elsewhere) were never properly grounded.
+        ``prefer_filter`` (Phase A F1, 2026-05-23): when supplied, the
+        root-selection step **first** tries roots for which
+        ``prefer_filter(name)`` returns ``True``. If any such root passes
+        the cycle check, it wins. Only when no preferred root is available
+        does it fall back to the highest-ranked root irrespective of
+        filter. This lets callers (e.g. ``RepairEngine`` aware of Phase B
+        idioms) override IR-mod/ref false-positive CREATE labels — on
+        lcms, ``cmsFreeToneCurveTriple`` is mod/ref-tagged CREATE but
+        Phase B idioms know the true creator is ``cmsCreateContext`` and
+        can vote it ahead.
 
         Returns the grafted sequence on success, ``None`` if no graft could
         be made (no `graph` attribute, no unmet handles, or no producer
@@ -221,7 +231,17 @@ class AutomatonArtifact:
                          if r not in seq_set and r not in creators_to_prepend]
                 if not roots:
                     continue
-                chosen = roots[0]
+                # Phase A F1: idiom-aware preference. Try preferred roots
+                # first; only fall back to the highest-ranked if none of
+                # the top-K are idiom-blessed. This makes graft robust
+                # against IR mod/ref false-positive CREATE labels.
+                chosen: Optional[str] = None
+                if prefer_filter is not None:
+                    preferred = [r for r in roots if prefer_filter(r)]
+                    if preferred:
+                        chosen = preferred[0]
+                if chosen is None:
+                    chosen = roots[0]
                 creators_to_prepend.append(chosen)
                 seq_set.add(chosen)
                 # Mark this handle (and any others the chosen creator

@@ -43,10 +43,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,56 @@ class RepairLog:
             json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Idiom-aware preference filter (F1, 2026-05-23)
+# ─────────────────────────────────────────────────────────────────────
+#
+# When Phase B idioms are available, the graft strategy uses them to
+# prefer "idiom-blessed" root producers over whatever's at the top of
+# UseDefGraph.roots(). Concretely, an API is idiom-blessed if it appears
+# in an idiom's snippet for any of these kinds:
+#
+#   cleanup_pair          — the init half (e.g. ``foo_init(...)``)
+#   context_null_pass     — the API name (e.g. ``cmsOpenProfileFromMem``)
+#   buffer_copy           — sometimes implies a buffer-creator
+#   data_offset_parse     — typically the parser entry
+#
+# On lcms, IR mod/ref tags ``cmsFreeToneCurveTriple`` as CREATE because
+# its body internally allocates then frees. Without idioms, ``roots()``
+# can rank that ahead of ``cmsCreateContext``. With idioms,
+# ``cmsCreateContext`` is preferred because it appears in a
+# ``context_null_pass`` snippet.
+
+_API_NAME_RE = re.compile(r'\b([A-Za-z_][A-Za-z0-9_]*)\s*\(')
+
+_PREFERRED_IDIOM_KINDS = frozenset({
+    "cleanup_pair",
+    "context_null_pass",
+    "data_offset_parse",
+    "buffer_copy",
+})
+
+
+def extract_idiom_blessed_apis(idioms_payload: Optional[Dict[str, Any]]) -> Set[str]:
+    """Return API names mentioned in Phase B idiom snippets.
+
+    Only idioms of "creator-relevant" kinds contribute. Idioms about
+    input shape (min_size_guard, null_termination_required, etc.)
+    don't influence creator selection — they affect the Prototyper's
+    LLVMFuzzerTestOneInput body, not the API sequence.
+    """
+    blessed: Set[str] = set()
+    if not idioms_payload:
+        return blessed
+    for idiom in (idioms_payload.get('idioms') or []):
+        if idiom.get('kind') not in _PREFERRED_IDIOM_KINDS:
+            continue
+        snippet = str(idiom.get('snippet') or '')
+        for m in _API_NAME_RE.finditer(snippet):
+            blessed.add(m.group(1))
+    return blessed
+
+
 class RepairEngine:
     """Pluggable chain of repair strategies.
 
@@ -163,31 +214,62 @@ class RepairEngine:
     ``validator`` is a thin callable ``List[str] -> bool`` so the engine
     doesn't depend on the specific factory/Z3/RunningContext stack —
     callers wire whatever validation they want.
+
+    Phase A F1 (2026-05-23): ``idioms_payload`` lets the engine query
+    Phase B's distilled idioms when picking among multiple candidate
+    root producers in the graft strategy. See ``extract_idiom_blessed_apis``
+    for which idiom kinds inform creator choice.
     """
 
     def __init__(
         self,
-        graft_fn: Optional[Callable[[List[str]], Optional[List[str]]]] = None,
+        graft_fn: Optional[Callable[..., Optional[List[str]]]] = None,
+        idioms_payload: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._strategies: List[Callable[[List[str]], Optional[RepairAttempt]]] = []
+        self._idiom_blessed: Set[str] = extract_idiom_blessed_apis(idioms_payload)
         if graft_fn is not None:
             self._strategies.append(self._make_graft_strategy(graft_fn))
 
     def _make_graft_strategy(
         self,
-        graft_fn: Callable[[List[str]], Optional[List[str]]],
+        graft_fn: Callable[..., Optional[List[str]]],
     ) -> Callable[[List[str]], Optional[RepairAttempt]]:
+        """Wrap ``graft_fn`` with an idiom-aware prefer filter when
+        Phase B idioms are present. If the underlying graft_fn doesn't
+        accept a ``prefer_filter`` keyword (older API), we fall back to
+        calling it without — graft just won't have idiom guidance.
+        """
+        blessed = self._idiom_blessed
+
         def strategy(seq: List[str]) -> Optional[RepairAttempt]:
-            grafted = graft_fn(seq)
+            grafted: Optional[List[str]] = None
+            if blessed:
+                # Try idiom-preferring path first.
+                try:
+                    grafted = graft_fn(
+                        seq,
+                        prefer_filter=lambda name: name in blessed,
+                    )
+                except TypeError:
+                    # graft_fn doesn't support prefer_filter — older API.
+                    grafted = graft_fn(seq)
+            else:
+                grafted = graft_fn(seq)
             if grafted is None or grafted == seq:
                 return None
             inserted = [a for a in grafted if a not in seq]
+            # If we got an idiom-blessed creator, note it in rationale.
+            blessed_hits = [a for a in inserted if a in blessed]
             return RepairAttempt(
                 strategy=RepairStrategy.GRAFT_CREATOR_PREFIX,
                 original_sequence=list(seq),
                 repaired_sequence=list(grafted),
                 inserted_apis=inserted,
                 success=False,  # caller flips to True after re-validation
+                rejection_reason=(
+                    f"idiom-blessed: {blessed_hits}" if blessed_hits else ""
+                ),
             )
         return strategy
 

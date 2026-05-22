@@ -1225,11 +1225,15 @@ class FuzzingContext:
             # come first → graft + Z3 get the strongest signal first;
             # CONTEXT_NULL_PASS-implicated APIs missing from L4 get a
             # synthesised entry that downstream LLM can flesh out.
+            #
+            # ``planner_idioms_payload`` is defined here (not inside the
+            # try) so the F1 wiring (idioms → RepairEngine, below) can
+            # still see it even if Planner setup fails.
+            planner_idioms_payload: Optional[Dict[str, Any]] = None
             try:
                 from src.knowledge.idiom_distiller import distill_idioms
                 from src.state.path_planner import plan_and_persist
                 # Load baseline driver sources for distillation.
-                planner_idioms_payload = None
                 early_root = _resolve_drivers_root(project_name)
                 if early_root is not None:
                     early_files = _iter_driver_source_files(early_root)
@@ -1282,6 +1286,7 @@ class FuzzingContext:
                 benchmark=benchmark,
                 log=log,
                 automaton_artifact=automaton_artifact,
+                idioms_payload=planner_idioms_payload,
             )
             if skeleton_drivers:
                 log.info(
@@ -2282,6 +2287,7 @@ def _synthesize_skeletons_per_sequence(
     log: logging.Logger,
     automaton_artifact: Optional[Any] = None,
     automaton_threshold: float = 0.6,
+    idioms_payload: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     For each L4-viable sequence, produce ONE Z3-validated skeleton with
@@ -2345,7 +2351,12 @@ def _synthesize_skeletons_per_sequence(
     graft_fn = (automaton_artifact.graft_creator_prefix
                 if automaton_artifact is not None
                 else None)
-    repair_engine = RepairEngine(graft_fn=graft_fn)
+    # Phase A F1 (2026-05-23): pass Phase B idioms to the engine so the
+    # graft strategy prefers idiom-blessed root producers over
+    # IR-mod/ref false-positive CREATE labels. See
+    # ``extract_idiom_blessed_apis`` in candidate_repair.py.
+    repair_engine = RepairEngine(graft_fn=graft_fn,
+                                 idioms_payload=idioms_payload)
     repair_log = RepairLog()
     # Name → Api object lookup so we can rebuild an Api list from a
     # name list returned by graft. Keys may overlap across project

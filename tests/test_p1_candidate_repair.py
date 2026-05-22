@@ -102,6 +102,146 @@ def test_no_graft_fn_means_no_strategies():
 
 
 # ---------------------------------------------------------------------------
+# F1 (2026-05-23): idioms_payload → graft prefer_filter
+# ---------------------------------------------------------------------------
+
+def _idiom(kind, snippet, src='t.c'):
+    return {'kind': kind, 'snippet': snippet, 'rationale': 'r',
+            'source_driver': src, 'confidence': 1.0}
+
+
+def test_extract_idiom_blessed_apis_collects_creator_kinds():
+    """Phase B kinds that imply creator selection feed the blessed set;
+    shape-only kinds (min_size_guard etc.) don't."""
+    from liberator_adapter.analysis.candidate_repair import (
+        extract_idiom_blessed_apis,
+    )
+    payload = {'idioms': [
+        _idiom('context_null_pass', 'cmsOpenProfileFromMem(NULL, ...)'),
+        _idiom('cleanup_pair', 'foo_init(...)  →  foo_destroy(...);'),
+        _idiom('data_offset_parse', 'cJSON_ParseWithOpts(data + offset)'),
+        _idiom('buffer_copy', 'memcpy(buf, data, size);'),
+        # shape-only kinds — must NOT contribute
+        _idiom('min_size_guard', 'if (size < 8) return 0;'),
+        _idiom('null_termination_required',
+               "if (data[size-1] != '\\0') return 0;"),
+        _idiom('header_flag_demux', 'data[0] == \'1\''),
+    ]}
+    blessed = extract_idiom_blessed_apis(payload)
+    assert 'cmsOpenProfileFromMem' in blessed
+    assert 'foo_init' in blessed
+    assert 'foo_destroy' in blessed   # cleanup_pair captures both
+    assert 'cJSON_ParseWithOpts' in blessed
+    assert 'memcpy' in blessed
+    # Shape-only kinds shouldn't add any APIs
+    assert 'size' not in blessed
+
+
+def test_extract_idiom_blessed_apis_safe_on_none():
+    from liberator_adapter.analysis.candidate_repair import (
+        extract_idiom_blessed_apis,
+    )
+    assert extract_idiom_blessed_apis(None) == set()
+    assert extract_idiom_blessed_apis({}) == set()
+    assert extract_idiom_blessed_apis({'idioms': []}) == set()
+
+
+def test_graft_prefers_idiom_blessed_root():
+    """The lcms acceptance test for F1: a graft_fn that exposes 3
+    candidate roots — including a "bad" IR-mod/ref false positive
+    (cmsFreeToneCurveTriple) and the real creator
+    (cmsCreateContext, idiom-blessed) — should pick the blessed one."""
+    captured_filter = {}
+
+    def graft_fn(seq, prefer_filter=None):
+        # Simulate: top-1 root is the bad creator; only the blessed
+        # root passes the filter.
+        captured_filter['fn'] = prefer_filter
+        candidate_roots = ['cmsFreeToneCurveTriple', 'cmsCreateContext']
+        if prefer_filter is not None:
+            preferred = [r for r in candidate_roots if prefer_filter(r)]
+            if preferred:
+                return [preferred[0]] + list(seq)
+        return [candidate_roots[0]] + list(seq)
+
+    idioms = {'idioms': [_idiom('context_null_pass',
+                                'cmsCreateContext(NULL, ...)')]}
+    eng = RepairEngine(graft_fn=graft_fn, idioms_payload=idioms)
+    trace = eng.attempt(
+        ['cmsOpenProfileFromMem'],
+        revalidate=lambda s: 'cmsCreateContext' in s,
+        candidate_index=0,
+    )
+    # Filter was passed (engine offered F1 path)
+    assert captured_filter['fn'] is not None
+    # Engine picked the blessed creator
+    assert trace.final_success
+    assert trace.final_sequence is not None
+    assert trace.final_sequence[0] == 'cmsCreateContext'
+    # Rejection-reason field carries the F1 telemetry note
+    assert 'idiom-blessed' in trace.attempts[0].rejection_reason
+
+
+def test_graft_falls_back_when_no_idiom_match():
+    """If no candidate root is idiom-blessed, graft falls back to
+    the top-1 root (existing behavior). No regression."""
+    def graft_fn(seq, prefer_filter=None):
+        candidates = ['someUnrelated', 'anotherUnrelated']
+        if prefer_filter is not None:
+            preferred = [r for r in candidates if prefer_filter(r)]
+            if preferred:
+                return [preferred[0]] + list(seq)
+        return [candidates[0]] + list(seq)
+
+    idioms = {'idioms': [_idiom('context_null_pass',
+                                'completelyUnrelatedAPI(NULL, ...)')]}
+    eng = RepairEngine(graft_fn=graft_fn, idioms_payload=idioms)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: 'someUnrelated' in s,
+        candidate_index=0,
+    )
+    assert trace.final_success
+    assert trace.final_sequence is not None
+    assert trace.final_sequence[0] == 'someUnrelated'
+    # No idiom-blessed inserts → empty telemetry note
+    assert 'idiom-blessed' not in trace.attempts[0].rejection_reason
+
+
+def test_graft_legacy_api_without_prefer_filter_still_works():
+    """If the wrapped graft_fn predates F1 (no prefer_filter kwarg),
+    the engine catches TypeError and falls back to legacy call."""
+    def legacy_graft(seq):
+        return ['prepended'] + list(seq)
+
+    idioms = {'idioms': [_idiom('context_null_pass', 'prepended(NULL, ...)')]}
+    eng = RepairEngine(graft_fn=legacy_graft, idioms_payload=idioms)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: 'prepended' in s,
+        candidate_index=0,
+    )
+    assert trace.final_success
+    assert trace.final_sequence == ['prepended', 'useX']
+
+
+def test_no_idioms_engine_works_normally():
+    """No idioms_payload → engine works exactly as before F1."""
+    def graft_fn(seq, prefer_filter=None):
+        # Even when filter is None, graft should still return.
+        return ['creator_X'] + list(seq)
+
+    eng = RepairEngine(graft_fn=graft_fn, idioms_payload=None)
+    trace = eng.attempt(
+        ['useX'],
+        revalidate=lambda s: 'creator_X' in s,
+        candidate_index=0,
+    )
+    assert trace.final_success
+    assert trace.final_sequence == ['creator_X', 'useX']
+
+
+# ---------------------------------------------------------------------------
 # RepairLog aggregation
 # ---------------------------------------------------------------------------
 
