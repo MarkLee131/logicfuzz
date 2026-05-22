@@ -47,9 +47,24 @@ HandleType = str  # canonical, normalized handle type key (e.g. ``"sqlite3*"``)
 import re as _re
 
 _NON_HANDLE_PRIMITIVES: Tuple[str, ...] = (
+    # C / C++ source-level scalar names
     "int", "long", "short", "char", "size_t", "ssize_t", "bool", "float",
     "double", "void", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
     "int8_t", "int16_t", "int32_t", "int64_t", "unsigned", "signed",
+    # LLVM IR scalar type names — when conditions come from LLVM IR
+    # mod/ref analysis (the common case in Liberator), arg types are
+    # written as ``i8 *`` / ``i32`` / ``i64`` rather than the source-level
+    # ``char *`` / ``int``. Without these here, ``is_handle_type("i8*")``
+    # returns True and every byte-buffer / scalar input slot looks like
+    # an opaque handle that needs lifecycle tracking. That cascades into
+    # graft_creator_prefix, post_parse_extensions, L4 ranking, and the
+    # comprehender — all of which then misclassify ``i8*`` as a
+    # project-managed resource. Adding the LLVM names propagates the
+    # same fix as #73's byte-buffer exemption to all consumers of
+    # usedef, not just the Z3 lifecycle walker.
+    "i1", "i8", "i16", "i32", "i64", "i128",
+    "half", "bfloat", "fp128", "ppc_fp128", "x86_fp80",
+    "label", "token", "metadata",
 )
 
 _CHANNEL_RETURN: int = 0
