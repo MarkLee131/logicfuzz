@@ -2,7 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Knowledge-Driven Neuro-Symbolic Fuzz Driver Generation over Structured API Program Spaces
+Knowledge-Driven Neuro-Symbolic Fuzz Driver Generation over Structured API Program Spaces.
+
+**Current iteration**: 5-phase system redesign in progress (Phase A/B/C foundation/D landed, E pending). See `docs/system_design_status.md` for status, cross-phase gaps, and decision queue.
 
 ## Commands
 
@@ -16,7 +18,7 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml --extract-only
 # Generate drivers with CBFactory only (no LLM)
 python3 run_logicfuzz.py -y comparison/cjson.yaml --generate-drivers --num-drivers 10
 
-# Phase G: closed-loop CBFactory feedback (re-synthesise with grown automaton)
+# Phase G (existing): closed-loop CBFactory feedback (re-synthesise with grown automaton)
 python3 run_logicfuzz.py -y comparison/cjson.yaml --closed-loop --closed-loop-iters 3 \
                         --closed-loop-early-stop 0
 
@@ -29,35 +31,37 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml --merge-drivers
 # Evaluation profile: bundles --no-coverage-filter + --closed-loop + --merge-drivers
 python3 run_logicfuzz.py -y comparison/cjson.yaml --eval
 
+# Multi-hop reasoning Mode A (Prototyper); opt-in
+python3 run_logicfuzz.py -y comparison/cjson.yaml --multihop-prototyper
+
+# Knowledge-layer priors (Phase B / T1)
+python3 run_logicfuzz.py -y comparison/cjson.yaml --use-doxygen-priors --use-readme-purpose
+
 # Control parallelism
 LLM_NUM_EXP=5 python3 run_logicfuzz.py -y comparison/cjson.yaml
 
 # Code quality
 pylint src/ && pyright src/
-pytest tests/ -v   # P0/P1 regression + telemetry tests
-
-# Aggregate per-trial telemetry into per-error-class fix-success curves
-python3 scripts/aggregate_build_attempts.py results/
+pytest tests/   # 121 P0/P1 regression tests as of 2026-05-23
 
 # Extended fuzzing evaluation (24h)
 python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz_targets/02.fuzz_target -d 86400
 ```
 
 `--num-samples` is auto-resolved at runtime to `len(skeleton_drivers)`
-(one trial per Z3-validated skeleton). See `src/runner.py:_fuzzing_pipelines`.
+(one trial per Z3-validated skeleton). See `run_single_fuzz.py:_fuzzing_pipelines`.
 
-## Subsystem deep-dives
+## Docs
 
-For non-obvious subsystems, the design + theory + empirical
-justification + future-work plan lives in `docs/`:
+| Doc | Subsystem |
+|-----|-----------|
+| `docs/system_design_status.md` | **Canonical current state.** 5-phase status, 11 cross-phase information-flow gaps, tiered decision queue. Updated as the system evolves. |
+| `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) and the PromeFuzz-derived knowledge layer. |
+| `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`). |
+| `docs/upstream_liberator_diffs.md` | Upstream Liberator issues the adapter has fixed. |
+| `docs/llm_vs_traditional_choices.md` | Per-LLM-call-site rationale: symbolic alternative considered, why LLM won, falsifiable measurement to revisit. |
 
-| Doc | Subsystem | Status |
-|-----|-----------|--------|
-| `docs/system_design_status.md` | **Canonical current state.** 5-phase status, 11 cross-phase information-flow gaps, decision queue (Tier 1 = 4 small fixes, Tier 2 = Phase E/CEGAR/L2 idioms, Tier 3 = WorkingMemory). Updated as the system evolves; historical proposals and refactor logs live in git history. | canonical |
-| `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) **and** the PromeFuzz-derived knowledge layer (comprehender shipped, ConstraintLearner design-only). Includes empirical justification across 25 benchmarks, A/B outcomes, future work. | living |
-| `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`); preflight + coverage-aware selection + weighted CDF dispatch + tail selector + corpus union. | living |
-| `docs/upstream_liberator_diffs.md` | Upstream `reference/liberator` issues that the adapter has already fixed (or has a clear path to fix). Adapter-side bugs are NOT recorded here — they are work-in-progress fix items. | living |
-| `docs/llm_vs_traditional_choices.md` | For every place LogicFuzz invokes an LLM: what symbolic alternative was considered, why LLM won, what we'd lose by reverting, and the falsifiable measurement that would prove the LLM choice wrong. | living |
+Historical proposals and refactor logs live in git history (`git log --grep`).
 
 ## Architecture
 
@@ -69,14 +73,28 @@ run_logicfuzz.py → FuzzingContext (SSOT) → FuzzingWorkflow (LangGraph) → E
             ┌────────────┴────────────┐
             │                         │
    Project-Adaptive Automaton   Knowledge Layer
-   (analysis/ static traces →   (knowledge/ comprehender:
-    PTA → EDSM → Artifact)       per-API usage + sequence
-            │                    semantics)
+   (analysis/ static traces →   (knowledge/ comprehender +
+    PTA → EDSM → Artifact)       Phase B idiom distiller)
+            │                         │
             ▼                         ▼
-     L4 Coverage Ranker       Prototyper protocol templates
-     (acceptance_score,        + library_purpose +
-      sample_paths,             sequence_invariants
-      graft_creator_prefix)
+     L4 Coverage Ranker         Prototyper context
+            │                         │
+            ▼                         ▼
+       Phase D Planner ←──────  Phase B idioms
+       (rerank + synthesize_missing)
+            │
+            ▼
+       Phase A Repair Engine
+       (graft_creator_prefix; one strategy now)
+            │
+            ▼
+       Z3 #4 position-indexed lifecycle + RunningContext binding
+            │
+            ▼
+       skeleton_drivers → trials × N → merge_drivers
+            │
+            ▼
+       Phase C IterationSnapshot → coverage_memory.json
 ```
 
 ### Workflow State Machine
@@ -98,18 +116,19 @@ duplicating here just rots.
 
 | Agent | Tools | Purpose |
 |-------|-------|---------|
-| ProjectAnalyzer (pre-prototyper) | - | Derives `project_understanding` (library purpose, build conventions, invariants) before driver synthesis. Output consumed by Prototyper |
-| Prototyper | - (context pre-fetched) | Generate initial driver. Reads `library_purpose`, `protocol_templates`, `sequence_invariants`, `project_understanding`, `skeleton_drivers[(N-1) % K]` from FuzzingContext |
+| ProjectAnalyzer (pre-prototyper) | - | Derives `project_understanding` before driver synthesis |
+| Prototyper | - (context pre-fetched) | Generate initial driver. Reads `library_purpose`, `protocol_templates`, `sequence_invariants`, `project_understanding`, `skeleton_drivers[(N-1) % K]`, **Phase B idioms** |
 | Fixer | BashExecuteTool | Fix compilation errors with error triage |
 | CoverageAnalyzer | BashExecuteTool | Diagnose low coverage, suggest improvements |
 | CrashAnalyzer | BashExecuteTool, GDBExecuteTool | Determine if crash is driver bug or real bug |
 | Improver | - (context pre-fetched) | Improve coverage based on analyzer suggestions |
 | CrashFeasibilityAnalyzer | - | Determine if crash is feasible/real |
-| Comprehender (non-LangGraph stage) | LLM batched | A: per-API usage notes + library purpose. B: per-sequence semantic verdict, optional repair, prototyper invariants. Stored in `FuzzingContext.comprehension` and `sequence_semantics`. |
+| BaselineDiffAnalyzer (§10B v2) | - | Triggered on baseline-regression alert. **Layer being reconsidered** — single-trial granularity wrong; should move to post-merge in CEGAR loop (see `system_design_status.md` Tier 4 P3) |
+| Comprehender (non-LangGraph stage) | LLM batched | A: per-API usage + library purpose. B: per-sequence semantic verdict |
 
 **Tool Consolidation**: All introspector-derived context (signatures,
-cross-refs, type defs, headers, tests, debug types) is **pre-fetched**
-into `FuzzingContext` before agent turns. The remaining LangGraph tools:
+cross-refs, type defs, headers, tests, debug types) is pre-fetched
+into `FuzzingContext` before agent turns. Remaining LangGraph tools:
 - `BashExecuteTool` (`src/tools/execution.py`): unified bash, 8KB output truncation
 - `GDBExecuteTool` (`src/tools/execution.py`): scripted GDB session for crash triage
 
@@ -117,20 +136,19 @@ into `FuzzingContext` before agent turns. The remaining LangGraph tools:
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| FuzzingContext | `src/context/data_context.py` | Immutable SSOT. Carries L0-L4 results plus `comprehension`, `sequence_semantics`, `automaton`, `skeleton_drivers`, `existing_driver_knowledge` |
-| Supervisor | `src/workflow/nodes/supervisor.py` | Route between agents, manage phases |
-| ToolCallingMixin | `src/agents/tool_calling_mixin.py` | ReAct loop for agent tool use |
-| ProjectAnalyzer | `src/agents/project_analyzer.py` | Pre-prototyper context-understanding pass (`project_understanding`) |
-| UnifiedCodeValidator | `src/utils/unified_validator.py` | Single-pass validator (fake-defs, internal APIs, language mismatch). Replaces former 4-validator pipeline |
-| Closed-loop orchestrator | `src/closed_loop.py` | Phase G: `run_closed_loop` re-runs L4+CBFactory with `update_with_traces` evidence each iteration |
-| CBFactory | `liberator_adapter/driver/factory/constraint_based/` | Z3-guided driver synthesis (Phase H gate: `AutomatonAcceptanceGuard`) |
-| Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter, Phase E `extend_post_def` |
-| Static traces | `liberator_adapter/analysis/static_trace.py` | libclang AST walker → `StaticTrace` with intra-function value-flow bindings |
-| PTA / EDSM | `liberator_adapter/analysis/pta.py`, `edsm.py` | Value-flow Prefix Tree Acceptor + evidence-driven state merging; `incremental_merge` for closed-loop |
-| LLM oracle | `liberator_adapter/analysis/llm_oracle.py` | Per-merge equivalence oracle, disk-cached. Off in production |
-| Project automaton | `liberator_adapter/analysis/project_automaton.py` | Orchestrator + `AutomatonArtifact` (acceptance_score, sample_accepting_paths, graft_creator_prefix, observed_apis, post_parse_extensions, update_with_traces) |
-| Knowledge cache | `src/knowledge/cache.py` | Disk cache for purpose / api_usage / sequence semantics |
-| Comprehender | `src/knowledge/comprehender.py` | Two-stage comprehender (A: per-API, B: per-sequence) with deterministic-then-LLM fallback |
+| FuzzingContext | `src/context/data_context.py` | Immutable SSOT |
+| Supervisor | `src/workflow/nodes/supervisor.py` | Agent routing, phase management |
+| ToolCallingMixin | `src/agents/tool_calling_mixin.py` | ReAct loop |
+| UnifiedCodeValidator | `src/utils/unified_validator.py` | Single-pass validator (fake-defs, internal APIs, language mismatch, hallucination) |
+| Closed-loop (Phase G existing) | `src/closed_loop.py` | Re-runs L4+CBFactory with `update_with_traces` evidence |
+| CBFactory | `liberator_adapter/driver/factory/constraint_based/` | Z3-guided driver synthesis |
+| Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter |
+| Project automaton | `liberator_adapter/analysis/project_automaton.py` | `AutomatonArtifact` |
+| Comprehender | `src/knowledge/comprehender.py` | Two-stage knowledge extraction |
+| **Phase A Repair Engine** | `liberator_adapter/analysis/candidate_repair.py` | `RepairEngine` + `graft_creator_prefix` strategy; writes `state/repair_log.json` |
+| **Phase B Idiom Distiller** | `src/knowledge/idiom_distiller.py` | 10 L1 deterministic patterns; writes `state/idioms.json` |
+| **Phase C Coverage Memory** | `src/state/coverage_memory.py` | `CoverageMemory` + `IterationSnapshot`; writes `state/coverage_memory.json` |
+| **Phase D Path Planner** | `src/state/path_planner.py` | Idiom-align rerank + synthesize_missing; writes `state/plan_ledger.json` |
 
 ### Progressive Filter Pipeline (`liberator_adapter/constraints/`)
 
@@ -141,46 +159,23 @@ All APIs (N) → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L
               (~1000)    (~100)      (~30)          (~10)            (filter by novelty)  (K=12)
                                                                                               ↑
                                                               Project-adaptive automaton signal
-                                                              (acceptance_score, sample_paths,
-                                                               creator-grafted candidates)
 ```
 
-L5 runs **before** L4 (see `coverage_ranker.py::select_top_k_sequences`):
-`CoverageAwareFilter` runs first when OSS-Fuzz coverage is available,
-then L4 ranks the survivors. L4's numbering predates L5; not applied
-in numerical order.
+L5 runs **before** L4 (`coverage_ranker.py::select_top_k_sequences`). L4's numbering predates L5; not applied in numerical order.
 
 | Layer | File | Constraint |
 |-------|------|------------|
 | L0 | (implicit in grammar) | `API_A.arg.type == API_B.return_type` |
-| L1 | `entry_point_analyzer.py` | Direct: API consumes `(uint8_t* data, size_t size)`. Indirect: `IndirectEntryPoint(creator, consumer)` pair |
+| L1 | `entry_point_analyzer.py` | Direct buffer + indirect `IndirectEntryPoint(creator, consumer)` pairs |
 | L2 | `lifecycle_analyzer.py` | Resources have matching init/destroy pairs |
 | L3 | `state_machine_analyzer.py` | API calls satisfy precondition/postcondition |
-| L5 | `coverage_aware_filter.py` | Pre-filter by novelty vs existing OSS-Fuzz coverage. Skipped without coverage data, or with `--no-coverage-filter` / `LOGICFUZZ_DISABLE_COVERAGE_FILTER=1` |
-| L4 | `coverage_ranker.py` | Diversity-sorted greedy Top-K. With `automaton_artifact`, pool is augmented by `sample_accepting_paths(8)`, `graft_creator_prefix(...)`, `post_parse_extensions(...)`; `acceptance_score` is the secondary sort axis |
+| L5 | `coverage_aware_filter.py` | Pre-filter by novelty vs existing OSS-Fuzz coverage; skipped with `--no-coverage-filter` |
+| L4 | `coverage_ranker.py` | Diversity-sorted greedy Top-K; automaton signals augment the pool |
 
 **Use-def + typestate substrate** (`liberator_adapter/analysis/usedef.py`):
-single USE/DEF/KILL summary per API (`APIEffect`) feeds the L4 ranker,
-the prototyper (via the automaton), and the comprehender. **Not its own
-filter** — consolidates the model formerly re-implemented inside each Lx.
-L1 (handle classification) and L2/L3 (per-sequence validation) both
-delegate here: L1 calls `consumed_handle_keys / extract_produced_handles
-/ UseDefGraph.roots`; L2/L3 build a per-analysis `UseDefGraph` from their
-domain model (lifecycle pairs / state constraints) and call
-`Typestate.check`. Domain-specific *discovery* still lives in each Lx
-file (name patterns, semantic patterns, condition_info sinks); the
-*walker* is now shared.
-
-**Entry Point Categories** (L1):
-- `C_BUFFER_WITH_SIZE`: (const uint8_t* data, size_t size)
-- `CPP_VIEW`: string_view, span<>, StringRef
-- `CPP_CONTAINER_REF`: std::string&, std::vector&
-- `C_STRING`: (const char*) null-terminated
-- Indirect: `IndirectEntryPoint` pairs (e.g. `ucl_parser_new()` → `ucl_parser_add_chunk(p, data, size)`); creator names captured in `indirect_creator_names`
-
-**Lifecycle Discovery** (L2): NAME_PATTERN (xxx_init↔xxx_destroy), TYPE_PATTERN, SEMANTIC_PATTERN (library-specific)
-
-**State Machine Violations** (L3): USE_BEFORE_INIT, DESTROY_BEFORE_INIT, DOUBLE_DESTROY, USE_AFTER_DESTROY, REINIT_WITHOUT_DESTROY (also UNCLOSED_RESOURCE / UNOPENED_CLOSE in the typestate interpreter)
+`APIEffect` (USE/DEF/KILL) per API feeds L4, Prototyper (via automaton), and Comprehender.
+L1 (handle classification) and L2/L3 (per-sequence validation) both delegate here.
+L2/L3 build a per-analysis `UseDefGraph` from their domain model (lifecycle pairs / state constraints) and call `Typestate.check`. Domain-specific *discovery* still lives in each Lx file; the *walker* is shared.
 
 ### Z3-Guided Synthesis (`liberator_adapter/driver/factory/constraint_based/`)
 
@@ -188,8 +183,9 @@ file (name patterns, semantic patterns, condition_info sinks); the
 |-----------|------|---------|
 | IncrementalZ3Solver | `z3_solver.py` | push/pop for decision guidance |
 | Z3-guided controller | `z3_guided_synthesis.py` | TYPE_MATCH, PROVENANCE, RESOURCE_LIFECYCLE, VARIABLE_AVAILABILITY |
-| `AutomatonAcceptanceGuard` | `z3_guided_synthesis.py` (class) | Phase H hard-pruning gate: rejects candidates whose `acceptance_score` is below `automaton_threshold` **before** Z3 is consulted. Wired in via `CBFactory(automaton_artifact=...)`. Telemetry via `get_automaton_stats()` |
-| UnsatCoreDiagnoser | `z3_guided_synthesis.py` | Failure diagnosis with unsat-core analysis |
+| `AutomatonAcceptanceGuard` | `z3_guided_synthesis.py` | Phase H hard-pruning gate (currently positive-only; see `system_design_status.md` P11) |
+| `Z3SequenceValidator` | `z3_solver.py` | **Position-indexed** lifecycle validation (#4 fix, 2026-05-22) + LLVM-IR byte-buffer exemption (#73) |
+| UnsatCoreDiagnoser | `z3_guided_synthesis.py` | Failure diagnosis |
 
 ### Liberator Static Analysis (`liberator_adapter/`)
 
@@ -203,89 +199,43 @@ file (name patterns, semantic patterns, condition_info sinks); the
 
 ## Project-Adaptive Automaton
 
-Per-project typestate automaton learned from the library's own tests/examples.
-**Full design + empirical justification + future work: `docs/automaton.md`.**
+Per-project typestate automaton learned from the library's own tests/examples. Full design + empirical justification: `docs/automaton.md`.
 
 Pipeline (all in `liberator_adapter/analysis/`):
 `extract_project_traces` → `extract_api_effects` → `build_pta` →
 `edsm.merge` → `learn_project_automaton() → AutomatonArtifact`.
 
 `AutomatonArtifact` surface (consumers in parens):
-- `acceptance_score(seq)` — L4 secondary sort, comprehender-B prefilter, Phase H guard
-- `sample_accepting_paths(n)` — L4 pool augmentation, prototyper `<protocol_templates>`
-- `graft_creator_prefix(seq)` — L4 turns unaccepted candidates into L_A-grounded variants
-- `post_parse_extensions(seq)` — Phase E: extends `parse → get_object` prefixes via `extend_post_def`
+- `acceptance_score(seq)` — L4 secondary sort, Comprehender-B prefilter, Phase H guard
+- `sample_accepting_paths(n)` — L4 pool augmentation, Prototyper `<protocol_templates>`
+- `graft_creator_prefix(seq)` — Phase A Repair Engine + L4 candidate variants
+- `post_parse_extensions(seq)` — extends `parse → get_object` prefixes via `extend_post_def`
 - `update_with_traces(traces)` — Phase G incremental EDSM merge
-- `observed_apis()` — telemetry
 
-Persistence: `results/{project}/automaton/{traces.json, pta.json, merged.json,
-metadata.json, oracle_cache.json}`. Comprehender output:
-`results/{project}/comprehension/{purpose.txt, api_usage.json, sequences.json}`.
+Persistence: `results/{project}/automaton/`. Comprehender output: `results/{project}/comprehension/`. Phase A/B/C/D state: `results/{project}/state/`.
 
-## Closed-Loop Synthesis (Phase G)
+## Closed-Loop Synthesis (Phase G, existing)
 
-Grows the automaton each round using the current viable Z3 skeletons'
-API sequences as evidence (incremental EDSM merge). Skeletons drive the
-LLM; closed-loop's value here is the in-place mutation of
-`automaton_artifact` it preserves through `persist_dir`.
+Distinct from the proposed Phase C CEGAR loop (which is for cross-iteration coverage feedback; see `system_design_status.md` Tier 2 F6).
 
-Entry: `src/closed_loop.py:run_closed_loop`. Wired into `data_context.py`
-Step 11 (right after Step 10 skeleton synthesis).
+Phase G grows the automaton each round using current viable Z3 skeletons' API sequences as evidence (incremental EDSM merge). Skeletons drive the LLM; closed-loop's value is the in-place mutation of `automaton_artifact` preserved through `persist_dir`.
 
-CLI: `--closed-loop`, `--closed-loop-iters N` (default 3),
-`--closed-loop-early-stop K` (default 0).
+Entry: `src/closed_loop.py:run_closed_loop`. Wired into `data_context.py` Step 11.
 
-Loop: extract `api_sequence` from skeletons → `update_with_traces` →
-`edsm.incremental_merge` → re-rank → re-synthesise random drivers under
-updated automaton (evidence for next iter, NOT fed to LLM).
-Stops when Δmerged_states ≤ K for 2 consecutive rounds.
-
-## Working method — post-run validation pass (2026-05-12)
-
-After every actual end-to-end run, **read the intermediate logs
-carefully** and confirm whether each remaining refactor / optimization
-is behaving as designed. Specifically:
-
-  1. Cross-check the run log against each ``docs/*_refactor_2026_05.md``
-     §3 "Empirical validation" section. The §3 lists what should
-     happen on a real run; verify presence (positive signals) and
-     absence (negative signals).
-  2. When the generated driver coverage drops vs the existing OSS-Fuzz
-     baseline driver (the "gold standard" hand-written by library
-     experts), **trigger emergency-mode analysis** — we likely dropped
-     critical context. See ``docs/knowledge_layer_design_proposal_2026_05.md``
-     §10B.
-  3. Validated refactor docs are removed from the tree once their §3
-     "Empirical validation" section is filled (their content already
-     lives in git history). Keep unvalidated docs in ``docs/`` so they
-     remain visible for follow-up runs.
+CLI: `--closed-loop`, `--closed-loop-iters N`, `--closed-loop-early-stop K`.
 
 ## Design Principles
 
 - **SSOT**: `FuzzingContext` prepared once, immutable. No fallbacks — explicit failures.
 - **Symbolic vs Neural**: Z3 handles hard constraints, LLM handles soft constraints.
 - **Error Triage**: Categorize build errors (link/header/type) for targeted fixing.
-- **Driver Knowledge**: Extract patterns from existing OSS-Fuzz drivers as reference.
-- **Token Efficiency**: Consolidated tools, context prefetching, 8KB output truncation. Comprehender uses deterministic-first layering and the automaton acceptance prefilter to cut LLM calls.
-- **Signal vs Filter**: The automaton produces three *signals* (acceptance, sampled paths, grafting) that augment the candidate pool and bias ranking; the underlying greedy max-coverage selection is unchanged.
-- **Reuse upstream Liberator over reimplementation.** When fixing a synthesis-layer problem, first check whether upstream Liberator (`reference/liberator` branch, tracking `https://github.com/HexHive/liberator` main) already solves it. If yes, route through the existing port in `liberator_adapter/` (e.g. `RunningContext.try_to_get_var`, `try_to_instantiate_api_call`, `LFBackendDriver`) rather than writing a simplified parallel implementation. Adapt at the boundary; don't fork.
+- **Token Efficiency**: Context prefetching, 8KB output truncation. Comprehender uses deterministic-first layering and automaton acceptance prefilter.
+- **Signal vs Filter**: The automaton produces *signals* (acceptance, sampled paths, grafting) that augment the candidate pool and bias ranking; the greedy max-coverage selection is unchanged.
+- **Reuse upstream Liberator over reimplementation**: When fixing a synthesis-layer problem, first check whether `reference/liberator` already solves it. Adapt at the boundary; don't fork.
 
 ## Validation Pipeline
 
-Single-pass `UnifiedCodeValidator` (`src/utils/unified_validator.py`)
-replaces the former 4 validators (fake-defs, language mismatch, internal
-APIs, API hallucination). Build errors are then triaged by
-`src/utils/compilation_error_triage.py` into link/header/type buckets for
-the Fixer. Hallucinated defs and internal API calls are fatal; other
-issues pass to the Fixer.
-
-## Open TODOs
-
-- L1/L2/L3 already delegate their typestate walkers / handle classification to `UseDefGraph + Typestate` (2026-05-21); remaining domain-specific *discovery* (name patterns, semantic patterns, condition_info sinks) stays in each Lx by design.
-- LLM equivalence oracle production throttling (`enable_llm_oracle=False` in `data_context.py:Step 5e2` until cost-aware pacing lands).
-- libaom path resolution — `src_ossfuzz/libaom/` layout doesn't match the consumer-paths probe.
-- Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
-- TLV-aware seed generation based on format analysis.
+`UnifiedCodeValidator` (`src/utils/unified_validator.py`) replaces the former 4 validators (fake-defs, language mismatch, internal APIs, API hallucination). Build errors are then triaged by `src/utils/compilation_error_triage.py` into link/header/type buckets for the Fixer. Hallucinated defs and internal API calls are fatal; other issues pass to the Fixer.
 
 ## Implementation Flow
 
@@ -306,83 +256,36 @@ Step 6b  Comprehender A+B                        (uses acceptance_score)
 Step 7   Header extraction
 Step 8   Existing-fuzzer header extraction
 Step 9   DriverEnhancer pattern analysis
-Step 10  Z3-validated skeleton drivers           (CBFactory + Phase H guard)
+Step 10  Phase D Planner + Phase A Repair + Z3-validated skeleton drivers
 Step 11  Closed-loop iterations                  (Phase G, opt-in)
-Step 12  Existing-driver knowledge extraction    (optional)
-# Exposes on FuzzingContext: comprehension, sequence_semantics, automaton,
-#                            skeleton_drivers, existing_driver_knowledge
+Step 12  Existing-driver knowledge extraction + Phase B idiom distillation
+# Post-merge: Phase C IterationSnapshot persisted by run_single_fuzz.py
 ```
 
----
+## Open TODOs
+
+- LLM equivalence oracle production throttling (`enable_llm_oracle=False` in `data_context.py:Step 5e2` until cost-aware pacing lands).
+- libaom path resolution — `src_ossfuzz/libaom/` layout doesn't match the consumer-paths probe.
+- Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
+- TLV-aware seed generation based on format analysis.
+- Cross-phase information flow (P1-P11 in `system_design_status.md`) — pending decision queue.
 
 ## Failed Attempts / Lessons
 
-Approaches we tried earlier and have since reworked. Why the current
-design looks the way it does — read before re-litigating.
+Approaches we tried earlier and have since reworked. Read before re-litigating.
 
 ### L5 `CoverageAwareFilter` as default-on hard filter
 
-L5 drops sequences with novelty < 0.2 vs existing OSS-Fuzz coverage to
-focus on uncovered code. Useful for production "extend baseline" runs,
-but **suppresses TOTAL coverage** in baseline comparisons (we deliberately
-avoid touching what the baseline already covers).
+L5 drops sequences with novelty < 0.2 vs existing OSS-Fuzz coverage to focus on uncovered code. Useful for production "extend baseline" runs, but **suppresses TOTAL coverage** in baseline comparisons (we deliberately avoid touching what the baseline already covers).
 
-**Now:** still default-on for production. Disabled via `--no-coverage-filter`
-or `LOGICFUZZ_DISABLE_COVERAGE_FILTER=1` for paper comparisons where
-total coverage is the metric.
+**Now:** still default-on for production. Disabled via `--no-coverage-filter` or `LOGICFUZZ_DISABLE_COVERAGE_FILTER=1` for paper comparisons where total coverage is the metric.
 
-### CBFactory's "one position per API" Z3 model (resolved 2026-05-22)
+### Z3 cyclic order constraints (resolved 2026-05-22)
 
-The legacy `Z3SequenceValidator` keyed `api_vars` / `order_vars` by API
-name (`Bool("api_called_X")`, `Int("order_X")`). Repeated APIs were
-deduped at the boundary, but more pathologically the lifecycle encoder
-quantified order constraints over the API-name set
-("∀c ∈ creates[T], u ∈ uses[T]: order_c < order_u"). For chained-builder
-APIs that serve as *both* creator and user of the same type (cjson's
-`cJSON_Add*` family — returns a new node AND mutates the parent), the
-all-pairs expansion generated cyclic constraints and forced 10/10
-cjson sequences UNSAT. Same expected on lcms.
+Legacy `Z3SequenceValidator` quantified lifecycle order constraints over the **API-name set** ("∀c ∈ creates[T], u ∈ uses[T]: order_c < order_u"). For chained-builder APIs that are both creator and user (cjson's `cJSON_Add*` family), all-pairs expansion generated cyclic constraints → 10/10 sequences UNSAT.
 
-**Proper fix (landed `f7001cf7`):** position-indexed lifecycle
-validation in `Z3SequenceValidator._check_lifecycle_position_indexed`.
-For each position j with USE on T, deterministically check that some
-k < j has CREATE on T. No Z3 solver call needed for the lifecycle
-family (it collapses to an O(n²) walk over a fixed sequence). Z3 is
-retained only for length-dependency constraints.
+**Fix landed `f7001cf7` + `7a140f80`**: position-indexed lifecycle validation in `Z3SequenceValidator._check_lifecycle_position_indexed`; LLVM-IR byte-buffer types exempt. cjson 0/10 → 7/10 SAT. Full root-cause analysis in commit message.
 
-The `add_api_sequence_constraint`, `add_access_order_constraint`, and
-`_add_lifecycle_constraints` methods were deleted in the same commit
-along with the "papered over" boundary-dedup hacks. Empirical result on
-cjson's 10 L4-ranked sequences: 0/10 → 7/10 SAT (the 3 remaining
-rejections are true USE-before-CREATE null-deref hazards). See
-`docs/z3_skeleton_synthesis_problem_2026_05.md` §3.6 for the root-cause
-analysis and §6.5 for the post-fix result.
+### §10B v1/v2 baseline-regression alert at per-trial granularity (under reconsideration)
 
-### libucl indirect entry point (added to L1)
-
-Original L1 only admitted APIs that directly consume `(const uint8_t*, size_t)`.
-libucl's parser API is `ucl_parser_new()` → `ucl_parser_add_chunk(p, data, size)`,
-so most sequences were filtered out, capping coverage at ~20% of the 70%
-reachable surface.
-
-**Now:** L1 emits `IndirectEntryPoint(creator, consumer)` pairs;
-`indirect_creator_names` captured for downstream sequence grounding.
-
-### Post-parse sequence cliff (Phase E)
-
-Sequences stopped at `parse → get_object`. High-value APIs like
-`emit/merge/compare` that operate on a parsed object were unreachable
-even when the object was in scope.
-
-**Now:** `AutomatonArtifact.post_parse_extensions` invokes
-`extend_post_def` over `UseDefGraph` to extend `parse → get_object`
-prefixes with witness-grounded post-parse uses. Consumed by L4
-candidate augmentation.
-
----
-
-## Upstream Liberator issues fixed in the adapter
-
-Bugs / limitations that exist in upstream `reference/liberator`
-that the adapter has fixed (or has a clear path to fix). See
-`docs/upstream_liberator_diffs.md` for the per-item detail.
+`§10B` landed (commits `9b2cf883`, `f6dd60b6`) but operates at single-trial level. The proper unit is post-merge (multi-trial harness vs baseline). Per-trial recovery in `BaselineDiffAnalyzer` wastes LLM calls on the wrong granularity. To be folded into Phase C CEGAR loop (`system_design_status.md` Tier 4).
