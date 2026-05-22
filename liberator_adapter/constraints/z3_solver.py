@@ -150,38 +150,12 @@ class Z3ConstraintBuilder:
 
         return constraint
 
-    def add_access_order_constraint(
-        self,
-        create_api: str,
-        delete_api: str
-    ) -> Z3Constraint:
-        """
-        Add access order constraint
-
-        CREATE must occur before DELETE
-        """
-        create_order = self._get_or_create_order_var(create_api)
-        delete_order = self._get_or_create_order_var(delete_api)
-        create_called = self._get_or_create_api_var(create_api)
-        delete_called = self._get_or_create_api_var(delete_api)
-
-        # If delete is called, create must be called first and in order
-        expr = Implies(
-            delete_called,
-            And(create_called, create_order < delete_order)
-        )
-
-        constraint = Z3Constraint(
-            constraint_type=ConstraintType.ACCESS_ORDER,
-            z3_expr=expr,
-            description=f"Order: {create_api} before {delete_api}",
-            source_api=create_api,
-            target_api=delete_api
-        )
-        self.constraints.append(constraint)
-        self.solver.add(expr)
-
-        return constraint
+    # NOTE: ``add_access_order_constraint`` removed 2026-05-22. It generated
+    # cyclic "order_creator < order_user" constraints over the API-name set
+    # whenever a single API name appeared in both ``creates`` and ``uses``
+    # for the same type (chained-builder APIs like cjson's ``cJSON_Add*``).
+    # Replaced by position-indexed lifecycle validation in
+    # ``Z3SequenceValidator._check_lifecycle_position_indexed``.
 
     def add_provenance_constraint(
         self,
@@ -323,45 +297,16 @@ class Z3ConstraintBuilder:
         self.constraints.extend(constraints)
         return constraints
 
-    def add_api_sequence_constraint(
-        self,
-        api_sequence: List[str]
-    ) -> Z3Constraint:
-        """
-        Add API sequence order constraint
-
-        Ensure APIs in sequence are executed in given order. The order var
-        is keyed by API name (one var per name), so if an API appears at
-        multiple indices we only pin its order to the FIRST occurrence —
-        otherwise ``order_X == 0 AND order_X == 2`` is UNSAT for any
-        legitimate sequence that uses an API more than once. The
-        ``api_called`` boolean assertion is also idempotent.
-        """
-        if len(api_sequence) < 2:
-            return None
-
-        order_exprs = []
-        seen: Set[str] = set()
-        for i, api in enumerate(api_sequence):
-            if api in seen:
-                continue
-            seen.add(api)
-            order_var = self._get_or_create_order_var(api)
-            order_exprs.append(order_var == i)
-            api_var = self._get_or_create_api_var(api)
-            self.solver.add(api_var)
-
-        expr = And(*order_exprs)
-
-        constraint = Z3Constraint(
-            constraint_type=ConstraintType.ACCESS_ORDER,
-            z3_expr=expr,
-            description=f"Sequence: {' -> '.join(api_sequence)}",
-        )
-        self.constraints.append(constraint)
-        self.solver.add(expr)
-
-        return constraint
+    # NOTE: ``add_api_sequence_constraint`` and the per-name ``order_X`` /
+    # ``api_called_X`` machinery it built on were removed 2026-05-22.
+    # Sequence validation now uses position-indexed semantics inside
+    # ``Z3SequenceValidator.validate_sequence``; the underlying
+    # ``add_access_order_constraint`` + ``_add_lifecycle_constraints``
+    # over the *API-name set* generated cyclic order constraints for
+    # libraries whose APIs serve both creator and user roles (cjson's
+    # ``cJSON_Add*`` family), pathologically rejecting 10/10 sequences
+    # on cjson and lcms. See ``docs/z3_skeleton_synthesis_problem_2026_05.md``
+    # §3.6 for the empirical root-cause analysis.
 
     # ========== Solving Methods ==========
 
@@ -416,110 +361,154 @@ class Z3SequenceValidator:
         api_sequence: List[Api],
         function_conditions: Dict[str, FunctionConditions]
     ) -> Tuple[bool, List[str]]:
-        """
-        Validate if API sequence is feasible
+        """Validate a fixed API sequence using **position-indexed** lifecycle
+        semantics.
 
-        Args:
-            api_sequence: API call sequence
-            function_conditions: Function constraint condition mapping
+        Background: the legacy implementation quantified lifecycle constraints
+        over the *API-name set* (``∀c ∈ creates[T], u ∈ uses[T]: order_c <
+        order_u``). For libraries with chained-builder APIs that are *both*
+        creators and users of the same type (cjson's `cJSON_Add*` family —
+        return a fresh node AND mutate the parent), the all-pairs expansion
+        generated cyclic order constraints and forced 10/10 sequences UNSAT.
+
+        Position-indexed semantics quantifies over *positions*:
+        ``for each j with USE on T: ∃ k < j with CREATE on T``. This matches
+        the *intended* meaning ("the creator of this value precedes its
+        user") instead of the over-conservative name-level reading
+        ("every-creator-API precedes every-user-API").
+
+        Because the sequence is fixed (we're validating a caller-supplied
+        ordering, not synthesizing one), the position-indexed check
+        collapses to a deterministic left-to-right walk over the sequence
+        — no SMT solver call needed for lifecycle. Z3 is retained only for
+        the length-dependency family (param-length-depends-on-param) where
+        SAT remains meaningful.
 
         Returns:
-            (is_valid, violations): Whether valid, and list of violated constraints
+            ``(is_valid, violations)`` — ``violations`` is a list of human-
+            readable strings tagged by family (``lifecycle:`` /
+            ``length_dep:``). Empty when valid.
         """
+        violations: List[str] = []
+
+        # ---- 1. Lifecycle (deterministic position-indexed walk) ----
+        violations.extend(self._check_lifecycle_position_indexed(
+            api_sequence, function_conditions))
+
+        # ---- 2. Length-dependency (still uses Z3) ----
         self.builder.reset()
-        violations = []
-
-        # 1. Add sequence order constraints
-        api_names = [api.function_name for api in api_sequence]
-        self.builder.add_api_sequence_constraint(api_names)
-
-        # 2. Add type dependency constraints
-        for i, api in enumerate(api_sequence):
+        for _, api in enumerate(api_sequence):
             if api.function_name not in function_conditions:
                 continue
-
             cond = function_conditions[api.function_name]
-
-            # Check parameter dependencies
             for j, arg_cond in enumerate(cond.argument_at):
                 if arg_cond.len_depends_on:
-                    dep_idx = int(arg_cond.len_depends_on.replace("param_", ""))
+                    try:
+                        dep_idx = int(arg_cond.len_depends_on.replace("param_", ""))
+                    except ValueError:
+                        continue
                     self.builder.add_dependency_constraint(
                         api.function_name, j, dep_idx, "length"
                     )
+        # No length constraints emitted → vacuously sat.
+        if self.builder.constraints:
+            is_sat, _ = self.builder.check_satisfiability()
+            if not is_sat:
+                violations.append("length_dep: z3 unsat on length constraints")
 
-        # 3. Add resource lifecycle constraints
-        self._add_lifecycle_constraints(api_sequence, function_conditions)
+        return (len(violations) == 0), violations
 
-        # 4. Check satisfiability
-        is_sat, model = self.builder.check_satisfiability()
-
-        if not is_sat:
-            violations = self.builder.get_unsat_core()
-
-        return is_sat, violations
-
-    def _add_lifecycle_constraints(
+    def _check_lifecycle_position_indexed(
         self,
         api_sequence: List[Api],
-        function_conditions: Dict[str, FunctionConditions]
-    ):
-        """Add resource lifecycle constraints.
+        function_conditions: Dict[str, FunctionConditions],
+    ) -> List[str]:
+        """Deterministic walk: for each position, verify the lifecycle
+        precondition holds against the *prior positions*, not against the
+        whole API-name set.
 
-        Tracks three roles per type: CREATE (return is producer), USE
-        (READ / WRITE on argument), DELETE (consume). Enforces:
-          * CREATE before any USE of the same type
-          * CREATE before DELETE
-          * USE before DELETE (you can't delete then use)
+        Semantic rules:
+          - USE on T at position j: some k < j must CREATE T.
+          - DELETE on T at position j: some k < j must CREATE T (we don't
+            forbid USE after DELETE here because the sequence is the
+            caller's intent and they may want to test use-after-free).
+          - CREATE on T at any position: always permitted.
 
-        Without USE tracking, sequences like ``[use_x, create_x]`` would
-        SAT-pass.
+        These match the intended semantics from §3.6 of
+        ``docs/z3_skeleton_synthesis_problem_2026_05.md``.
         """
-        creates: Dict[str, List[str]] = {}  # type -> [api_names producing it]
-        uses: Dict[str, List[str]] = {}     # type -> [api_names reading/writing it]
-        deletes: Dict[str, List[str]] = {}  # type -> [api_names destroying it]
+        violations: List[str] = []
 
-        for api in api_sequence:
-            if api.function_name not in function_conditions:
-                continue
-
-            cond = function_conditions[api.function_name]
-
+        # Pre-extract per-position role sets.
+        def _role_sets(api: Api) -> Tuple[Set[str], Set[str], Set[str]]:
+            """Return (creates, uses, deletes) type-string sets for this API."""
+            creates: Set[str] = set()
+            uses: Set[str] = set()
+            deletes: Set[str] = set()
+            cond = function_conditions.get(api.function_name)
+            if cond is None:
+                return creates, uses, deletes
+            # return access → creates only
             for at in cond.return_at.ats:
                 if at.access == Access.CREATE:
-                    type_str = at.type_string or api.return_info.type
-                    creates.setdefault(type_str, []).append(api.function_name)
-
+                    ts = at.type_string or api.return_info.type
+                    if ts:
+                        creates.add(ts)
+            # arg access → uses / deletes (mirrors legacy logic)
             for arg_cond in cond.argument_at:
                 for at in arg_cond.ats:
-                    type_str = at.type_string or ""
-                    if not type_str:
+                    ts = at.type_string or ""
+                    if not ts:
                         continue
                     if at.access == Access.DELETE:
-                        deletes.setdefault(type_str, []).append(api.function_name)
+                        deletes.add(ts)
                     elif at.access in (Access.READ, Access.WRITE):
-                        uses.setdefault(type_str, []).append(api.function_name)
+                        uses.add(ts)
+            return creates, uses, deletes
 
-        # CREATE before USE
-        for type_str in set(creates) & set(uses):
-            for c in creates[type_str]:
-                for u in uses[type_str]:
-                    if c != u:
-                        self.builder.add_access_order_constraint(c, u)
+        per_position = [_role_sets(api) for api in api_sequence]
 
-        # CREATE before DELETE
-        for type_str in set(creates) & set(deletes):
-            for c in creates[type_str]:
-                for d in deletes[type_str]:
-                    if c != d:
-                        self.builder.add_access_order_constraint(c, d)
+        # "Creatable-in-sequence" filter: a USE/DELETE of type T is only
+        # treated as a lifecycle dependency when some API in *this* sequence
+        # creates T. Types nobody creates (fuzzer-input primitives like
+        # ``i8*`` for ``const char*`` parser inputs, integer-return APIs)
+        # come from outside the sequence and don't require a creator.
+        # This matches the legacy encoding's implicit filter
+        # (``set(creates) & set(uses)`` per-sequence) — see §3.6 of
+        # ``docs/z3_skeleton_synthesis_problem_2026_05.md``.
+        creatable_types: Set[str] = set()
+        for creates_at_pos, _, _ in per_position:
+            creatable_types |= creates_at_pos
 
-        # USE before DELETE (no use-after-free)
-        for type_str in set(uses) & set(deletes):
-            for u in uses[type_str]:
-                for d in deletes[type_str]:
-                    if u != d:
-                        self.builder.add_access_order_constraint(u, d)
+        # Track which creatable types have been instantiated at any prior position.
+        ever_created: Set[str] = set()
+        for j, api in enumerate(api_sequence):
+            creates_j, uses_j, deletes_j = per_position[j]
+
+            # Check USE preconditions — need an earlier CREATE on each used
+            # type that *can* be created within this sequence.
+            for T in uses_j & creatable_types:
+                if T not in ever_created:
+                    violations.append(
+                        f"lifecycle: position {j} ({api.function_name}) "
+                        f"uses type {T} but no prior position creates it"
+                    )
+            # Same precondition for DELETE.
+            for T in deletes_j & creatable_types:
+                if T not in ever_created:
+                    violations.append(
+                        f"lifecycle: position {j} ({api.function_name}) "
+                        f"deletes type {T} but no prior position creates it"
+                    )
+            # Roll forward: this position's creates become available downstream.
+            ever_created |= creates_j
+
+        return violations
+
+    # NOTE: legacy ``_add_lifecycle_constraints`` (API-name-quantified
+    # all-pairs CREATE→USE / CREATE→DELETE / USE→DELETE order constraints)
+    # removed 2026-05-22 — see _check_lifecycle_position_indexed above for
+    # the position-indexed replacement.
 
 
 class Z3DependencyPruner:
