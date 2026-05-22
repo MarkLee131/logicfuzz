@@ -486,16 +486,23 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
 
   # Resolve --num-samples=auto. Until viability analysis runs (L0–L5 + L4
   # greedy max-coverage), we cannot know how many sequences survive — so
-  # there's no honest CLI default. Default to "one trial per viable
-  # CBFactory base driver" so every survivor gets at least one LLM pass.
-  # Falls back to 1 when the synthesis pool is empty (still better than
-  # crashing on `range(1, None+1)`).
+  # there's no honest CLI default. Default to "one trial per Z3-validated
+  # skeleton" so every survivor gets at least one LLM pass. Falls back to
+  # 1 when the synthesis pool is empty (still better than crashing on
+  # ``range(1, None+1)``).
+  #
+  # NOTE: the local variable inside ``_synthesize_skeletons_per_sequence``
+  # is called ``synthesized_drivers``, but the value is stored on
+  # ``FuzzingContext`` / ``shared_data`` under the key ``skeleton_drivers``
+  # (see ``src/context/data_context.py`` lines 65, 1222). Reading the
+  # wrong key here used to silently cap every project at a single trial.
   if args.num_samples is None:
-    n_synth = len(shared_data.get('synthesized_drivers', []))
-    args.num_samples = n_synth if n_synth > 0 else 1
+    n_skeletons = len(shared_data.get('skeleton_drivers', []) or [])
+    args.num_samples = n_skeletons if n_skeletons > 0 else 1
     logger.info(
         f'📍 [_fuzzing_pipelines] --num-samples auto-resolved to '
-        f'{args.num_samples} (one trial per viable base driver)',
+        f'{args.num_samples} (= len(skeleton_drivers), one trial per '
+        f'Z3-validated skeleton)',
         trial=0)
 
   logger.info(
