@@ -8,7 +8,7 @@ This module establishes clear data ownership:
 """
 
 from dataclasses import dataclass, field, replace
-from typing import Dict, Any, List, Optional, Set, Tuple
+from typing import Callable, Dict, Any, List, Optional, Set, Tuple
 from pathlib import Path
 import logging
 import json
@@ -1284,6 +1284,29 @@ class FuzzingContext:
                     f"Path-aware planner failed (non-critical, falling back "
                     f"to L4 order): {exc}")
 
+            # Phase A F4 (2026-05-23): build a lookup so the RepairEngine
+            # can consult Comprehender-B's per-sequence ``patched_sequence``
+            # when graft fails. Comprehender ran at Step 6b
+            # (``sequence_semantics_dicts``). Each entry shape:
+            # ``{"sequence": [...], "repair": {"patched_sequence": [...]}}``.
+            # We index by tuple(sequence) for O(1) lookup keyed on the
+            # exact API-name list the engine receives.
+            patched_lookup: Dict[Tuple[str, ...], List[str]] = {}
+            for entry in (sequence_semantics_dicts or []):
+                seq_names = entry.get('sequence') or []
+                repair_info = entry.get('repair') or {}
+                patched = repair_info.get('patched_sequence')
+                if patched:
+                    patched_lookup[tuple(seq_names)] = list(patched)
+
+            def _comprehender_patch_fn(
+                names: List[str],
+            ) -> Optional[List[str]]:
+                return patched_lookup.get(tuple(names))
+
+            comprehender_patch_fn = (_comprehender_patch_fn
+                                     if patched_lookup else None)
+
             skeleton_drivers = _synthesize_skeletons_per_sequence(
                 generator=generator,
                 target_sequences=filtered_api_sequences,
@@ -1292,6 +1315,7 @@ class FuzzingContext:
                 log=log,
                 automaton_artifact=automaton_artifact,
                 idioms_payload=planner_idioms_payload,
+                comprehender_patch_fn=comprehender_patch_fn,
             )
             if skeleton_drivers:
                 log.info(
@@ -2309,6 +2333,8 @@ def _synthesize_skeletons_per_sequence(
     automaton_artifact: Optional[Any] = None,
     automaton_threshold: float = 0.6,
     idioms_payload: Optional[Dict[str, Any]] = None,
+    comprehender_patch_fn: Optional[
+        Callable[[List[str]], Optional[List[str]]]] = None,
 ) -> List[Dict[str, Any]]:
     """
     For each L4-viable sequence, produce ONE Z3-validated skeleton with
@@ -2376,8 +2402,14 @@ def _synthesize_skeletons_per_sequence(
     # graft strategy prefers idiom-blessed root producers over
     # IR-mod/ref false-positive CREATE labels. See
     # ``extract_idiom_blessed_apis`` in candidate_repair.py.
+    # Phase A F4 (2026-05-23): wire Comprehender-B's ``patched_sequence``
+    # as a second repair strategy. Comprehender already emits per-sequence
+    # repair suggestions but historically marked them advisory and skipped
+    # them. Running them through the same revalidate gate as graft means
+    # they only land when CBFactory + Z3 actually accept the patched form.
     repair_engine = RepairEngine(graft_fn=graft_fn,
-                                 idioms_payload=idioms_payload)
+                                 idioms_payload=idioms_payload,
+                                 comprehender_patch_fn=comprehender_patch_fn)
     repair_log = RepairLog()
     # Name → Api object lookup so we can rebuild an Api list from a
     # name list returned by graft. Keys may overlap across project

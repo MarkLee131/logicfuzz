@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 class RepairStrategy(Enum):
     """Catalogue of repair strategy identifiers. Extensible."""
     GRAFT_CREATOR_PREFIX = "graft_creator_prefix"
+    COMPREHENDER_PATCH = "comprehender_patch"   # F4 (2026-05-23)
     TOPOLOGICAL_REORDER = "topological_reorder"  # not yet implemented
     NULLABLE_HANDLE_FILL = "nullable_handle_fill"  # not yet implemented
     SKETCH_FILL = "sketch_fill"  # not yet implemented
@@ -232,6 +233,8 @@ class RepairEngine:
         self,
         graft_fn: Optional[Callable[..., Optional[List[str]]]] = None,
         idioms_payload: Optional[Dict[str, Any]] = None,
+        comprehender_patch_fn: Optional[
+            Callable[[List[str]], Optional[List[str]]]] = None,
     ) -> None:
         # ``_strategies`` items are generators yielding zero or more
         # ``RepairAttempt`` per candidate. The engine walks each
@@ -241,6 +244,15 @@ class RepairEngine:
         self._idiom_blessed: Set[str] = extract_idiom_blessed_apis(idioms_payload)
         if graft_fn is not None:
             self._strategies.append(self._make_graft_strategy(graft_fn))
+        # F4 (2026-05-23): Comprehender-B emits ``patched_sequence`` per
+        # candidate sequence but historically marked them advisory and
+        # didn't apply. Wire them as a second strategy so they're tried
+        # when graft fails or doesn't apply. ``comprehender_patch_fn``
+        # is a thin callable the caller supplies (lookup by sequence
+        # into ``FuzzingContext.sequence_semantics``).
+        if comprehender_patch_fn is not None:
+            self._strategies.append(
+                self._make_comprehender_strategy(comprehender_patch_fn))
 
     def _make_graft_strategy(
         self,
@@ -323,6 +335,36 @@ class RepairEngine:
                 # If this attempt didn't succeed, exclude its inserts
                 # before the next iteration so we try a different root.
                 excluded.update(inserted)
+        return strategy
+
+    def _make_comprehender_strategy(
+        self,
+        patch_fn: Callable[[List[str]], Optional[List[str]]],
+    ) -> Callable[[List[str]], Iterable[RepairAttempt]]:
+        """Wrap Comprehender's per-sequence ``patched_sequence`` as a
+        repair strategy.
+
+        Yields **one** attempt per candidate (the Comprehender already
+        commits to a single patch per input — there's no "next-best"
+        suggestion to retry). If the patch is missing or equal to the
+        input sequence, the generator yields nothing.
+        """
+        def strategy(seq: List[str]) -> Iterable[RepairAttempt]:
+            try:
+                patched = patch_fn(seq)
+            except Exception:
+                return
+            if patched is None or list(patched) == list(seq):
+                return
+            inserted = [a for a in patched if a not in seq]
+            yield RepairAttempt(
+                strategy=RepairStrategy.COMPREHENDER_PATCH,
+                original_sequence=list(seq),
+                repaired_sequence=list(patched),
+                inserted_apis=inserted,
+                success=False,
+                rejection_reason="comprehender patched_sequence",
+            )
         return strategy
 
     def attempt(

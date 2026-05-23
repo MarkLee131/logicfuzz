@@ -381,6 +381,134 @@ def test_graft_retry_attempt_records_carry_excluded_set():
 
 
 # ---------------------------------------------------------------------------
+# F4 (2026-05-23): Comprehender patched_sequence as a repair strategy
+# ---------------------------------------------------------------------------
+
+def test_comprehender_patch_applied_when_graft_fails():
+    """End-to-end F4: graft can't fix the candidate (revalidate keeps
+    rejecting graft outputs), but Comprehender's ``patched_sequence``
+    holds the right answer and the engine accepts it."""
+    def graft_fn(seq, prefer_filter=None, exclude_filter=None):
+        # graft always proposes 'wrong_creator' — never revalidates.
+        return ['wrong_creator'] + list(seq)
+
+    def patch_fn(seq):
+        # Comprehender's per-sequence patch — the actual fix.
+        return ['cmsCreateContext', 'cmsOpenProfileFromMem']
+
+    eng = RepairEngine(graft_fn=graft_fn,
+                       comprehender_patch_fn=patch_fn)
+    trace = eng.attempt(
+        ['cmsOpenProfileFromMem'],
+        revalidate=lambda s: 'cmsCreateContext' in s,
+        candidate_index=0,
+    )
+    assert trace.final_success
+    assert trace.final_sequence == ['cmsCreateContext', 'cmsOpenProfileFromMem']
+    # Last attempt is the comprehender one
+    assert trace.attempts[-1].strategy == RepairStrategy.COMPREHENDER_PATCH
+    assert trace.attempts[-1].success is True
+    # Graft was tried first (recorded as failed attempts)
+    assert any(a.strategy == RepairStrategy.GRAFT_CREATOR_PREFIX
+               for a in trace.attempts)
+
+
+def test_comprehender_patch_returning_none_yields_no_attempt():
+    """If Comprehender has no patched_sequence for this candidate
+    (most common — only INVALID-status sequences get patches), the
+    strategy yields nothing and doesn't pollute the trace."""
+    def patch_fn(_seq):
+        return None
+
+    eng = RepairEngine(graft_fn=None, comprehender_patch_fn=patch_fn)
+    trace = eng.attempt(['useX'], revalidate=lambda s: True,
+                        candidate_index=0)
+    assert not trace.final_success
+    assert len(trace.attempts) == 0
+
+
+def test_comprehender_patch_equal_to_input_yields_no_attempt():
+    """If the patch is structurally identical to the input, treat as
+    no-op and skip — no redundant revalidation, no spurious attempt."""
+    def patch_fn(seq):
+        return list(seq)  # same content
+
+    eng = RepairEngine(graft_fn=None, comprehender_patch_fn=patch_fn)
+    trace = eng.attempt(['useX'], revalidate=lambda s: True,
+                        candidate_index=0)
+    assert not trace.final_success
+    assert len(trace.attempts) == 0
+
+
+def test_comprehender_patch_fn_exception_handled_gracefully():
+    """A throwing patch_fn shouldn't crash the engine — the strategy
+    just yields nothing for that candidate."""
+    def patch_fn(_seq):
+        raise RuntimeError("Comprehender lookup blew up")
+
+    eng = RepairEngine(graft_fn=None, comprehender_patch_fn=patch_fn)
+    trace = eng.attempt(['useX'], revalidate=lambda s: True,
+                        candidate_index=0)
+    assert not trace.final_success
+    assert len(trace.attempts) == 0
+
+
+def test_comprehender_patch_revalidate_rejects():
+    """If Comprehender's patch passes the patched-sequence equality
+    check but the revalidator rejects it (e.g., Z3 still can't bind),
+    the attempt is recorded as failed."""
+    def patch_fn(_seq):
+        return ['some_other_api', 'useX']
+
+    eng = RepairEngine(graft_fn=None, comprehender_patch_fn=patch_fn)
+    trace = eng.attempt(['useX'], revalidate=lambda s: False,
+                        candidate_index=0)
+    assert not trace.final_success
+    assert len(trace.attempts) == 1
+    assert trace.attempts[0].strategy == RepairStrategy.COMPREHENDER_PATCH
+    assert trace.attempts[0].success is False
+    assert trace.attempts[0].inserted_apis == ['some_other_api']
+
+
+def test_comprehender_patch_skipped_when_graft_already_succeeds():
+    """Strategy order: graft is tried first. If graft revalidates True
+    on its first attempt, the engine stops — Comprehender never runs."""
+    patch_call_count = {'n': 0}
+
+    def graft_fn(seq, prefer_filter=None, exclude_filter=None):
+        return ['creator_X'] + list(seq)
+
+    def patch_fn(_seq):
+        patch_call_count['n'] += 1
+        return ['somethingelse']
+
+    eng = RepairEngine(graft_fn=graft_fn,
+                       comprehender_patch_fn=patch_fn)
+    trace = eng.attempt(['useX'],
+                        revalidate=lambda s: 'creator_X' in s,
+                        candidate_index=0)
+    assert trace.final_success
+    assert trace.attempts[-1].strategy == RepairStrategy.GRAFT_CREATOR_PREFIX
+    assert patch_call_count['n'] == 0  # comprehender never asked
+
+
+def test_comprehender_patch_used_without_graft():
+    """RepairEngine constructed with only comprehender_patch_fn (no
+    graft_fn) is valid — used when the project has no automaton."""
+    def patch_fn(_seq):
+        return ['fixed_creator', 'useX']
+
+    eng = RepairEngine(graft_fn=None, comprehender_patch_fn=patch_fn)
+    trace = eng.attempt(['useX'],
+                        revalidate=lambda s: 'fixed_creator' in s,
+                        candidate_index=0)
+    assert trace.final_success
+    assert trace.final_sequence == ['fixed_creator', 'useX']
+    assert len(trace.attempts) == 1
+    assert trace.attempts[0].strategy == RepairStrategy.COMPREHENDER_PATCH
+
+
+# ---------------------------------------------------------------------------
 # RepairLog aggregation
 # ---------------------------------------------------------------------------
 
