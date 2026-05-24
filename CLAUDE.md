@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Knowledge-Driven Neuro-Symbolic Fuzz Driver Generation over Structured API Program Spaces.
 
-**Current iteration**: 5-phase system redesign in progress (Phase A/B/C foundation/D landed, E pending). See `docs/system_design_status.md` for status, cross-phase gaps, and decision queue.
+**Current iteration**: **generation-stage redesign** — see
+`docs/generation_stage_redesign.md` (the active source of truth for driver
+generation). First-principles diagnosis found the old "classify-then-repair"
+flow (Phase A repair + Tier-1 F1–F4) is a band-aid for a missing upstream
+API semantic model; the redesign builds `APISemanticModel` first and
+constructs sequences from it. `docs/system_design_status.md` remains the
+5-phase panorama + non-generation (Phase C/G feedback, merge) status, but its
+Phase A / F1–F4 entries are superseded.
 
 ## Commands
 
@@ -55,8 +62,11 @@ python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz
 
 | Doc | Subsystem |
 |-----|-----------|
-| `docs/system_design_status.md` | **Canonical current state.** 5-phase status, 11 cross-phase information-flow gaps, tiered decision queue. Updated as the system evolves. |
+| `docs/generation_stage_redesign.md` | **Active SoT for driver generation.** Root-cause diagnosis (4 classes / 11 problems) + MVP fix plan (G1–G4: APISemanticModel → construct → rank → semantic holes). Start generation work here. |
+| `docs/system_design_status.md` | 5-phase panorama + non-generation status (Phase C/G, merge). Phase A / F1–F4 entries superseded by the redesign. |
 | `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) and the PromeFuzz-derived knowledge layer. |
+| `docs/logicfuzz_vs_promefuzz.md` | Objective descriptive comparison of LogicFuzz vs `reference/promefuzz` driver generation. |
+| `docs/phase_e_adaptive_shape.md` | **Deferred** — driver-shape variety; sequenced after redesign G4 (semantic holes). |
 | `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`). |
 | `docs/upstream_liberator_diffs.md` | Upstream Liberator issues the adapter has fixed. |
 | `docs/llm_vs_traditional_choices.md` | Per-LLM-call-site rationale: symbolic alternative considered, why LLM won, falsifiable measurement to revisit. |
@@ -145,7 +155,7 @@ into `FuzzingContext` before agent turns. Remaining LangGraph tools:
 | Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter |
 | Project automaton | `liberator_adapter/analysis/project_automaton.py` | `AutomatonArtifact` |
 | Comprehender | `src/knowledge/comprehender.py` | Two-stage knowledge extraction |
-| **Phase A Repair Engine** | `liberator_adapter/analysis/candidate_repair.py` | `RepairEngine` + `graft_creator_prefix` strategy; writes `state/repair_log.json` |
+| **Phase A Repair Engine** ⚠️ superseded | `liberator_adapter/analysis/candidate_repair.py` | `RepairEngine` + `graft_creator_prefix`. **Band-aid for missing API semantic model — deleted by redesign G2** (`docs/generation_stage_redesign.md`). Kept until G2 reports 0 repairs. |
 | **Phase B Idiom Distiller** | `src/knowledge/idiom_distiller.py` | 10 L1 deterministic patterns; writes `state/idioms.json` |
 | **Phase C Coverage Memory** | `src/state/coverage_memory.py` | `CoverageMemory` + `IterationSnapshot`; writes `state/coverage_memory.json` |
 | **Phase D Path Planner** | `src/state/path_planner.py` | Idiom-align rerank + synthesize_missing; writes `state/plan_ledger.json` |

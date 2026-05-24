@@ -5,6 +5,14 @@
 > 子系统深 dive (automaton / merge_drivers / llm-vs-traditional /
 > upstream-liberator-diffs) 单独留在 docs/。
 
+> **⚠️ 生成阶段方向已变 (2026-05-23)。** 经第一性原理诊断，生成阶段的
+> Phase A repair + Tier 1 F1–F4 是"先错后补"的并发症，被
+> **`docs/generation_stage_redesign.md`** 取代（建 APISemanticModel 上游、
+> construct-from-model、按 reachability 选择）。**生成阶段的任何工作以
+> redesign doc 为准**；本文 §2–§4 里跟 repair / Phase A / F1–F4 相关的条目
+> 视为历史，不要据此开发。本文继续作为 5-phase 全景 + 非生成阶段
+> (Phase C/G 反馈、merge) 的状态快照。
+
 ---
 
 ## §1. 工具目的（不要忘）
@@ -47,7 +55,7 @@
 
 | Phase | Status | 实际能力 | 已知边界 |
 |-------|--------|---------|---------|
-| A Repair Engine | ✓ landed (`0627f3eb`, `7a140f80`, `8537902d`) | graft_creator_prefix；按位置化 lifecycle 验证；IR scalar 类型免检 | 单一 strategy；选错 creator 时无 fallback；不读 idioms 验证 |
+| A Repair Engine | ⚠️ **superseded** by redesign G2 | graft_creator_prefix；按位置化 lifecycle 验证 | repair 是 IR 误分类的症状；correct model → 无可修。`generation_stage_redesign.md` 删除 |
 | B Distillation | ✓ landed (`c10f807b`, `2a1be6a8`) | 10 种 L1 deterministic 模式；持久化 idioms.json；进 prototyper prompt | 无 L2 LLM-tier idioms；无置信度更新机制 |
 | C Foundation | ✓ landed (`50856f95`, `2a1be6a8`) | CoverageMemory 数据模型；post-merge IterationSnapshot；is_saturated 函数 | **没 loop driver**；frontier 计算未实现；snapshot write-only 没人读 |
 | D Planner | ✓ landed (`effdf034`) | Idiom-alignment 打分 + 重排 + synthesize_missing (限 context_null_pass) | Stateless（不看上轮）；不读 frontier；无 score→coverage 校准 |
@@ -100,9 +108,13 @@ Comprehender 给修补意见但 code 明确写"not applied"。Phase A repair 做
 
 ## §4. 待办 — 按价值密度
 
-### Tier 1：必做（不做的话 "5-phase 协作" 是名义上的）
+### Tier 1：~~必做~~ 已 landed，但被 redesign 取代
 
-**4 件小修（不引入新抽象，缝合现有信号）**
+> **SUPERSEDED (2026-05-23)。** F1–F4 已实现 (`51024b9d` `b013be02`
+> `07c13e70` `dc162fa5`) 并跑过 A/B —— 结果证伪了"缝合信号"路线：
+> emit 数升 (c-ares 6→7) 但总覆盖降 (412→81)，lcms 仍 0。F1/F2/F4 是
+> "先错后补"的下游补丁，由 `generation_stage_redesign.md` 的 G1/G2 删除
+> (F3 是纯效率修，保留)。**不要再按这张表开发。** 下面内容仅作历史。
 
 | # | Fix | 解什么问题 | 估算 |
 |---|-----|----------|------|
