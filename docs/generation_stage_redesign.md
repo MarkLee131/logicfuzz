@@ -212,12 +212,68 @@ orthogonal to the inversion.
 2. Doc-evidence extractor — doxygen/README → per-API role/arg hints (the
    doc-intent source that today only exists as free-text Comprehender output;
    make it structured).
+
+> **Token-budget invariant (non-negotiable for G1).** Knowledge extraction is
+> **deterministic-first**; the LLM is a last-resort, *batched* tiebreaker, never
+> a per-function call. PromeFuzz spends O(2N) LLM calls (per-function
+> excerpt-select + usage-generate) + pairwise relevance + RAG embeddings — we do
+> not. Our current comprehender already layers cache → deterministic (
+> ConditionManager role + lifecycle) → doxygen → batched-LLM-residual; the last
+> A/B run hit `LLM_calls=0` for comprehension. G1 must **keep** this and extend
+> it to structured role/arg. Structured extraction is *more* deterministic than
+> free-text (parsing `@brief Creates`/`@param data the input buffer` and naming
+> `_new/_create/_destroy` and type patterns `const uint8_t* + size_t` needs no
+> LLM), so done right G1 is **cheaper** than today, not dearer. Determinism
+> sources for each field are tabulated below; the LLM only sees the residual
+> where IR and doc *conflict* or both are silent, and those are batched into one
+> call. The model is cached (`api_semantic_model.json`) → 0-token re-runs.
+
+Deterministic sources per field (LLM only on the residual):
+
+| Field | 0-token source |
+|-------|----------------|
+| role creator/destroyer | doxygen `@brief` verb (Creates/Frees/Init); naming `_new/_create/_destroy/_free/_init` |
+| arg = input_buffer / length | type pattern `const uint8_t* + size_t`; doxygen `@param` text |
+| arg = output | `void**` / `T** out` |
+| arg = nullable_handle | IR + type `T* ctx` |
+| mechanism (alloc/free) | IR mod/ref |
+| composition (A→B) | automaton accepting paths + type match |
 3. Model-driven sequence constructor — grow creator→…→destroyer chains from the
    model, seeded by automaton paths + idiom chains (replaces Step 4).
 4. Reachability ranker — calibrate `acceptance_score` against observed
    coverage; rank candidates by it (replaces L4 diversity + L5 novelty).
 5. Semantic holes — attach `ArgSemantics` to each hole; renderer emits the
    value-intent as a structured constraint for the LLM.
+
+---
+
+## 4b. Prior-art check — does PromeFuzz's code help? (verdict: barely)
+
+Checked `reference/promefuzz` against G1–G4 (see `docs/logicfuzz_vs_promefuzz.md`).
+Conclusion: **PromeFuzz offers almost nothing reusable for this redesign**, and
+that confirms the direction is net-new rather than a reinvention.
+
+- **Doc/usage extraction is free-text only.** `deduce_func_usage_from_{doc,src}`
+  prompts ask for a ≤300-char usage string; output is `functions: dict[str,str]`.
+  **No role (creator/destroyer), no arg semantics.** PromeFuzz has no analogue of
+  the structured `APISemantics` G1 builds.
+- **We already exceed it.** Our `src/knowledge/comprehender.py` has
+  `_condition_role` + `_doc_derived_usage` + layered fallback (deterministic →
+  doxygen → LLM); PromeFuzz has only the last (free-text) layer. G1 is therefore
+  a *restructure* of what we already have — make it structured, fuse sources,
+  move upstream — not a from-scratch build.
+- **Relevance (type/scope/call) does not help G3.** It's symmetric function-pair
+  similarity with no dataflow/composition; our automaton `acceptance_score` is
+  the better reachability signal.
+- **`consumer.py` OrderSet** (call-order from real consumer code, normalized to
+  3–10 fns, Set-Cover-minimized) is the one piece adjacent to G2
+  construct-from-usage — but our automaton `sample_accepting_paths` (PTA+EDSM) is
+  a stronger version of the same idea. Don't port it; reuse the automaton.
+
+PromeFuzz is *usage-first + reactive (learn-after-crash)*; this redesign is
+*evidence-first + reconcile-up-front*. Opposite philosophies in the generation
+stage. Do not re-investigate this — borrow the automaton, not PromeFuzz's
+knowledge layer.
 
 ---
 
