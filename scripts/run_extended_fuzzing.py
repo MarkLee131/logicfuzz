@@ -316,21 +316,36 @@ class ExtendedFuzzer:
         if build_sh.exists():
             with open(build_sh, 'r') as f:
                 build_content = f.read()
-            target_ext = self.fuzz_target_path.suffix
-            if target_ext in ['.c', '.cc', '.cpp', '.cxx']:
-                compile_cmd = f'''
-# Compile extended fuzzing target
-$CXX $CXXFLAGS -c /src/{target_basename} -o /tmp/ext_fuzzer.o
-$CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} ${{LDFLAGS:-}}
+            # Our generated drivers carry a ``.fuzz_target`` extension (not
+            # ``.c``), and OSS-Fuzz fuzz targets are C/C++ (libFuzzer is C++,
+            # our drivers use ``extern "C"`` guards) — so compile ANY source
+            # extension with $CXX. (The old gate silently skipped
+            # ``.fuzz_target`` ⇒ the binary was never built ⇒ 0 execs ⇒ no
+            # coverage.) Also wire the project's headers + its just-built
+            # static lib(s): a bare ``$CXX target.o`` can't resolve
+            # ``cmsOpenProfileFromMem`` / ``#include "lcms2.h"``. We append
+            # AFTER the project's own build.sh, so its lib is already built.
+            import re
+            extra_l = ' '.join(sorted(set(re.findall(r'-l\w+', build_content))))
+            compile_cmd = f'''
+# === LogicFuzz extended-fuzzing target (compiled after project build) ===
+EXT_INC=""
+for d in /src/{self.project}/include /src/{self.project} /src/{self.project}/src /src/include /src; do
+  [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
+done
+EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
+# -x c++ : the driver file has a ``.fuzz_target`` extension, so clang cannot
+# infer the source language and would treat it as a linker input. Force C++
+# (our drivers are extern-"C"-guarded and OSS-Fuzz compiles fuzz targets with
+# $CXX). This was the lcms build failure.
+$CXX $CXXFLAGS $EXT_INC -x c++ -c /src/{target_basename} -o /tmp/ext_fuzzer.o
+$CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT/{self.target_name} ${{LDFLAGS:-}}
 '''
-                import re
-                lib_matches = re.findall(r'-l\w+', build_content)
-                if lib_matches:
-                    libs = ' '.join(set(lib_matches))
-                    compile_cmd = compile_cmd.replace('${LDFLAGS:-}', f'${{LDFLAGS:-}} {libs}')
-                with open(build_sh, 'a') as f:
-                    f.write(compile_cmd)
-        logger.info(f"Created project {self.generated_project_name}")
+            with open(build_sh, 'a') as f:
+                f.write(compile_cmd)
+        logger.info(f"Created project {self.generated_project_name} "
+                    f"(target {self.target_name}, compiled with project "
+                    f"includes + static libs)")
         return True
 
     def _setup_merged_dir(self, dst_project: Path) -> bool:
@@ -504,9 +519,9 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
         oss_fuzz_dir = self._get_oss_fuzz_dir()
         helper_py = oss_fuzz_dir / "infra" / "helper.py"
 
-        # Use absolute paths for corpus and crash dirs
+        # Use absolute path for corpus dir (crash artifacts go to the
+        # container-local /tmp/ — see -artifact_prefix below).
         corpus_dir_abs = str(self.corpus_dir.resolve())
-        crashes_dir_abs = str(self.crashes_dir.resolve())
 
         run_cmd = [
             "python3", str(helper_py),
@@ -518,11 +533,16 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
             f"-max_total_time={self.duration}",
             "-print_final_stats=1",
             "-detect_leaks=0",
-            f"-artifact_prefix={crashes_dir_abs}/",
+            # artifact_prefix must be a path that exists INSIDE the runner
+            # container — the host crashes dir isn't mounted there, so passing
+            # it makes libFuzzer abort ("required directory does not exist")
+            # before fuzzing. ``/tmp/`` always exists in base-runner. (Host-side
+            # crash collection needs a separate volume mount — tracked apart;
+            # the priority here is that the fuzzer actually RUNS so coverage is
+            # measurable.) ``crashes_dir_abs`` retained for host-side globbing.
+            "-artifact_prefix=/tmp/",
             # Continue fuzzing after crashes (standard practice for 24h evaluation)
-            # -fork=1: Run in forked process, auto-restart on crash
             # -ignore_crashes=1: Save crash but continue fuzzing
-            "-fork=1",
             "-ignore_crashes=1",
             "-ignore_timeouts=1",
             "-ignore_ooms=1",
@@ -609,11 +629,23 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE /tmp/ext_fuzzer.o -o $OUT/{self.target_name} 
             # Use absolute path for corpus dir
             corpus_dir_abs = str(self.corpus_dir.resolve())
 
-            # Check if corpus directory has files
+            # The fuzzer's --corpus-dir mount staging can empty the host corpus
+            # dir (helper does `rm` on the mount → "Device or resource busy" →
+            # libFuzzer runs on an empty corpus and the host dir ends empty), so
+            # coverage would see nothing. The fuzzer container has exited by
+            # now, so re-ensure the corpus is populated (re-copies the real
+            # project seeds) — coverage then measures the binary over at least
+            # those valid inputs (e.g. the 12 lcms .icc profiles → ICC parse).
             corpus_files = list(self.corpus_dir.glob("*"))
+            if not corpus_files:
+                logger.info("Corpus emptied during fuzzing; re-seeding before "
+                            "coverage measurement")
+                self._ensure_seed_corpus()
+                corpus_files = list(self.corpus_dir.glob("*"))
             if not corpus_files:
                 logger.warning("Corpus directory is empty, skipping coverage measurement")
                 return None
+            logger.info("Measuring coverage over %d corpus inputs", len(corpus_files))
 
             # Run coverage measurement
             coverage_cmd = [
