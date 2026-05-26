@@ -63,12 +63,8 @@ from .coverage_ranker import (
     select_top_k_sequences,
 )
 
-# L5: Coverage-Aware Filter (Progressive Filter Pipeline)
-from .coverage_aware_filter import (
-    CoverageAwareFilter,
-    CoverageAwareResult,
-    get_coverage_from_textcov,
-)
+# L5 (CoverageAwareFilter) deleted in redesign G3 — novelty pre-filter
+# replaced by reachability-first ranking in coverage_ranker.
 
 # Special Pattern Analyzers
 from .special_patterns import (

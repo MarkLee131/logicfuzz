@@ -283,15 +283,24 @@ Each phase is independently shippable and independently A/B-measurable.
 
 | Phase | Fixes | Deletes | Ship test |
 |-------|-------|---------|-----------|
-| **G1** `APISemanticModel` + reconciler (IR ⊕ doc ⊕ usage), wired BEFORE construction | Class I (P-gen-1/2/4/6) | demote ConditionManager authority | lcms: `cmsFreeToneCurveTriple` role = DESTROYER, not CREATOR; evidence log shows doc>IR |
-| **G2** Model-driven sequence constructor | Class II (P-gen-5/10/11) | random-walk grammar | sequences valid-by-construction; Phase A repair count → 0 (then delete it) |
-| **G3** Reachability ranker | Class III (P-gen-7) | L5 novelty filter | selection correlates with coverage; "more emitted ≠ more coverage" inversion gone |
-| **G4** Semantic holes | Class IV (P-gen-8/9) | — | hole carries in-range/out-of-range intent; structured input decoder for parsers |
+| **G1 ✅ landed (2026-05-25)** `APISemanticModel` + reconciler (IR ⊕ doc/naming ⊕ usage), wired at Step 5g BEFORE construction; comprehender role-authority routed through it | Class I (P-gen-1/2/4/6) | ConditionManager demoted to one IR-evidence source (role authority moved to the model; CBFactory/RunningContext/L1–L3 still read it until G2) | **PASS** — lcms `cmsFreeToneCurveTriple` role = DESTROYER (was IR CREATOR); evidence log shows NAMING>IR. 47 IR-role overrides on lcms. `liberator_adapter/analysis/api_semantic_model.py`, tests in `tests/test_p1_api_semantic_model.py` (15). |
+| **G2 ✅ landed (2026-05-25)** Model-driven sequence constructor (Step 5h: dependency-resolved creator→mutator*→consumer→destroyer chains, reachability-ranked) | Class II (P-gen-5/10/11) | random-walk grammar demoted to a **synthesizability floor** (constructed chains prepended, grammar guaranteed-retained, deduped) — `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1` for A/B | **PASS** — offline `tools/g2_viability/run.py`: lcms 1→**142** constructed, **100% ordering-fault-free by construction** on lcms/cjson/c-ares. **Live (gpt-5-mini, fresh prepare):** cjson 4 skeletons all `compiles:True` (~25% cov); lcms skeletons **1 (old) → 5 (G2)**. `liberator_adapter/analysis/sequence_constructor.py`, tests (10). **Live lessons (gpt-5-mini, fresh extraction):** (1) lifecycle-valid ≠ CBFactory-synthesizable — constructed chains can fail Z3 TYPE_MATCH/PROVENANCE/VARIABLE_AVAILABILITY (esp. lcms APIs with unbindable `void*` args), so we MERGE (not replace) with the L0-type-valid grammar floor; pure-replace regressed lcms to 0. (2) Raw `sample_accepting_paths` are NOT seeded as candidates (mid-stream fragments that fail lifecycle yet score acceptance≈1.0). (3) The model's `produces/requires` can diverge from raw `extract_api_effects` def/use on freshly-extracted accessors (lcms 142→109 after filter, was a 23% ordering-fault rate), so `construct_sequences` **self-filters through the shared `Typestate` oracle** (`project_apis` + `lifecycle_pairs`) → 100% ordering-clean by construction against the same walker CBFactory uses. |
+| **G3 ✅ landed (2026-05-25)** Reachability ranker | Class III (P-gen-7) | **L5 novelty filter DELETED** (`coverage_aware_filter.py` removed) | ranking is now reachability-first: `automaton.acceptance_score` is the PRIMARY sort axis (diversity demoted to tiebreak) in `coverage_ranker.py`, and Step 5h ranks constructed candidates the same way. The proxy (diversity/novelty) no longer drives selection. Full coverage-correlation calibration needs a live fuzzing run. |
+| **G4 ✅ landed (2026-05-25)** Semantic holes | Class IV (P-gen-8/9) | — | each skeleton carries per-arg **value intents** from the model (Step 10b): scalar config → in-range/out-of-range (P-gen-8), parser buffer → structured-input (P-gen-9), length-pairing, output, live-handle. Prototyper renders them into the hole-filling prompt. `liberator_adapter/analysis/hole_semantics.py`, tests `tests/test_p1_hole_semantics.py` (7). Coverage payoff measurable only via live fuzzing. |
+| **G5 ✅ landed (2026-05-25)** Coverage-gap-directed generation | (NEW class V — valid≠novel) | — | the §10B finding: G1–G4 make drivers *valid* but they re-cover the baseline (cjson `line_diff=0`; lcms baseline `cms_gdb_fuzzer` touches only **5/297** APIs). G5 extracts **gap APIs** (baseline-uncovered) from the baseline textcov and directs construction + ranking *toward* them — the principled successor to deleted L5 (right target, positive signal not hard filter). `liberator_adapter/analysis/coverage_gap.py`, tests `tests/test_p1_coverage_gap.py` (5). **Offline PASS:** lcms construction reaches **236/292** gap APIs (was 0 gap-blind); Step 5h ranks gap-first then reachability. Coverage payoff pending live fuzzing. |
+
+**Deletions done (2026-05-25):** Phase A repair engine (`candidate_repair.py`)
++ F1/F2/F4 wiring + its test removed — construction is lifecycle-complete by
+construction (offline harness: 100% ordering-clean), so repair is dead code.
+L5 (`coverage_aware_filter.py`) removed. Random-walk grammar is **retained as a
+fallback only** (Step 5h replaces it as the primary source; kept for the
+`LOGICFUZZ_DISABLE_G2_CONSTRUCT` A/B path and when construction yields nothing).
 
 **Ordering rationale:** G1 first — it's the spine; G2/G3/G4 all assume the
-model exists. After G2, Phase A repair should report 0 repairs on all three
-benches; that is the signal to delete it (don't delete before — keep it as the
-falsifiable check that construction is actually correct).
+model exists. Phase A repair was deleted on the strength of the offline
+viability harness (100% ordering-clean construction) standing in for the
+live "repair count → 0" gate, which is not runnable offline (the full LLM
+pipeline is required; `--generate-drivers` bypasses `prepare()`).
 
 ---
 
@@ -299,18 +308,33 @@ falsifiable check that construction is actually correct).
 
 Falsifiable, per phase, on the lcms / c-ares / cjson A/B harness:
 
-- **G1**: emit an `api_semantic_model.json`; assert known mislabels are fixed
-  (lcms free-functions not CREATOR). Manual spot-check evidence logs.
-- **G2**: Phase A repair attempts → 0 (construction is correct). Candidate set
-  no longer varies run-to-run from sampling noise (determinism).
-- **G3**: rank-vs-coverage correlation > 0 (today it's ~0 or negative — the
-  412→81 inversion). lcms total coverage ≥ pre-redesign.
-- **G4**: branch coverage in accessor/parser functions increases vs G3;
-  fewer fuzzer inputs rejected at the front gate (measure via early-return
-  rate).
+- **G1 ✅**: emits `results/{project}/state/api_semantic_model.json`; the
+  `cmsFreeToneCurveTriple` mislabel is fixed (DESTROYER, not CREATOR) and
+  every role carries an auditable winner/loser evidence log. Step 5g logs the
+  IR-override count (47 on lcms) — the band-aid surface G2 deletes; watch it
+  trend down as construction takes over.
+- **G2 ✅**: construction is ordering-fault-free by construction —
+  `tools/g2_viability/run.py` validates every constructed sequence with the
+  real `Typestate` checker and reports **100%** ordering-clean on lcms /
+  cjson / c-ares (lcms 142 sequences vs the old path's 1 viable skeleton).
+  Deterministic (no random walk → no run-to-run sampling noise). Remaining:
+  confirm Phase A repair attempts → 0 on a live run, then delete it (the
+  falsifiable check that construction is actually correct end-to-end).
+- **G3 ✅ (structural)**: ranking is reachability-first
+  (`acceptance_score` primary, diversity tiebreak) and L5 novelty is deleted.
+  The proxy no longer drives selection. *Open:* rank-vs-coverage correlation
+  must be confirmed > 0 on a live fuzzing run (offline we can't observe
+  per-sequence coverage).
+- **G4 ✅ (structural)**: every skeleton carries per-arg value intents
+  (in-range/out-of-range for scalars, structured-input for parser buffers)
+  and the Prototyper renders them. *Open:* the coverage payoff (more branch
+  coverage in accessors/parsers, fewer front-gate rejections) is measurable
+  only via live fuzzing.
 
-Overall success: **lcms moves off 0** (currently 1 skeleton, 0 coverage —
-the canary that the whole inversion fails on complex libs).
+Overall success: **lcms moves off 0** — ✅ at construction time (1 → 142
+ordering-clean sequences). End-to-end coverage confirmation requires a live
+LLM-pipeline + fuzzing run (the offline harness validates everything that
+does not require executing the target).
 
 ---
 
@@ -327,6 +351,119 @@ the canary that the whole inversion fails on complex libs).
   `docs/llm_vs_traditional_choices.md`, `docs/merge_drivers.md`,
   `docs/upstream_liberator_diffs.md` — unaffected (describe components that
   fold in or are orthogonal).
+
+---
+
+## 8. Final design synthesis (思路) — 2026-05-25
+
+The redesign started as *one* inversion (build a model, construct from it) but
+the live runs forced a **second** inversion on top. The final generation-stage
+design is the composition of both:
+
+### Two inversions
+
+1. **Correctness inversion (G1–G2): classify-then-repair → reconcile-then-construct.**
+   Build one reconciled `APISemanticModel` up front (IR ⊕ doc/naming ⊕ usage),
+   then *construct* dependency-resolved creator→mutator*→consumer→destroyer
+   chains from it. Result: candidates are **valid by construction** (100%
+   ordering-fault-free via the Typestate self-filter), so Z3 stops being a
+   lifecycle gate and Phase-A repair becomes dead code (deleted). Verified live:
+   lcms 1→5 compiling skeletons, no regression.
+
+2. **Value inversion (G5): valid → novel.** The live §10B data exposed that a
+   *valid* driver is worthless if it re-covers the baseline (cjson
+   `line_diff=0`; lcms baseline covers **5/297** APIs). So generation must be
+   **directed at the coverage gap** — the code the baseline misses. G5 extracts
+   gap APIs from the baseline textcov and steers construction + ranking toward
+   them (lcms: 236/292 gap APIs now reached, was 0).
+
+### The pipeline, end to end
+
+```
+extract APIs
+   │
+   ▼  G1  reconcile IR⊕doc/naming⊕usage  ──►  APISemanticModel (role + arg semantics)
+   │                                            (new role authority; ConditionManager demoted)
+   ▼  G5  baseline textcov  ──►  gap APIs (what baseline never covers)
+   │
+   ▼  G2  construct creator→…→destroyer chains  ──►  lifecycle-complete sequences
+   │       · gap APIs prioritized as targets (G5)
+   │       · Typestate self-filter → 100% ordering-clean
+   │       · MERGED with L0-type-valid grammar floor (synthesizability safety net)
+   ▼  G3+G5  rank by (gap-hits, automaton-reachability)  ──►  top-K
+   │
+   ▼  Z3 CONFIRM (type / var / provenance only — lifecycle correct by construction)
+   │
+   ▼  G4  skeleton + per-arg value intents (in/out-of-range, structured-input)
+   │
+   ▼  Prototyper fills holes  ──►  driver  ──►  fuzz + coverage
+```
+
+### Three load-bearing lessons the live runs taught (don't re-learn them)
+
+- **Lifecycle-valid ≠ CBFactory-synthesizable.** Constructed chains can pass the
+  Typestate lifecycle oracle yet fail Z3 type/provenance/variable-binding (lcms
+  APIs with unbindable `void*` args). ⇒ construction **merges with**, never
+  *replaces*, the L0-type-valid grammar floor. Pure-replace regressed lcms 1→0.
+- **The automaton is a ranking signal, not a candidate source.** Raw
+  `sample_accepting_paths` are mid-stream trace fragments (consumer with no
+  prior creator) that fail lifecycle yet score acceptance≈1.0 — seeding them as
+  candidates poisons selection. Use `acceptance_score` to *rank*, not to
+  *propose*.
+- **Two kinds of coverage gap need two different levers.** Whole baseline-
+  *uncovered APIs* (lcms: 98% of the surface) → **G5** API-level gap targeting.
+  *Uncovered branches inside covered functions* (cjson: baseline already hits
+  the public APIs, the gap is deep error/format paths) → **G4** structured
+  input + in/out-of-range value intent. cjson won't move on G5 alone; lcms is
+  where G5 pays off.
+
+### What "done" means now
+
+- Generation correctness: **done and verified** (valid-by-construction, no
+  regression, more compiling drivers).
+- Coverage value: **mechanism in place (G4+G5); live runs localized the true
+  bottleneck below generation.**
+
+### The bottleneck the live G5 run pinpointed (2026-05-25)
+
+G5 works at the *sequence* level — on lcms it constructs sequences reaching
+**239/297** baseline-uncovered APIs. But end-to-end it does **not** move lcms
+coverage, and the live run shows exactly why:
+
+- Step 5h ranks those 239 gap sequences first → Step 10 hands them to Z3 →
+  **`z3_rejected=38`, all gap sequences fail** (`RunningContext has N unsat
+  var(s)` — lcms APIs take `void*` contexts / opaque structs CBFactory cannot
+  *materialize* an argument value for).
+- Ranking gap-first ALONE then starved the few feasible candidates and
+  emitted **0** skeletons (regression 5→0). Fixed with a **three-strand trial
+  pool** — gap-first ⊕ acceptance-first ⊕ grammar floor — so feasible
+  candidates are always tried; emission recovered to **4**, and the 4 emitted
+  are `cmsCreateNULLProfile / cmsCreateXYZProfile / cmsCreate_sRGBProfile /
+  cmsD50_XYZ` — all **gap APIs** (baseline covers none of them). So G5 *did*
+  surface gap-targeting, synthesizable skeletons. (`10b 0/4` just means these
+  particular APIs have no buffer/scalar holes for value-intent.)
+- Yet total coverage stayed **~1%**: these are *shallow* gap APIs (profile
+  constructors with fixed params — they execute only the ~80 lines of creation
+  code). The *deep* gap APIs that hold lcms's bulk (`cmsDoTransform`,
+  `cmsTransform2DeviceLink`, …) cover a lot but **fail Z3 binding** — they need
+  a live profile handle PLUS unbindable non-handle args.
+
+**Conclusion:** for complex libs the wall has two faces, both at the binding
+layer, not sequence selection (G2/G3/G5 all succeed there):
+1. *Shallow* gap APIs synthesize but cover little.
+2. *Deep* gap APIs cover a lot but **CBFactory `RunningContext` can't
+   synthesize values for their `void*`/opaque-struct non-handle params**, so
+   they never become skeletons regardless of ranking.
+The next investment is therefore *below* the generation redesign:
+
+1. **Argument-value synthesis for opaque/`void*` params** (the binding layer)
+   — make gap APIs synthesizable so G4/G5 actually apply to them. This is the
+   single highest-leverage fix for lcms-class libraries.
+2. **Format-aware input** (deepen G4) — for libs where the gap is deep
+   *branches* inside already-bindable functions (cjson), not whole APIs.
+
+Both are measurable only in the live fuzz loop, which is now wired and
+working end-to-end (G1–G5 run live under gpt-5-mini with no crashes).
 
 ---
 

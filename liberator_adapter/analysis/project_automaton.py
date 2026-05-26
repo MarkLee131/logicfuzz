@@ -196,24 +196,16 @@ class AutomatonArtifact:
         producer is prepended once; multiple unmet handles produce a chain
         of creators (deduped, in discovery order).
 
-        ``prefer_filter`` (Phase A F1, 2026-05-23): when supplied, the
-        root-selection step **first** tries roots for which
-        ``prefer_filter(name)`` returns ``True``. If any such root passes
-        the cycle check, it wins. Only when no preferred root is available
-        does it fall back to the highest-ranked root irrespective of
-        filter. This lets callers (e.g. ``RepairEngine`` aware of Phase B
-        idioms) override IR-mod/ref false-positive CREATE labels — on
-        lcms, ``cmsFreeToneCurveTriple`` is mod/ref-tagged CREATE but
-        Phase B idioms know the true creator is ``cmsCreateContext`` and
-        can vote it ahead.
+        ``prefer_filter``: when supplied, the root-selection step **first**
+        tries roots for which ``prefer_filter(name)`` returns ``True``. If
+        any such root passes the cycle check, it wins; otherwise it falls
+        back to the highest-ranked root irrespective of filter. (The
+        APISemanticModel now corrects role mislabels up front, so the L4
+        ranker — the remaining caller — rarely needs this override.)
 
-        ``exclude_filter`` (Phase A F2, 2026-05-23): roots for which
-        ``exclude_filter(name)`` returns ``True`` are removed BEFORE
-        consulting ``prefer_filter``. Used by RepairEngine's retry loop:
-        when a graft attempt revalidates to False, the engine excludes
-        the chosen root on the next attempt so it can try a different
-        producer. Without exclude_filter, the engine would re-pick the
-        same top-1 root repeatedly.
+        ``exclude_filter``: roots for which ``exclude_filter(name)`` returns
+        ``True`` are removed BEFORE consulting ``prefer_filter``, letting a
+        caller retry with a different producer than the top-1 root.
 
         Returns the grafted sequence on success, ``None`` if no graft could
         be made (no `graph` attribute, no unmet handles, or no producer

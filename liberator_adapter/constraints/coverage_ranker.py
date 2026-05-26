@@ -272,13 +272,16 @@ class CoverageRanker:
         ]
 
         # Step 2: Hierarchical sort.
-        # When automaton is provided, acceptance becomes the secondary axis
-        # right after diversity (high-acceptance wins at equal diversity).
-        # When no automaton, secondary stays entry_point_position (legacy).
+        # G3: when an automaton is present, *reachability* (acceptance) is the
+        # PRIMARY axis — it predicts whether the library will actually walk the
+        # sequence — with diversity demoted to a tiebreak. (Pre-G3 this was
+        # inverted: diversity primary, acceptance secondary, which optimised a
+        # proxy that doesn't predict coverage.) Without an automaton, fall back
+        # to the legacy diversity-first ordering.
         if automaton_acceptance_fn is not None:
             sort_key = lambda s: (
-                -s.diversity_score,
                 -s.automaton_acceptance,
+                -s.diversity_score,
                 s.entry_point_position if s.entry_point_position >= 0 else float('inf'),
                 -s.length,
             )
@@ -463,7 +466,6 @@ def select_top_k_sequences(
     automaton_post_extend_max_inputs: int = 12,
     automaton_post_extend_acceptance_threshold: float = 0.0,
     length_floor_safe_apis: Optional[Set[str]] = None,
-    disable_coverage_filter: bool = False,
 ) -> Tuple[List[List[str]], Dict[str, Any]]:
     """
     Convenience function matching the filter interface of L1-L3.
@@ -501,53 +503,9 @@ def select_top_k_sequences(
     if entry_point_analysis:
         entry_point_names = set(entry_point_analysis.get('entry_point_names', []))
 
-    # === L5: Coverage-Aware Pre-filtering (if coverage data available) ===
-    # Skipped when disable_coverage_filter=True (evaluation mode: maximise
-    # total coverage by NOT avoiding APIs the baseline already covers).
-    coverage_aware_stats = {}
-    if disable_coverage_filter:
-        coverage_aware_stats = {'coverage_aware_enabled': False,
-                                'reason': 'disabled_for_evaluation'}
-        log.info("   ⏭️  L5 Coverage-Aware: SKIPPED (disable_coverage_filter=True)")
-    elif existing_coverage:
-        try:
-            from .coverage_aware_filter import CoverageAwareFilter
-
-            cov_filter = CoverageAwareFilter(
-                existing_coverage=existing_coverage,
-                important_apis=important_apis,
-            )
-
-            # Apply coverage-aware filtering
-            cov_result = cov_filter.filter_sequences(
-                sequences,
-                max_overlap=0.7,  # Allow up to 70% overlap
-                min_novelty=0.2,  # Require 20% novelty
-            )
-
-            # Use novelty-ranked sequences for further processing
-            sequences = cov_result.filtered_sequences
-            coverage_aware_stats = {
-                'coverage_aware_enabled': True,
-                'pre_filter_count': cov_result.stats['input_count'],
-                'post_filter_count': cov_result.stats['output_count'],
-                'avg_novelty_score': cov_result.stats['avg_novelty'],
-                'filtered_by_overlap': cov_result.stats['filtered_out'],
-            }
-
-            log.info(
-                f"   ✅ L5 Coverage-Aware: {cov_result.stats['input_count']} -> "
-                f"{cov_result.stats['output_count']} sequences "
-                f"(avg novelty: {cov_result.stats['avg_novelty']:.2f})"
-            )
-
-        except ImportError as e:
-            log.debug(f"Coverage-aware filter not available: {e}")
-            coverage_aware_stats = {'coverage_aware_enabled': False, 'error': str(e)}
-        except Exception as e:
-            log.warning(f"Coverage-aware filtering failed: {e}")
-            coverage_aware_stats = {'coverage_aware_enabled': False, 'error': str(e)}
-
+    # L5 (CoverageAwareFilter novelty pre-filter) was deleted in G3: it ranked
+    # by novelty-vs-baseline, a proxy that suppresses total coverage and does
+    # not predict reachability. Selection is now reachability-first (below).
     ranker = CoverageRanker(logger_instance=logger_instance)
     automaton_acceptance_fn = None
     automaton_graft_fn = None
@@ -611,7 +569,6 @@ def select_top_k_sequences(
         'output': len(result.selected_sequences),
         'api_coverage': len(result.total_api_coverage),
         'stats': result.get_stats(),
-        'coverage_aware': coverage_aware_stats,
         'automaton': automaton_stats,
     }
 

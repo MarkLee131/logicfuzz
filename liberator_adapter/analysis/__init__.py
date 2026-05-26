@@ -39,6 +39,30 @@ from liberator_adapter.analysis.project_automaton import (
     AutomatonArtifact,
     learn_project_automaton,
 )
+from liberator_adapter.analysis.api_semantic_model import (
+    APIRole,
+    ArgRole,
+    EvidenceSource,
+    Evidence,
+    ArgSemantics,
+    APISemantics,
+    APISemanticModel,
+    reconcile,
+)
+from liberator_adapter.analysis.sequence_constructor import (
+    ConstructionResult,
+    construct_sequences,
+)
+from liberator_adapter.analysis.hole_semantics import (
+    annotate_skeletons,
+    value_intents_for_sequence,
+    render_value_intents,
+)
+from liberator_adapter.analysis.coverage_gap import (
+    compute_gap_apis,
+    locate_baseline_textcov,
+    parse_textcov_covered,
+)
 
 __all__ = [
     "APIEffect",
@@ -61,4 +85,20 @@ __all__ = [
     "LLMEquivalenceOracle",
     "AutomatonArtifact",
     "learn_project_automaton",
+    "APIRole",
+    "ArgRole",
+    "EvidenceSource",
+    "Evidence",
+    "ArgSemantics",
+    "APISemantics",
+    "APISemanticModel",
+    "reconcile",
+    "ConstructionResult",
+    "construct_sequences",
+    "annotate_skeletons",
+    "value_intents_for_sequence",
+    "render_value_intents",
+    "compute_gap_apis",
+    "locate_baseline_textcov",
+    "parse_textcov_covered",
 ]

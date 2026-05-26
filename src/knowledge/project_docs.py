@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 logger = logging.getLogger(__name__)
 
@@ -328,4 +328,179 @@ def extract_doxygen_comments(
         "Doxygen extraction: %d/%d APIs documented (across %d headers)",
         len(out), len(api_set), len(header_paths),
     )
+    return out
+
+
+# ------------------------------------------------ Structured doc signals (G1)
+#
+# ``extract_doxygen_comments`` deliberately *drops* @param / @returns tag
+# bodies — fine for the free-text Comprehender, useless for the redesign's
+# APISemanticModel, which needs per-arg roles. ``extract_doc_signals`` keeps
+# the tags and emits a structured per-API record consumed by
+# ``liberator_adapter.analysis.api_semantic_model.collect_doc_evidence``.
+# Deterministic (no LLM); empty on libclang unavailability.
+
+_DOXY_BRIEF_TAG_RE = re.compile(r"[\\@]brief\s+(.*)", re.IGNORECASE)
+_DOXY_PARAM_TAG_RE = re.compile(
+    r"[\\@]param(?:\s*\[[^\]]*\])?\s+(\w+)\s+(.*)", re.IGNORECASE)
+_DOXY_RETURN_TAG_RE = re.compile(r"[\\@](?:return|returns|retval)\s+(.*)",
+                                 re.IGNORECASE)
+
+# @param description → ArgRole value string. Order matters: LENGTH and OUTPUT
+# cues are checked before the generic BUFFER cue so "size of the buffer" reads
+# as LENGTH, not INPUT_BUFFER.
+_PARAM_LENGTH_CUES = ("length", "size", "number of bytes", "num bytes",
+                      "byte count", "count of", "n_bytes", "nbytes", "len of",
+                      "size in bytes", "size of")
+_PARAM_OUTPUT_CUES = ("output", "result is", "receives", "filled in",
+                      "will be set", "will receive", "out parameter",
+                      "pointer to store", "on success contains", "[out]")
+_PARAM_BUFFER_CUES = ("input buffer", "the input", "raw bytes", "the data",
+                      "input data", "data buffer", "byte buffer", "the bytes",
+                      "buffer to", "pointer to the data")
+_PARAM_HANDLE_CUES = ("handle", "context", "the object", "instance",
+                      "previously created", "returned by")
+
+
+def _param_role_from_text(text: str) -> Optional[str]:
+    """Map a @param description to an ``ArgRole`` value string, or ``None``."""
+    low = (text or "").lower()
+    if not low:
+        return None
+    if any(c in low for c in _PARAM_LENGTH_CUES):
+        return "LENGTH"
+    if any(c in low for c in _PARAM_OUTPUT_CUES):
+        return "OUTPUT"
+    if any(c in low for c in _PARAM_BUFFER_CUES):
+        return "INPUT_BUFFER"
+    if any(c in low for c in _PARAM_HANDLE_CUES):
+        return "HANDLE_IN"
+    return None
+
+
+def _parse_doxygen_structured(raw: Optional[str]) -> Dict[str, Any]:
+    """Split a raw doxygen block into brief + ordered @param + return.
+
+    Keeps tag bodies (unlike ``_normalize_doxygen``). ``params`` is ordered by
+    appearance, each ``{"index", "name", "text", "role"}`` — ``index`` is the
+    ordinal position, which conventionally matches the signature arg order.
+    """
+    if not raw:
+        return {}
+    # Strip /** */ framing and per-line '*' prefixes, but keep tags.
+    lines: List[str] = []
+    for line in raw.splitlines():
+        if _DOXY_HEADER_RE.match(line) or _DOXY_TRAILING_RE.match(line):
+            continue
+        m = _DOXY_LINE_RE.match(line)
+        lines.append((m.group(1) if m else line.strip()).strip())
+    blob = "\n".join(l for l in lines if l)
+    if not blob:
+        return {}
+
+    params: List[Dict[str, Any]] = []
+    for ordinal, m in enumerate(_DOXY_PARAM_TAG_RE.finditer(blob)):
+        pname, ptext = m.group(1), m.group(2).strip()
+        params.append({
+            "index": ordinal, "name": pname, "text": ptext,
+            "role": _param_role_from_text(ptext),
+        })
+
+    brief = ""
+    bm = _DOXY_BRIEF_TAG_RE.search(blob)
+    if bm:
+        brief = bm.group(1).strip()
+    else:
+        # No explicit @brief: the lead text before the first tag is the brief.
+        lead: List[str] = []
+        for l in blob.splitlines():
+            if _DOXY_TAG_RE.match(l) or _DOXY_PARAM_RE.search(l):
+                break
+            lead.append(l)
+        brief = " ".join(lead).strip()
+
+    rm = _DOXY_RETURN_TAG_RE.search(blob)
+    returns = rm.group(1).strip() if rm else ""
+
+    out: Dict[str, Any] = {}
+    if brief:
+        out["brief"] = brief
+    if params:
+        out["params"] = params
+    if returns:
+        out["returns"] = returns
+    return out
+
+
+def extract_doc_signals(
+    headers_dir: Optional[Path],
+    public_headers: Sequence[str],
+    api_names: Sequence[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Map ``api_name`` → structured doc signal ``{brief, params, returns}``.
+
+    Same libclang walk as ``extract_doxygen_comments`` but retains @param /
+    @return tags so the APISemanticModel can read per-arg roles. Empty dict on
+    any failure (caller's naming + type-pattern evidence still carries role).
+    """
+    if not headers_dir or not public_headers or not api_names:
+        return {}
+    try:
+        from clang.cindex import Cursor, CursorKind, Index, TranslationUnit
+    except ImportError:
+        logger.warning(
+            "libclang bindings unavailable; structured doc extraction skipped")
+        return {}
+
+    api_set: Set[str] = {n for n in api_names if n}
+    headers_root = Path(headers_dir)
+    if not api_set or not headers_root.is_dir():
+        return {}
+
+    header_paths = [headers_root / n for n in public_headers
+                    if (headers_root / n).is_file()]
+    if not header_paths:
+        return {}
+
+    index = Index.create()
+    out: Dict[str, Dict[str, Any]] = {}
+    parse_args = ["-I", str(headers_root), "-x", "c++", "-std=c++17",
+                  "-ferror-limit=0", "-fparse-all-comments"]
+
+    def _walk(cursor: 'Cursor') -> None:
+        try:
+            kind = cursor.kind
+        except Exception:
+            return
+        if kind in (CursorKind.FUNCTION_DECL, CursorKind.CXX_METHOD):
+            name = cursor.spelling
+            if name and name in api_set and name not in out:
+                try:
+                    sig = _parse_doxygen_structured(cursor.raw_comment)
+                except Exception:
+                    sig = {}
+                if sig:
+                    out[name] = sig
+        for child in cursor.get_children():
+            _walk(child)
+
+    for hp in header_paths:
+        try:
+            tu = index.parse(
+                str(hp), args=parse_args,
+                options=(TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
+                         | TranslationUnit.PARSE_INCOMPLETE))
+        except Exception as exc:
+            logger.debug("libclang parse failed for %s: %s", hp, exc)
+            continue
+        if tu is None:
+            continue
+        try:
+            _walk(tu.cursor)
+        except Exception as exc:
+            logger.debug("structured doc walk failed for %s: %s", hp, exc)
+            continue
+
+    logger.info("Structured doc signals: %d/%d APIs (across %d headers)",
+                len(out), len(api_set), len(header_paths))
     return out

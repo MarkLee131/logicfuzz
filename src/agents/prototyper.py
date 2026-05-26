@@ -1418,6 +1418,21 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 "  (No explicit holes - review code and fill any __HOLE_*__ placeholders)"
             )
 
+        # G4: per-arg value intent from APISemanticModel (in-range/out-of-range
+        # for scalars, structured-input for parser buffers, length pairing,
+        # output, live-handle). Tells the LLM how to choose hole *values*, not
+        # just their type.
+        value_intents = skeleton.get('value_intents') or []
+        if value_intents:
+            try:
+                from liberator_adapter.analysis import render_value_intents
+                block = render_value_intents(value_intents)
+                if block:
+                    holes_desc_lines.append("")
+                    holes_desc_lines.append(block)
+            except Exception:
+                pass
+
         return code, "\n".join(holes_desc_lines), True
 
     def _describe_hole(self, hole: Dict[str, Any]) -> str:

@@ -243,22 +243,46 @@ def _doc_derived_usage(api: Dict[str, Any], docstring: str) -> Optional[str]:
     return f"{text} (doxygen) — signature: {sig}"
 
 
+# APISemanticModel role (redesign G1) → deterministic usage text. The model
+# is the authority for role (it reconciles IR ⊕ doc ⊕ naming); ConditionManager's
+# IR-only SOURCE/SINK/INIT is the fallback when the model is unavailable.
+_MODEL_ROLE_USAGE = {
+    "CREATOR": "Produces fresh data / handle; safe to call without prior state.",
+    "DESTROYER": "Consumes a previously produced object; releases ownership.",
+    "MUTATOR": "Configures or advances a library object; needs an upstream handle.",
+    "CONSUMER": "Reads a previously produced object; needs an upstream handle.",
+}
+
+
 def _deterministic_usage(api: Dict[str, Any],
                          condition_info: Dict[str, Any],
-                         lifecycle_analysis: Dict[str, Any]) -> Optional[str]:
-    """Synthesize a usage line from static facts. Returns None if we know nothing."""
+                         lifecycle_analysis: Dict[str, Any],
+                         api_roles: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Synthesize a usage line from static facts. Returns None if we know nothing.
+
+    ``api_roles`` (name → ``APIRole`` value) is the reconciled
+    ``APISemanticModel`` verdict; when present it is the role authority and
+    ConditionManager (``_condition_role``) is demoted to fallback.
+    """
     name = api.get("function_name", "")
-    role = _condition_role(name, condition_info)
     pair = _lifecycle_pair(name, lifecycle_analysis)
-    if not role and not pair:
-        return None
+
     parts = []
-    if role == "INIT":
-        parts.append("Initializes a library object; call before any consumer API.")
-    elif role == "SOURCE":
-        parts.append("Produces fresh data / handle; safe to call without prior state.")
-    elif role == "SINK":
-        parts.append("Consumes a previously produced object; releases ownership.")
+    model_role = (api_roles or {}).get(name)
+    role_text = _MODEL_ROLE_USAGE.get(model_role) if model_role else None
+    if role_text:
+        parts.append(role_text)
+    else:
+        role = _condition_role(name, condition_info)
+        if role == "INIT":
+            parts.append("Initializes a library object; call before any consumer API.")
+        elif role == "SOURCE":
+            parts.append("Produces fresh data / handle; safe to call without prior state.")
+        elif role == "SINK":
+            parts.append("Consumes a previously produced object; releases ownership.")
+
+    if not parts and not pair:
+        return None
     if pair:
         parts.append(pair + ".")
     return " ".join(parts) if parts else None
@@ -403,6 +427,7 @@ class Comprehender:
                         condition_info: Optional[Dict[str, Any]] = None,
                         lifecycle_analysis: Optional[Dict[str, Any]] = None,
                         api_docstrings: Optional[Dict[str, str]] = None,
+                        api_roles: Optional[Dict[str, str]] = None,
                         ) -> Dict[str, str]:
         """Per-API usage with cache → deterministic → doxygen → LLM layering.
 
@@ -436,7 +461,8 @@ class Comprehender:
             api = api_lookup.get(name)
             if api is None:
                 continue
-            det = _deterministic_usage(api, condition_info, lifecycle_analysis)
+            det = _deterministic_usage(api, condition_info, lifecycle_analysis,
+                                       api_roles)
             if det:
                 usages[name] = det
                 continue

@@ -1338,6 +1338,70 @@ class CBFactory(Factory):
             return None
         return self._create_skeleton_from_sequence(target_seq)
 
+    def create_skeleton_unchecked(
+        self, target_seq: List[Api]
+    ) -> Optional['DriverSkeleton']:
+        """Render a skeleton for a sequence WITHOUT the Z3 / RunningContext
+        provenance gate (redesign G5 follow-through).
+
+        Rationale (first-principles): the reconciled semantic model already
+        tells us each argument's *source* — a handle (use a prior producer's
+        return), a fuzzer buffer, a length, an output local, or a scalar
+        config. Writing the driver is a per-arg role lookup; it does NOT
+        require Z3 to *prove* provenance for every argument.
+        ``create_skeleton_for_sequence`` rejects a whole sequence the moment
+        RunningContext can't bind one scalar/``void*`` (lcms
+        ``cmsCreateTransform`` / ``cmsBuildGamma``) — which silently drops the
+        very baseline-uncovered (gap) APIs we most want to reach.
+
+        This path keeps Z3 as an *optional* confirmation only: it wires handle
+        args to prior producers by type-match (single-pointer types,
+        including opaque ``void*`` handles) and leaves every other arg as a
+        ``SkeletonGenerator`` hole for the LLM to fill (guided by G4 value
+        intents). It never rejects — every non-empty sequence yields a
+        skeleton. Z3-clean sequences still go through
+        ``create_skeleton_for_sequence``; this is the fallback that recovers
+        the rest.
+        """
+        if not SKELETON_AVAILABLE or not target_seq:
+            return None
+        bindings = self._signature_handle_bindings(target_seq)
+        varlen_relations = self._extract_varlen_relations(target_seq)
+        generator = SkeletonGenerator()
+        skeleton = generator.generate(
+            api_sequence=target_seq,
+            varlen_relations=varlen_relations,
+            driver_name="model_skeleton",
+            arg_bindings=bindings,
+        )
+        skeleton.metadata['synthesis_method'] = 'model_unchecked'
+        skeleton.metadata['api_count'] = len(target_seq)
+        skeleton.metadata['api_names'] = [a.function_name for a in target_seq]
+        return skeleton
+
+    def _signature_handle_bindings(
+        self, api_sequence: List[Api]
+    ) -> Dict[Tuple[str, int], str]:
+        """Wire single-pointer handle args to a prior producer's ``ret_<api>``
+        by normalized type-match. Never rejects; returns only the bindings it
+        can make (the rest become holes). Out-pointers (``T**``) and fuzzer
+        buffers are left to SkeletonGenerator (output local / FUZZ_INPUT)."""
+        from liberator_adapter.analysis.usedef import normalize_handle_type
+        bindings: Dict[Tuple[str, int], str] = {}
+        produced: Dict[str, str] = {}   # normalized handle type -> ret var
+        for api in api_sequence:
+            for j, arg in enumerate(getattr(api, 'arguments_info', []) or []):
+                t = getattr(arg, 'type', '') or ''
+                if t.count('*') == 1:   # single-pointer ⇒ candidate input handle
+                    key = normalize_handle_type(t)
+                    if key and key in produced:
+                        bindings[(api.function_name, j)] = produced[key]
+            ri = getattr(api, 'return_info', None)
+            rt = getattr(ri, 'type', '') if ri else ''
+            if rt and rt not in ('void', '') and rt.count('*') == 1:
+                produced[normalize_handle_type(rt)] = f"ret_{api.function_name}"
+        return bindings
+
     def _create_skeleton_from_sequence(self, api_sequence: List[Api]) -> Optional['DriverSkeleton']:
         """
         Convert an API sequence to a skeleton with holes.

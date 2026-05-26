@@ -92,6 +92,14 @@ class FuzzingContext:
     comprehension: Dict[str, Any] = field(default_factory=dict)
     sequence_semantics: List[Dict[str, Any]] = field(default_factory=list)
 
+    # === API Semantic Model (redesign G1) ===
+    # Reconciled per-API role + arg semantics (IR ⊕ doc/naming ⊕ usage).
+    # The full model is persisted to results/{project}/state/api_semantic_model.json;
+    # here we carry only a lightweight summary + the role map (name → APIRole
+    # value) the comprehender / downstream consumers read. {} when the build
+    # was skipped or failed.
+    api_semantic_model: Dict[str, Any] = field(default_factory=dict)
+
     # === Project-adaptive automaton (P3) ===
     # Lightweight summary; the live ``AutomatonArtifact`` (with PTA + EDSM
     # + UseDefGraph) is too heavy to keep in the immutable context. We carry
@@ -792,13 +800,13 @@ class FuzzingContext:
                     if not eff.use:
                         length_floor_safe.add(eff.name)
 
-            # Rank and select top-k sequences (with L5 coverage-aware filtering
-            # + automaton signal + length-floor defensive guard when available)
+            # Rank and select top-k sequences by automaton *reachability*
+            # (G3 — L5 novelty pre-filter deleted; diversity demoted to a
+            # tiebreak) + length-floor defensive guard when available.
+            # NOTE: when G2 construction (Step 5h) is enabled, this ranks the
+            # grammar candidates that Step 5h then replaces — kept as the
+            # fallback path for when construction yields nothing.
             pre_rank_count = len(api_sequences)
-            import os as _os
-            _disable_cov = _os.environ.get(
-                'LOGICFUZZ_DISABLE_COVERAGE_FILTER', '0'
-            ).lower() in ('1', 'true', 'yes')
             # filter_top_k is a budget cap (default 10); greedy max-coverage
             # may stop earlier when no candidate adds new APIs (viability
             # self-termination at coverage_ranker.py:394).
@@ -810,7 +818,6 @@ class FuzzingContext:
                 existing_coverage=existing_coverage if existing_coverage else None,
                 automaton_artifact=automaton_artifact,
                 length_floor_safe_apis=length_floor_safe or None,
-                disable_coverage_filter=_disable_cov,
             )
             coverage_ranking_result = ranking_summary
 
@@ -845,6 +852,233 @@ class FuzzingContext:
 
         grammar_info['filter'] = coverage_ranking_result
         grammar_info['num_sequences'] = len(api_sequences)
+
+        # === Step 5g: Build APISemanticModel (redesign G1) ===
+        # Fuse IR (mechanism) ⊕ doc/naming (intent) ⊕ usage (composition) into
+        # one reconciled per-API model BEFORE construction. Deterministic-only
+        # (no LLM — token-budget invariant). This model is the new role
+        # authority, demoting ConditionManager (whose IR-only labels mislabel
+        # e.g. lcms ``cmsFree*`` free-array out-pointers as CREATORs).
+        api_semantic_model = None
+        api_semantic_model_dict: Dict[str, Any] = {}
+        _lc_pairs: List[Tuple[str, str]] = []   # bound for Step 5h even if 5g fails
+        try:
+            from liberator_adapter.analysis import reconcile as _reconcile_model
+
+            # (init, destroy) pairs → IR KILL-edge wiring for the mechanism side.
+            for _pair in (lifecycle_analysis_result.get('pairs') or []):
+                if isinstance(_pair, dict):
+                    _i = _pair.get('init') or _pair.get('init_api')
+                    _d = _pair.get('destroy') or _pair.get('destroy_api')
+                    if _i and _d:
+                        _lc_pairs.append((_i, _d))
+
+            # Structured doc signals (best-effort; the naming verb carries role
+            # without them, which is the lcms case — no doxygen present).
+            _doc_signals: Dict[str, Any] = {}
+            try:
+                _lmeta = (generator.extract_metadata.get('local', {})
+                          if getattr(generator, 'extract_metadata', None) else {})
+                _ph_file = _lmeta.get('public_headers')
+                _ph_names: List[str] = []
+                if _ph_file and os.path.exists(_ph_file):
+                    with open(_ph_file, 'r') as _fh:
+                        _ph_names = [ln.strip() for ln in _fh if ln.strip()]
+                _hdr_dir = _lmeta.get('headers_dir') or _lmeta.get('source_dir')
+                _all_api_names = [
+                    a.get('function_name', '') for a in project_apis
+                    if a.get('function_name')
+                ]
+                if _hdr_dir and _ph_names and _all_api_names:
+                    from src.knowledge.project_docs import extract_doc_signals
+                    _doc_signals = extract_doc_signals(
+                        Path(_hdr_dir), _ph_names, _all_api_names)
+            except Exception as _de:
+                log.debug('  5g/12 structured doc-signal extraction skipped: %s', _de)
+
+            _accept_paths = (
+                automaton_artifact.sample_accepting_paths(n=16)
+                if automaton_artifact is not None else None
+            )
+
+            api_semantic_model = _reconcile_model(
+                project_apis,
+                project=project_name,
+                condition_info=condition_info,
+                lifecycle_pairs=_lc_pairs or None,
+                doc_signals=_doc_signals or None,
+                accepting_paths=_accept_paths,
+            )
+            _asm_path = Path(f"./results/{project_name}/state/api_semantic_model.json")
+            api_semantic_model.save(_asm_path)
+
+            # Telemetry: how many IR roles doc/naming overrode — this count is
+            # the band-aid (Phase A / F1) that the redesign deletes; it should
+            # trend down as the model gets the role right up front.
+            _ir_overrides = sum(
+                1 for _s in api_semantic_model.apis.values()
+                for _e in _s.evidence
+                if _e.field == 'role' and not _e.won and _e.source == 'IR'
+            )
+            log.info(
+                '  5g/12 ✅ APISemanticModel: %d APIs (%d creators, %d destroyers); '
+                '%d IR-role overrides by doc/naming; doc_signals=%d',
+                len(api_semantic_model.apis),
+                len(api_semantic_model.creators()),
+                len(api_semantic_model.destroyers()),
+                _ir_overrides, len(_doc_signals),
+            )
+            api_semantic_model_dict = {
+                'summary': {
+                    'n_apis': len(api_semantic_model.apis),
+                    'n_creators': len(api_semantic_model.creators()),
+                    'n_destroyers': len(api_semantic_model.destroyers()),
+                    'n_ir_overrides': _ir_overrides,
+                    'n_doc_signals': len(_doc_signals),
+                    'path': str(_asm_path),
+                },
+                'roles': {
+                    n: s.role.value for n, s in api_semantic_model.apis.items()
+                },
+            }
+        except Exception as _ae:
+            log.warning('APISemanticModel build failed (non-critical): %s', _ae)
+            api_semantic_model = None
+
+        # === Step 5h: Construct sequences from the model (redesign G2) ===
+        # Build dependency-resolved creator→mutator*→consumer→destroyer chains
+        # from APISemanticModel — lifecycle-complete by construction. These are
+        # PREPENDED to (not replacing) the L4-ranked grammar candidates, which
+        # stay as a synthesizability floor: a constructed chain is
+        # lifecycle-valid but may still fail CBFactory's finer type/provenance/
+        # variable-binding checks (esp. APIs with unbindable non-handle args on
+        # complex libs like lcms), whereas the grammar candidates are
+        # L0-type-compatible and known-bindable. Merging avoids the regression
+        # pure-replace caused (lcms 1→0 skeletons).
+        #
+        # We deliberately do NOT seed raw ``automaton.sample_accepting_paths``
+        # as candidates: those are mid-stream trace *fragments* (a consumer with
+        # no creator before it), so they fail CBFactory's lifecycle check — yet
+        # they score acceptance≈1.0 and would crowd out the real constructed
+        # chains under reachability ranking. The automaton's value is the
+        # ranking SIGNAL (acceptance_score), not raw candidates.
+        #
+        # Disable for A/B via LOGICFUZZ_DISABLE_G2_CONSTRUCT=1.
+        _disable_g2 = os.environ.get(
+            'LOGICFUZZ_DISABLE_G2_CONSTRUCT', '0'
+        ).lower() in ('1', 'true', 'yes')
+        if api_semantic_model is not None and not _disable_g2:
+            try:
+                from liberator_adapter.analysis import (
+                    construct_sequences, compute_gap_apis)
+                # G5: coverage-gap signal — APIs the OSS-Fuzz baseline does NOT
+                # cover. Direct construction + ranking TOWARD them so we add
+                # NEW lines instead of re-covering the baseline (the §10B
+                # line_diff=0 problem). On lcms the baseline touches 5/297 APIs,
+                # so the gap is ~98% of the surface.
+                _all_api_names = [a.get('function_name', '') for a in project_apis
+                                  if a.get('function_name')]
+                _gap_apis = compute_gap_apis(
+                    _all_api_names, project=project_name,
+                    existing_coverage=existing_coverage or None)
+                # Self-filter through the Typestate oracle (project_apis +
+                # lifecycle pairs) so constructed chains are ordering-clean by
+                # the same walker CBFactory's lifecycle gate uses. No raw seeds.
+                _cres = construct_sequences(
+                    api_semantic_model,
+                    project_apis=project_apis,
+                    lifecycle_pairs=_lc_pairs or None,
+                    gap_apis=_gap_apis or None)
+                _constructed = _cres.sequences
+                if _constructed:
+                    # The Z3 trial pool must carry BOTH novelty and feasibility,
+                    # or it regresses: gap APIs (novel) are often exactly the
+                    # ones CBFactory can't bind (lcms void*/struct args), so
+                    # ranking gap-first ALONE starves the synthesizable
+                    # candidates out of the budget → 0 skeletons emitted
+                    # (observed: lcms 5→0). We therefore build the pool from
+                    # THREE strands, deduped, so Z3 always gets feasible options:
+                    #   (a) gap-first  — novelty toward baseline-uncovered code
+                    #   (b) acceptance-first — automaton-validated ⇒ likely Z3-feasible
+                    #   (c) grammar floor — L0-type-valid safety net
+                    # Step 10 then emits one skeleton per Z3-viable sequence and
+                    # keeps the top-K (gap-leading) — so feasible+novel wins,
+                    # feasible-only fills the rest, and we never drop to 0.
+                    _acc = (automaton_artifact.acceptance_score
+                            if automaton_artifact is not None else (lambda s: 0.0))
+                    def _acc_of(seq, _a=_acc):
+                        try:
+                            return float(_a(seq))
+                        except Exception:
+                            return 0.0
+                    def _gap_hits(seq, _g=_gap_apis):
+                        return sum(1 for a in seq if a in _g) if _g else 0
+                    # Buffer-consuming entry points (parsers) are the coverage
+                    # goldmines: a single ``cmsOpenProfileFromMem(data,size)``
+                    # drives the fuzzer bytes through thousands of lines of ICC
+                    # parsing, whereas a 3-gap-API MLU chain covers a handful.
+                    # Gap-COUNT ranking alone buried the parsers (1 gap hit) under
+                    # multi-gap shallow chains, so we add a top-priority strand:
+                    # any sequence that contains an INPUT_BUFFER entry API.
+                    _buffer_entry_apis = {
+                        n for n, s in api_semantic_model.apis.items()
+                        if any(a.role.value == 'INPUT_BUFFER' for a in s.args)
+                    }
+                    def _has_buffer_entry(seq, _b=_buffer_entry_apis):
+                        return any(a in _b for a in seq)
+                    _buffer_ranked = sorted(
+                        [s for s in _constructed if _has_buffer_entry(s)],
+                        key=lambda s: (_gap_hits(s), _acc_of(s), -len(s)),
+                        reverse=True)
+                    _gap_ranked = sorted(
+                        _constructed, key=lambda s: (_gap_hits(s), _acc_of(s)),
+                        reverse=True)
+                    _acc_ranked = sorted(_constructed, key=_acc_of, reverse=True)
+                    _grammar_candidates = list(api_sequences)
+                    _budget = max(filter_top_k * 4, 40) if filter_top_k else (
+                        len(_constructed) + len(_grammar_candidates))
+                    _k = filter_top_k or 12
+                    # Strand order = priority: parser entries first (deepest
+                    # coverage per call), then gap-novelty, then automaton-
+                    # feasible, then the grammar floor. Step 10's top-K cap thus
+                    # keeps parser entries; the rest provide breadth + a floor.
+                    _seen2: set = set()
+                    _merged: List[List[str]] = []
+                    for _seq in (_buffer_ranked + _gap_ranked[:_k]
+                                 + _acc_ranked[:_k] + _grammar_candidates
+                                 + _gap_ranked):
+                        _key = tuple(_seq)
+                        if _key and _key not in _seen2:
+                            _seen2.add(_key)
+                            _merged.append(_seq)
+                        if len(_merged) >= _budget:
+                            break
+                    api_sequences = _merged
+                    grammar_info.setdefault('g2_construction', {})
+                    grammar_info['g2_construction']['buffer_entry_seqs'] = len(_buffer_ranked)
+                    grammar_info['num_sequences'] = len(api_sequences)
+                    grammar_info['g2_construction'] = {
+                        **_cres.metrics,
+                        'selected': len(api_sequences),
+                        'grammar_floor': len(_grammar_candidates),
+                        'z3_budget': _budget,
+                    }
+                    log.info(
+                        '  5h/12 ✅ G2 construct-from-model: %d constructed '
+                        '(%d unsatisfiable) merged with %d grammar floor → '
+                        '%d candidates to Z3 (gap+reachability-ranked, budget=%d); '
+                        'G5 gap: reached %d/%d baseline-uncovered APIs',
+                        _cres.metrics['n_sequences'],
+                        _cres.metrics['n_unsatisfiable_targets'],
+                        len(_grammar_candidates), len(api_sequences), _budget,
+                        _cres.metrics.get('gap_apis_reached', 0),
+                        _cres.metrics.get('gap_apis_total', 0),
+                    )
+                else:
+                    log.info('  5h/12 G2 construct produced 0 sequences; '
+                             'keeping grammar candidates')
+            except Exception as _ge:
+                log.warning('G2 construction failed (non-critical): %s', _ge)
 
         # === Step 6b: Knowledge comprehension (comprehender-A + B) ===
         # Runs only on the unique APIs / sequences that survived L0-L4 filtering.
@@ -982,6 +1216,12 @@ class FuzzingContext:
                 condition_info=condition_info,
                 lifecycle_analysis=lifecycle_analysis_result,
                 api_docstrings=api_docstrings if use_doxygen_priors else None,
+                # G1: APISemanticModel role is the authority (demotes
+                # ConditionManager's IR-only role inside the comprehender).
+                api_roles=(
+                    api_semantic_model_dict.get('roles')
+                    if api_semantic_model_dict else None
+                ),
             )
             comprehension = LibraryComprehension(purpose=purpose, functions=api_usages)
             comprehension_dict = comprehension.to_dict()
@@ -1226,9 +1466,9 @@ class FuzzingContext:
             # CONTEXT_NULL_PASS-implicated APIs missing from L4 get a
             # synthesised entry that downstream LLM can flesh out.
             #
-            # ``planner_idioms_payload`` is defined here (not inside the
-            # try) so the F1 wiring (idioms → RepairEngine, below) can
-            # still see it even if Planner setup fails.
+            # ``planner_idioms_payload`` is defined here (not inside the try)
+            # so it's always bound for the Planner call below even if the
+            # distillation setup fails.
             planner_idioms_payload: Optional[Dict[str, Any]] = None
             try:
                 # F3 (2026-05-23): Step 10 owns the canonical idiom
@@ -1284,29 +1524,6 @@ class FuzzingContext:
                     f"Path-aware planner failed (non-critical, falling back "
                     f"to L4 order): {exc}")
 
-            # Phase A F4 (2026-05-23): build a lookup so the RepairEngine
-            # can consult Comprehender-B's per-sequence ``patched_sequence``
-            # when graft fails. Comprehender ran at Step 6b
-            # (``sequence_semantics_dicts``). Each entry shape:
-            # ``{"sequence": [...], "repair": {"patched_sequence": [...]}}``.
-            # We index by tuple(sequence) for O(1) lookup keyed on the
-            # exact API-name list the engine receives.
-            patched_lookup: Dict[Tuple[str, ...], List[str]] = {}
-            for entry in (sequence_semantics_dicts or []):
-                seq_names = entry.get('sequence') or []
-                repair_info = entry.get('repair') or {}
-                patched = repair_info.get('patched_sequence')
-                if patched:
-                    patched_lookup[tuple(seq_names)] = list(patched)
-
-            def _comprehender_patch_fn(
-                names: List[str],
-            ) -> Optional[List[str]]:
-                return patched_lookup.get(tuple(names))
-
-            comprehender_patch_fn = (_comprehender_patch_fn
-                                     if patched_lookup else None)
-
             skeleton_drivers = _synthesize_skeletons_per_sequence(
                 generator=generator,
                 target_sequences=filtered_api_sequences,
@@ -1314,12 +1531,40 @@ class FuzzingContext:
                 benchmark=benchmark,
                 log=log,
                 automaton_artifact=automaton_artifact,
-                idioms_payload=planner_idioms_payload,
-                comprehender_patch_fn=comprehender_patch_fn,
             )
             if skeleton_drivers:
                 log.info(
                     f'   ✅ {len(skeleton_drivers)}/{len(filtered_api_sequences)} sequences passed Z3 → skeletons emitted')
+                # Prioritize PARSER-ENTRY skeletons before the budget cap.
+                # A driver that feeds the fuzz buffer to a parser entry
+                # (cmsOpenProfileFromMem / cmsIT8LoadFromMem) drives thousands
+                # of lines of parsing; a shallow MLU/Stage chain covers a
+                # handful. Upstream ordering (Step 5h) is reshuffled by the
+                # Phase D planner before synthesis, so we re-assert the priority
+                # HERE, right before the cap, where it's authoritative: any
+                # skeleton whose sequence contains an INPUT_BUFFER entry sorts
+                # first and is guaranteed to survive top-K.
+                if api_semantic_model is not None:
+                    _buf_apis = {
+                        n for n, s in api_semantic_model.apis.items()
+                        if any(a.role.value == 'INPUT_BUFFER' for a in s.args)
+                    }
+                    if _buf_apis:
+                        skeleton_drivers.sort(
+                            key=lambda d: 0 if any(
+                                a in _buf_apis
+                                for a in (d.get('api_sequence') or [])) else 1)
+                        _n_parser = sum(
+                            1 for d in skeleton_drivers
+                            if any(a in _buf_apis
+                                   for a in (d.get('api_sequence') or [])))
+                        log.info('   🎯 %d parser-entry skeletons prioritized', _n_parser)
+                # Bound the trial count (= len(skeleton_drivers)) so LLM-trial
+                # cost stays bounded; parser entries (sorted first) survive.
+                if filter_top_k and len(skeleton_drivers) > filter_top_k:
+                    log.info('   ✂️  capping %d emitted skeletons to top-%d',
+                             len(skeleton_drivers), filter_top_k)
+                    skeleton_drivers = skeleton_drivers[:filter_top_k]
         except Exception as e:
             log.warning(f"Skeleton generation failed (non-critical): {e}")
             skeleton_drivers = []
@@ -1338,6 +1583,20 @@ class FuzzingContext:
             log.info(
                 f'   🔗 api_sequences aligned with skeleton_drivers '
                 f'(K={len(api_sequences)})')
+
+        # === Step 10b: Semantic value-intent on holes (redesign G4) ===
+        # Attach per-arg value intent (in-range/out-of-range for scalars,
+        # structured-input for parser buffers, length-pairing, output, live
+        # handle) derived from APISemanticModel, so the Prototyper fills holes
+        # with intent — not just a type. Deterministic; no LLM.
+        if skeleton_drivers and api_semantic_model is not None:
+            try:
+                from liberator_adapter.analysis import annotate_skeletons
+                _n_annot = annotate_skeletons(skeleton_drivers, api_semantic_model)
+                log.info('  10b/12 ✅ G4 value-intent: %d/%d skeletons annotated',
+                         _n_annot, len(skeleton_drivers))
+            except Exception as _he:
+                log.warning('G4 hole annotation failed (non-critical): %s', _he)
 
         # === Step 11 (Phase G): Closed-loop automaton feedback ===
         # When ``closed_loop_iters > 0`` and the project has a learned
@@ -1470,6 +1729,7 @@ class FuzzingContext:
                    coverage_ranking=coverage_ranking_result,
                    comprehension=comprehension_dict,
                    sequence_semantics=sequence_semantics_dicts,
+                   api_semantic_model=api_semantic_model_dict,
                    automaton=(
                        {
                            'summary': automaton_artifact.to_summary(),
@@ -1500,6 +1760,7 @@ class FuzzingContext:
             'coverage_ranking': self.coverage_ranking,
             'comprehension': self.comprehension,
             'sequence_semantics': self.sequence_semantics,
+            'api_semantic_model': self.api_semantic_model,
             'automaton': self.automaton,
             'preparation_time': self.preparation_time,
         }
@@ -2332,16 +2593,19 @@ def _synthesize_skeletons_per_sequence(
     log: logging.Logger,
     automaton_artifact: Optional[Any] = None,
     automaton_threshold: float = 0.6,
-    idioms_payload: Optional[Dict[str, Any]] = None,
-    comprehender_patch_fn: Optional[
-        Callable[[List[str]], Optional[List[str]]]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    For each L4-viable sequence, produce ONE Z3-validated skeleton with
-    holes via ``CBFactory.create_skeleton_for_sequence``. This is the
+    For each viable sequence, produce ONE Z3-validated skeleton with holes
+    via ``CBFactory.create_skeleton_for_sequence``. This is the
     program-synthesis-precondition path that feeds the LLM prototyper
     refinement step (PromeFuzz-style scaffolding, not from-scratch
     generation).
+
+    G2 note: sequences now arrive *constructed from the APISemanticModel*
+    (Step 5h) — lifecycle-complete by construction — so the old Phase A
+    repair engine (graft / patched-sequence retry on CBFactory rejection)
+    was removed: a rejection here is now a genuine type/var infeasibility,
+    not a fixable lifecycle mislabel. Z3 rejections are dropped, no cap.
 
     Returns a list of dicts shaped to be consumed by the prototyper:
         {'name', 'api_sequence', 'code', 'holes', 'synthesis_info'}
@@ -2387,35 +2651,6 @@ def _synthesize_skeletons_per_sequence(
         automaton_threshold=automaton_threshold,
     )
 
-    # Phase A — Candidate Repair Engine. When CBFactory rejects a
-    # candidate (lifecycle UNSAT or RunningContext binding fail), try to
-    # repair it instead of dropping immediately. Currently only
-    # graft_creator_prefix is wired (the most common L4 failure mode);
-    # the engine is designed to accept more strategies (topological
-    # reorder, nullable-handle fill, sketch fill) without restructuring
-    # callers. See ``liberator_adapter/analysis/candidate_repair.py``.
-    from liberator_adapter.analysis.candidate_repair import RepairEngine, RepairLog
-    graft_fn = (automaton_artifact.graft_creator_prefix
-                if automaton_artifact is not None
-                else None)
-    # Phase A F1 (2026-05-23): pass Phase B idioms to the engine so the
-    # graft strategy prefers idiom-blessed root producers over
-    # IR-mod/ref false-positive CREATE labels. See
-    # ``extract_idiom_blessed_apis`` in candidate_repair.py.
-    # Phase A F4 (2026-05-23): wire Comprehender-B's ``patched_sequence``
-    # as a second repair strategy. Comprehender already emits per-sequence
-    # repair suggestions but historically marked them advisory and skipped
-    # them. Running them through the same revalidate gate as graft means
-    # they only land when CBFactory + Z3 actually accept the patched form.
-    repair_engine = RepairEngine(graft_fn=graft_fn,
-                                 idioms_payload=idioms_payload,
-                                 comprehender_patch_fn=comprehender_patch_fn)
-    repair_log = RepairLog()
-    # Name → Api object lookup so we can rebuild an Api list from a
-    # name list returned by graft. Keys may overlap across project
-    # versions but within a single FuzzingContext they're stable.
-    api_by_name = {a.function_name: a for a in generator.all_apis}
-
     # ``target_path`` is no longer needed for renderer dispatch — the
     # generated skeleton always emits ``#ifdef __cplusplus`` extern "C"
     # guards (OSS-Fuzz drives clang++ on .c files too). Kept here only
@@ -2425,6 +2660,7 @@ def _synthesize_skeletons_per_sequence(
 
     skeletons: List[Dict[str, Any]] = []
     z3_rejected = 0
+    unchecked_emitted = 0   # skeletons rendered via the no-Z3-gate model path
     automaton_low_score = 0
     # **Positive-only automaton signal** (2026-05-12 redesign): the
     # acceptance_score is computed for telemetry but is NOT used to
@@ -2465,56 +2701,21 @@ def _synthesize_skeletons_per_sequence(
                     pass
 
             skeleton = factory.create_skeleton_for_sequence(target_seq)
-            used_sequence = target_seq
-            repair_trace = None
             if skeleton is None:
-                # Phase A — try to repair before giving up. The repair
-                # engine drives strategies (currently only graft); each
-                # produces a candidate sequence that is re-validated by
-                # the same factory call.
-                seq_names = [a.function_name for a in target_seq]
-                # Stash for the revalidation callback so the success branch
-                # doesn't have to recompute. List-of-one keeps closure cell
-                # mutable without function-attribute gymnastics.
-                stash: List[Any] = [None, None]  # [skeleton, apis]
-
-                def _revalidate(names: List[str]) -> bool:
-                    apis = [api_by_name[n] for n in names if n in api_by_name]
-                    if len(apis) != len(names):
-                        return False
-                    s = factory.create_skeleton_for_sequence(apis)
-                    if s is None:
-                        return False
-                    stash[0] = s
-                    stash[1] = apis
-                    return True
-
-                repair_trace = repair_engine.attempt(
-                    seq_names, _revalidate, candidate_index=i)
-                if repair_trace.final_success:
-                    skeleton = stash[0]
-                    used_sequence = stash[1]
-                    log.info(
-                        f"   🔧 Repaired sequence {i}: original {seq_names} "
-                        f"→ {repair_trace.final_sequence} "
-                        f"(strategy={repair_trace.attempts[-1].strategy.value})")
-                repair_log.record(repair_trace)
+                # The Z3/RunningContext gate couldn't *prove* every arg's
+                # provenance — but that's not infeasibility, it's a scalar/
+                # void* the solver can't bind (e.g. lcms cmsCreateTransform's
+                # format enums, cmsBuildGamma's gamma double). The semantic
+                # model already knows these are CONFIG/handle args, so render
+                # the skeleton anyway: wire handle args to prior producers,
+                # leave scalars/buffers as holes for the LLM (G4 intents). This
+                # recovers the baseline-uncovered (gap) APIs that the gate was
+                # silently dropping. Z3 is thus a confirmation, not a gate.
+                skeleton = factory.create_skeleton_unchecked(target_seq)
                 if skeleton is None:
-                    # Truly unrepairable. The CBFactory method already logged
-                    # a precise reason for the original rejection.
                     z3_rejected += 1
                     continue
-            else:
-                # Accepted unmodified — still record so the counters
-                # reflect the full denominator.
-                from liberator_adapter.analysis.candidate_repair import (
-                    CandidateRepairTrace)
-                repair_log.record(CandidateRepairTrace(
-                    candidate_index=i,
-                    original_sequence=[a.function_name for a in target_seq],
-                    final_success=True,
-                    final_sequence=[a.function_name for a in target_seq],
-                ))
+                unchecked_emitted += 1
 
             try:
                 rendered_code = render_skeleton(skeleton, mark_holes=True)
@@ -2547,8 +2748,6 @@ def _synthesize_skeletons_per_sequence(
                     'driver_size': driver_size,
                     'num_apis_used': len(api_seq),
                     'num_holes': len(holes_info),
-                    'repair': repair_trace.to_dict()
-                        if repair_trace and repair_trace.attempts else None,
                 },
             })
         except Exception as e:
@@ -2558,37 +2757,12 @@ def _synthesize_skeletons_per_sequence(
                 f"({[api.function_name for api in target_seq]}): {e}")
 
     total = len(target_sequences)
-    if automaton_low_score or z3_rejected:
-        log.info(
-            f"   📊 Skeleton synthesis on {total} sequences: "
-            f"automaton_low_score={automaton_low_score} (informational; "
-            f"score < {automaton_threshold}, not pruned), "
-            f"z3_rejected={z3_rejected} (real infeasibility: "
-            f"type/lifecycle/provenance), "
-            f"emitted={len(skeletons)}")
-
-    # Persist the repair log for Phase B/C/D consumption and operator
-    # inspection. Keep best-effort — telemetry failure must not break
-    # synthesis. Location follows the shared-state convention:
-    # ``results/<project>/state/repair_log.json``.
-    try:
-        from pathlib import Path
-        project_name = getattr(benchmark, 'project', None) \
-            or getattr(benchmark, 'project_name', None) or 'unknown'
-        repair_log_path = Path('results') / project_name / 'state' / 'repair_log.json'
-        repair_log.persist(repair_log_path)
-        summary = repair_log.to_dict()['summary']
-        if (summary['candidates_repaired_success']
-                + summary['candidates_unrepairable']) > 0:
-            log.info(
-                f"   🔧 Repair: {summary['candidates_repaired_success']}/"
-                f"{summary['candidates_total']} repaired, "
-                f"{summary['candidates_unrepairable']} unrepairable; "
-                f"strategies attempted={summary['by_strategy_attempt']}, "
-                f"succeeded={summary['by_strategy_success']}; "
-                f"log at {repair_log_path}")
-    except Exception as exc:
-        log.warning(f"RepairLog persist failed (non-critical): {exc}")
+    log.info(
+        f"   📊 Skeleton synthesis on {total} sequences: "
+        f"automaton_low_score={automaton_low_score} (informational), "
+        f"z3_rejected={z3_rejected} (truly unrenderable), "
+        f"emitted={len(skeletons)} (of which {unchecked_emitted} via the "
+        f"no-Z3-gate model path = recovered gap candidates)")
 
     return skeletons
 
