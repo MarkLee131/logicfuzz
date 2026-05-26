@@ -309,22 +309,36 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
             f.write(content + "\n" + compile_cmd)
 
     def _create_seed_corpus(self):
-        """Create minimal seed corpus if none exists."""
-        seeds = [
-            b"",
-            b"{}",
-            b"[]",
-            b'{"a":1}',
-            b"null",
-            b'"test"',
-            b"123",
-            b"true",
-        ]
+        """Seed the corpus — real project inputs first, synthetic as fallback.
+
+        Parser entry points (ICC/IT8/image/…) reject random bytes at the
+        header check, so continuous fuzzing needs valid seeds (the project's
+        own ``*.icc``/``*.it8``/``*_seed_corpus.zip`` samples) to reach deep
+        code. See ``scripts/seed_discovery.py``.
+        """
+        import shutil as _shutil
+        n_real = 0
+        try:
+            from scripts.seed_discovery import discover_project_seeds
+            for i, src in enumerate(discover_project_seeds(self.project)):
+                dst = self.corpus_dir / f"projseed_{i:04d}_{src.name}"
+                if not dst.exists():
+                    try:
+                        _shutil.copy(src, dst)
+                        n_real += 1
+                    except OSError:
+                        continue
+        except Exception as exc:
+            logger.debug("project seed discovery skipped: %s", exc)
+        if n_real:
+            logger.info("Seeded corpus with %d REAL project inputs", n_real)
+            return
+        seeds = [b"", b"{}", b"[]", b'{"a":1}', b"null", b'"test"', b"123", b"true"]
         for i, seed in enumerate(seeds):
             seed_path = self.corpus_dir / f"seed_{i:04d}"
             with open(seed_path, 'wb') as f:
                 f.write(seed)
-        logger.info("Created %d seed files in corpus", len(seeds))
+        logger.info("No real seeds found; created %d synthetic seed files", len(seeds))
 
     def build(self) -> bool:
         """Build the fuzz target with address sanitizer."""

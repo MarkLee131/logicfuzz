@@ -208,24 +208,44 @@ class ExtendedFuzzer:
                     f"Copied {n} pre-tagged seeds from {self.seed_corpus_dir}"
                 )
 
+        # Seed with the project's REAL inputs (valid ICC profiles, IT8
+        # datasets, OSS-Fuzz *_seed_corpus.zip, …). A format parser rejects
+        # random bytes at its header check, so without valid seeds our
+        # parser-entry drivers barely move coverage. Real seeds drive them
+        # straight into deep parse code.
+        try:
+            from scripts.seed_discovery import discover_project_seeds
+            real_seeds = discover_project_seeds(self.project)
+            n_real = 0
+            for i, src in enumerate(real_seeds):
+                dst = self.corpus_dir / f"projseed_{i:04d}_{src.name}"
+                if not dst.exists():
+                    try:
+                        shutil.copy(src, dst)
+                        n_real += 1
+                    except OSError:
+                        continue
+            if n_real:
+                logger.info(
+                    "Seeded corpus with %d REAL project inputs (continuous "
+                    "fuzzing will exercise deep parser paths)", n_real)
+        except Exception as exc:
+            logger.debug("project seed discovery skipped: %s", exc)
+
         corpus_files = list(self.corpus_dir.glob("*"))
         if not corpus_files:
-            # Create minimal seed inputs for common fuzzing scenarios
+            # No caller corpus AND no real project seeds → minimal synthetic
+            # fallback so LibFuzzer has a non-empty start (low value; only
+            # forgiving parsers like JSON get coverage from these).
             seeds = [
-                b"",                    # Empty input
-                b"{}",                  # Empty JSON object
-                b"[]",                  # Empty JSON array
-                b'{"a":1}',             # Simple JSON
-                b"null",                # JSON null
-                b'"test"',              # JSON string
-                b"123",                 # JSON number
-                b"true",                # JSON boolean
+                b"", b"{}", b"[]", b'{"a":1}', b"null", b'"test"', b"123", b"true",
             ]
             for i, seed in enumerate(seeds):
                 seed_file = self.corpus_dir / f"seed_{i:03d}"
                 with open(seed_file, 'wb') as f:
                     f.write(seed)
-            logger.info(f"Created {len(seeds)} seed corpus files in {self.corpus_dir}")
+            logger.info(f"No real seeds found; created {len(seeds)} synthetic "
+                        f"seed files in {self.corpus_dir}")
 
     def _read_fuzz_target(self) -> str:
         """Read fuzz target source code (single-file mode only)."""
