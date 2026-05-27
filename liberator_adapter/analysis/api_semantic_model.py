@@ -80,6 +80,15 @@ class EvidenceSource(Enum):
     NAMING = "NAMING"    # function-name verb stem (_create / _free / ...)
     IR = "IR"            # LLVM-IR mod/ref + use-def
     USAGE = "USAGE"      # automaton accepting paths (composition)
+    LLM = "LLM"          # batched LLM role classification (semantic judgement)
+
+
+# A deterministic role this confident (or higher) is trusted as-is; only
+# below it does the LLM classification override. Keeps the symbolic verdict
+# authoritative where the rules are sure (per "program-analysis where certain,
+# LLM where uncertain"); the LLM repairs the noisy residual (mis-roled
+# CONSUMER/CREATOR siblings, signatures the IR/naming can't disambiguate).
+_LLM_OVERRIDE_BELOW = 0.7
 
 
 # =============================================================================
@@ -486,11 +495,20 @@ def _reconcile_role(
     ir: Optional[_IREvidence],
     doc: Optional[_DocEvidence],
     usage_count: int,
+    llm_role: Optional[APIRole] = None,
+    llm_conf: float = 0.0,
 ) -> Tuple[APIRole, float, List[Evidence]]:
     """Apply the §2.2 rule: doc/naming win role, IR is the tiebreak.
 
     Records every candidate as ``Evidence`` (winner ``won=True``) so a wrong
     verdict is auditable straight from the artifact.
+
+    ``llm_role`` (optional) is the batched-LLM classification. It is the
+    highest authority but is applied *surgically*: it overrides only when the
+    deterministic verdict is UNKNOWN or below ``_LLM_OVERRIDE_BELOW`` — a
+    confident rule keeps its verdict (and the LLM claim is logged as a
+    non-winning witness). This is the "LLM repairs the uncertain residual"
+    boundary, not "LLM replaces the rules".
     """
     log: List[Evidence] = []
     ir_role = ir.role if ir else None
@@ -523,6 +541,23 @@ def _reconcile_role(
     else:
         winner_role, winner_conf = APIRole.UNKNOWN, 0.0
 
+    # LLM override of the uncertain residual.
+    if llm_role is not None and llm_role is not APIRole.UNKNOWN:
+        if winner_role is APIRole.UNKNOWN or winner_conf < _LLM_OVERRIDE_BELOW:
+            # Demote any prior role winner so the flip is auditable.
+            log = [Evidence(e.source, e.field, e.value, e.confidence,
+                            won=(e.won and e.field != "role"), note=e.note)
+                   for e in log]
+            winner_role = llm_role
+            winner_conf = max(winner_conf, llm_conf, 0.75)
+            log.append(Evidence(EvidenceSource.LLM.value, "role", llm_role.value,
+                                winner_conf, won=True,
+                                note="LLM authoritative (rule uncertain)"))
+        else:
+            log.append(Evidence(EvidenceSource.LLM.value, "role", llm_role.value,
+                                llm_conf, won=False,
+                                note="confident rule role retained over LLM"))
+
     if usage_count > 0 and winner_role is not APIRole.UNKNOWN:
         # Composition support nudges confidence up (capped), never flips role.
         bonus = min(0.1, 0.02 * usage_count)
@@ -538,11 +573,18 @@ def _reconcile_args(
     api: Dict[str, Any],
     ir: Optional[_IREvidence],
     doc: Optional[_DocEvidence],
+    llm_arg: Optional[Dict[int, ArgRole]] = None,
 ) -> Tuple[Tuple[ArgSemantics, ...], List[Evidence]]:
-    """Arg roles: doc @param > type-pattern (IR). Pair LENGTH ↔ buffer."""
+    """Arg roles: doc @param > LLM > type-pattern (IR). Pair LENGTH ↔ buffer.
+
+    The LLM arg-role wins over the IR type-pattern (which can't tell a fuzzer
+    INPUT_BUFFER from any ``void*``, or a LENGTH from any size_t) but yields to
+    an explicit ``@param`` description.
+    """
     args = api.get("arguments", api.get("arguments_info", [])) or []
     ir_arg = ir.arg_roles if ir else {}
     doc_arg = doc.arg_roles if doc else {}
+    llm_arg = llm_arg or {}
     log: List[Evidence] = []
 
     resolved: Dict[int, ArgRole] = {}
@@ -555,6 +597,15 @@ def _reconcile_args(
             if i in ir_arg and ir_arg[i] is not doc_arg[i]:
                 log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
                                     ir_arg[i].value, 0.6, won=False))
+        elif i in llm_arg and llm_arg[i] is not ArgRole.UNKNOWN:
+            resolved[i] = llm_arg[i]
+            log.append(Evidence(EvidenceSource.LLM.value, f"arg{i}",
+                                llm_arg[i].value, 0.8, won=True,
+                                note="LLM arg classification"))
+            if i in ir_arg and ir_arg[i] is not llm_arg[i]:
+                log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
+                                    ir_arg[i].value, 0.6, won=False,
+                                    note="IR type-pattern overruled by LLM"))
         else:
             resolved[i] = ir_arg.get(i, ArgRole.UNKNOWN)
 
@@ -577,6 +628,42 @@ def _reconcile_args(
     return tuple(out_args), log
 
 
+def _parse_llm_roles(
+    llm_roles: Optional[Dict[str, Dict[str, Any]]],
+) -> Dict[str, Tuple[Optional[APIRole], float, Dict[int, ArgRole]]]:
+    """Normalise the Comprehender role payload into typed enums.
+
+    Expected per-API shape (tolerant of missing keys):
+    ``{"role": "CREATOR", "confidence": 0.9,
+       "args": {0: "INPUT_BUFFER", 1: "LENGTH"}}`` (args may also be a list of
+    ``{"index": i, "role": "..."}``).
+    """
+    out: Dict[str, Tuple[Optional[APIRole], float, Dict[int, ArgRole]]] = {}
+    for name, entry in (llm_roles or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        role = None
+        try:
+            role = APIRole(str(entry.get("role", "")).upper())
+        except ValueError:
+            role = None
+        conf = float(entry.get("confidence", 0.8) or 0.0)
+        raw_args = entry.get("args", {})
+        arg_roles: Dict[int, ArgRole] = {}
+        items = (raw_args.items() if isinstance(raw_args, dict)
+                 else [(a.get("index"), a.get("role")) for a in raw_args
+                       if isinstance(a, dict)])
+        for idx, ar in items:
+            if idx is None:
+                continue
+            try:
+                arg_roles[int(idx)] = ArgRole(str(ar).upper())
+            except (ValueError, TypeError):
+                continue
+        out[name] = (role, conf, arg_roles)
+    return out
+
+
 def reconcile(
     project_apis: Sequence[Dict[str, Any]],
     *,
@@ -585,17 +672,25 @@ def reconcile(
     lifecycle_pairs: Optional[List[Tuple[str, str]]] = None,
     doc_signals: Optional[Dict[str, Dict[str, Any]]] = None,
     accepting_paths: Optional[Sequence[Sequence[str]]] = None,
+    llm_roles: Optional[Dict[str, Dict[str, Any]]] = None,
     llm_tiebreak: Optional[Any] = None,
 ) -> APISemanticModel:
-    """Fuse IR ⊕ doc ⊕ usage into one ``APISemanticModel`` (deterministic).
+    """Fuse IR ⊕ doc ⊕ usage ⊕ LLM into one ``APISemanticModel``.
 
-    ``llm_tiebreak`` is an optional callable reserved for the batched-LLM
-    residual on genuine IR↔doc conflicts; it defaults to ``None`` so G1 adds
-    zero LLM calls (the redesign token-budget invariant).
+    Deterministic by default. ``llm_roles`` (the batched Comprehender role
+    classification) is folded in as the highest-authority evidence source but
+    overrides only the *uncertain residual* (deterministic role UNKNOWN or
+    confidence < ``_LLM_OVERRIDE_BELOW``) — confident rule verdicts stand. When
+    ``llm_roles`` is None the result is exactly the prior deterministic model
+    (zero LLM calls).
+
+    ``llm_tiebreak`` is the older callable hook (model, apis)->model; retained
+    for back-compat, runs after the data-driven fold.
     """
     ir_ev = collect_ir_evidence(project_apis, condition_info, lifecycle_pairs)
     doc_ev = collect_doc_evidence(project_apis, doc_signals)
     usage = collect_usage_evidence(accepting_paths)
+    llm_ev = _parse_llm_roles(llm_roles)
 
     apis: Dict[str, APISemantics] = {}
     for api in project_apis:
@@ -604,10 +699,20 @@ def reconcile(
             continue
         ir = ir_ev.get(name)
         doc = doc_ev.get(name)
+        llm_role, llm_conf, llm_arg = llm_ev.get(name, (None, 0.0, {}))
+        # INPUT_BUFFER / LENGTH stay DETERMINISTIC: they are a TYPE pattern (a
+        # raw-byte pointer paired with a size), which the IR detector resolves
+        # reliably. The LLM over-applies INPUT_BUFFER to any pointer/string arg
+        # (it flagged cmsEvalToneCurveFloat, cmsIT8GetProperty as "parser
+        # entries"), so we drop its verdict for these two roles and let it
+        # speak only to the genuinely-semantic arg roles (OUTPUT / HANDLE_IN /
+        # NULLABLE_HANDLE / CONFIG) and to the API role.
+        llm_arg = {i: r for i, r in llm_arg.items()
+                   if r not in (ArgRole.INPUT_BUFFER, ArgRole.LENGTH)}
 
         role, role_conf, role_log = _reconcile_role(
-            ir, doc, usage.get(name, 0))
-        arg_sems, arg_log = _reconcile_args(api, ir, doc)
+            ir, doc, usage.get(name, 0), llm_role=llm_role, llm_conf=llm_conf)
+        arg_sems, arg_log = _reconcile_args(api, ir, doc, llm_arg=llm_arg)
 
         # Mechanism: which handle types, from IR; *direction* assigned by the
         # reconciled role. This is the key correction — a DESTROYER's IR

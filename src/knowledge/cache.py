@@ -40,6 +40,7 @@ class KnowledgeCache:
         self.api_path = self.dir / "api_usage.json"
         self.seq_path = self.dir / "sequences.json"
         self.docs_priors_path = self.dir / "docs_priors.json"
+        self.roles_path = self.dir / "api_roles.json"
 
     # ---- library purpose ----
     def load_purpose(self) -> Optional[str]:
@@ -76,6 +77,26 @@ class KnowledgeCache:
             )
         except OSError as exc:
             logger.warning("Failed to write api_usage cache: %s", exc)
+
+    # ---- API role classification (LLM role authority) ----
+    def load_api_roles(self) -> Dict[str, Dict[str, Any]]:
+        if not self.roles_path.exists():
+            return {}
+        try:
+            data = json.loads(self.roles_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to read api_roles cache: %s", exc)
+            return {}
+
+    def save_api_roles(self, roles: Dict[str, Dict[str, Any]]) -> None:
+        try:
+            self.roles_path.write_text(
+                json.dumps(roles, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("Failed to write api_roles cache: %s", exc)
 
     # ---- sequence semantics ----
     @staticmethod

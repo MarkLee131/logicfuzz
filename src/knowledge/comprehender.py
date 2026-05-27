@@ -40,6 +40,36 @@ DEFAULT_COMPREHENDER_MODEL = "gpt-4o-mini"
 # Batch size for comprehender-A (signatures per LLM call).
 API_BATCH_SIZE = 10
 
+# System prompt for the role-classification authority (classify_roles).
+_ROLE_SYSTEM_PROMPT = """You are a C/C++ API analyst for fuzz-driver generation. \
+For each function signature, classify its semantic ROLE and each ARGUMENT's role. \
+Output ONLY a JSON object, no prose.
+
+ROLE — what the function does to library resources:
+- CREATOR: produces a fresh handle/object/resource (returns it or fills an out-pointer), often FROM input bytes (a parser/loader/open).
+- MUTATOR: takes an existing handle and configures / advances / writes into it.
+- CONSUMER: reads a handle or input data and returns a value/result, creating no new owned resource.
+- DESTROYER: frees / closes / releases a handle.
+
+ARG role — per parameter, by 0-based position:
+- INPUT_BUFFER: raw input bytes the fuzzer should drive (e.g. a const void*/const char*/const uint8_t* blob to be parsed).
+- LENGTH: the size/count of an INPUT_BUFFER.
+- OUTPUT: an out-pointer the function writes its result through.
+- HANDLE_IN: a required pre-existing handle/object obtained from another call.
+- NULLABLE_HANDLE: an optional handle that may be NULL (e.g. a context/allocator/thread arg).
+- CONFIG: a scalar / enum / flag knob.
+
+Guidance: a top-level PARSER ENTRY reads INPUT_BUFFER (usually with a LENGTH) and \
+needs no prior handle except possibly a NULLABLE_HANDLE context — these are the \
+highest-value fuzz entry points. A function that takes a real HANDLE_IN and writes a \
+buffer into it is a MUTATOR, not a parser entry. Be decisive; use UNKNOWN only when \
+genuinely ambiguous.
+
+Output JSON shape (include EVERY function from the input):
+{"func_name": {"role": "CREATOR", "confidence": 0.0-1.0,
+  "args": [{"index": 0, "role": "INPUT_BUFFER"}, {"index": 1, "role": "LENGTH"}]}}
+"""
+
 
 @dataclass
 class LibraryComprehension:
@@ -418,6 +448,99 @@ class Comprehender:
             )
         self.cache.save_purpose(purpose)
         return purpose
+
+    # ------------------------------------------------------------ A.role
+    def classify_roles(self,
+                       api_names: Sequence[str],
+                       project_apis: Sequence[Dict[str, Any]],
+                       purpose: str = "",
+                       api_docstrings: Optional[Dict[str, str]] = None,
+                       usage_context: Optional[Dict[str, str]] = None,
+                       det_verdicts: Optional[Dict[str, str]] = None,
+                       handle_types: Optional[Sequence[str]] = None,
+                       ) -> Dict[str, Dict[str, Any]]:
+        """Batched-LLM role + arg-role classification (the role authority).
+
+        Returns ``{api_name: {"role": str, "confidence": float,
+        "args": [{"index": i, "role": str}, ...]}}`` for ``APISemanticModel.
+        reconcile(llm_roles=...)`` to fold in. Cached on disk and merged, so a
+        rerun re-classifies only new APIs. Degrades to ``{}`` with no LLM
+        (reconcile then stays purely deterministic).
+
+        This is the "LLM as semantic judgement" layer: role (CREATOR vs CONSUMER
+        vs MUTATOR vs DESTROYER) is exactly the call the deterministic IR+naming
+        model gets noisily wrong on sibling APIs. The symbolic layer still owns
+        lifecycle ordering, dependency wiring, INPUT_BUFFER detection, and
+        synthesis.
+
+        The LLM ADJUDICATES with evidence rather than cold-guessing the
+        signature. Optional context (all sourced from analysis we already run):
+        ``api_docstrings`` (doxygen @brief/@param/@return), ``usage_context``
+        (the API's real call neighbours from the automaton traces),
+        ``det_verdicts`` (the deterministic rule verdict + conflicting claims),
+        and ``handle_types`` (the project's opaque-handle type catalogue, so a
+        handle arg isn't mistaken for a data buffer). Cache is name-keyed, so
+        clear ``api_roles.json`` when the context inputs change materially.
+        """
+        api_docstrings = api_docstrings or {}
+        usage_context = usage_context or {}
+        det_verdicts = det_verdicts or {}
+        catalogue = ", ".join(sorted(handle_types or [])[:48]) or "(none detected)"
+        cached = self.cache.load_api_roles()
+        roles: Dict[str, Dict[str, Any]] = {}
+        api_lookup = {a.get("function_name", ""): a for a in project_apis}
+        need_llm: List[Dict[str, Any]] = []
+        for name in api_names:
+            if not name or name in roles:
+                continue
+            if name in cached and isinstance(cached[name], dict):
+                roles[name] = cached[name]
+                continue
+            api = api_lookup.get(name)
+            if api is not None:
+                need_llm.append(api)
+
+        for batch_start in range(0, len(need_llm), API_BATCH_SIZE):
+            batch = need_llm[batch_start:batch_start + API_BATCH_SIZE]
+            blocks: List[str] = []
+            for a in batch:
+                nm = a.get("function_name", "")
+                lines = [f"### {nm}", f"signature: {_format_signature(a)}"]
+                if api_docstrings.get(nm):
+                    lines.append(f"doc: {api_docstrings[nm]}")
+                if usage_context.get(nm):
+                    lines.append(f"real usage: {usage_context[nm]}")
+                if det_verdicts.get(nm):
+                    lines.append(f"rule verdict: {det_verdicts[nm]}")
+                blocks.append("\n".join(lines))
+            user = (
+                f"Library: {self.project_name} — {purpose or '(purpose unknown)'}\n\n"
+                f"Opaque handle types in this library (a parameter of one of these "
+                f"types is HANDLE_IN / NULLABLE_HANDLE, NOT a data INPUT_BUFFER): "
+                f"{catalogue}\n\n"
+                f"Classify each function below. Weigh the doc, the real usage, and "
+                f"the rule verdict; adjudicate conflicts and keep the rule's role "
+                f"when it already looks right.\n\n"
+                + "\n\n".join(blocks))
+            raw = self._invoke(_ROLE_SYSTEM_PROMPT, user)
+            parsed = _extract_json_block(raw)
+            if not isinstance(parsed, dict):
+                logger.warning(
+                    "Comprehender-role: unparsable response for batch at %d "
+                    "(%d APIs left unclassified → deterministic fallback)",
+                    batch_start, len(batch))
+                continue
+            for api in batch:
+                name = api.get("function_name", "")
+                entry = parsed.get(name)
+                if name and isinstance(entry, dict) and entry.get("role"):
+                    roles[name] = entry
+
+        if roles:
+            merged = dict(cached)
+            merged.update(roles)
+            self.cache.save_api_roles(merged)
+        return roles
 
     # ---------------------------------------------------------------- A.usage
     def comprehend_apis(self,
