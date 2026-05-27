@@ -21,6 +21,62 @@ from experiment.evaluator import Evaluator
 from experiment.workdir import WorkDirs
 
 
+def _preserve_preflight_binary(work_dirs: WorkDirs,
+                               generated_oss_fuzz_project: str,
+                               target_name: str,
+                               trial: int) -> None:
+    """Copy a freshly-built fuzzer binary where the merge preflight resolver
+    looks, so the eval-tail preflight can smoke-test it before fusing drivers.
+
+    The per-trial OSS-Fuzz binary lives in the Docker ``/out`` mount at
+    ``<OSS_FUZZ_DIR>/build/out/<generated_project>/<target_name>``. That dir is
+    wiped (``rm -rf /out/*``) at the start of the NEXT ``build_target_local``
+    and the whole oss-fuzz checkout is removed at run end, so the binary is
+    transient. We copy it under ``<work_dirs.base>/preflight_bins/<NN>`` (NN =
+    zero-padded trial number, matching the ``<NN>.fuzz_target`` stem the merge
+    resolver derives in ``run_single_fuzz._resolve_candidate_binary``).
+
+    Host-runnability caveat: OSS-Fuzz fuzzers are compiled inside the
+    ``gcr.io/oss-fuzz/<project>`` image and the canonical way to run them is
+    ``infra/helper.py run_fuzzer`` *inside* the base-runner container (see
+    ``builder_runner.run_target_local`` / ``scripts/run_extended_fuzzing.py``).
+    A plain host ``subprocess`` (what ``tools/merge_drivers/preflight.py`` does)
+    only works when the binary happens to be ABI-compatible with this host
+    (statically-linked C fuzzers usually are; many are not). The preflight
+    layer already treats a non-host-runnable binary as ``binary_broken`` →
+    "couldn't vet, keep it" (never a drop), so preserving the binary is the
+    correct minimal step regardless: it lets preflight fire and drop genuine
+    crashers when it CAN run them, and degrades safely to the prior
+    unvetted-merge behaviour when it can't. (A full in-container smoke via
+    ``run_fuzzer`` is the follow-up if host execution proves too lossy — see
+    docs/merge_drivers.md.)
+
+    Best-effort: any failure here is swallowed so it can NEVER break the run.
+    """
+    try:
+        outdir = builder_runner_lib.get_build_artifact_dir(
+            generated_oss_fuzz_project, 'out')
+        src_bin = os.path.join(outdir, target_name)
+        if not os.path.isfile(src_bin):
+            return
+        import shutil as _shutil
+        dst_dir = os.path.join(work_dirs.base, 'preflight_bins')
+        os.makedirs(dst_dir, exist_ok=True)
+        dst_bin = os.path.join(dst_dir, f'{trial:02d}')
+        _shutil.copy2(src_bin, dst_bin)
+        try:
+            os.chmod(dst_bin, 0o755)
+        except OSError:
+            pass
+        logger.info(
+            f'merge_drivers: preserved preflight binary '
+            f'{src_bin} -> {dst_bin}', trial=trial)
+    except Exception as exc:  # noqa: BLE001 — preservation must never break the run
+        logger.debug(
+            f'merge_drivers: preflight binary preservation skipped: {exc}',
+            trial=trial)
+
+
 def validate_target_api_calls(
     fuzz_target_source: str,
     context: Dict[str, Any],
@@ -349,10 +405,17 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
             }]
         }
     
+    # Build succeeded and produced a runnable binary (run_result is non-None).
+    # Preserve it for the eval-tail merge preflight BEFORE the next trial's
+    # build wipes /out. Best-effort; never breaks the run.
+    _preserve_preflight_binary(
+        work_dirs, generated_oss_fuzz_project,
+        benchmark.target_name, trial)
+
     # Process coverage information
     coverage_percent = 0.0
     coverage_diff = 0.0
-    
+
     # 🚨 STUB DETECTION: Check if fuzzer is only testing stub code.
     # Pre-2026-05 this returned ``compile_success=False`` to force the
     # fixer loop, conflating "compilation failed" with "binary built but
@@ -700,7 +763,16 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
                f"binary_exists={build_result.get('binary_exists')}, "
                f"errors={len(build_result.get('errors', []))}",
                trial=trial)
-    
+
+    # Preserve the built binary for the eval-tail merge preflight (only when
+    # the build actually produced one). Build-only path never runs the fuzzer,
+    # so this is the only chance to capture its binary before /out is wiped.
+    # Best-effort; never breaks the run.
+    if build_result.get("binary_exists"):
+        _preserve_preflight_binary(
+            work_dirs, generated_oss_fuzz_project,
+            benchmark.target_name, trial)
+
     # Create state update based on build result
     compile_success = build_result.get("success", False)
     state_update = {
