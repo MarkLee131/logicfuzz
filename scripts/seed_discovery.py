@@ -26,7 +26,14 @@ logger = logging.getLogger(__name__)
 # real seed, taken wholesale. (NOT generic ``testdata`` dirs, which hold
 # arbitrary non-input files like test-framework headers — those go through the
 # extension filter below instead.)
-_SEED_DIR_NAMES = ("corpus", "seeds", "seed_corpus")
+# Dirs where EVERY file is a fuzz seed (corpus / extension-less binary inputs).
+# Includes project fuzz-input conventions: c-ares ships its DNS-packet and
+# name corpora in test/fuzzinput and test/fuzznames (clusterfuzz-* / hash names,
+# no extension) — missed by both the old dir list and the sample-extension
+# filter, so 119 real c-ares seeds were silently dropped.
+_SEED_DIR_NAMES = ("corpus", "seeds", "seed_corpus",
+                   "fuzzinput", "fuzznames", "fuzz_corpus", "fuzz_inputs",
+                   "fuzz_seeds", "afl_seeds")
 # Sample-bearing dirs scanned only for known input-format files (ext-filtered).
 _SAMPLE_DIR_NAMES = ("testbed", "tests", "test", "samples", "examples",
                      "fuzzers", "fuzz", "data", "testdata", "test_data")
