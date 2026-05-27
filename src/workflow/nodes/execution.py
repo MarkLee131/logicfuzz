@@ -546,7 +546,14 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     # high-novelty trial.
     baseline_regression_alert = None
     _ABS_LINE_DIFF_THRESHOLD = 0.005
-    if (baseline_available and isinstance(coverage_diff, float)
+    # LOGICFUZZ_DISABLE_BASELINE_RECOVERY=1 suppresses the §10B regression
+    # alert (and thus the BaselineDiffAnalyzer → re-prototype recovery loop).
+    # On single-purpose targets every driver matches the baseline, so the
+    # per-trial recovery re-prototypes them all and dominates wall-clock for
+    # little gain — set this for evaluation runs where we just want the
+    # generated drivers, then merge.
+    if (not os.environ.get('LOGICFUZZ_DISABLE_BASELINE_RECOVERY')
+            and baseline_available and isinstance(coverage_diff, float)
             and coverage_diff < _ABS_LINE_DIFF_THRESHOLD):
         baseline_regression_alert = {
             "reason": "line_coverage_diff_below_threshold",
