@@ -52,6 +52,12 @@ _ORDERING_FAULTS = frozenset({
 class ConstructionResult:
     sequences: List[List[str]]
     metrics: Dict[str, Any] = field(default_factory=dict)
+    # Workflow-backbone sequences (grafted from the automaton's real per-test
+    # accepting paths) that survived the ordering filter — the human-equivalent
+    # usage compositions (e.g. profile→transform→dotransform). Callers protect
+    # these in the synthesis budget instead of letting gap-COUNT ranking (which
+    # rewards long multi-API breadth) bury the focused workflows.
+    workflow_sequences: List[List[str]] = field(default_factory=list)
 
 
 # =============================================================================
@@ -178,6 +184,8 @@ def construct_sequences(
     accepting_paths: Optional[Sequence[Sequence[str]]] = None,
     idiom_chains: Optional[Sequence[Sequence[str]]] = None,
     gap_apis: Optional[Set[str]] = None,
+    graft_fn: Optional[Any] = None,
+    construct_mode: str = "merged",
     max_sequences: int = 300,
     max_prefix_depth: int = 6,
 ) -> ConstructionResult:
@@ -197,8 +205,9 @@ def construct_sequences(
 
     seqs: List[List[str]] = []
     seen: Set[Tuple[str, ...]] = set()
+    source_of: Dict[Tuple[str, ...], str] = {}
 
-    def _add(seq: Sequence[str]) -> None:
+    def _add(seq: Sequence[str], source: str = "bottomup") -> None:
         cleaned = [a for a in seq if a and a in model.apis]
         if not cleaned:
             return
@@ -206,14 +215,35 @@ def construct_sequences(
         if key in seen:
             return
         seen.add(key)
+        source_of[key] = source
         seqs.append(list(cleaned))
 
-    # 1. Seeds: real compositions (automaton paths + idiom chains) verbatim.
-    for p in (accepting_paths or []):
-        _add(p)
-    n_seeded = len(seqs)
+    mode = (construct_mode or "merged").lower()
+    do_workflow = mode in ("workflow", "merged")
+    do_bottomup = mode in ("bottomup", "merged")
+
+    # 1. WORKFLOW backbone (top-down). The automaton's accepting paths are real
+    # usage compositions from the library's own tests — they encode "how the
+    # library is actually used" (e.g. lcms profile→transform→dotransform), the
+    # domain knowledge a human driver-author has and bottom-up type-walking
+    # can't infer. We graft-complete each (prepend creators for handles the
+    # path uses but doesn't open — turning a mid-stream trace fragment into a
+    # runnable driver) and let the Typestate filter validate. graft_fn is the
+    # automaton's graft_creator_prefix; absent it, paths are used verbatim
+    # (the filter drops genuine fragments).
+    n_seeded = 0
+    if do_workflow:
+        for p in (accepting_paths or []):
+            grafted = None
+            if graft_fn is not None:
+                try:
+                    grafted = graft_fn(list(p))
+                except Exception:
+                    grafted = None
+            _add(grafted or p, source="workflow")
+        n_seeded = len(seqs)
     for c in (idiom_chains or []):
-        _add(c)
+        _add(c, source="idiom")
     n_idiom = len(seqs) - n_seeded
 
     # 2. Type-driven construction around each target. G5: when a coverage gap
@@ -222,40 +252,41 @@ def construct_sequences(
     # FIRST so they survive the max_sequences / downstream top-K cap. This is
     # what directs generation at baseline-uncovered code.
     gap_apis = gap_apis or set()
-    targets: List[APISemantics] = []
-    seen_targets: Set[str] = set()
-    target_pool = list(idx.entries) + list(idx.consumers) \
-        + [s for ms in idx.mutators.values() for s in ms]
-    if gap_apis:
-        # Add gap APIs that aren't already entries/consumers/mutators so we
-        # build a reaching sequence for them too.
-        target_pool += [model.apis[n] for n in sorted(gap_apis)
-                        if n in model.apis]
-    # Stable sort: gap-API targets first, then the rest (original order kept).
-    target_pool.sort(key=lambda s: 0 if s.name in gap_apis else 1)
-    for sem in target_pool:
-        if sem.name not in seen_targets:
-            seen_targets.add(sem.name)
-            targets.append(sem)
-
     n_attempted = 0
     n_unsatisfiable = 0   # retained for telemetry; best-effort never drops now
-    for target in targets:
-        n_attempted += 1
-        prefix, opened = _build_prefix(target, idx, max_prefix_depth)
-        # The target itself opens handles if it is also a producer.
-        opened = set(opened) | set(target.produces)
-        seq = prefix + [target.name] + _closing_destroyers(opened, idx)
-        _add(seq)
+    if do_bottomup:
+        targets: List[APISemantics] = []
+        seen_targets: Set[str] = set()
+        target_pool = list(idx.entries) + list(idx.consumers) \
+            + [s for ms in idx.mutators.values() for s in ms]
+        if gap_apis:
+            # Add gap APIs that aren't already entries/consumers/mutators so we
+            # build a reaching sequence for them too.
+            target_pool += [model.apis[n] for n in sorted(gap_apis)
+                            if n in model.apis]
+        # Stable sort: gap-API targets first, then the rest (original order kept).
+        target_pool.sort(key=lambda s: 0 if s.name in gap_apis else 1)
+        for sem in target_pool:
+            if sem.name not in seen_targets:
+                seen_targets.add(sem.name)
+                targets.append(sem)
 
-    # 3. create→destroy coverage for creators no target reached.
-    covered = {a for s in seqs for a in s}
-    for creator in idx.creators:
-        if creator.name in covered:
-            continue
-        prefix, opened = _build_prefix(creator, idx, max_prefix_depth)
-        opened = set(opened) | set(creator.produces)
-        _add(prefix + [creator.name] + _closing_destroyers(opened, idx))
+        for target in targets:
+            n_attempted += 1
+            prefix, opened = _build_prefix(target, idx, max_prefix_depth)
+            # The target itself opens handles if it is also a producer.
+            opened = set(opened) | set(target.produces)
+            seq = prefix + [target.name] + _closing_destroyers(opened, idx)
+            _add(seq)
+
+        # 3. create→destroy coverage for creators no target reached.
+        covered = {a for s in seqs for a in s}
+        for creator in idx.creators:
+            if creator.name in covered:
+                continue
+            prefix, opened = _build_prefix(creator, idx, max_prefix_depth)
+            opened = set(opened) | set(creator.produces)
+            _add(prefix + [creator.name] + _closing_destroyers(opened, idx))
 
     if len(seqs) > max_sequences:
         seqs = seqs[:max_sequences]
@@ -303,4 +334,8 @@ def construct_sequences(
         "gap_apis_total": len(gap_apis),
         "gap_apis_reached": len(gap_hit),
     }
-    return ConstructionResult(sequences=seqs, metrics=metrics)
+    workflow_sequences = [s for s in seqs
+                          if source_of.get(tuple(s)) == "workflow"]
+    metrics["n_workflow_kept"] = len(workflow_sequences)
+    return ConstructionResult(sequences=seqs, metrics=metrics,
+                              workflow_sequences=workflow_sequences)

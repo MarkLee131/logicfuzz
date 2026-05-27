@@ -301,8 +301,11 @@ class FuzzingContext:
 
         log = logger_instance or logger
 
-        # Try to load from cache first
-        if use_cache:
+        # Try to load from cache first. LOGICFUZZ_NO_CACHE=1 forces a fresh
+        # prepare() so iterative changes to Step 5h (construct) / Step 10
+        # (skeleton synthesis) actually take effect — the cache hit otherwise
+        # restores api_sequences + skeletons and returns before those steps run.
+        if use_cache and not os.environ.get('LOGICFUZZ_NO_CACHE'):
             cached = cls.load_from_cache(project_name, logger_instance=log)
             if cached:
                 log.info(
@@ -901,14 +904,112 @@ class FuzzingContext:
                 if automaton_artifact is not None else None
             )
 
-            api_semantic_model = _reconcile_model(
-                project_apis,
+            _reconcile_kwargs = dict(
                 project=project_name,
                 condition_info=condition_info,
                 lifecycle_pairs=_lc_pairs or None,
                 doc_signals=_doc_signals or None,
                 accepting_paths=_accept_paths,
             )
+            # Pass 1 — deterministic reconcile (IR ⊕ doc/naming ⊕ usage).
+            api_semantic_model = _reconcile_model(project_apis, **_reconcile_kwargs)
+
+            # Pass 2 — LLM role AUTHORITY over the uncertain residual only.
+            # The deterministic model mis-roles the hard cases (CONSUMER vs
+            # CREATOR siblings, a void* that is a fuzzer INPUT_BUFFER vs an
+            # opaque handle). We hand the LLM exactly the APIs the rules are
+            # unsure about (role UNKNOWN or confidence < the override floor),
+            # classify them in one batched (cached) call, and re-reconcile —
+            # reconcile() folds the LLM verdict in surgically (confident rule
+            # roles still stand). Bounds LLM cost to the ambiguous subset and
+            # leaves the certain structure to program analysis. Disable with
+            # LOGICFUZZ_DISABLE_LLM_ROLES=1 (then it's the old deterministic
+            # model, zero LLM).
+            if not os.environ.get('LOGICFUZZ_DISABLE_LLM_ROLES'):
+                _uncertain = [
+                    n for n, s in api_semantic_model.apis.items()
+                    if s.role.value == 'UNKNOWN' or s.role_confidence < 0.7
+                ]
+                if _uncertain:
+                    try:
+                        from src.knowledge import Comprehender
+                        _comp = Comprehender(project_name)
+                        _uset = set(_uncertain)
+
+                        # (1) library purpose (cached; reused by Step 6b).
+                        _role_purpose = _comp.comprehend_purpose(
+                            library_name=project_name)
+
+                        # (2) doxygen @brief/@param for each uncertain API.
+                        _role_docs: Dict[str, str] = {}
+                        for _n in _uncertain:
+                            _sig = _doc_signals.get(_n) or {}
+                            _brief = (_sig.get('brief') or '').strip()
+                            if _brief:
+                                _role_docs[_n] = _brief[:240]
+
+                        # (3) real call neighbours from the automaton traces —
+                        # composition evidence ("who creates it, what consumes
+                        # its result") is what makes a role genuine.
+                        _role_usage: Dict[str, List[str]] = {}
+                        try:
+                            _tp = Path(f"./results/{project_name}/automaton/traces.json")
+                            _seqs: List[List[str]] = []
+                            if _tp.exists():
+                                with open(_tp) as _tf:
+                                    _traw = json.load(_tf)
+                                _traw = _traw if isinstance(_traw, list) else _traw.get('traces', [])
+                                for _t in _traw:
+                                    _seqs.append([c.get('api_name') for c in
+                                                  (_t.get('api_calls') or [])
+                                                  if c.get('api_name')])
+                            for _p in _seqs:
+                                for _i, _a in enumerate(_p):
+                                    if _a in _uset and len(_role_usage.get(_a, [])) < 2:
+                                        _lo, _hi = max(0, _i - 2), min(len(_p), _i + 3)
+                                        _win = ' → '.join(
+                                            (f'[{_x}]' if _x == _a else _x)
+                                            for _x in _p[_lo:_hi])
+                                        _role_usage.setdefault(_a, [])
+                                        if _win not in _role_usage[_a]:
+                                            _role_usage[_a].append(_win)
+                        except Exception:
+                            _role_usage = {}
+                        _role_usage_s = {k: '; '.join(v) for k, v in _role_usage.items()}
+
+                        # (4) deterministic verdict + conflicting claims, and the
+                        # opaque-handle type catalogue (handle arg ≠ data buffer).
+                        _role_verd: Dict[str, str] = {}
+                        for _n in _uncertain:
+                            _s = api_semantic_model.apis[_n]
+                            _claims = '; '.join(
+                                f'{_e.source}={_e.value}({_e.confidence:.2f})'
+                                for _e in _s.evidence if _e.field == 'role')
+                            _role_verd[_n] = (f'role={_s.role.value}@'
+                                              f'{_s.role_confidence:.2f}'
+                                              + (f' [{_claims}]' if _claims else ''))
+                        _handle_types: set = set()
+                        for _s in api_semantic_model.apis.values():
+                            _handle_types |= set(_s.produces) | set(_s.requires) \
+                                | set(_s.destroys)
+
+                        _llm_roles = _comp.classify_roles(
+                            api_names=_uncertain, project_apis=project_apis,
+                            purpose=_role_purpose, api_docstrings=_role_docs,
+                            usage_context=_role_usage_s, det_verdicts=_role_verd,
+                            handle_types=_handle_types)
+                        if _llm_roles:
+                            api_semantic_model = _reconcile_model(
+                                project_apis, **_reconcile_kwargs,
+                                llm_roles=_llm_roles)
+                            log.info(
+                                '  5g/12 🧠 LLM role authority: classified %d '
+                                'uncertain APIs (of %d total)',
+                                len(_llm_roles), len(api_semantic_model.apis))
+                    except Exception as _lre:
+                        log.warning(
+                            '  5g/12 LLM role classification skipped (%s); '
+                            'deterministic-only', _lre)
             _asm_path = Path(f"./results/{project_name}/state/api_semantic_model.json")
             api_semantic_model.save(_asm_path)
 
@@ -981,15 +1082,60 @@ class FuzzingContext:
                 _gap_apis = compute_gap_apis(
                     _all_api_names, project=project_name,
                     existing_coverage=existing_coverage or None)
-                # Self-filter through the Typestate oracle (project_apis +
-                # lifecycle pairs) so constructed chains are ordering-clean by
-                # the same walker CBFactory's lifecycle gate uses. No raw seeds.
+                # Top-down WORKFLOW backbone: the automaton's accepting paths
+                # are real usage compositions from the library's own tests
+                # (e.g. lcms profile→transform→dotransform) — domain knowledge
+                # bottom-up type-walking can't infer. graft_fn completes
+                # mid-stream fragments. construct_mode=merged (offline-validated
+                # best: workflow depth + bottom-up breadth + gap), so the
+                # automaton AUGMENTS rather than replaces (it's only a test
+                # subset; workflow-only loses most APIs). Self-filtered by the
+                # Typestate oracle (project_apis + lifecycle pairs).
+                # Workflow backbone = RAW per-test traces, NOT
+                # sample_accepting_paths. Each raw trace is one test function's
+                # actual call sequence (clean single-purpose workflow, e.g.
+                # cmsCreateXYZProfile→cmsCreateTransform→cmsDoTransform→cleanup);
+                # sample_accepting_paths random-walks the MERGED automaton and
+                # blends many tests into noisy mixed chains. Offline-validated:
+                # raw traces surface 5 clean transform workflows on lcms; random
+                # walks surfaced none clean. Fall back to sampled paths if the
+                # traces file is absent.
+                _accept = None
+                if automaton_artifact is not None:
+                    _accept = []
+                    _tpath = Path(f"./results/{project_name}/automaton/traces.json")
+                    if _tpath.exists():
+                        try:
+                            with open(_tpath) as _tf:
+                                _tr = json.load(_tf)
+                            _tr = _tr if isinstance(_tr, list) else _tr.get('traces', [])
+                            for _t in _tr:
+                                _names = [c.get('api_name')
+                                          for c in (_t.get('api_calls') or [])
+                                          if c.get('api_name')]
+                                if len(_names) >= 2:
+                                    _accept.append(_names)
+                        except Exception:
+                            _accept = []
+                    if not _accept:
+                        _accept = automaton_artifact.sample_accepting_paths(n=40)
+                _graft = (automaton_artifact.graft_creator_prefix
+                          if automaton_artifact is not None else None)
+                _cmode = os.environ.get('LOGICFUZZ_CONSTRUCT_MODE', 'merged')
                 _cres = construct_sequences(
                     api_semantic_model,
                     project_apis=project_apis,
                     lifecycle_pairs=_lc_pairs or None,
-                    gap_apis=_gap_apis or None)
+                    gap_apis=_gap_apis or None,
+                    accepting_paths=_accept,
+                    graft_fn=_graft,
+                    construct_mode=_cmode)
                 _constructed = _cres.sequences
+                # Provenance set for the Step 10 cap: which constructed
+                # sequences are workflow-backbone (real per-test compositions).
+                # The cap gives these their own tier so the focused transform
+                # workflow isn't ranked below longer generic builder chains.
+                _workflow_seq_set = {tuple(s) for s in _cres.workflow_sequences}
                 if _constructed:
                     # The Z3 trial pool must carry BOTH novelty and feasibility,
                     # or it regresses: gap APIs (novel) are often exactly the
@@ -1019,10 +1165,20 @@ class FuzzingContext:
                     # parsing, whereas a 3-gap-API MLU chain covers a handful.
                     # Gap-COUNT ranking alone buried the parsers (1 gap hit) under
                     # multi-gap shallow chains, so we add a top-priority strand:
-                    # any sequence that contains an INPUT_BUFFER entry API.
+                    # any sequence whose entry is a top-level parser.
+                    #
+                    # A parser ENTRY is a CREATOR/CONSUMER decoder that takes the
+                    # fuzzer byte buffer (INPUT_BUFFER) — bytes in, handle/result
+                    # out (cmsOpenProfileFromMem, cmsIT8LoadFromMem). Role is now
+                    # LLM-authoritative (Step 5g), so this clean role check
+                    # correctly excludes a buffer-taking MUTATOR (cmsWriteRawTag
+                    # writes into an already-open profile) — which is ubiquitous
+                    # among gap-targeted sequences and, if mistaken for an entry,
+                    # made this FIRST unbounded strand swallow the whole budget.
                     _buffer_entry_apis = {
                         n for n, s in api_semantic_model.apis.items()
-                        if any(a.role.value == 'INPUT_BUFFER' for a in s.args)
+                        if s.role.value in ('CREATOR', 'CONSUMER')
+                        and any(a.role.value == 'INPUT_BUFFER' for a in s.args)
                     }
                     def _has_buffer_entry(seq, _b=_buffer_entry_apis):
                         return any(a in _b for a in seq)
@@ -1034,17 +1190,30 @@ class FuzzingContext:
                         _constructed, key=lambda s: (_gap_hits(s), _acc_of(s)),
                         reverse=True)
                     _acc_ranked = sorted(_constructed, key=_acc_of, reverse=True)
+                    # Protected WORKFLOW strand (top-down): the real per-test
+                    # usage compositions (profile→transform→dotransform), ranked
+                    # focused-first (4..12 APIs) so the high-value transform
+                    # workflow isn't buried by gap-COUNT ranking — which rewards
+                    # long multi-API breadth and otherwise crowds the focused
+                    # workflows out of the budget entirely (lcms: 0 DoTransform
+                    # workflows survived without this strand).
+                    _wf_ranked = sorted(
+                        _cres.workflow_sequences,
+                        key=lambda s: (0 if 4 <= len(s) <= 12 else 1,
+                                       -_gap_hits(s)))
                     _grammar_candidates = list(api_sequences)
                     _budget = max(filter_top_k * 4, 40) if filter_top_k else (
                         len(_constructed) + len(_grammar_candidates))
                     _k = filter_top_k or 12
                     # Strand order = priority: parser entries first (deepest
-                    # coverage per call), then gap-novelty, then automaton-
-                    # feasible, then the grammar floor. Step 10's top-K cap thus
-                    # keeps parser entries; the rest provide breadth + a floor.
+                    # coverage per call), then the protected workflow backbone,
+                    # then gap-novelty, automaton-feasible, and the grammar
+                    # floor. Step 10's top-K cap keeps parser entries + focused
+                    # workflows; the rest provide breadth + a floor.
                     _seen2: set = set()
                     _merged: List[List[str]] = []
-                    for _seq in (_buffer_ranked + _gap_ranked[:_k]
+                    for _seq in (_buffer_ranked + _wf_ranked[:_k]
+                                 + _gap_ranked[:_k]
                                  + _acc_ranked[:_k] + _grammar_candidates
                                  + _gap_ranked):
                         _key = tuple(_seq)
@@ -1535,35 +1704,88 @@ class FuzzingContext:
             if skeleton_drivers:
                 log.info(
                     f'   ✅ {len(skeleton_drivers)}/{len(filtered_api_sequences)} sequences passed Z3 → skeletons emitted')
-                # Prioritize PARSER-ENTRY skeletons before the budget cap.
-                # A driver that feeds the fuzz buffer to a parser entry
-                # (cmsOpenProfileFromMem / cmsIT8LoadFromMem) drives thousands
-                # of lines of parsing; a shallow MLU/Stage chain covers a
-                # handful. Upstream ordering (Step 5h) is reshuffled by the
-                # Phase D planner before synthesis, so we re-assert the priority
-                # HERE, right before the cap, where it's authoritative: any
-                # skeleton whose sequence contains an INPUT_BUFFER entry sorts
-                # first and is guaranteed to survive top-K.
+                # === Divide-and-conquer driver PORTFOLIO (round-robin) ===
+                # We union K drivers, so we deliberately fund BOTH strategies
+                # instead of ranking one above the other (which starved the
+                # other — 27 workflow seqs filled all 10 slots). Three buckets,
+                # drawn round-robin so the union always carries each:
+                #   A parser-input    : fuzzer bytes → a CREATOR/CONSUMER decoder
+                #                       (cmsOpenProfileFromMem). Deepest parse
+                #                       coverage per call.
+                #   B exploit-workflow: a real per-test trace workflow OR a
+                #                       synthesized lifecycle-complete pseudo-
+                #                       workflow (creator→…→destroyer). Mirrors
+                #                       how the library is actually used — and
+                #                       the pseudo-workflows fill this role even
+                #                       when the project has NO tests (don't
+                #                       over-rely on traces).
+                #   C explore-novel   : everything else non-trivial — reach the
+                #                       API combinations the tests never exercise
+                #                       (the unexplored region, which is exactly
+                #                       where the marginal coverage is).
+                # Empty buckets (no tests + no lifecycle pairs ⇒ B empty)
+                # redistribute their slots automatically. Role classification is
+                # now LLM-authoritative (Step 5g), so a clean role check replaces
+                # the old requires/LENGTH heuristics: a MUTATOR that writes a
+                # buffer into an open handle is no longer mistaken for a parser.
                 if api_semantic_model is not None:
-                    _buf_apis = {
+                    _entry_apis = {
                         n for n, s in api_semantic_model.apis.items()
-                        if any(a.role.value == 'INPUT_BUFFER' for a in s.args)
+                        if s.role.value in ('CREATOR', 'CONSUMER')
+                        and any(a.role.value == 'INPUT_BUFFER' for a in s.args)
                     }
-                    if _buf_apis:
-                        skeleton_drivers.sort(
-                            key=lambda d: 0 if any(
-                                a in _buf_apis
-                                for a in (d.get('api_sequence') or [])) else 1)
-                        _n_parser = sum(
-                            1 for d in skeleton_drivers
-                            if any(a in _buf_apis
-                                   for a in (d.get('api_sequence') or [])))
-                        log.info('   🎯 %d parser-entry skeletons prioritized', _n_parser)
-                # Bound the trial count (= len(skeleton_drivers)) so LLM-trial
-                # cost stays bounded; parser entries (sorted first) survive.
-                if filter_top_k and len(skeleton_drivers) > filter_top_k:
-                    log.info('   ✂️  capping %d emitted skeletons to top-%d',
-                             len(skeleton_drivers), filter_top_k)
+                    _creator_apis = set(api_semantic_model.creators())
+                    _destroyer_apis = set(api_semantic_model.destroyers())
+                    _wf_set = locals().get('_workflow_seq_set') or set()
+
+                    def _focus(seq):
+                        return abs(len(seq) - 6)   # 4-7 API focused workflows win
+
+                    def _is_pseudo_workflow(seq):
+                        # lifecycle-complete composed usage: open→…→close,
+                        # substantive — a synthesized stand-in for a real
+                        # workflow when the project ships no tests.
+                        return (4 <= len(seq) <= 12
+                                and any(a in _creator_apis for a in seq)
+                                and any(a in _destroyer_apis for a in seq))
+
+                    _bA: List[Dict[str, Any]] = []   # parser-input
+                    _bB: List[Dict[str, Any]] = []   # exploit-workflow
+                    _bC: List[Dict[str, Any]] = []   # explore-novel
+                    for d in skeleton_drivers:
+                        seq = d.get('api_sequence') or []
+                        if _entry_apis and any(a in _entry_apis for a in seq):
+                            _bA.append(d)
+                        elif tuple(seq) in _wf_set or _is_pseudo_workflow(seq):
+                            _bB.append(d)
+                        else:
+                            _bC.append(d)
+                    for _b in (_bA, _bB, _bC):
+                        _b.sort(key=lambda d: _focus(d.get('api_sequence') or []))
+
+                    _cap = filter_top_k or len(skeleton_drivers)
+                    _buckets = [_bA, _bB, _bC]
+                    _bi = [0, 0, 0]
+                    _portfolio: List[Dict[str, Any]] = []
+                    while len(_portfolio) < _cap:
+                        _moved = False
+                        for _j, _b in enumerate(_buckets):
+                            if _bi[_j] < len(_b):
+                                _portfolio.append(_b[_bi[_j]])
+                                _bi[_j] += 1
+                                _moved = True
+                                if len(_portfolio) >= _cap:
+                                    break
+                        if not _moved:
+                            break
+                    log.info(
+                        '   🎯 portfolio (round-robin): %d parser + %d workflow '
+                        '+ %d novel available → kept %d of %d',
+                        len(_bA), len(_bB), len(_bC), len(_portfolio),
+                        len(skeleton_drivers))
+                    skeleton_drivers = _portfolio
+                elif filter_top_k and len(skeleton_drivers) > filter_top_k:
+                    # No semantic model → fall back to a plain top-K cap.
                     skeleton_drivers = skeleton_drivers[:filter_top_k]
         except Exception as e:
             log.warning(f"Skeleton generation failed (non-critical): {e}")
@@ -2662,6 +2884,7 @@ def _synthesize_skeletons_per_sequence(
     z3_rejected = 0
     unchecked_emitted = 0   # skeletons rendered via the no-Z3-gate model path
     automaton_low_score = 0
+    _z3_mode = os.environ.get('LOGICFUZZ_Z3_MODE', 'soft').lower()
     # **Positive-only automaton signal** (2026-05-12 redesign): the
     # acceptance_score is computed for telemetry but is NOT used to
     # reject candidates. Rationale: the project automaton is trained
@@ -2700,22 +2923,31 @@ def _synthesize_skeletons_per_sequence(
                     # the candidate unchanged.
                     pass
 
-            skeleton = factory.create_skeleton_for_sequence(target_seq)
-            if skeleton is None:
-                # The Z3/RunningContext gate couldn't *prove* every arg's
-                # provenance — but that's not infeasibility, it's a scalar/
-                # void* the solver can't bind (e.g. lcms cmsCreateTransform's
-                # format enums, cmsBuildGamma's gamma double). The semantic
-                # model already knows these are CONFIG/handle args, so render
-                # the skeleton anyway: wire handle args to prior producers,
-                # leave scalars/buffers as holes for the LLM (G4 intents). This
-                # recovers the baseline-uncovered (gap) APIs that the gate was
-                # silently dropping. Z3 is thus a confirmation, not a gate.
+            # Z3 role is a tunable knob (LOGICFUZZ_Z3_MODE), being A/B'd from
+            # coverage feedback because Z3 has a history of FALSE rejections
+            # (void*/config/nullable args have no producer ⇒ it judges UNSAT
+            # though they're valid). The one true hard gate is lifecycle
+            # ORDERING — and that's enforced upstream by the Typestate
+            # self-filter, not here. Modes:
+            #   gate  : legacy — Z3 reject drops the sequence.
+            #   off   : skip Z3 entirely; render via the model path.
+            #   soft  : try Z3 (its pass = a quality signal, tagged); on reject,
+            #           render anyway via the model path (don't drop). [default]
+            skeleton = None
+            z3_passed = False
+            if _z3_mode in ('gate', 'soft', 'selective'):
+                skeleton = factory.create_skeleton_for_sequence(target_seq)
+                z3_passed = skeleton is not None
+            if skeleton is None and _z3_mode != 'gate':
+                # Render without the prove-or-reject gate: wire handle args to
+                # prior producers (symbolic), leave scalars/buffers/void* as
+                # holes for the LLM. Recovers candidates Z3 falsely rejects.
                 skeleton = factory.create_skeleton_unchecked(target_seq)
-                if skeleton is None:
-                    z3_rejected += 1
-                    continue
-                unchecked_emitted += 1
+                if skeleton is not None:
+                    unchecked_emitted += 1
+            if skeleton is None:
+                z3_rejected += 1
+                continue
 
             try:
                 rendered_code = render_skeleton(skeleton, mark_holes=True)
@@ -2744,7 +2976,9 @@ def _synthesize_skeletons_per_sequence(
                 'code': rendered_code,
                 'holes': holes_info,
                 'synthesis_info': {
-                    'method': 'CBFactory_skeleton_for_sequence',
+                    'method': ('CBFactory_z3' if z3_passed
+                               else 'model_unchecked'),
+                    'z3_passed': z3_passed,
                     'driver_size': driver_size,
                     'num_apis_used': len(api_seq),
                     'num_holes': len(holes_info),
