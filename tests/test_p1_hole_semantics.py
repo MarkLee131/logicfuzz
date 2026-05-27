@@ -85,3 +85,29 @@ def test_annotate_skeletons_in_place():
 def test_annotate_safe_on_empty():
     assert annotate_skeletons([], _model()) == 0
     assert annotate_skeletons(None, _model()) == 0
+
+
+def test_g4_format_aware_decoder_intent_is_idempotent():
+    """G4 decoder: a parser-entry buffer gets a format-specific, IDEMPOTENT
+    normalize instruction (the clause that lets it coexist with seeds)."""
+    apis = [_api("cmsOpenProfileFromMem",
+                 [_arg("const void *", const=True, name="MemPtr"),
+                  _arg("unsigned int", name="dwSize")], ret="void *")]
+    model = reconcile(apis)
+    recs = value_intents_for_sequence(model, ["cmsOpenProfileFromMem"])
+    intents = {a["index"]: a["intent"] for r in recs for a in r["args"]}
+    buf = intents[0]
+    assert "ICC profile" in buf            # format detected
+    assert "acsp" in buf                   # concrete recipe (magic)
+    assert "idempotent" in buf.lower()     # passthrough-on-valid ⇒ seed coexistence
+    assert "UNCHANGED" in buf              # explicit passthrough of valid seeds
+
+
+def test_g4_unknown_format_falls_back_to_generic():
+    apis = [_api("lib_consume",
+                 [_arg("const uint8_t *", const=True, name="data"),
+                  _arg("size_t", name="len")], ret="int")]
+    model = reconcile(apis)
+    recs = value_intents_for_sequence(model, ["lib_consume"])
+    buf = next(a["intent"] for r in recs for a in r["args"] if a["index"] == 0)
+    assert "STRUCTURED_INPUT" in buf and "ICC" not in buf  # generic, no format

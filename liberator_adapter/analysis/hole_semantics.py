@@ -33,10 +33,49 @@ def _is_scalar_int(type_str: str) -> bool:
     return any(t in low for t in _INT_TYPES)
 
 
-def _arg_intent(arg) -> Optional[str]:
+def _format_for_api(api_name: str):
+    """Map a parser-entry API to ``(format_label, minimal-valid recipe)`` for
+    the G4 format-aware decoder, or ``None`` for an unknown/raw format.
+
+    Recipes are deliberately concrete (byte offsets / magic) so the LLM can
+    write the normalizer without guessing the layout. Extend per format.
+    """
+    low = (api_name or "").lower()
+    if "it8" in low or "cgats" in low:
+        return ("IT8/CGATS text dataset",
+                "ensure the buffer begins with a token the IT8 lexer accepts "
+                "(e.g. a header keyword like 'NUMBER_OF_FIELDS' or a leading "
+                "'#' comment line) so parsing proceeds past the front gate, "
+                "then append the fuzzer bytes as the body")
+    if "profile" in low and ("mem" in low or "stream" in low):
+        return ("ICC profile (binary)",
+                "the buffer must be >=128 bytes; bytes[36..39] must equal the "
+                "ASCII magic 'acsp'; bytes[0..3] must be the big-endian total "
+                "byte length; the remaining bytes carry the fuzzer payload")
+    return None
+
+
+def _arg_intent(arg, api_name: str = "") -> Optional[str]:
     """Value intent for one argument, or ``None`` when nothing to say."""
     role = arg.role
     if role is ArgRole.INPUT_BUFFER:
+        fmt = _format_for_api(api_name)
+        if fmt is not None:
+            label, recipe = fmt
+            # G4 format-aware decoder. The idempotence clause is what lets this
+            # COEXIST with the seed layer (scripts/seed_discovery.py): a real
+            # seed already has a valid header → passthrough unchanged; a random
+            # or libFuzzer-mutated input → normalized so it still clears the
+            # front gate and the fuzzer explores the BODY instead of bouncing
+            # off the header.
+            return (
+                f"STRUCTURED_INPUT [{label}]: this arg feeds a {label} parser. "
+                f"Write a small IDEMPOTENT decoder that turns the raw fuzzer "
+                f"bytes into a minimal-valid {label}: {recipe}. CRITICAL — make "
+                f"it idempotent: if the input ALREADY has a valid {label} "
+                f"header (a real corpus seed), pass it through UNCHANGED; only "
+                f"normalize when the header is missing/invalid. Pass the "
+                f"(possibly-normalized) buffer + its length to the API.")
         return ("STRUCTURED_INPUT: drive these bytes from the fuzzer input. "
                 "If the API parses a format, split the input into a "
                 "header/prefix + body so the bytes survive front-gate "
@@ -80,7 +119,7 @@ def value_intents_for_sequence(
             continue
         arg_records: List[Dict[str, Any]] = []
         for arg in sem.args:
-            intent = _arg_intent(arg)
+            intent = _arg_intent(arg, name)
             if intent is None:
                 continue
             arg_records.append({
