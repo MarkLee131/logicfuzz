@@ -334,11 +334,14 @@ for d in /src/{self.project}/include /src/{self.project} /src/{self.project}/src
   [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
 done
 EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
-# -x c++ : the driver file has a ``.fuzz_target`` extension, so clang cannot
-# infer the source language and would treat it as a linker input. Force C++
-# (our drivers are extern-"C"-guarded and OSS-Fuzz compiles fuzz targets with
-# $CXX). This was the lcms build failure.
-$CXX $CXXFLAGS $EXT_INC -x c++ -c /src/{target_basename} -o /tmp/ext_fuzzer.o
+# The driver has a ``.fuzz_target`` extension, so clang can't infer the source
+# language and would treat it as a linker input. We must pass ``-x``. Try C
+# first ($CC -x c) — C projects (lcms/cjson/c-ares) and their drivers are C,
+# and real C drivers use C-only features (e.g. VLAs that C++ rejects) — then
+# fall back to C++ for genuinely-C++ drivers. Always LINK with $CXX (the
+# libFuzzer engine is C++).
+($CC $CFLAGS $EXT_INC -x c -c /src/{target_basename} -o /tmp/ext_fuzzer.o) || \\
+($CXX $CXXFLAGS $EXT_INC -x c++ -c /src/{target_basename} -o /tmp/ext_fuzzer.o)
 $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT/{self.target_name} ${{LDFLAGS:-}}
 '''
             with open(build_sh, 'a') as f:
