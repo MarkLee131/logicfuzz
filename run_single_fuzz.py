@@ -573,6 +573,71 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
   return result
 
 
+def _resolve_candidate_binary(src, work_dirs):
+  """Best-effort: find a host-runnable libFuzzer binary for a driver source.
+
+  Per-trial OSS-Fuzz binaries are built in Docker and cleaned up, so this
+  returns one only when the eval preserved a host-runnable build under
+  ``<base>/preflight_bins/<NN>`` (the preservation hook). Returns None when no
+  runnable binary exists — preflight then can't vet this driver (it is kept,
+  not dropped).
+  """
+  from pathlib import Path
+  stem = src.stem  # e.g. "06" from "06.fuzz_target"
+  base = Path(work_dirs.base) / 'preflight_bins'
+  for cand in (base / stem, base / f'{stem}.bin', base / f'{stem}_fuzzer'):
+    if cand.is_file():
+      return cand
+  return None
+
+
+def _preflight_filter_candidates(sources, work_dirs):
+  """Smoke-test candidate drivers and drop crash / no-progress ones.
+
+  Returns the surviving source paths. Drops a driver ONLY on a crash or
+  zero-edge verdict from a runnable binary; a driver whose binary can't be
+  resolved/run is kept (couldn't vet ≠ reject). If fewer than 2 binaries are
+  resolvable, preflight is skipped entirely and all sources are returned
+  unchanged (logged), preserving prior behaviour.
+  """
+  from pathlib import Path
+  pairs = []
+  for src in sources:
+    b = _resolve_candidate_binary(src, work_dirs)
+    if b is not None:
+      pairs.append((Path(src), b))
+  if len(pairs) < 2:
+    logger.info(
+        f'merge_drivers: preflight skipped — only {len(pairs)} of '
+        f'{len(sources)} candidates have a host-runnable binary '
+        f'(per-trial binaries are cleaned; see docs/merge_drivers.md). '
+        f'Merging the unvetted set.', trial=0)
+    return sources
+  try:
+    from tools.merge_drivers.preflight import preflight, write_report
+  except ImportError as exc:
+    logger.warning(f'merge_drivers: preflight unavailable ({exc}); '
+                   f'merging unvetted', trial=0)
+    return sources
+
+  results = preflight(pairs, smoke_duration_sec=15, drop_on_crash=True)
+  try:
+    write_report(results, Path(work_dirs.base) / 'merged' / 'preflight.json')
+  except Exception:
+    pass
+  # Drop ONLY genuine crash / no-progress; keep "couldn't vet" (binary missing
+  # or broken-to-run, which is infra, not a driver defect).
+  rejected = {r.driver_path for r in results
+              if not r.accepted
+              and r.rejection_reason.startswith(('crash_on_empty', 'no_progress'))}
+  if rejected:
+    logger.info(
+        f'merge_drivers: preflight dropped {len(rejected)} crashing/'
+        f'no-progress driver(s): '
+        f'{sorted(Path(p).name for p in rejected)}', trial=0)
+  return [s for s in sources if str(s) not in rejected]
+
+
 def _maybe_merge_drivers(benchmark: Benchmark,
                          work_dirs: WorkDirs,
                          trial_results: List) -> Optional[str]:
@@ -584,13 +649,18 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     - synthesized/<id>.{c,cpp}     renamed sub-driver i
     - oss_fuzz_build_snippet.sh    append to OSS-Fuzz project build.sh
 
-  Skipped here vs the standalone `pipeline` subcommand:
-    - **preflight** (smoke-fuzz each binary): the per-trial OSS-Fuzz
-      binaries are removed during _fuzzing_pipeline cleanup; we only
-      have the .fuzz_target sources at this stage. Adding preflight
-      would require keeping binaries around for the whole run, which
-      this minimal cut intentionally avoids.
-    - **coverage-aware Top-K selection**: same reason — needs binaries
+  **Preflight is now wired** (``_preflight_filter_candidates``): candidates are
+  smoke-fuzzed and crashing / no-progress drivers are dropped BEFORE merge, so
+  one bad auto-driver can't poison the fused campaign (the failure that
+  motivated this). It activates when host-runnable binaries are resolvable
+  under ``<base>/preflight_bins/`` (preservation hook); per-trial OSS-Fuzz
+  binaries are still cleaned up, so when none are resolvable preflight logs the
+  gap and proceeds with the unvetted set rather than blocking the merge. A
+  driver is dropped only on a real crash/no-progress verdict, never for a
+  missing/unrunnable binary.
+
+  Still skipped vs the standalone `pipeline` subcommand:
+    - **coverage-aware Top-K selection**: needs binaries
       to gather per-driver edge counts. Without it we use uniform
       dispatch (PromeFuzz §5.2 fallback when coverage signal is
       unavailable). Future enhancement: read from per-driver coverage
@@ -615,6 +685,26 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     logger.info(
         f'merge_drivers: skipping (only {len(successful_sources)} '
         f'successful trial(s); need ≥2 to merge)', trial=0)
+    return None
+
+  # === Preflight (O1): vet candidates before merging ===
+  # A merged harness runs all sub-drivers in ONE process, so a single
+  # crashing/zero-progress driver poisons the whole fused campaign (observed:
+  # an auto-driver that passed NULL to a consumer aborted the union). We smoke
+  # each candidate and drop the bad ones first. Preflight needs *host-runnable*
+  # libFuzzer binaries (tools.merge_drivers.preflight runs them as
+  # subprocesses); the per-trial OSS-Fuzz binaries are built in Docker and
+  # cleaned up, so they're only available when the eval kept a host-runnable
+  # build (resolver below). When none are resolvable we DON'T silently merge
+  # everything blind — we log the gap and proceed with the unvetted set
+  # (preserving prior behaviour), and a crash will surface in the merged run.
+  # Only crash / no-progress verdicts drop a driver; a missing/unrunnable
+  # binary is treated as "couldn't vet", never as a reason to drop.
+  successful_sources = _preflight_filter_candidates(successful_sources, work_dirs)
+  if len(successful_sources) < 2:
+    logger.info(
+        f'merge_drivers: skipping (only {len(successful_sources)} '
+        f'candidate(s) survived preflight; need ≥2 to merge)', trial=0)
     return None
 
   try:
