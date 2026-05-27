@@ -1,0 +1,4 @@
+"language": "c"
+"project": "lcms"
+"target_name": "cms_gdb_fuzzer"
+"target_path": "/src/cms_gdb_fuzzer.c"
