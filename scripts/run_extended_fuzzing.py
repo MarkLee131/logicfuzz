@@ -465,7 +465,11 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             # Increase timeout for full image build (30 minutes)
             result = subprocess.run(build_cmd, capture_output=True, text=True, timeout=1800)
             if result.returncode != 0:
-                logger.error(f"Failed to build image: {result.stderr[:1000]}")
+                # The real docker/build error is at the TAIL of the combined
+                # output (helper.py prints the build to stdout; the leading
+                # 1000 chars are just its "Running: ..." banner).
+                _tail = ((result.stdout or "") + (result.stderr or ""))[-3000:]
+                logger.error(f"Failed to build image (tail):\n{_tail}")
                 return False
 
             # Build fuzzers with the specified sanitizer
@@ -478,7 +482,8 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             # Increase timeout for fuzzer build (20 minutes)
             result = subprocess.run(build_fuzzers_cmd, capture_output=True, text=True, timeout=1200)
             if result.returncode != 0:
-                logger.error(f"Failed to build fuzzers: {result.stderr[:1000]}")
+                _tail = ((result.stdout or "") + (result.stderr or ""))[-3000:]
+                logger.error(f"Failed to build fuzzers (tail):\n{_tail}")
                 return False
 
             return True
