@@ -2839,39 +2839,69 @@ def _synthesize_skeletons_per_sequence(
     if not target_sequences:
         return []
 
-    # CBFactory needs the same prerequisites as in _generate_cbfactory_drivers.
-    if (not generator.condition_manager
-            or not generator.function_conditions
-            or not generator.all_apis
-            or not generator.dependency_graph):
+    # The TRULY required prerequisites for emitting a skeleton are api_list +
+    # dgraph (CBFactory's ``create_skeleton_unchecked`` only needs those plus a
+    # SkeletonGenerator). condition_manager / function_conditions drive the Z3-
+    # validated path (``create_skeleton_for_sequence``); when LLVM extraction
+    # falls back to clang-only (observed on nghttp2 + liblouis 2026-05-29) those
+    # conditions come in empty. Previously that hit ``return []`` and the whole
+    # portfolio collapsed to 1 LLM-only trial — Bug #6, ~5500 lines lost across
+    # those two projects per coverage_diff. Degrade gracefully: build CBFactory
+    # with an empty conditions set and force the unchecked render path.
+    if not generator.all_apis or not generator.dependency_graph:
         log.warning(
-            "CBFactory prerequisites missing; cannot run Z3 skeleton synthesis "
-            "(needs condition_manager, function_conditions, all_apis, dgraph).")
+            "Skeleton synthesis impossible: missing all_apis or dependency_graph.")
         return []
+
+    _degraded = (not generator.condition_manager
+                 or not generator.function_conditions)
 
     from liberator_adapter.driver.factory.constraint_based import CBFactory
     from liberator_adapter.bias import Bias
+    from liberator_adapter.common.conditions import FunctionConditionsSet
     from liberator_adapter.driver.synthesis.skeleton_generator import render_skeleton
 
-    available_conditions = set(generator.function_conditions.fun_cond_set.keys())
-    filtered_apis = {
-        api for api in generator.all_apis
-        if api.function_name in available_conditions
-    }
-    if not filtered_apis:
-        log.warning("No APIs have conditions available for skeleton synthesis")
-        return []
+    if _degraded:
+        log.warning(
+            "CBFactory degraded mode: function_conditions empty (LLVM "
+            "extraction likely fell back to clang-only). Z3 validation off; "
+            "skeletons via the model-unchecked render path. Without this we "
+            "would emit 0 skeletons → 1 LLM-only trial → lost portfolio.")
+        filtered_apis = set(generator.all_apis)
+        conditions_arg = FunctionConditionsSet()
+    else:
+        available_conditions = set(
+            generator.function_conditions.fun_cond_set.keys())
+        filtered_apis = {
+            api for api in generator.all_apis
+            if api.function_name in available_conditions
+        }
+        conditions_arg = generator.function_conditions
+        if not filtered_apis:
+            log.warning("No APIs have conditions available for skeleton synthesis")
+            return []
 
-    factory = CBFactory(
-        api_list=filtered_apis,
-        driver_size=driver_size,
-        dgraph=generator.dependency_graph,
-        conditions=generator.function_conditions,
-        bias=Bias(),
-        enable_z3_validation=True,
-        automaton_artifact=automaton_artifact,
-        automaton_threshold=automaton_threshold,
-    )
+    try:
+        factory = CBFactory(
+            api_list=filtered_apis,
+            driver_size=driver_size,
+            dgraph=generator.dependency_graph,
+            conditions=conditions_arg,
+            bias=Bias(),
+            enable_z3_validation=not _degraded,
+            enable_z3_guidance=not _degraded,
+            automaton_artifact=automaton_artifact,
+            automaton_threshold=automaton_threshold,
+        )
+    except (AttributeError, KeyError, RuntimeError) as exc:
+        # CBFactory's __init__ touches ``ConditionManager.instance()`` for
+        # things like ``source_api``; in degraded environments where the
+        # singleton wasn't fully populated (or in tests with synthetic
+        # generators) the construction can fail with AttributeError. Degrade
+        # further to []. In real runs Step 5b ensures the singleton is set up.
+        log.warning("CBFactory construction failed (%s: %s); skipping "
+                    "skeleton synthesis.", type(exc).__name__, exc)
+        return []
 
     # ``target_path`` is no longer needed for renderer dispatch — the
     # generated skeleton always emits ``#ifdef __cplusplus`` extern "C"
@@ -2885,6 +2915,10 @@ def _synthesize_skeletons_per_sequence(
     unchecked_emitted = 0   # skeletons rendered via the no-Z3-gate model path
     automaton_low_score = 0
     _z3_mode = os.environ.get('LOGICFUZZ_Z3_MODE', 'soft').lower()
+    if _degraded:
+        # No function_conditions → Z3 has nothing to validate against; go
+        # straight to the model-unchecked render path for every sequence.
+        _z3_mode = 'off'
     # **Positive-only automaton signal** (2026-05-12 redesign): the
     # acceptance_score is computed for telemetry but is NOT used to
     # reject candidates. Rationale: the project automaton is trained

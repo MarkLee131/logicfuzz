@@ -182,10 +182,19 @@ class CBFactory(Factory):
                 inv_dep_graph[dep].add(api)
         self.dependency_graph = inv_dep_graph
 
+        # ConditionManager may be uninitialised when LLVM extraction fell back
+        # to clang-only (no condition data). Without these the validated path
+        # (``create_skeleton_for_sequence`` + ``_try_all_source_apis``) won't
+        # work, but the model-unchecked render path doesn't touch them — so we
+        # default to empty lists and let CBFactory degrade to unchecked-only
+        # usage rather than crashing on construction.
         self.condition_manager = ConditionManager.instance()
-
-        self.source_api = list(self.condition_manager.get_source_api())
-        self.init_api = list(self.condition_manager.get_init_api())
+        try:
+            self.source_api = list(self.condition_manager.get_source_api())
+            self.init_api = list(self.condition_manager.get_init_api())
+        except (AttributeError, KeyError):
+            self.source_api = []
+            self.init_api = []
 
         # Build API name to Api object mapping (for enhanced callback generation)
         self.api_name_to_api: Dict[str, Api] = {

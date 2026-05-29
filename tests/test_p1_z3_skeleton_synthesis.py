@@ -171,13 +171,19 @@ def _fake_generator(missing_prereq=None):
 
 
 def test_skeleton_helper_returns_empty_on_missing_prereq():
-    """If CBFactory prerequisites are missing, the helper logs and
-    returns []. The trial pipeline must not crash."""
+    """Bug #6 fix (2026-05-29) — split by which prereq is missing.
+
+    The only TRULY required prerequisites are all_apis + dependency_graph
+    (CBFactory's unchecked render path needs nothing else). When
+    condition_manager / function_conditions are missing we now degrade
+    gracefully into the model-unchecked path instead of collapsing the whole
+    portfolio to 1 LLM-only trial. The helper must not crash either way.
+    """
     from src.context.data_context import _synthesize_skeletons_per_sequence
     import logging
 
-    for missing in ('condition_manager', 'function_conditions',
-                    'all_apis', 'dependency_graph'):
+    # Hard prerequisites: missing these still returns [] (no driver possible).
+    for missing in ('all_apis', 'dependency_graph'):
         gen = _fake_generator(missing_prereq=missing)
         out = _synthesize_skeletons_per_sequence(
             generator=gen,
@@ -187,6 +193,26 @@ def test_skeleton_helper_returns_empty_on_missing_prereq():
             log=logging.getLogger('test'),
         )
         assert out == [], f'missing {missing} should return empty list'
+
+    # Degraded prerequisites: must not raise. The helper attempts the
+    # model-unchecked render path. With synthetic ``SimpleNamespace`` APIs the
+    # renderer may produce nothing usable, but the helper must NOT crash with
+    # an exception (real projects with real Api objects produce skeletons —
+    # the bug #6 validation runs are in the commit message).
+    for missing in ('condition_manager', 'function_conditions'):
+        gen = _fake_generator(missing_prereq=missing)
+        try:
+            _synthesize_skeletons_per_sequence(
+                generator=gen,
+                target_sequences=[[_FakeApi('cJSON_Parse')]],
+                driver_size=5,
+                benchmark=types.SimpleNamespace(target_path='/src/x.c'),
+                log=logging.getLogger('test'),
+            )
+        except Exception as exc:
+            raise AssertionError(
+                f'degraded mode (missing {missing}) must not raise; got '
+                f'{type(exc).__name__}: {exc}')
 
 
 def test_skeleton_helper_returns_empty_on_empty_target_sequences():
