@@ -159,18 +159,26 @@ def postprocess_oss_fuzz() -> None:
                   capture_output=True,
                   stdin=sp.DEVNULL,
                   cwd=OSS_FUZZ_DIR)
+  # This venv is for OSS-Fuzz's own cloud build-functions (``infra/build/
+  # functions/``) — NOT used by our driver-generation pipeline (which invokes
+  # OSS-Fuzz via ``helper.py build_image`` in Docker). When upstream's pinned
+  # requirements drift off the local PyPI mirror (observed 2026-05-28:
+  # ``Brotli==1.0.9`` unavailable) a hard failure here aborts the whole run.
+  # Treat the install as best-effort and continue.
   result = sp.run([
       f'./{VENV_DIR}/bin/pip', 'install', '-r',
       'infra/build/functions/requirements.txt'
   ],
-                  check=True,
                   cwd=OSS_FUZZ_DIR,
                   stdin=sp.DEVNULL,
                   capture_output=True)
   if result.returncode:
-    logger.info('Failed to postprocess OSS-Fuzz (%s)', OSS_FUZZ_DIR)
-    logger.info('stdout: %s', result.stdout)
-    logger.info('stderr: %s', result.stderr)
+    logger.warning(
+        'OSS-Fuzz cloud-build-functions venv install failed (non-fatal — '
+        'driver gen runs OSS-Fuzz via Docker, not this venv). returncode=%d',
+        result.returncode)
+    logger.debug('stdout: %s', result.stdout)
+    logger.debug('stderr: %s', result.stderr)
 
 def list_c_cpp_projects() -> list[str]:
   """Returns a list of all c/c++ projects from oss-fuzz."""

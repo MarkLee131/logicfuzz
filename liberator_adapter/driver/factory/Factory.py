@@ -43,9 +43,24 @@ class Factory:
         """
         if not isinstance(a_is_const, list):
             raise Exception(f"a_is_const must be a list, \"{type(a_is_const)}\" given!")
-        
+
+        # Strip trailing pointer qualifiers — they're compiler hints, not part of
+        # the type's semantic shape (libpng: ``png_struct * __restrict__``;
+        # OpenSSL idioms: ``X * const``; Linux kernel: ``T * __must_check``).
+        # Without this the "*$" pointer-shape check below misclassifies the type,
+        # AND the downstream ``a_type.replace("*","")`` concatenates the qualifier
+        # into the type name (``png_struct__restrict``) and DataLayout lookup fails.
+        # Explicit alternatives (cover GCC ``__keyword__`` spellings):
+        a_type = re.sub(
+            r"(\s*(__restrict__|__restrict|restrict|"
+            r"__const__|__const|const|"
+            r"__volatile__|__volatile|volatile|"
+            r"__must_check|__attribute__\s*\(\([^()]*\)\)))+\s*$",
+            "", a_type
+        ).rstrip()
+
         if a_flag == "ref" or a_flag == "ret":
-            if not re.search("\*$", a_type) and "*" in a_type:
+            if not re.search(r"\*$", a_type) and "*" in a_type:
                 raise Exception(f"Type '{a_type}' is not a valid pointer")
         elif a_flag == "val":
             if "*" in a_type:
@@ -99,9 +114,34 @@ class Factory:
             # the AttributeError surface so the caller knows the
             # initialisation order is broken.
             dl = DataLayout.instance()
-            a_size = dl.get_type_size(a_type_core)
-            a_incomplete_core = dl.is_incomplete(a_type_core)
-            type_tag = TypeTag.STRUCT if dl.is_a_struct(a_type_core) else TypeTag.PRIMITIVE
+            try:
+                a_size = dl.get_type_size(a_type_core)
+                a_incomplete_core = dl.is_incomplete(a_type_core)
+                type_tag = TypeTag.STRUCT if dl.is_a_struct(a_type_core) else TypeTag.PRIMITIVE
+            except KeyError:
+                if pointer_level >= 1:
+                    # Opaque handle pointer — common C-API idiom that
+                    # intentionally hides the struct (libucl ``ucl_parser*``,
+                    # openssl, sqlite3, ...). Treat as incomplete struct so the
+                    # driver can plumb the handle through APIs without knowing
+                    # its layout.
+                    a_size = 0
+                    a_incomplete_core = True
+                    type_tag = TypeTag.STRUCT
+                else:
+                    # Value-passed unknown type — almost always an ENUM that the
+                    # clang-only extraction fallback didn't register in
+                    # DataLayout (libucl ``ucl_string_flags``, ``ucl_emit_type``,
+                    # ...). Default to int-sized primitive: the fuzzer feeds an
+                    # integer, which is the correct shape for enums (the
+                    # dominant case) and works for typedef'd scalars. The rare
+                    # struct-by-value of an unknown type would produce a driver
+                    # that fails to compile — preflight drops it before merge,
+                    # so the failure surfaces as "driver rejected" not "silent
+                    # wrong analysis".
+                    a_size = 4
+                    a_incomplete_core = False
+                    type_tag = TypeTag.PRIMITIVE
                 
             type_core = Type(a_type_core, a_size, a_incomplete_core, a_is_const[-1] if a_is_const else False, type_tag)
 

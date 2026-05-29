@@ -813,7 +813,33 @@ class ProjectDriverGenerator:
                 logger.info(f"Using single project header: {project_header_found}")
 
         if not header_paths:
-            raise RuntimeError(f"No headers found under {search_dir}")
+            # Relaxed fallback: the strict heuristic excludes ``src/`` as an
+            # internal dir, but for single-header / non-standard-layout libraries
+            # the public API IS in ``src/`` (pugixml: ``src/pugixml.hpp``;
+            # several header-only libs). Rescan keeping ONLY test/example/docs
+            # exclusions, and treat anything that survives as public. Worst case
+            # = a few extra candidate APIs the downstream filters drop, not
+            # wrong analysis.
+            from pathlib import Path as _PP
+            _relaxed_excludes = {'tests', 'test', 'testing', 'examples',
+                                 'example', 'benchmarks', 'benchmark',
+                                 'docs', 'doc'}
+            _relaxed = []
+            for _p in _PP(search_dir).rglob("*"):
+                if not _p.is_file() or _p.suffix.lower() not in header_exts:
+                    continue
+                if any(_part.lower() in _relaxed_excludes
+                       for _part in _p.relative_to(search_dir).parts):
+                    continue
+                _relaxed.append(str(_p.relative_to(search_dir)))
+            if _relaxed:
+                header_paths = sorted(_relaxed)
+                logger.info(
+                    "Strict heuristic found 0; relaxed fallback (kept "
+                    "test/example/docs exclusions only) found %d header(s)",
+                    len(header_paths))
+            else:
+                raise RuntimeError(f"No headers found under {search_dir}")
 
         logger.info(f"Generated public headers list with {len(header_paths)} header(s)")
 

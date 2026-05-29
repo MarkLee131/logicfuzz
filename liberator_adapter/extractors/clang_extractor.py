@@ -345,10 +345,32 @@ class ClangAPIExtractor(BaseAPIExtractor):
         logger.info(f"Auto-detected include directory: {include_dir}")
 
         if not public_headers_file:
-            raise ValueError(
-                "public_headers_file is required. "
-                "Please provide a file listing the header files to analyze."
-            )
+            # Fallback: auto-scan the auto-detected include_dir for .h/.hpp
+            # files when introspector didn't supply a curated list (e.g.,
+            # single-header libs like pugixml with no standard ``include/``
+            # layout; libs where the metadata extraction couldn't infer the
+            # public surface). Downstream filters (L0-L4 + APISemanticModel)
+            # gate quality, so the worst case is bloat (extra candidate APIs)
+            # — not wrong analysis. Raise only when there are truly no headers.
+            from pathlib import Path as _P
+            _inc = _P(include_dir)
+            _hdrs = sorted({
+                str(p.relative_to(_inc))
+                for p in (list(_inc.rglob("*.h")) + list(_inc.rglob("*.hpp")))
+            })
+            if not _hdrs:
+                raise ValueError(
+                    "public_headers_file not provided and no .h/.hpp found "
+                    f"under include_dir '{include_dir}' — nothing to analyse."
+                )
+            _fb = _P(output_dir) / "auto_public_headers.txt"
+            _fb.parent.mkdir(parents=True, exist_ok=True)
+            _fb.write_text("\n".join(_hdrs))
+            public_headers_file = str(_fb)
+            logger.info(
+                "public_headers_file not provided; auto-scanned %d header(s) "
+                "in %s → %s",
+                len(_hdrs), include_dir, _fb)
 
         # Note: extract_apis_clang now handles host path to container path conversion
         # So we just pass the public_headers_file as-is
