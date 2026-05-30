@@ -1222,6 +1222,45 @@ class FuzzingContext:
                             _merged.append(_seq)
                         if len(_merged) >= _budget:
                             break
+
+                    # #2 SUBSYSTEM BALANCE (opt-in: LOGICFUZZ_SUBSYS_BALANCE=1,
+                    # default OFF). The rank strands above (gap/acceptance/focus)
+                    # cluster on the same dense API families, so whole subsystems
+                    # (c-ares dns_write/query/dns_record, nghttp2 submit/sfparse)
+                    # never reach the budget pool — measured: only 21-42 of
+                    # 138-429 project APIs entered the pool, and the missed
+                    # families exactly matched the coverage_diff HUMAN_NEW gap.
+                    # Reserve the last third of the budget for a PARAMETER-FREE
+                    # greedy max-new-API pass: repeatedly take the constructed
+                    # sequence adding the most not-yet-pooled APIs (ties: fewer
+                    # total = more focused). Widens API/subsystem coverage of the
+                    # pool without removing the quality leaders (they fill the
+                    # first two thirds). Default off → existing results unchanged.
+                    if os.environ.get('LOGICFUZZ_SUBSYS_BALANCE'):
+                        _reserve = max(1, _budget // 3)
+                        _qkeep = _merged[:max(0, _budget - _reserve)]
+                        _kept_keys = {tuple(s) for s in _qkeep}
+                        _pooled = {a for s in _qkeep for a in s}
+                        _rest = [s for s in _constructed
+                                 if tuple(s) not in _kept_keys]
+                        _greedy: List[List[str]] = []
+                        while _rest and len(_qkeep) + len(_greedy) < _budget:
+                            _bi, _bg, _bl = -1, 0, 10**9
+                            for _ix, _s in enumerate(_rest):
+                                _g = len(set(_s) - _pooled)
+                                if _g > _bg or (_g == _bg and len(_s) < _bl):
+                                    _bi, _bg, _bl = _ix, _g, len(_s)
+                            if _bi < 0 or _bg <= 0:
+                                break
+                            _chosen = _rest.pop(_bi)
+                            _greedy.append(_chosen)
+                            _pooled.update(_chosen)
+                        _merged = _qkeep + _greedy
+                        log.info(
+                            '   🧩 subsystem-balance: %d quality + %d breadth '
+                            '(greedy max-new-API) → pool covers %d APIs',
+                            len(_qkeep), len(_greedy), len(_pooled))
+
                     api_sequences = _merged
                     grammar_info.setdefault('g2_construction', {})
                     grammar_info['g2_construction']['buffer_entry_seqs'] = len(_buffer_ranked)
@@ -1765,24 +1804,55 @@ class FuzzingContext:
 
                     _cap = filter_top_k or len(skeleton_drivers)
                     _buckets = [_bA, _bB, _bC]
-                    _bi = [0, 0, 0]
+                    _used = [[False] * len(_b) for _b in _buckets]
                     _portfolio: List[Dict[str, Any]] = []
+
+                    # #2 SUBSYSTEM BALANCE at the cap (opt-in): prefer the next
+                    # driver that introduces an unseen API-family, so the kept-K
+                    # spread across subsystems instead of piling onto the
+                    # dominant one. Family = first two '_'-tokens (nghttp2_submit_*
+                    # → "nghttp2_submit"; ares_dns_write → "ares_dns"; ares_parse_*
+                    # → "ares_parse") — a deterministic name proxy that matched
+                    # the measured missed families. Default OFF.
+                    _balance = bool(os.environ.get('LOGICFUZZ_SUBSYS_BALANCE'))
+
+                    def _fam(api):
+                        _t = (api or '').split('_')
+                        return '_'.join(_t[:2]) if len(_t) >= 2 else (api or '')
+
+                    def _fams(d):
+                        return {_fam(a) for a in (d.get('api_sequence') or [])}
+                    _seen_fams: set = set()
+
+                    def _pick_from(_b, _u):
+                        if _balance:
+                            for _i, _d in enumerate(_b):
+                                if not _u[_i] and (_fams(_d) - _seen_fams):
+                                    return _i
+                        for _i, _d in enumerate(_b):
+                            if not _u[_i]:
+                                return _i
+                        return -1
+
                     while len(_portfolio) < _cap:
                         _moved = False
                         for _j, _b in enumerate(_buckets):
-                            if _bi[_j] < len(_b):
-                                _portfolio.append(_b[_bi[_j]])
-                                _bi[_j] += 1
+                            _i = _pick_from(_b, _used[_j])
+                            if _i >= 0:
+                                _portfolio.append(_b[_i])
+                                _used[_j][_i] = True
+                                _seen_fams |= _fams(_b[_i])
                                 _moved = True
                                 if len(_portfolio) >= _cap:
                                     break
                         if not _moved:
                             break
                     log.info(
-                        '   🎯 portfolio (round-robin): %d parser + %d workflow '
-                        '+ %d novel available → kept %d of %d',
+                        '   🎯 portfolio (round-robin%s): %d parser + %d workflow '
+                        '+ %d novel available → kept %d of %d (%d families)',
+                        ', subsys-balanced' if _balance else '',
                         len(_bA), len(_bB), len(_bC), len(_portfolio),
-                        len(skeleton_drivers))
+                        len(skeleton_drivers), len(_seen_fams))
                     skeleton_drivers = _portfolio
                 elif filter_top_k and len(skeleton_drivers) > filter_top_k:
                     # No semantic model → fall back to a plain top-K cap.
