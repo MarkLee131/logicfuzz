@@ -216,19 +216,49 @@ class ExtendedFuzzer:
         try:
             from scripts.seed_discovery import discover_project_seeds
             real_seeds = discover_project_seeds(self.project)
+            # A MERGED dispatcher harness (tools/merge_drivers) consumes the
+            # last `selector_bytes` of every input as `driverIndex` and routes
+            # via `switch(driverIndex % n)`, feeding Data[0:Size-selector_bytes]
+            # as the body. A raw seed copied verbatim therefore (a) loses its
+            # last body byte(s) to the selector and (b) routes to a
+            # pseudo-random sub-driver — a real .icc almost never reaches the
+            # profile sub-driver. Fix: tag each raw seed with EVERY sub-driver's
+            # TAIL selector (one copy per index) so the format-matching
+            # sub-driver gets a clean-body copy. Format-agnostic; N is small.
+            # LOGICFUZZ_DISABLE_SEED_TAGGING=1 forces verbatim (A/B isolation).
+            merged = (None if os.environ.get('LOGICFUZZ_DISABLE_SEED_TAGGING')
+                      else self._parse_merged_dispatch())
             n_real = 0
             for i, src in enumerate(real_seeds):
-                dst = self.corpus_dir / f"projseed_{i:04d}_{src.name}"
-                if not dst.exists():
+                if merged is not None:
+                    sel_bytes, ndrv = merged
                     try:
-                        shutil.copy(src, dst)
-                        n_real += 1
+                        data = src.read_bytes()
                     except OSError:
                         continue
+                    for d in range(ndrv):
+                        tag = d.to_bytes(sel_bytes, "little")
+                        dst = self.corpus_dir / f"projseed_{i:04d}_d{d:02d}_{src.name}"
+                        if not dst.exists():
+                            try:
+                                dst.write_bytes(data + tag)
+                                n_real += 1
+                            except OSError:
+                                continue
+                else:
+                    dst = self.corpus_dir / f"projseed_{i:04d}_{src.name}"
+                    if not dst.exists():
+                        try:
+                            shutil.copy(src, dst)
+                            n_real += 1
+                        except OSError:
+                            continue
             if n_real:
+                _how = (f"selector-tagged for {merged[1]}-way merged dispatch"
+                        if merged is not None else "verbatim")
                 logger.info(
-                    "Seeded corpus with %d REAL project inputs (continuous "
-                    "fuzzing will exercise deep parser paths)", n_real)
+                    "Seeded corpus with %d REAL project inputs (%s) (continuous "
+                    "fuzzing will exercise deep parser paths)", n_real, _how)
         except Exception as exc:
             logger.debug("project seed discovery skipped: %s", exc)
 
@@ -246,6 +276,34 @@ class ExtendedFuzzer:
                     f.write(seed)
             logger.info(f"No real seeds found; created {len(seeds)} synthetic "
                         f"seed files in {self.corpus_dir}")
+
+    def _parse_merged_dispatch(self):
+        """Detect a merged dispatcher harness; return (selector_bytes, n) or None.
+
+        Matches the ACTUAL tools/merge_drivers/merge.py UNIFORM/TAIL dispatcher:
+            memcpy(&driverIndex, Data + Size - <k>, <k>);
+            switch (driverIndex % <n>) {
+        Single-driver harnesses (and HEAD/CDF variants) return None → seeds are
+        copied verbatim (safe). Only UNIFORM/TAIL — what run_single_fuzz emits —
+        is selector-tagged.
+        """
+        try:
+            if not self.fuzz_target_path:
+                return None
+            src = Path(self.fuzz_target_path)
+            if not src.is_file():
+                return None
+            text = src.read_text(errors="replace")
+            import re as _re
+            m_n = _re.search(r"switch\s*\(\s*driverIndex\s*%\s*(\d+)\s*\)", text)
+            m_tail = _re.search(
+                r"memcpy\(&driverIndex,\s*Data\s*\+\s*Size\s*-\s*(\d+)\s*,\s*(\d+)\)",
+                text)
+            if m_n and m_tail:
+                return int(m_tail.group(2)), int(m_n.group(1))
+        except Exception:
+            pass
+        return None
 
     def _read_fuzz_target(self) -> str:
         """Read fuzz target source code (single-file mode only)."""
