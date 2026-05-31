@@ -3,7 +3,7 @@
 # Generate c-ares ONCE, merge ONCE, then short-fuzz the SAME merged harness
 # twice — tagging OFF (old verbatim) vs ON (fix) — and compare coverage.
 # Only the seed-tagging differs, so any coverage delta is the fix's effect.
-cd /home1/kaixuan/conti/fdg_2025/lf-refactor || exit 1
+cd /home1/kaixuan/conti/fdg_2025/logic-fuzz || exit 1
 proj=c-ares
 DUR=600   # 10 min per cell (short verification, not the 20h A/B)
 
