@@ -257,7 +257,7 @@ class FuzzingContext:
                 driver_size: int = 5,
                 # Budget cap on the per-project driver count after L4
                 # greedy max-coverage. NOT a viability filter — viability
-                # is decided by L0–L5 + the greedy itself, which already
+                # is decided by L0–L4 + the greedy itself, which already
                 # orders by marginal coverage and self-terminates when no
                 # candidate adds new APIs. This cap just bounds compile /
                 # fuzz / LLM cost. Matches PromeFuzz CCS'25's per-project
@@ -716,10 +716,11 @@ class FuzzingContext:
         except Exception as e:
             log.warning(f"State Machine analysis failed (non-critical): {e}")
 
-        # === Step 5f: L4/L5 Coverage Ranking (Progressive Filter Pipeline) ===
-        # L4: Rank sequences by diversity and entry point position
-        # L5: Coverage-aware filtering to avoid re-testing already covered code
-        log.debug('  5f/12 Ranking sequences by coverage potential (L4/L5)...')
+        # === Step 5f: L4 Coverage Ranking (Progressive Filter Pipeline) ===
+        # L4: Rank sequences by automaton reachability + diversity + entry point.
+        # (L5 novelty pre-filter was deleted in G3 — see CLAUDE.md "Failed
+        # Attempts"; ranking is now reachability-first.)
+        log.debug('  5f/12 Ranking sequences by coverage potential (L4)...')
         coverage_ranking_result = {}
 
         # Fetch the only OSS-Fuzz-specific input we still need: per-function
@@ -730,7 +731,7 @@ class FuzzingContext:
         # === Step 5e2: Learn project-adaptive automaton (P3) ===
         # Built from the project's own tests/examples via libclang AST walk;
         # produces a typestate automaton whose accepted language reflects how
-        # the library is *actually* used in practice. Used by L4 / L5 below
+        # the library is *actually* used in practice. Used by L4 below
         # as a soft signal (acceptance score, creator-prefix grafting,
         # accepting-path sample injection). Optional — if learning fails,
         # ranker degrades to pre-automaton behaviour.
