@@ -36,7 +36,11 @@ Rewrite the driver in current_driver to maximize coverage by addressing the diag
 1. Implement coverage analyzer's recommended actions
 2. Use FuzzedDataProvider for all variable inputs
 3. Replace fixed/constant parameters with varied inputs
-4. Test edge cases (NULL, empty, boundary values)
+4. Test edge cases on the FUZZER DATA path only (empty/short/boundary sizes &
+   values). Do NOT pass NULL/fabricated pointers as library handle/object
+   arguments — that violates the API non-NULL precondition, aborts the process,
+   and poisons a merged harness. Handles come from their creator, guarded
+   `if (!h) return 0;`.
 5. Maintain correct API sequence order
 6. Don't violate API lifecycle constraints
 </requirements>
@@ -93,7 +97,7 @@ api_init(ctx, &cfg);
 <common_issues>
 - Fixed params -> Use FuzzedDataProvider
 - Single sequence -> Try different sequences
-- No edge cases -> Test NULL/empty/boundary
+- No edge cases -> Test empty/short/boundary on the DATA path (NOT NULL handles)
 - Missing API calls -> Add more APIs from the same sequence
 </common_issues>
 

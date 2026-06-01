@@ -20,7 +20,13 @@ Tool calls are optional - use them when needed for better coverage decisions.
 
 <improvement_strategies>
 1. Vary more parameters (use FuzzedDataProvider for C++, raw data for C)
-2. Test edge cases (NULL, empty, boundary)
+2. Test edge cases on the FUZZER INPUT/DATA path only (empty, short, boundary
+   sizes/values). NEVER pass NULL or a fabricated/data-cast pointer as a library
+   HANDLE/object argument (context, profile, transform, curve, parser, …): those
+   args have a non-NULL precondition and the library asserts on NULL, which
+   ABORTS the whole process (a driver bug, not a finding) and — in a merged
+   harness — kills every other driver too. A handle must always come from its
+   real creator, guarded by `if (!h) return 0;`.
 3. Try different API sequences if current one saturated
 4. Add more API calls from the same sequence
 5. Query source code to understand uncovered branches

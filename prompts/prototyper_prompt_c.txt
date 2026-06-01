@@ -63,7 +63,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   lib_get_count(ctx);                     // +1 API
   lib_get_item(ctx, 0);                   // +1 API
   lib_iterate(ctx);                       // +1 API
-  lib_serialize(ctx, NULL, 0);            // +1 API
+  lib_serialize(ctx, NULL, 0);            // +1 API (NULL here = optional OUTPUT
+                                          // buffer, fine. NEVER pass NULL as a
+                                          // handle/object arg like `ctx` — that
+                                          // breaks the API's precondition and
+                                          // aborts the process.)
 
   lib_free(ctx);
   return 0;

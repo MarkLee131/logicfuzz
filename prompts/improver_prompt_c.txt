@@ -44,7 +44,11 @@ Rewrite the driver to maximize coverage by addressing the diagnosis above.
 1. Implement coverage analyzer's recommended actions
 2. Use direct data/size manipulation for input variation
 3. Replace fixed/constant parameters with fuzzer-derived inputs
-4. Test edge cases (NULL, empty, boundary values)
+4. Test edge cases on the FUZZER DATA path only (empty/short/boundary sizes &
+   values). Do NOT pass NULL or a data-cast pointer as a library handle/object
+   argument — that violates the API's non-NULL precondition and aborts the
+   process (and poisons a merged harness). Handles come from their creator,
+   guarded with `if (!h) return 0;`.
 5. Maintain correct API sequence order
 6. Don't violate API lifecycle constraints
 </requirements>
@@ -123,7 +127,7 @@ if (size >= sizeof(int) * 2) {
 <common_issues>
 - Fixed params -> Extract from fuzz data
 - Single sequence -> Try different sequences
-- No edge cases -> Test NULL/empty/boundary
+- No edge cases -> Test empty/short/boundary on the DATA path (NOT NULL handles)
 - Missing API calls -> Add more APIs from the same sequence
 </common_issues>
 
