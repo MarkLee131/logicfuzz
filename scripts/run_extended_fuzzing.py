@@ -585,9 +585,28 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
         oss_fuzz_dir = self._get_oss_fuzz_dir()
         helper_py = oss_fuzz_dir / "infra" / "helper.py"
 
-        # Use absolute path for corpus dir (crash artifacts go to the
-        # container-local /tmp/ — see -artifact_prefix below).
-        corpus_dir_abs = str(self.corpus_dir.resolve())
+        # Mount a FRESH, uniquely-named copy of the corpus — NOT self.corpus_dir
+        # directly. Bug: helper.py bind-mounts the host corpus to
+        # /tmp/<target>_corpus and base-runner's run_fuzzer rm's/syncs it; on a
+        # bind-mounted host dir that races ("rm: Device or resource busy" →
+        # "0 files found in corpus" → libFuzzer starts from EMPTY, so the real
+        # seeds never reach the fuzzer). A fresh per-run dir has no stale mount
+        # holder and a unique name (no cross-run TOCTOU), so the seeds load.
+        # We snapshot the new units back into self.corpus_dir after the run.
+        import tempfile
+        self._run_corpus_dir = Path(tempfile.mkdtemp(
+            prefix=f"lf_corpus_{self.target_name}_"))
+        n_staged = 0
+        for src in self.corpus_dir.glob("*"):
+            if src.is_file():
+                try:
+                    shutil.copy(src, self._run_corpus_dir / src.name)
+                    n_staged += 1
+                except OSError:
+                    continue
+        logger.info("Staged %d seeds into fresh run-corpus %s",
+                    n_staged, self._run_corpus_dir)
+        corpus_dir_abs = str(self._run_corpus_dir.resolve())
 
         run_cmd = [
             "python3", str(helper_py),
@@ -695,17 +714,29 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             # Use absolute path for corpus dir
             corpus_dir_abs = str(self.corpus_dir.resolve())
 
-            # The fuzzer's --corpus-dir mount staging can empty the host corpus
-            # dir (helper does `rm` on the mount → "Device or resource busy" →
-            # libFuzzer runs on an empty corpus and the host dir ends empty), so
-            # coverage would see nothing. The fuzzer container has exited by
-            # now, so re-ensure the corpus is populated (re-copies the real
-            # project seeds) — coverage then measures the binary over at least
-            # those valid inputs (e.g. the 12 lcms .icc profiles → ICC parse).
+            # Pull the post-fuzz corpus (seeds + newly-discovered units) back
+            # from the fresh run-corpus dir into self.corpus_dir, so coverage is
+            # measured over what the fuzzer actually accumulated — not just the
+            # original seeds. (The run-corpus is the bind-mounted dir libFuzzer
+            # wrote into; see _run_fuzzer for the mount-race rationale.)
+            run_corpus = getattr(self, "_run_corpus_dir", None)
+            if run_corpus and Path(run_corpus).is_dir():
+                pulled = 0
+                for src in Path(run_corpus).glob("*"):
+                    if src.is_file():
+                        dst = self.corpus_dir / src.name
+                        if not dst.exists():
+                            try:
+                                shutil.copy(src, dst)
+                                pulled += 1
+                            except OSError:
+                                continue
+                logger.info("Pulled %d post-fuzz units back from run-corpus",
+                            pulled)
+            # Defensive: if still empty (e.g. seeding failed entirely), re-seed.
             corpus_files = list(self.corpus_dir.glob("*"))
             if not corpus_files:
-                logger.info("Corpus emptied during fuzzing; re-seeding before "
-                            "coverage measurement")
+                logger.info("Corpus empty after run; re-seeding before coverage")
                 self._ensure_seed_corpus()
                 corpus_files = list(self.corpus_dir.glob("*"))
             if not corpus_files:
@@ -962,6 +993,14 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
         if hasattr(self, '_fuzzer_log_handle') and self._fuzzer_log_handle:
             try:
                 self._fuzzer_log_handle.close()
+            except Exception:
+                pass
+
+        # Remove the per-run staging corpus (already pulled back into corpus_dir).
+        run_corpus = getattr(self, "_run_corpus_dir", None)
+        if run_corpus:
+            try:
+                shutil.rmtree(run_corpus, ignore_errors=True)
             except Exception:
                 pass
 
