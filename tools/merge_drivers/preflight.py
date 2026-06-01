@@ -206,10 +206,18 @@ def preflight(
         if not drv_bin.exists():
             res.accepted = False
             res.rejection_reason = f"binary_missing ({drv_bin})"
-        elif drop_on_crash and res.crashed:
+        elif drop_on_crash and res.crashed and res.edges_seen < min_edges:
+            # A crash is only DISQUALIFYING when the driver also made no
+            # forward progress (edges < min). A driver that explores many
+            # edges but happens to crash on the (degenerate) empty/short seed
+            # is a normal fuzz target — under the real run's
+            # ``-ignore_crashes=1`` it crashes-and-continues and still
+            # contributes coverage. Only the truly-dead driver (immediate SEGV,
+            # 0 edges — the merged-harness poison case) is dropped here.
             res.accepted = False
             res.rejection_reason = (
-                f"crash_on_empty (artifact={res.crash_artifact})"
+                f"dead_on_empty (crash + edges={res.edges_seen} < {min_edges}; "
+                f"artifact={res.crash_artifact})"
             )
         elif res.exit_code not in (0, 77, -1) and not res.crashed:
             # -1 = our timeout fallback; 0/77 = clean libFuzzer exit
