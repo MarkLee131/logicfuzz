@@ -474,16 +474,16 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             logger.error(f"No C/C++ files in {self.fuzz_target_dir}")
             return False
 
-        # Auto-detect lib link flags from project's existing build.sh
+        # Auto-detect -l link flags from project's existing build.sh
         # (matches single-file behavior).
         build_sh = dst_project / "build.sh"
-        extra_libs = self.merged_build_libs
-        if build_sh.exists() and not extra_libs:
+        lflags = self.merged_build_libs
+        if build_sh.exists() and not lflags:
             import re
             content = build_sh.read_text()
             lib_matches = re.findall(r'-l\w+', content)
             if lib_matches:
-                extra_libs = ' '.join(sorted(set(lib_matches)))
+                lflags = ' '.join(sorted(set(lib_matches)))
 
         # Drop the entry from the SynthesizedDriver list — emit_oss_fuzz_
         # build_snippet only needs the language/N for snippet shape.
@@ -498,10 +498,32 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             logger.error(f"merged synth driver invalid: {e}")
             return False
 
+        # The merged-dir path must be self-sufficient like the single-file
+        # path: each sub-driver TU #includes the project headers (e.g.
+        # "lcms2.h") and the link needs the project's just-built static
+        # lib(s). emit_oss_fuzz_build_snippet only interpolates what we pass,
+        # so compute the SAME EXT_INC (header dirs) + EXT_LIBS (lib*.a) shell
+        # vars the single-file path uses and prepend them. Without -I the
+        # build fails ("lcms2.h not found"); without the .a it fails to link
+        # cmsOpenProfile* — both surfaced when running merged via
+        # --fuzz-target-dir (single-file masked it by scanning these itself).
+        prelude = f'''
+# === LogicFuzz merged-harness include/lib discovery ===
+EXT_INC=""
+for d in /src/{self.project}/include /src/{self.project} /src/{self.project}/src /src/include /src; do
+  [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
+done
+EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
+'''
+        with open(build_sh, 'a') as f:
+            f.write(prelude)
+
         snippet = drv.emit_oss_fuzz_build_snippet(
             target_name=target_name,
-            extra_libs=extra_libs,
-            extra_includes=self.merged_build_includes,
+            # static lib(s) first, then any -l flags; both after the objects
+            # in the link line so symbols resolve.
+            extra_libs=f'$EXT_LIBS {lflags}'.strip(),
+            extra_includes=f'{self.merged_build_includes or ""} $EXT_INC'.strip(),
             synth_dir_var="/src/synthesized",
         )
         with open(build_sh, 'a') as f:
@@ -509,7 +531,8 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
         logger.info(
             f"Created merged project {self.generated_project_name} "
             f"({drv.driver_count} sub-drivers, "
-            f"libs='{extra_libs}', includes='{self.merged_build_includes}')"
+            f"lflags='{lflags}' + $EXT_LIBS, includes=$EXT_INC + "
+            f"'{self.merged_build_includes}')"
         )
         return True
 
