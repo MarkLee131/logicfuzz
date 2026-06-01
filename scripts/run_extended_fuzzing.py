@@ -186,6 +186,11 @@ class ExtendedFuzzer:
         self.seen_crash_hashes: set = set()
         self.container_name = f"extended_fuzz_{project}_{int(time.time())}"
         self.generated_project_name = None
+        # Separate project/out dir for the COVERAGE build. `build_fuzzers
+        # --sanitizer coverage` writes to build/out/<name>; if that name equals
+        # the address build's, the profile-instrumented binary CLOBBERS the
+        # libFuzzer (sancov) one and the fuzzer runs blind (corp 1/1b forever).
+        self.coverage_project_name = None
         self.initial_coverage: Optional[CoverageData] = None
         self.prev_coverage: Optional[CoverageData] = None
         self._fuzzer_log_handle = None
@@ -341,8 +346,26 @@ class ExtendedFuzzer:
             shutil.copytree(src_project, dst_project)
 
             if self.fuzz_target_dir is not None:
-                return self._setup_merged_dir(dst_project)
-            return self._setup_single_file(dst_project)
+                ok = self._setup_merged_dir(dst_project)
+            else:
+                ok = self._setup_single_file(dst_project)
+            if not ok:
+                return False
+
+            # Mirror the fully-prepared project (our fuzz target COPY + the
+            # build.sh append + Dockerfile changes) into a sibling project used
+            # ONLY for the coverage build. This gives the coverage build its own
+            # build/out/<name>-cov dir so it never overwrites the libFuzzer
+            # (sancov) binary the fuzzer actually runs. ROOT CAUSE of every flat
+            # long run: both builds shared build/out/<gen>; the coverage
+            # (-fprofile-instr-generate) binary clobbered the sancov one, so
+            # libFuzzer got zero edge feedback (corp 1/1b, +0.00% gain forever).
+            self.coverage_project_name = f"{self.generated_project_name}-cov"
+            cov_project = oss_fuzz_dir / "projects" / self.coverage_project_name
+            if cov_project.exists():
+                shutil.rmtree(cov_project)
+            shutil.copytree(dst_project, cov_project)
+            return True
         except Exception as e:
             logger.error(f"Failed to setup project: {e}")
             import traceback
@@ -554,17 +577,41 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             return False
 
     def _build_coverage_image(self) -> bool:
-        """Build with coverage sanitizer for coverage measurement."""
-        logger.info(f"Building coverage image for {self.generated_project_name}...")
+        """Build the coverage-instrumented binary into its OWN out dir.
+
+        Builds project ``<gen>-cov`` so the profile-instrumented binary lands in
+        build/out/<gen>-cov and does NOT clobber the sancov/libFuzzer binary in
+        build/out/<gen> that the fuzzer runs. The cov project shares the address
+        build's docker image (via ``docker tag``) so we skip a second
+        build_image; only ``build_fuzzers --sanitizer coverage`` re-runs.
+        """
+        assert self.coverage_project_name, "coverage_project_name unset (setup not run)"
+        logger.info(f"Building coverage image for {self.coverage_project_name}...")
 
         try:
             oss_fuzz_dir = self._get_oss_fuzz_dir()
             helper_py = oss_fuzz_dir / "infra" / "helper.py"
 
+            # Reuse the already-built project image under the cov project name.
+            tag_cmd = [
+                "docker", "tag",
+                f"gcr.io/oss-fuzz/{self.generated_project_name}",
+                f"gcr.io/oss-fuzz/{self.coverage_project_name}",
+            ]
+            tag_res = subprocess.run(tag_cmd, capture_output=True, text=True)
+            if tag_res.returncode != 0:
+                logger.warning(
+                    "docker tag for cov image failed (%s); falling back to "
+                    "build_image", tag_res.stderr[:300])
+                subprocess.run(
+                    ["python3", str(helper_py), "build_image", "--no-pull",
+                     self.coverage_project_name],
+                    capture_output=True, text=True, timeout=1800)
+
             build_fuzzers_cmd = [
                 "python3", str(helper_py),
                 "build_fuzzers", "--sanitizer", "coverage",
-                self.generated_project_name
+                self.coverage_project_name
             ]
             # Increase timeout for coverage build (20 minutes)
             result = subprocess.run(build_fuzzers_cmd, capture_output=True, text=True, timeout=1200)
@@ -611,6 +658,16 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
         run_cmd = [
             "python3", str(helper_py),
             "run_fuzzer",
+            # CRITICAL: set CORPUS_DIR to the in-container mount path. Without
+            # it, base-runner's run_fuzzer script defaults CORPUS_DIR to
+            # /tmp/<fuzzer>_corpus AND does `rm -rf` + recreate it — which wipes
+            # the seeds we bind-mounted there (helper.py mounts host corpus →
+            # /tmp/<fuzzer>_corpus but never exports CORPUS_DIR). Result was
+            # `corp: 1/1b` / "target rejected all inputs" — seeds never loaded,
+            # so a strict-format target (lcms .icc) got ZERO real fuzzing even
+            # over 4h/268M execs. Setting CORPUS_DIR makes run_fuzzer take the
+            # else-branch (use the dir as-is, no rm).
+            "-e", f"CORPUS_DIR=/tmp/{self.target_name}_corpus",
             "--corpus-dir", corpus_dir_abs,
             self.generated_project_name,
             self.target_name,
@@ -631,6 +688,15 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             "-ignore_crashes=1",
             "-ignore_timeouts=1",
             "-ignore_ooms=1",
+            # Raise the RSS ceiling: a merged harness runs N sub-drivers in one
+            # process and their cumulative allocations + libFuzzer's own corpus
+            # bookkeeping blow past the 2560Mb default in minutes, killing a
+            # long run prematurely (observed: c-ares OOM at 2622Mb after ~30s,
+            # ending a 4h run early). 8Gb lets a long campaign actually run.
+            "-rss_limit_mb=8192",
+            # Bound per-input memory so a single pathological input can't OOM
+            # the whole run (-malloc_limit defaults to rss_limit; keep it lower).
+            "-malloc_limit_mb=3072",
         ]
 
         logger.info(f"Starting fuzzer: {' '.join(run_cmd)}")
@@ -752,7 +818,9 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
                 "--fuzz-target", self.target_name,
                 "--no-serve",
                 "--port", "",
-                self.generated_project_name
+                # Measure against the coverage-instrumented build (its own out
+                # dir), NOT the address build the fuzzer runs.
+                self.coverage_project_name
             ]
 
             result = subprocess.run(
@@ -768,10 +836,10 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
                 return None
 
             # Parse coverage from summary.json
-            if not self.generated_project_name:
-                logger.warning("No generated project name")
+            if not self.coverage_project_name:
+                logger.warning("No coverage project name")
                 return None
-            build_out = oss_fuzz_dir / "build" / "out" / self.generated_project_name
+            build_out = oss_fuzz_dir / "build" / "out" / self.coverage_project_name
             summary_file = build_out / "report" / "linux" / "summary.json"
 
             if not summary_file.exists():
@@ -1004,13 +1072,15 @@ $CXX $CXXFLAGS /tmp/ext_fuzzer.o $EXT_LIBS $LIB_FUZZING_ENGINE {extra_l} -o $OUT
             except Exception:
                 pass
 
-        if self.generated_project_name:
+        for proj in (self.generated_project_name, self.coverage_project_name):
+            if not proj:
+                continue
             try:
                 oss_fuzz_dir = self._get_oss_fuzz_dir()
-                project_dir = oss_fuzz_dir / "projects" / self.generated_project_name
+                project_dir = oss_fuzz_dir / "projects" / proj
                 if project_dir.exists():
                     shutil.rmtree(project_dir)
-                    logger.info(f"Cleaned up project {self.generated_project_name}")
+                    logger.info(f"Cleaned up project {proj}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup: {e}")
 
