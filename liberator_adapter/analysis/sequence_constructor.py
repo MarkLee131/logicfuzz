@@ -142,7 +142,17 @@ def _build_prefix(
         cands = [p for p in idx.producers.get(t, []) if p.role is APIRole.CREATOR]
         if not cands:
             return False
-        producer = sorted(cands, key=lambda s: (len(s.requires), s.name))[0]
+        # Prefer a creator that INGESTS FUZZER BYTES (has an INPUT_BUFFER arg,
+        # e.g. cmsOpenProfileFromMem) over an equivalent synthetic creator
+        # (cmsCreateBCHSWabstractProfile): both produce the same handle type, but
+        # only the byte-parsing one turns fuzz input into the handle's state, so
+        # downstream consumers (cmsReadTag → cmstypes.c tag deserializers) reach
+        # real depth instead of operating on a fixed in-memory object. Tie-break
+        # by fewest prerequisites, then name (deterministic).
+        def _creator_key(s: APISemantics) -> Tuple[int, int, str]:
+            is_entry = any(a.role is ArgRole.INPUT_BUFFER for a in s.args)
+            return (0 if is_entry else 1, len(s.requires), s.name)
+        producer = sorted(cands, key=_creator_key)[0]
         in_progress.add(t)
         for rt in producer.requires:
             resolve(rt, depth + 1)   # best-effort: a sub-req hole is fine

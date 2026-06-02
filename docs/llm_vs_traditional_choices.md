@@ -214,12 +214,12 @@ APIs and suggest a refined driver.
   - Improver: rewrite the driver to chase the identified
     uncovered code.
 
-**Traditional alternative considered:**
-`liberator_adapter/constraints/coverage_aware_filter.py` (L5) does
-the symbolic version of "identify which sequences cover novel code"
-— but it operates on the *sequence-selection* layer (before
-synthesis), not on the *driver-rewriting* layer (after running). The
-two are complementary, not interchangeable.
+**Traditional alternative considered:** A symbolic novelty filter at the
+*sequence-selection* layer (the deleted L5 `coverage_aware_filter.py`, now
+replaced by reachability-first ranking + G5 coverage-gap targeting in
+`coverage_gap.py`) addresses "which sequences cover novel code" *before*
+synthesis — a different layer from the *driver-rewriting* layer the Improver
+works at (after running). The two are complementary, not interchangeable.
 
 A pure-symbolic Improver would have to:
   1. Diff the per-line coverage with what the driver "should" cover

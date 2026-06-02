@@ -553,13 +553,39 @@ def extract_api_effects(
     # intentional so the body doesn't have to branch on ``None``.
     _consumed = consumed_handle_keys or globals()["consumed_handle_keys"]
     _produced = extract_produced_handles or globals()["extract_produced_handles"]
+    _normalize = normalize_handle_type or globals()["normalize_handle_type"]
+
+    # Value-type (enum/scalar) exclusion. A non-primitive identifier like
+    # ``cmsTagSignature`` passes ``is_handle_type`` (it isn't a known scalar),
+    # so without this it would be counted as a USE'd/produced handle — making
+    # ``cmsReadTag`` falsely "require" a cmstagsignature handle (no producer →
+    # USE_BEFORE_INIT → the open→ReadTag→close tag-deserializer path is dropped).
+    # A resource handle is carried by a pointer (``*`` in the spelling, or
+    # ``flag == 'ref'`` once Liberator collapses ``typedef void* H`` to ``H``);
+    # an enum/scalar is passed by value. A type NEVER seen by reference but seen
+    # by value is a value type, not a handle. Derived from the API set itself —
+    # no project enum list needed (``enum_types.txt`` is often empty).
+    _ref_types: Set[str] = set()
+    _val_types: Set[str] = set()
+    for api in project_apis:
+        for arg in (api.get("arguments", api.get("arguments_info", [])) or []):
+            atype = arg.get("type", arg.get("type_clang", "")) or ""
+            key = _normalize(atype)
+            if not key:
+                continue
+            is_ptr = "*" in atype or (arg.get("flag") or "").lower() == "ref"
+            if is_ptr:
+                _ref_types.add(key)
+            elif (arg.get("flag") or "").lower() in ("val", ""):
+                _val_types.add(key)
+    _value_types = _val_types - _ref_types
 
     effects: Dict[str, APIEffect] = {}
     for api in project_apis:
         name = api.get('function_name', '')
         if not name:
             continue
-        use_set = frozenset(_consumed(api))
+        use_set = frozenset(_consumed(api)) - _value_types
         # Iterator / forwarder exclusion: a production for handle H is dropped
         # when H is also USE'd by the same API (e.g. ``sqlite3_next_stmt(stmt*)
         # → stmt*``). Such an API traverses an existing instance rather than
@@ -576,7 +602,7 @@ def extract_api_effects(
                 confidence=float(conf),
             )
             for h, ch, conf in raw_productions
-            if h not in use_set
+            if h not in use_set and h not in _value_types
         )
         def_set = frozenset(p.handle for p in productions)
         effects[name] = APIEffect(

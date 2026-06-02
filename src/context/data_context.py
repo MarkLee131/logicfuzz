@@ -905,6 +905,32 @@ class FuzzingContext:
                 if automaton_artifact is not None else None
             )
 
+            # Typedef-handle recovery (root cause for void*-collapsed handles).
+            # Liberator's extractor expands typedefs to their underlying type, so
+            # an opaque handle (``typedef void* cmsHPROFILE``) collapses to
+            # ``void*``/``i8*`` and the handle classifier drops every
+            # produces/requires edge — the dependency graph for such a library is
+            # empty (lcms: profiles/transforms/IT8 all void*), so no
+            # creator→consumer→destroyer chain (e.g. open→cmsReadTag→close, the
+            # cmstypes.c tag-deserializer coverage path) can be constructed.
+            # Re-type the collapsed slots back to the typedef found in the public
+            # headers + exported_functions before reconcile reads effects.
+            # Safety: only UPGRADES void*/i8* to a non-primitive typedef; byte
+            # buffers (declared ``const void*``) stay buffers. Disable with
+            # LOGICFUZZ_DISABLE_TYPEDEF_RECOVERY=1.
+            if not os.environ.get('LOGICFUZZ_DISABLE_TYPEDEF_RECOVERY'):
+                try:
+                    from liberator_adapter.analysis.handle_typedef_recovery \
+                        import recover_from_extract_metadata
+                    _n_up = recover_from_extract_metadata(
+                        project_apis,
+                        getattr(generator, 'extract_metadata', None))
+                    if _n_up:
+                        log.info('   5g/12 typedef-handle recovery: upgraded '
+                                 '%d collapsed handle slots', _n_up)
+                except Exception as _tre:
+                    log.debug('   5g typedef-handle recovery skipped: %s', _tre)
+
             _reconcile_kwargs = dict(
                 project=project_name,
                 condition_info=condition_info,

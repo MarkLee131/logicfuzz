@@ -63,13 +63,12 @@ python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz
 
 | Doc | Subsystem |
 |-----|-----------|
-| `docs/generation_stage_redesign.md` | **Active SoT for driver generation.** Root-cause diagnosis (4 classes / 11 problems) + MVP fix plan (G1–G4: APISemanticModel → construct → rank → semantic holes). Start generation work here. |
-| `docs/system_design_status.md` | 5-phase panorama + non-generation status (Phase C/G, merge). Phase A / F1–F4 entries superseded by the redesign. |
+| `docs/generation_stage_redesign.md` | **Active SoT for driver generation.** Root-cause diagnosis (4 classes / 11 problems) + landed G1–G5 (APISemanticModel → construct → gap-direct → rank → semantic holes) + the binding-layer bottleneck §8. Start generation work here. |
+| `docs/system_design_status.md` | Non-generation panorama: tool-goal framing, Phase B/C/D/E status, the P1–P11 cross-phase info-flow debt, and the feedback/binding-layer roadmap (F5–F7 + WorkingMemory). Generation stage deferred to the redesign doc. |
 | `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) and the PromeFuzz-derived knowledge layer. |
-| `docs/logicfuzz_vs_promefuzz.md` | Objective descriptive comparison of LogicFuzz vs `reference/promefuzz` driver generation. |
+| `docs/contributions_and_related_work.md` | **Contributions pitch (3 innovations vs prior work) + objective comparison vs PromeFuzz (neural baseline) and Liberator (symbolic baseline).** Merges the former `logicfuzz_vs_promefuzz.md` + `upstream_liberator_diffs.md`. |
 | `docs/phase_e_adaptive_shape.md` | **Deferred** — driver-shape variety; sequenced after redesign G4 (semantic holes). |
 | `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`). |
-| `docs/upstream_liberator_diffs.md` | Upstream Liberator issues the adapter has fixed. |
 | `docs/llm_vs_traditional_choices.md` | Per-LLM-call-site rationale: symbolic alternative considered, why LLM won, falsifiable measurement to revisit. |
 
 Historical proposals and refactor logs live in git history (`git log --grep`).
@@ -315,3 +314,5 @@ Legacy `Z3SequenceValidator` quantified lifecycle order constraints over the **A
 ### §10B v1/v2 baseline-regression alert at per-trial granularity (under reconsideration)
 
 `§10B` landed (commits `9b2cf883`, `f6dd60b6`) but operates at single-trial level. The proper unit is post-merge (multi-trial harness vs baseline). Per-trial recovery in `BaselineDiffAnalyzer` wastes LLM calls on the wrong granularity. To be folded into Phase C CEGAR loop (`system_design_status.md` Tier 4).
+
+kx: 当前放进prompt里的driver信息里，是否做了noise 过滤？ 比如driver里的license需要移除掉。

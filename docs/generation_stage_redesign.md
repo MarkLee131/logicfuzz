@@ -249,7 +249,7 @@ Deterministic sources per field (LLM only on the residual):
 
 ## 4b. Prior-art check — does PromeFuzz's code help? (verdict: barely)
 
-Checked `reference/promefuzz` against G1–G4 (see `docs/logicfuzz_vs_promefuzz.md`).
+Checked `reference/promefuzz` against G1–G4 (see `docs/contributions_and_related_work.md`).
 Conclusion: **PromeFuzz offers almost nothing reusable for this redesign**, and
 that confirms the direction is net-new rather than a reinvention.
 
@@ -347,10 +347,9 @@ does not require executing the target).
 - `docs/phase_e_adaptive_shape.md` — Phase E (shape variety) is **downstream of
   G4**: shape variants only make sense once holes carry semantics. Keep, but
   sequence it after G1–G4.
-- `docs/automaton.md`, `docs/logicfuzz_vs_promefuzz.md`,
-  `docs/llm_vs_traditional_choices.md`, `docs/merge_drivers.md`,
-  `docs/upstream_liberator_diffs.md` — unaffected (describe components that
-  fold in or are orthogonal).
+- `docs/automaton.md`, `docs/contributions_and_related_work.md`,
+  `docs/llm_vs_traditional_choices.md`, `docs/merge_drivers.md` — unaffected
+  (describe components that fold in or are orthogonal).
 
 ---
 

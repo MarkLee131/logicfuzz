@@ -51,12 +51,20 @@ multi-source observation                         (shipped)
   merged automaton — ~95% compression typical
         │
         ▼  AutomatonArtifact
-        ├─ acceptance_score(seq)            ──► L4 ranker secondary axis
-        ├─ sample_accepting_paths(8)        ──► L4 candidate-pool augmentation
-        ├─ graft_creator_prefix(seq)        ──► repair unaccepted L0–L4 candidates
+        ├─ acceptance_score(seq)            ──► L4 ranker PRIMARY axis (G3)
+        ├─ sample_accepting_paths(8)        ──► prototyper <protocol_templates>
+        ├─ graft_creator_prefix(seq)        ──► L4 candidate variant (ranking signal)
         ├─ observed_apis()                  ──► comprehender prefilter
-        └─ samples for prototyper           ──► <protocol_templates> prompt section
+        └─ post_parse_extensions(seq)       ──► extend parse→get_object prefixes
 ```
+
+> Note (post-redesign G3): `acceptance_score` is now the **primary** L4 sort
+> axis (diversity demoted to tiebreak). `sample_accepting_paths` are a
+> *ranking/template* signal, **not** a candidate source — raw paths are
+> mid-stream fragments that fail lifecycle yet score ≈1.0 (see
+> `generation_stage_redesign.md` §8). `graft_creator_prefix` survives only as
+> an L4 ranking variant; the Phase A repair engine that also consumed it was
+> deleted in G2.
 
 All five points of contact are wired in `FuzzingContext.prepare()`
 Step 5e2 → Step 5f → Step 6b → prototyper.
@@ -264,112 +272,32 @@ covered.
 - B: canonical `create_query → free_string`, `mkquery → free_string`,
   plus an 8-API real test protocol
 
-## 9. Future work
+## 9. Future work (condensed)
 
-### 9.1 Z3 hard pruning of merge candidates
+Speculative extensions, not yet built. Each is independently sequenced;
+detailed sketches in git history if revived.
 
-EDSM's evidence score (typestate match + suffix overlap + sqrt-witness
-mass) is *soft*. Two states that score high may have *contradictory*
-typestate constraints once unfolded with the existing Z3 solver.
-
-`liberator_adapter/analysis/edsm.py:merge` builds candidate state
-pairs. Today the per-pair decision is `evidence_score → maybe oracle
-→ accept/reject`. Future hook:
-
-```
-for pair in candidate_pairs:
-    if Z3.check(pair.merged_typestate_constraints) == UNSAT:
-        skip(pair)              # hard prune, no oracle call
-        continue
-    score = evidence_score(pair)
-    ...
-```
-
-`liberator_adapter/driver/factory/constraint_based/z3_solver.py`'s
-`IncrementalZ3Solver` already supports `push`/`pop`. EDSM would push
-the merged-state assertions, run `check()`, pop. ~80 LOC + a
-typestate→Z3 formula translator (the only nontrivial piece — the
-existing `Typestate` model is small enough that this is a switch on
-`ResourceLifecycleState`).
-
-Z3 is *cheaper* than the LLM oracle and *strictly sound* for the
-typestate fragment. The expected effect is that the oracle call rate
-drops by another order of magnitude.
-
-### 9.2 LLM oracle proposal throttling
-
-Current EDSM in evidence-only mode meets P1 acceptance criteria.
-Asking the oracle on every same-bucket pair costs ~$40 in
-`gpt-4o-mini` for sqlite3 (44k candidate merges). Not justified for
-validation; required for paid production.
-
-Plan:
-1. After Z3 hard pruning (§9.1), candidate set is much smaller.
-2. Sort the survivors by evidence score; only consult the oracle on
-   the *uncertain band* (score ∈ [1.0, 2.5] — calibrate per project).
-3. Cap absolute number of oracle calls per project (default 100).
-4. Cache by `(project, state_pair_signature)` so re-runs are free.
-
-~30 LOC in `edsm.py:merge`, no new modules.
-
-### 9.3 Closed-loop refinement
-
-When CBFactory builds or runs a generated driver, every build/crash
-failure is a *negative* example for the automaton: the sequence the
-driver actually called is *not* in the project's protocol language.
-Feed those back into the EDSM training set as explicit-negative
-traces. Re-run merge incrementally.
-
-```
-supervisor:
-  on crash_feasibility = "driver bug":
-    sequence_from_driver = extract_api_call_order(driver_source)
-    learner.add_negative_example(sequence_from_driver, signature=crash_sig)
-    if learner.signature_count(crash_sig) >= 3:
-        artifact = learner.refine(automaton_artifact)
-        FuzzingContext.automaton_artifact = artifact   # hot-swap
-```
-
-Entry points:
-- `src/workflow/nodes/supervisor.py` — insert `learner` node between
-  `crash_feasibility_analyzer` and `fixer` on the `driver bug` branch.
-- `src/workflow/state.py` — add `automaton_negative_examples: list[seq]`
-  to `FuzzingWorkflowState`.
-- `liberator_adapter/analysis/edsm.py` — extend `merge()` to accept
-  explicit negative pairs; veto any merge that would accept any of them.
-
-This is the *symbolic* counterpart of PromeFuzz's `ConstraintLearner`
-(see § 12 below — natural-language version).
-
-### 9.4 A2DG (Automaton → Driver Generator)
-
-**Today**: `sample_accepting_paths(8)` injects 8 protocol-shaped
-sequences into the L4 candidate pool. They're rendered as
-`<protocol_templates>` for the prototyper to mimic.
-
-**Next**: A real A2DG would *compositionally* enumerate driver
-templates from the automaton, parameterised over fuzzer-data
-consumption sites:
-
-```
-for path in automaton.paths(min_len=3, max_len=8, max_paths=K):
-    for entry_api in path:
-        if entry_api.consumes(uint8_t*, size_t):
-            yield render_driver_template(path, entry_index=entry_api)
-```
-
-This *replaces* the prototyper's freeform-generation step for the
-common case, falling back to LLM only when no path satisfies a
-desired constraint (e.g. "must call `parser_set_options` with
-non-default flags").
-
-Open questions:
-1. How to parameterise non-fuzzer arguments (pick a constant, sample
-   from `ConditionManager`'s SOURCE set, leave as a free variable
-   that the LLM completes?).
-2. How to merge multiple paths into a single driver (witness-cover
-   the automaton in K drivers — connects back to the budgeted
-   max-coverage formulation in §3).
+- **Z3 hard pruning of merge candidates.** EDSM's evidence score is *soft*;
+  high-scoring state pairs can have contradictory typestate once unfolded.
+  Push the merged-state assertions through the existing `IncrementalZ3Solver`
+  (`push`/`pop`), skip UNSAT pairs before scoring. Z3 is cheaper than and
+  strictly sound vs. the LLM oracle; expected to drop oracle call rate by an
+  order of magnitude. Needs a typestate→Z3 translator.
+- **LLM oracle proposal throttling.** Evidence-only EDSM is what ships;
+  oracle-on-every-pair costs ~$40 (gpt-4o-mini, sqlite3, 44k merges). Plan:
+  Z3-prune first, then consult oracle only on the uncertain evidence band,
+  cap calls per project, cache by `(project, state_pair_signature)`.
+- **Closed-loop negative refinement.** A build/crash failure is a *negative*
+  example: the driver's actual call sequence is not in the protocol language.
+  Feed those back into EDSM as explicit-negative traces (veto merges that
+  would accept them). Symbolic counterpart of PromeFuzz's ConstraintLearner
+  (§12).
+- **A2DG (Automaton → Driver Generator).** Today `sample_accepting_paths`
+  seeds `<protocol_templates>` for the prototyper. A full A2DG would
+  compositionally enumerate driver templates from the automaton, parameterised
+  over fuzzer-data consumption sites, falling back to LLM only when no path
+  satisfies a desired constraint. Open: non-fuzzer arg parameterisation;
+  witness-covering K paths into one driver (the §3 max-coverage formulation).
 
 ## 10. Open questions / non-goals
 
@@ -391,41 +319,6 @@ Open questions:
   results (graft picked the wrong creator for ambiguous handles like
   `int64_t`-returning extractors). Doesn't affect the canonical case;
   ranker drops them naturally.
-
-## 11. Reproduce
-
-```bash
-python3 - <<'PY'
-import json, sys
-from pathlib import Path
-sys.path.insert(0, '/home/likaixuan/fuzzing/logicfuzz')
-ROOT = Path('/home/likaixuan/fuzzing/logicfuzz')
-from liberator_adapter.constraints import select_top_k_sequences, analyze_entry_points
-from liberator_adapter.analysis import learn_project_automaton
-
-proj = 'sqlite3'  # try libucl, sqlite3, c-ares
-src = ROOT/'results'/proj/'src_ossfuzz'/proj
-apis = json.loads((ROOT/'results'/proj/'static_analysis/project_apis.json').read_text())['apis']
-fs = json.loads((ROOT/'results'/proj/'static_analysis/filtered_sequences.json').read_text())
-candidates = [item['apis'] for item in fs['sequences'] if item.get('apis')]
-
-art = learn_project_automaton(
-    project=proj, source_root=src, consumer_paths=['test'],
-    project_apis=apis, output_dir=ROOT/'results'/proj/'automaton',
-    enable_llm_oracle=False,
-)
-ep = analyze_entry_points(apis)
-
-selB, sumB = select_top_k_sequences(
-    candidates, entry_point_analysis=ep.to_dict(), top_k=12,
-    automaton_artifact=art,
-)
-print(f'unique APIs in selection: {len({a for s in selB for a in s})}')
-print('automaton stats:', sumB.get('automaton'))
-for s in selB:
-    print(f'  [{art.acceptance_score(s):.2f}] {s}')
-PY
-```
 
 ## 11. Knowledge layer — Comprehender (PromeFuzz Tier-1 (A), shipped)
 
@@ -586,51 +479,19 @@ The comprehender's true job is therefore redefined:
 
 ## 12. Knowledge layer — ConstraintLearner (PromeFuzz Tier-1 (B), design only)
 
-PromeFuzz reference: `promefuzz_ref/src/generator/learner.py:259-337`.
+PromeFuzz's crash-driven learner (`reference/promefuzz` `generator/learner.py`):
+bucket crashes by ASan signature; when a signature accumulates ≥3 crashes, an
+LLM call extracts a constraint and **appends it to
+`comprehension.functions[api]`**, so subsequent generation reads usage already
+augmented with the rule (knowledge persists). Not yet ported here.
 
-### 12.1 Mechanism
-
-1. Bucket crashes by ASan signature (`CrashRecorder`).
-2. When a signature accumulates ≥3 crashes, fire `ConstraintLearner.learn_constraint`:
-   - `CrashReportComposer` assembles report + related-API list.
-   - LLM call (`learn_crash_constraint.{sys, explain.usr, learn.usr, fix.usr}`).
-   - Parse fenced JSON: `{api_name: constraint_text}`.
-   - **Append `constraint_text` to `comprehension.functions[api_name]`**;
-     rewrite `comp.{pkl,json}`.
-3. Subsequent generation reads usage already augmented with the rule —
-   **knowledge persists**.
-4. Side effect: `Scheduler.TempBanAPIs(related)` skips related APIs for
-   the next few rounds.
-
-### 12.2 Integration (future)
-
-| Site | Change |
-|------|--------|
-| Workflow | `src/workflow/nodes/supervisor.py`: insert `constraint_learner` between `crash_feasibility_analyzer` and `fixer`. Trigger only when feasibility = "driver bug" AND signature count ≥ 3. |
-| State | `src/workflow/state.py:FuzzingWorkflowState`: add `crash_signatures: dict[sig→count]`, `learned_constraints: dict[api→list[str]]`. |
-| Knowledge writeback | append constraint text to `ctx.comprehension.functions[api]` — shares the same per-API knowledge object as § 11. |
-| Prompts | Port `learn_crash_constraint_*.{sys,usr}`. |
-| Reuse | Keep `CrashAnalyzer` as the triage gate before learner fires; do not replace. |
-
-### 12.3 Relationship to the automaton's closed-loop refinement (§ 9.3)
-
-Two complementary paths feed the same crash signal:
-
-| Path | Output | Consumer |
-|------|--------|----------|
-| ConstraintLearner (this section) | natural-language constraint appended to `comprehension.functions[api]` | prototyper LLM, next iteration |
-| Automaton closed-loop (§ 9.3) | symbolic negative example fed to EDSM as "this sequence is *not* in the language" | L4 ranker via `acceptance_score`, next iteration |
-
-Both should eventually coexist. The constraint text grounds the LLM
-fixer; the automaton grounds the L4 ranker.
-
-### 12.4 PromeFuzz Tier-2 / Tier-3 we do NOT port
-
-| Item | PromeFuzz file | Why not |
-|------|----------------|---------|
-| Complexity score `sqrt(LoC × (reachable+1))` | `complexity.py` | L4 ranker already has reachable-node count; marginal gain unclear |
-| Multi-axis `RelevanceCalculator` (4 weighted signals) | `relevance.py`, `scheduler.py` | Our 4 relevance signals come for free from static analysis |
-| `function_failed_times` / `deprecated_functions` / `TempBanAPIs` | `scheduler.py` | Only meaningful paired with (B); deferred until (B) ships |
+It is the **natural-language counterpart** of the automaton's closed-loop
+negative refinement (§9): both feed the same crash signal, but the
+ConstraintLearner grounds the LLM fixer (prose constraint) while the automaton
+grounds the L4 ranker (symbolic negative example). Both should eventually
+coexist. PromeFuzz's Tier-2/3 scheduler machinery (complexity score, multi-axis
+relevance, TempBanAPIs) is **not** ported — our L4 ranker + static-analysis
+relevance signals already cover it.
 
 ---
 
