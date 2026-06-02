@@ -314,5 +314,3 @@ Legacy `Z3SequenceValidator` quantified lifecycle order constraints over the **A
 ### §10B v1/v2 baseline-regression alert at per-trial granularity (under reconsideration)
 
 `§10B` landed (commits `9b2cf883`, `f6dd60b6`) but operates at single-trial level. The proper unit is post-merge (multi-trial harness vs baseline). Per-trial recovery in `BaselineDiffAnalyzer` wastes LLM calls on the wrong granularity. To be folded into Phase C CEGAR loop (`system_design_status.md` Tier 4).
-
-kx: 当前放进prompt里的driver信息里，是否做了noise 过滤？ 比如driver里的license需要移除掉。
