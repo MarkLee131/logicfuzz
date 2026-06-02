@@ -1626,16 +1626,11 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if driver_sources:
             lines.append("<reference_drivers>")
             for d in driver_sources[:3]:
-                source = d['source']
-                # Strip license header if present (simple heuristic)
-                if source.startswith('/*') or source.startswith('//'):
-                    import re
-                    source = re.sub(r'^(/\*.*?\*/|//.*?\n)+\s*',
-                                    '',
-                                    source,
-                                    flags=re.DOTALL)
+                # Sources are license-stripped at load time
+                # (data_context._extract_existing_driver_knowledge), so render
+                # as-is — no second, weaker heuristic strip here.
                 lines.append(f"<driver path=\"{d['path']}\">")
-                lines.append(source)
+                lines.append(d['source'])
                 lines.append("</driver>")
             lines.append("</reference_drivers>")
 

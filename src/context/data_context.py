@@ -2273,60 +2273,46 @@ def _strip_license_header(source: str) -> str:
     """
     lines = source.split('\n')
 
-    # Track where the license block ends
-    code_start_index = 0
+    # Span the maximal LEADING comment region: contiguous blank / ``//`` /
+    # ``/* ... */`` lines before the first real code line. A license header is a
+    # multi-line comment that often opens with a decorative divider
+    # (``//------``) or blank ``//`` lines carrying no keyword — the old
+    # line-by-line keyword gate broke on those and stripped nothing (lcms's
+    # ``//----`` header survived verbatim). We instead consume the whole leading
+    # comment block, then strip it ONLY if a license keyword appears anywhere in
+    # it — so a genuine leading doc comment with no license text is preserved.
+    region_end = 0          # first index that is real code
     in_block_comment = False
-
     for i, line in enumerate(lines):
         stripped = line.strip()
-
-        # Handle block comment start
-        if stripped.startswith('/*'):
-            in_block_comment = True
-            # Check if block comment ends on same line
-            if '*/' in stripped:
-                in_block_comment = False
-            code_start_index = i + 1
-            continue
-
-        # Handle block comment end
         if in_block_comment:
+            region_end = i + 1
             if '*/' in stripped:
                 in_block_comment = False
-            code_start_index = i + 1
+                # block may close and reopen / be followed by code on same line
+                if stripped.endswith('*/'):
+                    continue
             continue
-
-        # Handle line comments at the start (often license headers)
-        if stripped.startswith('//'):
-            # Check if this looks like license/copyright
-            lower = stripped.lower()
-            if any(kw in lower for kw in [
-                    'copyright', 'license', 'permission', 'redistribution',
-                    'disclaimer', 'warranty', 'use of this source', 'apache',
-                    'mit', 'bsd'
-            ]):
-                code_start_index = i + 1
-                continue
-            # Stop if we see actual code comments (not license)
-            if not any(kw in lower for kw in [
-                    'copyright', 'license', 'permission', 'redistribution',
-                    'http://', 'https://'
-            ]):
-                break
-
-        # Empty lines at the start - keep scanning
         if not stripped:
-            code_start_index = i + 1
+            region_end = i + 1
             continue
+        if stripped.startswith('/*'):
+            in_block_comment = '*/' not in stripped
+            region_end = i + 1
+            continue
+        if stripped.startswith('//'):
+            region_end = i + 1
+            continue
+        break   # first non-blank, non-comment line → real code
 
-        # Non-comment, non-empty line - this is code, stop here
-        break
-
-    # Return code starting from after the license
-    result = '\n'.join(lines[code_start_index:])
-
-    # Strip leading empty lines
-    return result.lstrip('\n')
+    header = '\n'.join(lines[:region_end]).lower()
+    is_license = any(kw in header for kw in (
+        'copyright', 'license', 'permission', 'redistribution', 'disclaimer',
+        'warranty', 'use of this source', 'spdx', 'apache', '(c)', 'all rights',
+    ))
+    if not is_license:
+        return source.lstrip('\n')
+    return '\n'.join(lines[region_end:]).lstrip('\n')
 
 
 def _extract_existing_driver_knowledge(project_name: str,
@@ -2388,7 +2374,13 @@ def _extract_existing_driver_knowledge(project_name: str,
         except OSError as e:
             log.debug("Skipping driver %s: %s", path, e)
             continue
-        all_driver_sources.append({'path': str(path), 'source': text})
+        # Strip the license/copyright header at the single point where driver
+        # sources are loaded, so EVERY downstream consumer (Prototyper
+        # <reference_drivers>, pattern analyzer, idiom distiller) sees clean
+        # code — not the ~15-line Apache/Google boilerplate that is pure prompt
+        # noise and burns tokens. Robust block-/line-comment strip; idempotent.
+        all_driver_sources.append(
+            {'path': str(path), 'source': _strip_license_header(text)})
 
     # The Prototyper-facing slice is bounded by ``max_drivers``.
     driver_sources = all_driver_sources[:max_drivers]
@@ -2450,11 +2442,11 @@ def _analyze_driver_patterns(driver_sources: List[Dict[str, str]],
     from src.utils.prompt_loader import load_prompt_file
     from src.agents.utils import parse_tag
 
-    # Format driver code - strip license headers to save tokens
+    # Driver sources are already license-stripped at load time
+    # (_extract_existing_driver_knowledge), so this is a plain format.
     drivers_text = ""
     for i, d in enumerate(driver_sources[:5]):
-        source = _strip_license_header(d['source'])
-        drivers_text += f"\n=== Driver {i+1}: {d['path']} ===\n{source}\n"
+        drivers_text += f"\n=== Driver {i+1}: {d['path']} ===\n{d['source']}\n"
 
     # Load prompt from file
     try:
