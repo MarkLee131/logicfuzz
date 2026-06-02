@@ -706,8 +706,17 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
             # the priority here is that the fuzzer actually RUNS so coverage is
             # measurable.) ``crashes_dir_abs`` retained for host-side globbing.
             "-artifact_prefix=/tmp/",
+            # Fork mode: REQUIRED for -ignore_crashes/-ignore_timeouts/-ignore_ooms
+            # to have any effect. In non-fork mode an ASan abort (e.g. a single
+            # buggy sub-driver in a merged harness) kills the whole process, so a
+            # 4h campaign died at ~10s on lcms_merged8's heap-overflow in 05.c
+            # (UnrollChunkyBytes via cmsDoTransform) despite -ignore_crashes=1.
+            # With -fork=1 libFuzzer runs each batch in a child; a crashing child
+            # is recorded (artifact saved) and the parent spawns a fresh child and
+            # keeps fuzzing — one poison sub-driver no longer ends the run.
+            "-fork=1",
             # Continue fuzzing after crashes (standard practice for 24h evaluation)
-            # -ignore_crashes=1: Save crash but continue fuzzing
+            # -ignore_crashes=1: Save crash but continue fuzzing (fork mode only)
             "-ignore_crashes=1",
             "-ignore_timeouts=1",
             "-ignore_ooms=1",
