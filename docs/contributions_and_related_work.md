@@ -166,6 +166,28 @@ LogicFuzz fixes structure symbolically and lets the LLM decide leaf values.*
   fully-wired CEGAR loop (Phase C data only); happy-path driver shape only
   (variety deferred — `docs/generation.md` F5).
 
+### Harness merge — four optimisations beyond PromeFuzz
+
+After per-driver generation, `tools/merge_drivers/` fuses N drivers into one
+multi-task OSS-Fuzz binary (the O1 preflight → O2 select → O3 merge → O4 corpus
+chain; wired via `run_logicfuzz.py --merge-drivers`). **Why merge at all:**
+per-driver runs fragment the exec budget and share nothing across drivers;
+folding them into one binary that dispatches on a discriminator word lets the
+fuzzer's mutator implicitly schedule across sub-harnesses — an interesting input
+for harness A transfers to B with a single-byte mutation. We adopt PromeFuzz's
+multi-TU + entry-dispatcher structure, then add four optimisations:
+
+| # | LogicFuzz | PromeFuzz baseline | Why |
+|---|---|---|---|
+| 1 | Multi-TU, only the public symbol renamed (`…_<id>`) | single-file flatten | flattening link-fails on duplicate `static` symbols / macro clashes |
+| 2 | Selector at input **tail** | selector at offset 0 | mutators are prefix-biased; a head selector churns sub-harness routing on every front-byte flip — tail keeps the body locally stable for deep exploration |
+| 3 | **Coverage-aware** O2 pre-prune (max-coverage greedy on reached-functions) | include all drivers | drops drivers whose coverage is subsumed |
+| 4 | **CDF** weighted dispatch (bucket width ∝ marginal coverage) | uniform `selector % N` | high-overlap drivers don't waste equal budget |
+
+(CDF-vs-uniform on real 24h campaigns is empirically untested; both modes are
+exposed — `--mode cdf` / `uniform` — so the complexity can be A/B'd before being
+kept. Implementation lives in `tools/merge_drivers/{preflight,select,merge,corpus}.py`.)
+
 ---
 
 ## 4. Comparison vs Liberator (symbolic baseline)

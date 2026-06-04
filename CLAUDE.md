@@ -29,12 +29,11 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml --closed-loop --closed-loop-it
 
 # A/B: disable G2 model-driven construction, fall back to random-walk grammar
 LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.yaml
-# (--no-coverage-filter is now a no-op: L5 was deleted in G3)
 
 # Synthesize a multi-task harness from successful trials at the eval tail
 python3 run_logicfuzz.py -y comparison/cjson.yaml --merge-drivers
 
-# Evaluation profile: bundles --closed-loop + --merge-drivers (+ legacy --no-coverage-filter no-op)
+# Evaluation profile: bundles --closed-loop + --merge-drivers
 python3 run_logicfuzz.py -y comparison/cjson.yaml --eval
 
 # Multi-hop reasoning Mode A (Prototyper); opt-in
@@ -64,7 +63,6 @@ python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz
 | `docs/generation.md` | **SoT for driver generation.** The built G1–G5 pipeline (APISemanticModel → construct → gap-direct → rank → semantic holes), the three load-bearing lessons, the open binding-layer bottleneck, and surrounding-phase status + roadmap (B/C/D landed, E/F5–F7 open). Start generation work here. |
 | `docs/knowledge_layer.md` | PromeFuzz-derived comprehender (two-stage, deterministic-first, ~70× cheaper). Automaton mechanics live in the `Project-Adaptive Automaton` section below. |
 | `docs/contributions_and_related_work.md` | **Contributions pitch (3 innovations vs prior work) + objective comparison vs PromeFuzz (neural baseline) and Liberator (symbolic baseline).** |
-| `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`). |
 | `docs/llm_vs_traditional_choices.md` | Per-LLM-call-site rationale: symbolic alternative considered, why LLM won, falsifiable measurement to revisit. |
 
 Historical proposals and refactor logs live in git history (`git log --grep`).
@@ -127,7 +125,7 @@ duplicating here just rots.
 | CrashAnalyzer | BashExecuteTool, GDBExecuteTool | Determine if crash is driver bug or real bug |
 | Improver | - (context pre-fetched) | Improve coverage based on analyzer suggestions |
 | CrashFeasibilityAnalyzer | - | Determine if crash is feasible/real |
-| BaselineDiffAnalyzer (§10B v2) | - | Triggered on baseline-regression alert. **Layer being reconsidered** — single-trial granularity wrong; should move to post-merge in CEGAR loop (see `generation.md` F6) |
+| BaselineDiffAnalyzer (§10B) | - | Triggered on baseline-regression alert. Granularity under reconsideration — see Failed Attempts / `generation.md` F6 |
 | Comprehender (non-LangGraph stage) | LLM batched | A: per-API usage + library purpose. B: per-sequence semantic verdict |
 
 **Tool Consolidation**: All introspector-derived context (signatures,
@@ -148,12 +146,11 @@ into `FuzzingContext` before agent turns. Remaining LangGraph tools:
 | CBFactory | `liberator_adapter/driver/factory/constraint_based/` | Z3-guided driver synthesis |
 | Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter |
 | Project automaton | `liberator_adapter/analysis/project_automaton.py` | `AutomatonArtifact` |
-| **APISemanticModel** (redesign G1) | `liberator_adapter/analysis/api_semantic_model.py` | `reconcile()` fuses IR ⊕ doc/naming ⊕ usage → per-API `APISemantics` (role + arg semantics + evidence log). **New role authority** (demotes ConditionManager). Deterministic-only (0 LLM). Built at Step 5g; writes `state/api_semantic_model.json`. Structured doc signals via `project_docs.extract_doc_signals`. |
-| **Sequence Constructor** (redesign G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences(model)` grows dependency-resolved creator→mutator*→consumer→destroyer chains. Step 5h **prepends** them to the grammar candidates (grammar kept as a guaranteed CBFactory-synthesizability floor), reachability-ranked, enlarged Z3 budget. Lifecycle-complete by construction, but NOT necessarily CBFactory-bindable (live lesson: lcms `void*` args) — hence merge, not replace. A/B via `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1`. Don't seed raw `sample_accepting_paths` as candidates (fragments). |
-| **Hole Semantics** (redesign G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons(skeletons, model)` attaches per-arg **value intents** (scalar→in/out-of-range, parser buffer→structured-input, length-pairing, output, live-handle) at Step 10b; the Prototyper renders them into the hole-filling prompt. Deterministic. |
-| **Coverage Gap** (redesign G5) | `liberator_adapter/analysis/coverage_gap.py` | `compute_gap_apis(...)` reads the OSS-Fuzz **baseline textcov** → APIs the baseline never covers (lcms: 292/297). Step 5h directs construction (gap APIs as targets) + ranking (gap-hits primary) **toward** the gap, so drivers add NEW lines instead of re-covering baseline (the §10B `line_diff=0` problem). Positive successor to deleted L5. |
-| Comprehender | `src/knowledge/comprehender.py` | Two-stage knowledge extraction |
-| ~~Phase A Repair Engine~~ **DELETED (G2, 2026-05-25)** | — | `candidate_repair.py` + F1/F2/F4 removed. Construction is lifecycle-complete by construction, so repair was dead code. (`graft_creator_prefix` survives on `AutomatonArtifact` — still an L4 ranking signal.) |
+| **APISemanticModel** (G1) | `liberator_adapter/analysis/api_semantic_model.py` | `reconcile()` → per-API role+arg semantics+evidence; role authority (demotes ConditionManager); 0 LLM; Step 5g. Detail: `docs/generation.md`. |
+| **Sequence Constructor** (G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences()` builds lifecycle-complete chains, **merged with** the grammar floor at Step 5h. A/B: `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1`. Detail: `docs/generation.md`. |
+| **Hole Semantics** (G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons()` attaches per-arg value intents at Step 10b (rendered into the hole prompt). |
+| **Coverage Gap** (G5) | `liberator_adapter/analysis/coverage_gap.py` | `compute_gap_apis()` → baseline-uncovered APIs; directs Step 5h construction+ranking toward the gap. |
+| Comprehender | `src/knowledge/comprehender.py` | Two-stage knowledge extraction. Detail: `docs/knowledge_layer.md`. |
 | **Phase B Idiom Distiller** | `src/knowledge/idiom_distiller.py` | 10 L1 deterministic patterns; writes `state/idioms.json` |
 | **Phase C Coverage Memory** | `src/state/coverage_memory.py` | `CoverageMemory` + `IterationSnapshot`; writes `state/coverage_memory.json` |
 | **Phase D Path Planner** | `src/state/path_planner.py` | Idiom-align rerank + synthesize_missing; writes `state/plan_ledger.json` |
@@ -169,13 +166,10 @@ All APIs (N) → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L
                                                           Project-adaptive automaton signal
 ```
 
-**Post-G2/G3, this L0–L4 path produces the grammar candidates that Step 5h
-keeps as a synthesizability *floor*.** The lead candidates are Step 5h
-*model-driven construction* (`sequence_constructor.py`), prepended to that
-floor and reachability-ranked. L5 (`coverage_aware_filter.py`, novelty
-pre-filter) was **deleted in G3**; L4 ranking is now reachability-first
-(`acceptance_score` primary, diversity
-tiebreak).
+This L0–L4 path now produces the **grammar floor** (a guaranteed
+CBFactory-synthesizability safety net); the lead candidates are Step 5h
+model-driven construction, merged onto that floor. (L5 was deleted in G3 — see
+Failed Attempts.)
 
 | Layer | File | Constraint |
 |-------|------|------------|
@@ -184,7 +178,6 @@ tiebreak).
 | L2 | `lifecycle_analyzer.py` | Resources have matching init/destroy pairs |
 | L3 | `state_machine_analyzer.py` | API calls satisfy precondition/postcondition |
 | L4 | `coverage_ranker.py` | **Reachability-first** (G3): `acceptance_score` primary sort, diversity tiebreak, greedy Top-K |
-| ~~L5~~ | ~~`coverage_aware_filter.py`~~ | **DELETED (G3)** — novelty pre-filter was a proxy that suppressed total coverage |
 
 **Use-def + typestate substrate** (`liberator_adapter/analysis/usedef.py`):
 `APIEffect` (USE/DEF/KILL) per API feeds L4, Prototyper (via automaton), and Comprehender.
@@ -209,7 +202,7 @@ L2/L3 build a per-analysis `UseDefGraph` from their domain model (lifecycle pair
 | Var-len params | `VarLenAnalyzer` in `special_patterns.py` |
 | Callbacks | `CallbackAnalyzer` + stub templates |
 | API lifecycle | `LLMLifecycleValidator` in `sequence_filter.py` |
-| Type classification | `ConditionManager.py` (SOURCE/SINK/INIT/SETBY). **Demoted by G1** — now one IR-evidence source feeding `APISemanticModel.reconcile`, no longer the role authority (still authoritative inside CBFactory/RunningContext until G2). |
+| Type classification | `ConditionManager.py` (SOURCE/SINK/INIT/SETBY). **Demoted by G1** to one IR-evidence source feeding `APISemanticModel.reconcile`; no longer the role authority. |
 
 ## Project-Adaptive Automaton
 
@@ -268,16 +261,16 @@ Step 5b  Build ConditionManager
 Step 5c  L1 Entry-point filter
 Step 5d  L2 Lifecycle filter
 Step 5e  L3 State-machine filter
-Step 5f  L4 reachability ranker (fallback path)  (acceptance_score-first; L5 deleted in G3)
+Step 5f  L4 reachability ranker (grammar floor)
 Step 5e2 learn_project_automaton                 (runs after 5f)
-Step 5g  Build APISemanticModel                  (reconcile IR⊕doc/naming⊕usage; G1)
-Step 5h  Construct sequences from model           (gap-directed targets + prepend to grammar floor; gap+reachability-ranked; G2+G5)
-Step 6b  Comprehender A+B                        (uses acceptance_score + 5g role authority)
+Step 5g  Build APISemanticModel                  (G1)
+Step 5h  Construct sequences from model + merge onto floor   (G2+G5)
+Step 6b  Comprehender A+B
 Step 7   Header extraction
 Step 8   Existing-fuzzer header extraction
 Step 9   DriverEnhancer pattern analysis
-Step 10  Phase D Planner + Z3-validated skeleton drivers   (Phase A repair DELETED in G2)
-Step 10b Semantic value-intent on holes          (per-arg intent from model; G4)
+Step 10  Phase D Planner + Z3-validated skeleton drivers
+Step 10b Semantic value-intent on holes          (G4)
 Step 11  Closed-loop iterations                  (Phase G, opt-in)
 Step 12  Existing-driver knowledge extraction + Phase B idiom distillation
 # Post-merge: Phase C IterationSnapshot persisted by run_single_fuzz.py
@@ -285,6 +278,15 @@ Step 12  Existing-driver knowledge extraction + Phase B idiom distillation
 
 ## Open TODOs
 
+Generation (G1–G5) has landed; the live frontier is now **below** it. Start
+new work from `docs/generation.md` (open bottleneck + roadmap):
+
+- **Binding layer (highest leverage).** CBFactory's `RunningContext` can't
+  synthesize argument values for `void*`/opaque-struct non-handle params, so
+  deep gap APIs (lcms `cmsDoTransform`, …) never become skeletons regardless of
+  ranking. Make them synthesizable.
+- **Feedback layers** — F5 adaptive shape (error-injection skeletons), F6 Phase C
+  CEGAR loop (prereq: WorkingMemory), F7 L2 LLM idioms. See `docs/generation.md`.
 - LLM equivalence oracle production throttling (`enable_llm_oracle=False` in `data_context.py:Step 5e2` until cost-aware pacing lands).
 - libaom path resolution — `src_ossfuzz/libaom/` layout doesn't match the consumer-paths probe.
 - Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
@@ -293,24 +295,16 @@ Step 12  Existing-driver knowledge extraction + Phase B idiom distillation
 
 ## Failed Attempts / Lessons
 
-Approaches we tried earlier and have since reworked. Read before re-litigating.
+Guardrails — read before re-litigating. Full detail in git history.
 
-### L5 `CoverageAwareFilter` novelty pre-filter — DELETED (G3, 2026-05-25)
-
-L5 dropped sequences with novelty < 0.2 vs existing OSS-Fuzz coverage. It is a
-*proxy* that suppresses TOTAL coverage and does not predict reachability. The
-redesign (G3) replaced it with reachability-first ranking (`acceptance_score`
-primary in `coverage_ranker.py`) and **deleted the module**. The
-`--no-coverage-filter` / `LOGICFUZZ_DISABLE_COVERAGE_FILTER` escape hatch is no
-longer needed (there is nothing to disable). Don't reintroduce a novelty
-pre-filter as a hard gate — rank by reachability instead.
-
-### Z3 cyclic order constraints (resolved 2026-05-22)
-
-Legacy `Z3SequenceValidator` quantified lifecycle order constraints over the **API-name set** ("∀c ∈ creates[T], u ∈ uses[T]: order_c < order_u"). For chained-builder APIs that are both creator and user (cjson's `cJSON_Add*` family), all-pairs expansion generated cyclic constraints → 10/10 sequences UNSAT.
-
-**Fix landed `f7001cf7` + `7a140f80`**: position-indexed lifecycle validation in `Z3SequenceValidator._check_lifecycle_position_indexed`; LLVM-IR byte-buffer types exempt. cjson 0/10 → 7/10 SAT. Full root-cause analysis in commit message.
-
-### §10B v1/v2 baseline-regression alert at per-trial granularity (under reconsideration)
-
-`§10B` landed (commits `9b2cf883`, `f6dd60b6`) but operates at single-trial level. The proper unit is post-merge (multi-trial harness vs baseline). Per-trial recovery in `BaselineDiffAnalyzer` wastes LLM calls on the wrong granularity. To be folded into Phase C CEGAR loop (`generation.md` F6).
+- **Don't reintroduce a novelty pre-filter as a hard gate** (the deleted L5
+  `coverage_aware_filter.py`). Novelty-vs-baseline is a proxy that suppresses
+  total coverage and doesn't predict reachability. Rank by reachability
+  (`acceptance_score` primary, G3); target the gap positively via G5.
+- **Lifecycle order constraints are position-indexed, not over the API-name
+  set** (`Z3SequenceValidator._check_lifecycle_position_indexed`, resolved
+  2026-05-22). All-pairs name-set quantification made chained-builder APIs
+  (cjson `cJSON_Add*`) self-cyclic → all-UNSAT. Don't revert to set-based.
+- **§10B baseline-regression recovery belongs post-merge, not per-trial**
+  (`BaselineDiffAnalyzer`, under reconsideration). Per-trial granularity wastes
+  LLM calls; to be folded into the Phase C CEGAR loop (`generation.md` F6).

@@ -48,8 +48,7 @@ def _preserve_preflight_binary(work_dirs: WorkDirs,
     correct minimal step regardless: it lets preflight fire and drop genuine
     crashers when it CAN run them, and degrades safely to the prior
     unvetted-merge behaviour when it can't. (A full in-container smoke via
-    ``run_fuzzer`` is the follow-up if host execution proves too lossy — see
-    docs/merge_drivers.md.)
+    ``run_fuzzer`` is the follow-up if host execution proves too lossy.)
 
     Best-effort: any failure here is swallowed so it can NEVER break the run.
     """

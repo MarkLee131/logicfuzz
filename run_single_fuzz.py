@@ -544,8 +544,9 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
   cleanup_duration = time.time() - starmap_start - starmap_duration
   logger.info(f'📍 [_fuzzing_pipelines] ThreadPool cleanup completed in {cleanup_duration:.2f}s', trial=0)
 
-  # Optional: merge successful trials into a single multi-task harness.
-  # See docs/merge_drivers.md and the --merge-drivers flag in run_logicfuzz.
+  # Optional: merge successful trials into a single multi-task harness
+  # (--merge-drivers flag in run_logicfuzz; design rationale in
+  # docs/contributions_and_related_work.md §3 "Harness merge").
   merged_path: Optional[str] = None
   if getattr(args, 'merge_drivers', False):
     merged_path = _maybe_merge_drivers(benchmark, work_dirs, trial_results)
@@ -610,7 +611,7 @@ def _preflight_filter_candidates(sources, work_dirs):
     logger.info(
         f'merge_drivers: preflight skipped — only {len(pairs)} of '
         f'{len(sources)} candidates have a host-runnable binary '
-        f'(per-trial binaries are cleaned; see docs/merge_drivers.md). '
+        f'(per-trial binaries are cleaned, so few remain host-runnable). '
         f'Merging the unvetted set.', trial=0)
     return sources
   try:

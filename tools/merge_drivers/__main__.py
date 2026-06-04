@@ -362,8 +362,7 @@ def main(argv: list[str] | None = None) -> int:
             "evaluates each driver — no separate coverage build needed. "
             "If a driver has no summary.json, it is skipped (printed "
             "under 'skipped without coverage data'); re-run the LogicFuzz "
-            "evaluation for that driver to produce it. "
-            "See docs/merge_drivers.md § 4 for the full FAQ."
+            "evaluation for that driver to produce it."
         ),
     )
     pl.add_argument("--pair", action="append", required=True, type=_parse_pair,

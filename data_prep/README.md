@@ -27,7 +27,7 @@ python -m data_prep.introspector <project-name> -m <num_benchmark_per_project> -
 # E.g., python -m data_prep.introspector tinyxml2 -m 5 -o comparison/new
 ```
 
-Benchmark files generated in this way prioritize [far-reach-but-low-coverage](https://introspector.oss-fuzz.com/api#api-far-reach-but-low-coverage) functions in `OSS-Fuzz` production, hence easier to achieve higher [`max line coverage diff`](../README.md#Visualizing-Results).
+Benchmark files generated in this way prioritize [far-reach-but-low-coverage](https://introspector.oss-fuzz.com/api#api-far-reach-but-low-coverage) functions in `OSS-Fuzz` production, hence easier to achieve higher max line coverage diff.
 
 ## Fuzz Target Examples
 The framework adds existing human-written fuzz targets as examples into the
