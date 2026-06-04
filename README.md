@@ -18,7 +18,7 @@ LogicFuzz automatically generates high-quality fuzz drivers (harnesses) for C/C+
 
 - **Multi-Agent Workflow** - Specialized agents for prototyping, fixing, coverage analysis, crash analysis, and improvement
 - **Z3-Guided Synthesis** - Constraint-based driver generation with type matching, provenance tracking, and resource lifecycle management
-- **Progressive Filter Pipeline** - 6-layer filtering (L0-L5) from thousands of APIs down to high-value sequences
+- **Progressive Filter Pipeline** - layered filtering (L0–L4) from thousands of APIs down to high-value sequences
 - **Automatic Error Recovery** - Intelligent error triage and iterative fixing with up to 3 retry attempts
 - **Coverage-Aware Generation** - Prioritizes uncovered code paths and API combinations
 - **OSS-Fuzz Integration** - Seamless integration with Google's OSS-Fuzz infrastructure
@@ -153,8 +153,8 @@ LogicFuzz has been tested on these OSS-Fuzz projects:
 ### Filter Pipeline
 
 ```
-All APIs → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L4 Ranking → L5 Coverage → Top-K
- (1000+)   (~100)     (~50)       (~30)           (~15)           (K=12)        (prioritized)
+All APIs → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L4 Ranking → Top-K
+ (1000+)   (~100)     (~50)       (~30)           (~15)           (K=12)
 ```
 
 | Layer | Constraint |
@@ -163,8 +163,7 @@ All APIs → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L4 Ra
 | **L1** | Entry point detection (`uint8_t* data, size_t size`) |
 | **L2** | Lifecycle pairing (`init` ↔ `destroy`) |
 | **L3** | State machine validation (no use-after-destroy) |
-| **L4** | Diversity ranking (greedy selection) |
-| **L5** | Coverage-aware prioritization |
+| **L4** | Reachability ranking (acceptance-score-first greedy selection) |
 
 ## Output
 
@@ -214,7 +213,7 @@ logicfuzz/
 │   ├── workflow/             # LangGraph workflow & supervisor
 │   └── tools/                # Agent tools (FuzzIntrospector, Bash)
 ├── liberator_adapter/
-│   ├── constraints/          # Filter pipeline (L1-L5)
+│   ├── constraints/          # Filter pipeline (L0-L4)
 │   └── driver/factory/       # Z3-guided synthesis
 ├── comparison/               # Project YAML configs
 └── scripts/                  # Utility scripts

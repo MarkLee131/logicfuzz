@@ -3,8 +3,9 @@
 Given two PTA states reached via different prefixes, ask the LLM whether
 they represent the same library state. The oracle returns yes / no /
 uncertain and EDSM uses that as one extra evidence signal in
-``edsm._score_merge``. See ``docs/automaton.md`` §6 (design contracts)
-and §9.2 (oracle proposal throttling, future work).
+``edsm._score_merge``. The oracle is wired but throttled off; evidence-only
+merging is what ships (see the ``Project-Adaptive Automaton`` section in
+``CLAUDE.md``).
 
 Design constraints:
 - Cheap model (default ``gpt-4o-mini``); each query is small (≤ ~600 tokens).

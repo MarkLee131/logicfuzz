@@ -1,6 +1,6 @@
 """Knowledge-driven comprehender.
 
-Two-stage design (see docs/automaton.md § 11):
+Two-stage design (see docs/knowledge_layer.md):
 
 1. ``LibraryComprehension``: per-API usage notes + a one-paragraph library
    purpose. Layered fallback per API:

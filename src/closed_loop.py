@@ -17,7 +17,7 @@ Each iteration:
    currently consumes the artifact via CBFactory's Phase H
    ``AutomatonAcceptanceGuard`` (hard-pruning candidates below the
    acceptance threshold). Other L4 signals the artifact carries —
-   ``acceptance_score`` as secondary sort axis, ``sample_accepting_paths``
+   ``acceptance_score`` as primary sort axis (G3), ``sample_accepting_paths``
    pool injection, ``graft_creator_prefix``, ``post_parse_extensions`` —
    are NOT re-applied here; doing so would make consecutive iters
    produce identical deterministic top-K (no novelty → automaton

@@ -11,9 +11,9 @@ component-level comparison against the two systems it is closest to:
   baseline.
 
 This doc is the single source for the "what's new vs prior work" pitch and the
-descriptive baselines behind it. For the live design roadmap see
-`docs/generation_stage_redesign.md`; for the typestate automaton see
-`docs/automaton.md`.
+descriptive baselines behind it. For the generation pipeline see
+`docs/generation.md`; for the comprehender/knowledge layer see
+`docs/knowledge_layer.md` (automaton mechanics: `CLAUDE.md`).
 
 ---
 
@@ -101,8 +101,8 @@ matter of soft semantic judgment (leaf values).**
 ### ③ Project-adaptive usage knowledge + a closed loop — *learn how THIS library is actually used*
 
 LogicFuzz learns a **typestate automaton from the library's own tests and
-examples** (PTA + EDSM, `analysis/project_automaton.py`; see
-`docs/automaton.md`) and uses it as a first-class signal — `acceptance_score`
+examples** (PTA + EDSM, `analysis/project_automaton.py`; mechanics in
+`CLAUDE.md`) and uses it as a first-class signal — `acceptance_score`
 for L4 ranking, accepting-path samples for construction/prompting, and a
 hard-pruning acceptance gate (Phase H). It then **grows the automaton from the
 sequences that proved Z3-viable** (Phase G closed loop, incremental EDSM merge),
@@ -164,7 +164,7 @@ LogicFuzz fixes structure symbolically and lets the LLM decide leaf values.*
 - **LogicFuzz:** no crash-constraint memory banning APIs across rounds (crash
   handling is per-trial); no RAG vector store (uses doxygen/README priors); no
   fully-wired CEGAR loop (Phase C data only); happy-path driver shape only
-  (variety deferred — `docs/phase_e_adaptive_shape.md`).
+  (variety deferred — `docs/generation.md` F5).
 
 ---
 
@@ -194,15 +194,12 @@ upstream divergences, so future upstream ports don't reintroduce them.)
 Upstream had **fatal `IPython embed; exit(1)` traps in the production hot path**
 (four in `CBFactory`, one in `Buffer.get_allocated_size`) that abort an entire
 campaign on a single problematic API → replaced with `warning + raise` /
-backtracking / partial-driver return. The `Factory.normalize_type` abort on
-C++ template-aliased pointer types (`flag="val"` on a textual `*`) → demoted to
-a debug-level flag flip. The **backend renderer** (`LFBackendDriver`, ~55-line
-fork) and the **Statement IR** (`framework/driver/ir/`) each shipped ~6–7 latent
-crashes — `GLOBAL`-alloctype fall-through, list-iterated-as-dict, nine broken
-`__hash__` referencing an unset `self.token`, an off-by-one `set_pos_arg_var`
-bound, non-deterministic `os.walk` include order, etc. — all masked in
-production by a call-site bug that left the renderer dead, and all fixed in the
-2026-05 backend/IR refactors.
+backtracking / partial-driver return. The **backend renderer**
+(`LFBackendDriver`) and the **Statement IR** (`framework/driver/ir/`) each
+shipped ~6–7 latent crashes (alloctype fall-through, broken `__hash__`,
+off-by-one bounds, non-deterministic include order) — all masked in production
+by a call-site bug that left the renderer dead, and all fixed in the 2026-05
+backend/IR refactors.
 
 > Full per-fix detail + rollback recipes live in git history
 > (`git log --grep="backend"` / `--grep="IR refactor"` in `liberator_adapter/`).
@@ -228,5 +225,5 @@ production by a call-site bug that left the renderer dead, and all fixed in the
 
 ---
 
-*Descriptive baselines current as of 2026-06. Roadmap and open gaps:
-`docs/generation_stage_redesign.md`, `docs/system_design_status.md`.*
+*Descriptive baselines current as of 2026-06. Pipeline and open gaps:
+`docs/generation.md`.*

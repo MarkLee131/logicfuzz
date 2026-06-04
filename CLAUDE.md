@@ -4,14 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Knowledge-Driven Neuro-Symbolic Fuzz Driver Generation over Structured API Program Spaces.
 
-**Current iteration**: **generation-stage redesign** — see
-`docs/generation_stage_redesign.md` (the active source of truth for driver
-generation). First-principles diagnosis found the old "classify-then-repair"
-flow (Phase A repair + Tier-1 F1–F4) is a band-aid for a missing upstream
-API semantic model; the redesign builds `APISemanticModel` first and
-constructs sequences from it. `docs/system_design_status.md` remains the
-5-phase panorama + non-generation (Phase C/G feedback, merge) status, but its
-Phase A / F1–F4 entries are superseded.
+**Generation stage**: see `docs/generation.md` (source of truth for driver
+generation). The pipeline is reconcile-then-construct — build an
+`APISemanticModel` first (IR ⊕ doc ⊕ usage), then *construct* lifecycle-
+complete sequences from it, so candidates are valid by construction and there
+is no repair stage. (The old "classify-then-repair" flow — Phase A repair +
+Tier-1 F1–F4 — was deleted; it band-aided the missing model downstream.)
 
 ## Commands
 
@@ -63,11 +61,9 @@ python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz
 
 | Doc | Subsystem |
 |-----|-----------|
-| `docs/generation_stage_redesign.md` | **Active SoT for driver generation.** Root-cause diagnosis (4 classes / 11 problems) + landed G1–G5 (APISemanticModel → construct → gap-direct → rank → semantic holes) + the binding-layer bottleneck §8. Start generation work here. |
-| `docs/system_design_status.md` | Non-generation panorama: tool-goal framing, Phase B/C/D/E status, the P1–P11 cross-phase info-flow debt, and the feedback/binding-layer roadmap (F5–F7 + WorkingMemory). Generation stage deferred to the redesign doc. |
-| `docs/automaton.md` | Project-adaptive automaton (PTA + EDSM) and the PromeFuzz-derived knowledge layer. |
-| `docs/contributions_and_related_work.md` | **Contributions pitch (3 innovations vs prior work) + objective comparison vs PromeFuzz (neural baseline) and Liberator (symbolic baseline).** Merges the former `logicfuzz_vs_promefuzz.md` + `upstream_liberator_diffs.md`. |
-| `docs/phase_e_adaptive_shape.md` | **Deferred** — driver-shape variety; sequenced after redesign G4 (semantic holes). |
+| `docs/generation.md` | **SoT for driver generation.** The built G1–G5 pipeline (APISemanticModel → construct → gap-direct → rank → semantic holes), the three load-bearing lessons, the open binding-layer bottleneck, and surrounding-phase status + roadmap (B/C/D landed, E/F5–F7 open). Start generation work here. |
+| `docs/knowledge_layer.md` | PromeFuzz-derived comprehender (two-stage, deterministic-first, ~70× cheaper). Automaton mechanics live in the `Project-Adaptive Automaton` section below. |
+| `docs/contributions_and_related_work.md` | **Contributions pitch (3 innovations vs prior work) + objective comparison vs PromeFuzz (neural baseline) and Liberator (symbolic baseline).** |
 | `docs/merge_drivers.md` | Multi-driver harness merger (`tools/merge_drivers`). |
 | `docs/llm_vs_traditional_choices.md` | Per-LLM-call-site rationale: symbolic alternative considered, why LLM won, falsifiable measurement to revisit. |
 
@@ -131,7 +127,7 @@ duplicating here just rots.
 | CrashAnalyzer | BashExecuteTool, GDBExecuteTool | Determine if crash is driver bug or real bug |
 | Improver | - (context pre-fetched) | Improve coverage based on analyzer suggestions |
 | CrashFeasibilityAnalyzer | - | Determine if crash is feasible/real |
-| BaselineDiffAnalyzer (§10B v2) | - | Triggered on baseline-regression alert. **Layer being reconsidered** — single-trial granularity wrong; should move to post-merge in CEGAR loop (see `system_design_status.md` Tier 4 P3) |
+| BaselineDiffAnalyzer (§10B v2) | - | Triggered on baseline-regression alert. **Layer being reconsidered** — single-trial granularity wrong; should move to post-merge in CEGAR loop (see `generation.md` F6) |
 | Comprehender (non-LangGraph stage) | LLM batched | A: per-API usage + library purpose. B: per-sequence semantic verdict |
 
 **Tool Consolidation**: All introspector-derived context (signatures,
@@ -201,7 +197,7 @@ L2/L3 build a per-analysis `UseDefGraph` from their domain model (lifecycle pair
 |-----------|------|---------|
 | IncrementalZ3Solver | `z3_solver.py` | push/pop for decision guidance |
 | Z3-guided controller | `z3_guided_synthesis.py` | TYPE_MATCH, PROVENANCE, RESOURCE_LIFECYCLE, VARIABLE_AVAILABILITY |
-| `AutomatonAcceptanceGuard` | `z3_guided_synthesis.py` | Phase H hard-pruning gate (currently positive-only; see `system_design_status.md` P11) |
+| `AutomatonAcceptanceGuard` | `z3_guided_synthesis.py` | Phase H hard-pruning gate (currently positive-only) |
 | `Z3SequenceValidator` | `z3_solver.py` | **Position-indexed** lifecycle validation (#4 fix, 2026-05-22) + LLVM-IR byte-buffer exemption (#73) |
 | UnsatCoreDiagnoser | `z3_guided_synthesis.py` | Failure diagnosis |
 
@@ -217,14 +213,18 @@ L2/L3 build a per-analysis `UseDefGraph` from their domain model (lifecycle pair
 
 ## Project-Adaptive Automaton
 
-Per-project typestate automaton learned from the library's own tests/examples. Full design + empirical justification: `docs/automaton.md`.
+Per-project typestate automaton learned from the library's own tests/examples. The comprehender that consumes it: `docs/knowledge_layer.md`.
 
 Pipeline (all in `liberator_adapter/analysis/`):
 `extract_project_traces` → `extract_api_effects` → `build_pta` →
 `edsm.merge` → `learn_project_automaton() → AutomatonArtifact`.
+State vector = `frozenset[(handle_type, lifecycle_state)]`. EDSM merging is
+*constructive*: every input trace stays accepted after every merge; an
+oracle-vetoed merge is skipped, never weakened. Selection over the
+automaton-augmented pool is budgeted max-coverage ((1−1/e) greedy).
 
 `AutomatonArtifact` surface (consumers in parens):
-- `acceptance_score(seq)` — L4 secondary sort, Comprehender-B prefilter, Phase H guard
+- `acceptance_score(seq)` — L4 **primary** sort axis (G3; diversity demoted to tiebreak when an automaton is present), Comprehender-B positive-only prefilter, Phase H guard
 - `sample_accepting_paths(n)` — L4 pool augmentation, Prototyper `<protocol_templates>`
 - `graft_creator_prefix(seq)` — L4 candidate variants (Phase A repair, its other consumer, was deleted in G2)
 - `post_parse_extensions(seq)` — extends `parse → get_object` prefixes via `extend_post_def`
@@ -234,7 +234,7 @@ Persistence: `results/{project}/automaton/`. Comprehender output: `results/{proj
 
 ## Closed-Loop Synthesis (Phase G, existing)
 
-Distinct from the proposed Phase C CEGAR loop (which is for cross-iteration coverage feedback; see `system_design_status.md` Tier 2 F6).
+Distinct from the proposed Phase C CEGAR loop (which is for cross-iteration coverage feedback; see `generation.md` F6).
 
 Phase G grows the automaton each round using current viable Z3 skeletons' API sequences as evidence (incremental EDSM merge). Skeletons drive the LLM; closed-loop's value is the in-place mutation of `automaton_artifact` preserved through `persist_dir`.
 
@@ -289,7 +289,7 @@ Step 12  Existing-driver knowledge extraction + Phase B idiom distillation
 - libaom path resolution — `src_ossfuzz/libaom/` layout doesn't match the consumer-paths probe.
 - Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
 - TLV-aware seed generation based on format analysis. (Partial: `scripts/seed_discovery.py` now feeds the project's REAL on-disk seeds — `*.icc`/`*.it8`/OSS-Fuzz `*_seed_corpus.zip` — into continuous/extended fuzzing so parser-entry drivers reach deep code; synthetic generation from format analysis is still TODO.)
-- Cross-phase information flow (P1-P11 in `system_design_status.md`) — pending decision queue.
+- Cross-phase information flow (write-only JSON state, WorkingMemory prereq for F6) — see `generation.md`.
 
 ## Failed Attempts / Lessons
 
@@ -313,4 +313,4 @@ Legacy `Z3SequenceValidator` quantified lifecycle order constraints over the **A
 
 ### §10B v1/v2 baseline-regression alert at per-trial granularity (under reconsideration)
 
-`§10B` landed (commits `9b2cf883`, `f6dd60b6`) but operates at single-trial level. The proper unit is post-merge (multi-trial harness vs baseline). Per-trial recovery in `BaselineDiffAnalyzer` wastes LLM calls on the wrong granularity. To be folded into Phase C CEGAR loop (`system_design_status.md` Tier 4).
+`§10B` landed (commits `9b2cf883`, `f6dd60b6`) but operates at single-trial level. The proper unit is post-merge (multi-trial harness vs baseline). Per-trial recovery in `BaselineDiffAnalyzer` wastes LLM calls on the wrong granularity. To be folded into Phase C CEGAR loop (`generation.md` F6).

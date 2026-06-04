@@ -1,26 +1,11 @@
 # Where we use LLM, what we considered first, and why
 
-This doc enumerates every place LogicFuzz invokes an LLM, lists the
-traditional / symbolic alternatives we considered (or actually used in
-earlier versions), and records why we picked LLM here. The point is
-to make the design defensible: for every LLM call we should be able
-to point to a specific limitation of the deterministic alternative —
-not just "LLM seemed easier".
-
-The format per item:
-
-```
-A. <Where>
-   What we use LLM for: ...
-   Traditional alternative considered: ...
-   Why we chose LLM here: ...
-   What we'd lose by going back to traditional: ...
-   Falsifiable measurement: ...
-```
-
-The last line ("falsifiable measurement") is the experiment that
-would prove the LLM choice wrong. If we ever observe that result,
-revisit the decision.
+This doc enumerates every place LogicFuzz invokes an LLM, the symbolic
+alternative considered, and why LLM won — so the design is defensible: every
+LLM call points to a specific limitation of the deterministic alternative, not
+"LLM seemed easier". Each item ends with a **falsifiable measurement** — the
+experiment that would prove the LLM choice wrong; observe that result, revisit
+the decision.
 
 ---
 
@@ -278,7 +263,7 @@ weight.
 **Traditional alternative considered:** PromeFuzz's
 ConstraintLearner (which mines invariants from the test suite via
 symbolic execution + invariant inference). We have a port stubbed
-out under design but not shipped — `docs/automaton.md` notes the
+out under design but not shipped — `docs/knowledge_layer.md` notes the
 ConstraintLearner is "design-only".
 
 **Why we chose LLM here:**

@@ -40,11 +40,12 @@ class SequenceScore:
     # Tertiary: Sequence length
     length: int
 
-    # Quaternary (optional, project-adaptive): automaton acceptance.
-    # 1.0 = sequence is a fully accepted path through the project's learned
-    # protocol automaton; 0.0 = automaton has the sequence labels but breaks
-    # on at least one transition; -1.0 = no automaton available (signal off).
-    # Defaults keep behavior unchanged when no automaton is provided.
+    # Project-adaptive automaton acceptance. When present it is the PRIMARY
+    # sort axis (G3; see rank_and_select); diversity/entry/length above demote
+    # to tiebreaks. 1.0 = sequence is a fully accepted path through the
+    # project's learned protocol automaton; 0.0 = automaton has the sequence
+    # labels but breaks on at least one transition; -1.0 = no automaton
+    # available (signal off → legacy diversity-first ordering).
     automaton_acceptance: float = -1.0
 
     # Metadata
@@ -170,11 +171,10 @@ class CoverageRanker:
                 consumer with empty creator-prefix), L4 will not pick it.
 
         When ``automaton_acceptance_fn`` is supplied the sort key promotes
-        acceptance to a *secondary* axis (right after diversity), so
-        high-acceptance grafted candidates beat type-only-feasible ones at
-        equal diversity. When unset, the secondary axis is the legacy
-        entry_point_position so this stays a strict superset of historical
-        behaviour.
+        acceptance to the *primary* axis (G3), with diversity demoted to a
+        tiebreak, so reachability — not the diversity proxy — drives selection.
+        When unset, the legacy diversity-first ordering applies so this stays a
+        strict superset of historical behaviour.
 
         Returns:
             CoverageRankingResult with ranked and selected sequences.
@@ -482,7 +482,7 @@ def select_top_k_sequences(
         automaton_artifact: Optional ``AutomatonArtifact`` from
             ``learn_project_automaton``. When supplied, three signals plug
             into the ranker:
-              1. ``acceptance_score`` becomes the secondary sort axis
+              1. ``acceptance_score`` becomes the primary sort axis (G3)
               2. ``graft_creator_prefix`` augments unaccepted candidates
                  with creator-prefixed grounded versions
               3. ``sample_accepting_paths`` injects high-precision protocol

@@ -1,12 +1,12 @@
 """APISemanticModel — the single reconciled per-API record (redesign G1).
 
-The generation-stage redesign (``docs/generation_stage_redesign.md``) traces
-every downstream band-aid (Phase A repair, F1–F4, L5 reranks) to one
-inversion: roles/arg-semantics are derived from a *single* source (LLVM-IR
-mod/ref) and then corrected later. This module inverts that: it fuses the
-three evidence sources up front into one auditable model.
+The generation pipeline (``docs/generation.md``) traces every former
+downstream band-aid (Phase A repair, F1–F4, L5 reranks) to one inversion:
+roles/arg-semantics were derived from a *single* source (LLVM-IR mod/ref) and
+corrected later. This module inverts that: it fuses the three evidence sources
+up front into one auditable model.
 
-Reconciliation principle (redesign §2.2) — each source is authoritative only
+Reconciliation principle (G1) — each source is authoritative only
 for what it can witness:
 
     | question                         | authority          | supporting |

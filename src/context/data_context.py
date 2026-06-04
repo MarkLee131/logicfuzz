@@ -808,8 +808,10 @@ class FuzzingContext:
             # (G3 — L5 novelty pre-filter deleted; diversity demoted to a
             # tiebreak) + length-floor defensive guard when available.
             # NOTE: when G2 construction (Step 5h) is enabled, this ranks the
-            # grammar candidates that Step 5h then replaces — kept as the
-            # fallback path for when construction yields nothing.
+            # grammar candidates that Step 5h MERGES with the constructed
+            # chains as a synthesizability floor (not replace — pure-replace
+            # regressed lcms 1→0); the floor also covers when construction
+            # yields nothing.
             pre_rank_count = len(api_sequences)
             # filter_top_k is a budget cap (default 10); greedy max-coverage
             # may stop earlier when no candidate adds new APIs (viability
