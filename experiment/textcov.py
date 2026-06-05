@@ -33,7 +33,7 @@ def _discard_fuzz_target_lines(covreport_content: str) -> str:
   # 'LLVMFuzzerTestOneInput'(C/C++) or 'fuzz_target' (Rust).
   project_file_contents = [
       sec for sec in covreport_content.split('\n\n')
-      if 'LLVMFuzzerTestOneInput' not in sec or 'fuzz_target' not in sec
+      if 'LLVMFuzzerTestOneInput' not in sec and 'fuzz_target' not in sec
   ]
   return '\n\n'.join(project_file_contents)
 
