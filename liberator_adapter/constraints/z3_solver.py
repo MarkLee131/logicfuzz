@@ -15,15 +15,11 @@ from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
-from z3 import (
-    Solver, Bool, Int, BitVec, Array, And, Or, Not, Implies,
-    sat, unsat, unknown, IntSort, BitVecSort, ArraySort,
-    Function, ForAll, Exists, If, simplify, Context
-)
+from z3 import Solver, Bool, Int, And, Not, Implies, sat, unsat
 Z3_AVAILABLE = True
 
 from liberator_adapter.common import (
-    Api, AccessType, Access, AccessTypeSet, ValueMetadata, FunctionConditions
+    Api, Access, ValueMetadata, FunctionConditions
 )
 
 logger = logging.getLogger(__name__)
@@ -177,7 +173,6 @@ class Z3ConstraintBuilder:
 
         if compatible:
             expr = Bool(f"prov_compat_{source_api}_{target_api}")
-            self.solver.add(expr)  # Compatible
         else:
             # Incompatible: If both APIs are called, it's infeasible
             expr = Not(And(source_called, target_called))
@@ -201,8 +196,6 @@ class Z3ConstraintBuilder:
             return False
         if source_prov in ["STACK", "GLOBAL"] and target_prov == "HEAP_MALLOC":
             return False
-        if source_prov == "UNKNOWN" or target_prov == "UNKNOWN":
-            return True
         return True
 
     def add_dependency_constraint(
@@ -244,59 +237,6 @@ class Z3ConstraintBuilder:
 
         return constraint
 
-    def add_resource_lifecycle_constraint(
-        self,
-        resource_type: str,
-        create_apis: List[str],
-        use_apis: List[str],
-        delete_apis: List[str]
-    ) -> List[Z3Constraint]:
-        """
-        Add resource lifecycle constraint
-
-        Resource must be created first, used, then destroyed
-        """
-        constraints = []
-
-        # Create resource existence variable
-        resource_exists = Bool(f"resource_{resource_type}_exists")
-
-        # Any create API can create resource
-        if create_apis:
-            create_exprs = [self._get_or_create_api_var(api) for api in create_apis]
-            self.solver.add(Implies(resource_exists, Or(*create_exprs)))
-
-        # Use APIs require resource to exist
-        for use_api in use_apis:
-            use_var = self._get_or_create_api_var(use_api)
-            expr = Implies(use_var, resource_exists)
-
-            constraint = Z3Constraint(
-                constraint_type=ConstraintType.RESOURCE_LIFECYCLE,
-                z3_expr=expr,
-                description=f"Lifecycle: {use_api} requires {resource_type}",
-                source_api=use_api
-            )
-            constraints.append(constraint)
-            self.solver.add(expr)
-
-        # Delete APIs require resource to exist
-        for delete_api in delete_apis:
-            delete_var = self._get_or_create_api_var(delete_api)
-            expr = Implies(delete_var, resource_exists)
-
-            constraint = Z3Constraint(
-                constraint_type=ConstraintType.RESOURCE_LIFECYCLE,
-                z3_expr=expr,
-                description=f"Lifecycle: {delete_api} requires {resource_type}",
-                source_api=delete_api
-            )
-            constraints.append(constraint)
-            self.solver.add(expr)
-
-        self.constraints.extend(constraints)
-        return constraints
-
     # NOTE: ``add_api_sequence_constraint`` and the per-name ``order_X`` /
     # ``api_called_X`` machinery it built on were removed 2026-05-22.
     # Sequence validation now uses position-indexed semantics inside
@@ -330,20 +270,6 @@ class Z3ConstraintBuilder:
         else:  # unknown
             logger.warning("Z3 solver returned unknown")
             return False, None
-
-    def get_unsat_core(self) -> List[str]:
-        """
-        Get unsatisfiable core constraints
-
-        Need to call solver.set("unsat_core", True) first
-        """
-        self.solver.set("unsat_core", True)
-        result = self.solver.check()
-
-        if result == unsat:
-            core = self.solver.unsat_core()
-            return [str(c) for c in core]
-        return []
 
 
 class Z3SequenceValidator:
@@ -635,17 +561,3 @@ def validate_api_sequence(
     return validator.validate_sequence(api_sequence, function_conditions)
 
 
-def should_prune_dependency(
-    source_api: Api,
-    target_api: Api,
-    source_cond: Optional[FunctionConditions] = None,
-    target_cond: Optional[FunctionConditions] = None
-) -> bool:
-    """
-    Convenience function: Check if dependency edge should be pruned
-    """
-    pruner = Z3DependencyPruner()
-    should_prune, _ = pruner.prune_dependency_edge(
-        source_api, target_api, source_cond, target_cond
-    )
-    return should_prune

@@ -122,6 +122,28 @@ unless a test pins the behavior.
   whether the accessor surface is contractual; the genuinely dead utilities and
   internals around them were removed.
 
+### D5. `AutomatonAcceptanceGuard` auto-relax / automaton-prune machinery
+- **File:** `liberator_adapter/constraints/z3_guided_synthesis.py`
+- **Observation:** `admits()` is hardcoded to return True (the positive-only
+  redesign), so the auto-relaxation path (`_consecutive_reject`, `n_relaxes`,
+  threshold decay) and the `IncrementalZ3Solver.n_automaton_pruned` candidate
+  block are unreachable, and `stats()` always reports zeros.
+- **Why deferred:** CLAUDE.md documents the guard as "Phase H hard-pruning gate
+  (currently positive-only)" — "currently" signals an intended reactivation
+  point. Removing the relax/prune scaffolding now would make re-enabling
+  rejection harder. Left as dormant machinery; revisit if the gate is declared
+  permanently positive-only.
+
+### D6. `is_z3_available()` / `Z3_AVAILABLE` always-true gate
+- **File:** `liberator_adapter/constraints/z3_solver.py` (+ callers)
+- **Observation:** `Z3_AVAILABLE = True` is a constant and `is_z3_available()`
+  always returns True — the import-fallback it once guarded is gone (z3 is now a
+  hard dependency). Callers in CBFactory / TypeDependencyGraphGenerator branch on
+  a constant.
+- **Why deferred:** collapsing the gate touches multiple call sites across the
+  synthesis boundary and changes the "z3 optional" contract surface; better as a
+  focused change than folded into a dead-code sweep.
+
 ### D2. `tools/p0_trace_survey/extract_traces.py` fork of `analysis/static_trace.py`
 - **Opportunity:** the survey tool carries a 484-line older fork of
   `static_trace` (same `CallSite`/`StaticTrace`/`ProjectTraceReport`/
