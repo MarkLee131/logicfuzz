@@ -26,7 +26,7 @@ families of prior tools each get one half right and pay for the other:
 | Failure mode | Where it bites |
 |---|---|
 | **P1 — LLM decides program structure** | The LLM picks the API set, the call order, the arg wiring, and the input derivation in one shot. It hallucinates APIs, mis-orders lifecycles (use-before-init, missing destroy), and fakes types. Validity is recovered *after the fact* by build/run + crash learning, burning tokens on repair. *(PromeFuzz)* |
-| **P2 — pure symbolic types over-connect, and lose handle identity** | Type compatibility ≠ semantic validity, so a type-driven graph proposes nonsense chains; and the compiler IR collapses every opaque handle (`typedef void* cmsHPROFILE`) to `void*`/`i8*`, so the handle dependency graph for such a library is *empty* — deep creator→consumer→destroyer chains can never form. *(Liberator)* |
+| **P2 — pure symbolic types over-connect, and lose handle structure** | Type compatibility ≠ semantic validity, so a type-driven graph proposes nonsense chains; and the compiler IR collapses every opaque handle (`typedef void* cmsHPROFILE`) to `void*`/`i8*`, so the handle dependency graph for such a library is *empty* — deep creator→consumer→destroyer chains can never form. A second blind spot has the same effect: the production model recognizes only *return-value* and *out-pointer* (`T**`) creators, so a **caller-allocated struct initialized in place** (`deflateInit_(z_stream*)` — single pointer, indistinguishable by arity from a plain consumer) appears to have *no producer*, and the whole stateful family (zlib deflate/inflate) is unconstructable. *(Liberator)* |
 | **P3 — coverage saturates on the shallow surface** | Without library-specific usage knowledge and without aiming at code the existing corpus misses, drivers re-cover the easy entry points and never reach deep subsystems (parsers, serializers, optimizers). |
 
 Empirically, P2/P3 are not hypothetical: on lcms every opaque handle is
@@ -48,18 +48,42 @@ that **deterministically fuses three evidence sources** into one per-API verdict
 before any sequence is proposed:
 
 - **IR mechanism** — produces/requires/kills handle types from a use-def walker
-  (`analysis/usedef.py`);
+  (`analysis/usedef.py`), gated by **SVF per-argument read/write value-flow**
+  (`conditions.json`) to tell an *initializer* from a same-struct *mutator*;
 - **doc/naming intent** — role verbs, doxygen/README priors;
 - **usage composition** — accepting paths from the project automaton.
 
 This model is the **role authority** (demoting the heuristic
-`ConditionManager`), and it is recovered to be *correct*: a dedicated
-typedef-handle recovery pass (`analysis/handle_typedef_recovery.py`) restores
-the opaque-handle identity the compiler IR discards (re-typing collapsed
-`void*`/`i8*` slots back to `cmsHPROFILE` / `cmsHTRANSFORM` from the public
-headers), so the dependency graph is *connected where Liberator's is empty* and
-*specific where a naive void*-graph would over-connect* (`cmsHPROFILE` ≠
-`cmsHTRANSFORM`). It is deterministic — zero LLM, zero token cost.
+`ConditionManager`), and it is recovered to be *correct* by **two orthogonal
+recovery passes** that restore handle relations the raw IR view drops:
+
+1. **Handle *identity*** — a typedef-handle recovery pass
+   (`analysis/handle_typedef_recovery.py`) restores the opaque-handle identity
+   the compiler IR discards (re-typing collapsed `void*`/`i8*` slots back to
+   `cmsHPROFILE` / `cmsHTRANSFORM` from the public headers), so the dependency
+   graph is *connected where Liberator's is empty* and *specific where a naive
+   void*-graph would over-connect* (`cmsHPROFILE` ≠ `cmsHTRANSFORM`).
+2. **Handle *production*** — a caller-allocated, in-place-initialized struct
+   (`z_stream` ← `deflateInit_(z_stream*)`) is restored as a *producer* via an
+   **SVF-write-gated INIT channel** (`analysis/usedef.py`): an init-named
+   single-pointer struct counts as creating that struct unless SVF's value-flow
+   positively observed the parameter read-only — which correctly rejects
+   same-arity *consumers* like `pthread_create(attr*)` (reads the attr) while
+   accepting true initializers. Without it the deflate/inflate family has no
+   creator and never forms a chain; with it the lifecycle prefix
+   (`deflateInit_` → `deflate` → `deflateEnd`) constructs.
+
+Both passes are deterministic — zero LLM, zero token cost.
+
+> **Empirical anchor (zlib, validated 2026-06):** with the production-recovery
+> channel the deflate/inflate family goes from **0 → 34 of 36 constructable**,
+> and a single generated driver covers **`deflate.c` (570 lines) + `inflate.c`
+> (551) + `trees.c` (387)** — *all 0 before the fix* — for 1,874/3,397 lines
+> (55%) in that driver's own coverage build. Without the recovery no chain forms
+> for `z_stream`, so none of that code is reachable by any driver. (Measured via
+> the per-driver `run_extended_fuzzing` build; the project's *eval* coverage
+> build is degenerate for zlib — it re-measures the baseline `checksum_fuzzer`,
+> so cov-diff over it understates every zlib driver.)
 
 > **vs prior work:** PromeFuzz has no dependency substrate at all (the LLM
 > infers relationships); Liberator has a type substrate that both
@@ -210,6 +234,7 @@ upstream divergences, so future upstream ports don't reintroduce them.)
 | Var-len buffers | static `len_depends_on` only; decoupled when analysis misses it | falls back to `DriverEnhancer.get_buffer_size_constraint` (`VarLenAnalyzer` name/type heuristics) |
 | Dependency graph | inverts the dep-graph, **drops the original direction** (no "who produces type T?") | keeps both directions + `_build_type_producer_map` (return-type → APIs), loose pointer-suffix matching |
 | Handle identity | collapsed to `void*`/`i8*` by IR (see Innovation ①) | recovered from headers/exported-functions (`handle_typedef_recovery.py`) |
+| Handle production channels | return-value + out-pointer (`T**`) creators only; a caller-allocated struct initialized in place (`z_stream` ← `deflateInit_(z_stream*)`, single pointer) has no producer → the stateful family is unconstructable | **+ SVF-write-gated caller-alloc INIT channel** (`usedef.py:annotate_svf_writes` / `extract_produced_handles`): an init-named single-pointer struct is recovered as a creator when SVF value-flow shows it *writing* the param (not read-only), with naming anti-stems + demotion when a real return/out-ptr creator already exists |
 
 ### Robustness hardening (upstream latent bugs the adapter fixed)
 
@@ -236,7 +261,7 @@ backend/IR refactors.
 |---|---|---|---|
 | Driver creation | LLM free-form | symbolic full render | Z3 skeleton + LLM hole-fill |
 | Structure decided by | LLM | symbolic | symbolic (Z3 + automaton) |
-| Dependency substrate | none (LLM) | type-only, handles collapsed | reconciled IR⊕doc⊕usage, handles recovered |
+| Dependency substrate | none (LLM) | type-only, handles collapsed | reconciled IR⊕doc⊕usage, handles recovered (void\*-identity + caller-alloc init) |
 | Feasibility check | none (relevance) | Python-symbolic | SMT (Z3) + typestate |
 | Usage knowledge | RAG + LLM relevance | none | learned project automaton |
 | Coverage targeting | weighted score | none | gap-directed (baseline-uncovered) |

@@ -46,6 +46,7 @@ from liberator_adapter.analysis.usedef import (
     _count_pointer_levels,
     _find_buffer_size_positions,
     _get_is_const,
+    _is_init_named,
     _strip_one_pointer_level,
 )
 
@@ -383,6 +384,8 @@ def _ir_arg_roles(api: Dict[str, Any]) -> Dict[int, ArgRole]:
     args = api.get("arguments", api.get("arguments_info", [])) or []
     roles: Dict[int, ArgRole] = {}
     buf_idx, size_idx = _find_buffer_size_positions(args)
+    name_lower = (api.get("function_name", "") or "").lower()
+    init_named = _is_init_named(name_lower)
     for i, arg in enumerate(args):
         atype = arg.get("type", arg.get("type_clang", "")) or ""
         if i == buf_idx:
@@ -397,6 +400,15 @@ def _ir_arg_roles(api: Dict[str, Any]) -> Dict[int, ArgRole]:
             if inner and is_handle_type(inner):
                 roles[i] = ArgRole.OUTPUT
                 continue
+        # Caller-allocated-struct init: ``deflateInit_(z_stream*)`` writes/sets
+        # up a struct the caller declares. Single-pointer (not the ``T**``
+        # out-pointer above), init-named, and not SVF-proven read-only — same
+        # gate as the INIT producer channel in usedef. Mark OUTPUT so the hole
+        # renderer declares + initializes it rather than seeking a live handle.
+        if (levels == 1 and not _get_is_const(arg) and is_handle_type(atype)
+                and init_named and arg.get("_svf_writes") is not False):
+            roles[i] = ArgRole.OUTPUT
+            continue
         if is_handle_type(atype) and levels >= 1:
             roles[i] = ArgRole.HANDLE_IN
             continue

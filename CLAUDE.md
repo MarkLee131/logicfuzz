@@ -144,7 +144,7 @@ into `FuzzingContext` before agent turns. Remaining LangGraph tools:
 | UnifiedCodeValidator | `src/utils/unified_validator.py` | Single-pass validator (fake-defs, internal APIs, language mismatch, hallucination) |
 | Closed-loop (Phase G existing) | `src/closed_loop.py` | Re-runs L4+CBFactory with `update_with_traces` evidence |
 | CBFactory | `liberator_adapter/driver/factory/constraint_based/` | Z3-guided driver synthesis |
-| Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter |
+| Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter; **caller-alloc INIT producer channel** (`annotate_svf_writes` + `extract_produced_handles`) recovers in-place initializers (`deflateInit_(z_stream*)`) as creators, SVF-write-gated via `conditions.json`. Detail: `docs/generation.md` G1. |
 | Project automaton | `liberator_adapter/analysis/project_automaton.py` | `AutomatonArtifact` |
 | **APISemanticModel** (G1) | `liberator_adapter/analysis/api_semantic_model.py` | `reconcile()` → per-API role+arg semantics+evidence; role authority (demotes ConditionManager); 0 LLM; Step 5g. Detail: `docs/generation.md`. |
 | **Sequence Constructor** (G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences()` builds lifecycle-complete chains, **merged with** the grammar floor at Step 5h. A/B: `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1`. Detail: `docs/generation.md`. |

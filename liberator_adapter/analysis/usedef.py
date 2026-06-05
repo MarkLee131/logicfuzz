@@ -69,10 +69,37 @@ _NON_HANDLE_PRIMITIVES: Tuple[str, ...] = (
 
 _CHANNEL_RETURN: int = 0
 _CHANNEL_OUT_POINTER: int = 1
+# Caller-allocated-struct init: ``foo_init(foo *)`` initializes a struct the
+# caller declares on the stack. The struct arrives by single pointer (arity 1),
+# not the ``foo **`` out-pointer pattern, so the RETURN / OUT_POINTER channels
+# miss it and the type looks unproduced (e.g. zlib ``z_stream`` ← deflateInit_).
+_CHANNEL_INIT: int = 2
 
 _CREATOR_PRIORITY_PATTERNS: Tuple[str, ...] = (
     "_new", "_create", "_alloc", "_init", "_open",
 )
+
+# Init-naming stems (substring, case-insensitive) used to distinguish a
+# caller-alloc *initializer* (CREATOR-like) from a plain *mutator* of the same
+# struct: deflate and deflateInit_ both write z_stream's fields, only the latter
+# is the creator. Underscore-free so camelCase (``deflateInit_``) matches.
+_INIT_NAMING_STEMS: Tuple[str, ...] = (
+    "init", "create", "alloc", "setup", "construct", "make", "open", "begin",
+)
+# Guard: these forms contain an init stem but are NOT initializers (destroyers /
+# re-inits), so they must NOT be treated as producers.
+_INIT_NAMING_ANTI_STEMS: Tuple[str, ...] = (
+    "deinit", "uninit", "reinit", "close", "free", "destroy", "delet",
+    "releas", "cleanup", "fini", "dealloc", "dispose", "reset", "term",
+)
+
+
+def _is_init_named(name_lower: str) -> bool:
+    """True for caller-alloc initializer names (``deflateInit_``), excluding
+    de-init / destroy forms that merely contain an init substring."""
+    if any(a in name_lower for a in _INIT_NAMING_ANTI_STEMS):
+        return False
+    return any(s in name_lower for s in _INIT_NAMING_STEMS)
 
 # Buffer-hint patterns: arg types that signal raw byte / string buffers
 # (we don't want to treat these as handle out-pointers when they appear as
@@ -252,23 +279,91 @@ def extract_produced_handles(
     buffer_idx, size_idx = _find_buffer_size_positions(args)
     name_lower = (api.get("function_name", "") or "").lower()
     naming_boost = any(pat in name_lower for pat in _CREATOR_PRIORITY_PATTERNS)
+    init_named = _is_init_named(name_lower)
     for arg_idx, arg in enumerate(args):
         if arg_idx == buffer_idx or arg_idx == size_idx:
             continue
         arg_type = arg.get("type", arg.get("type_clang", "")) or ""
-        if _count_pointer_levels(arg_type) < 2:
-            continue
         if _get_is_const(arg):
             continue
-        inner = _strip_one_pointer_level(arg_type)
-        if inner is None or not is_handle_type(inner):
-            continue
-        key = normalize_handle_type(inner)
-        if not key:
-            continue
-        confidence = 0.95 if naming_boost else 0.7
-        produced.append((key, _CHANNEL_OUT_POINTER, confidence))
+        levels = _count_pointer_levels(arg_type)
+        if levels >= 2:
+            # Classic out-pointer creator: ``foo **out`` receives a fresh handle.
+            inner = _strip_one_pointer_level(arg_type)
+            if inner is None or not is_handle_type(inner):
+                continue
+            key = normalize_handle_type(inner)
+            if not key:
+                continue
+            confidence = 0.95 if naming_boost else 0.7
+            produced.append((key, _CHANNEL_OUT_POINTER, confidence))
+        elif levels == 1 and init_named and is_handle_type(arg_type):
+            # Caller-allocated-struct init: ``foo_init(foo *)`` initializes a
+            # struct the caller declares (zlib ``deflateInit_(z_stream*)``). The
+            # produced key is the single-pointer struct itself (same normalize
+            # the consumers' ``requires`` use, so they wire up). Three safety nets
+            # keep this from over-firing:
+            #   (a) only init-NAMED APIs reach here (a plain mutator ``deflate``
+            #       that also writes z_stream is excluded by naming);
+            #   (b) SVF write-through gate (``_svf_writes`` ∈ {True, False, None}):
+            #       True = SVF saw it write/init the struct → produce; False = SVF
+            #       analyzed it and saw only reads → it's NOT an initializer
+            #       (e.g. ``pthread_create(attr*)`` reads the attr), so SKIP;
+            #       None = SVF had no data (e.g. ``inflateInit_`` inlined away) →
+            #       trust the init-naming;
+            #   (c) ``extract_api_effects`` demotes this channel whenever the
+            #       type already has a real (return/out-ptr) creator.
+            svf_writes = arg.get("_svf_writes")
+            if svf_writes is False:
+                continue
+            key = normalize_handle_type(arg_type)
+            if not key:
+                continue
+            confidence = 0.6 if svf_writes is True else 0.45
+            produced.append((key, _CHANNEL_INIT, confidence))
     return produced
+
+
+def annotate_svf_writes(
+    apis: List[Dict[str, Any]],
+    conditions: Any,
+) -> None:
+    """Tag each arg with ``_svf_writes`` ∈ {True, False, None} in place.
+
+    The signal gates the caller-alloc INIT producer channel (see
+    ``extract_produced_handles``): an init-named API only counts as producing a
+    single-pointer struct if SVF didn't *positively* observe it reading-only.
+
+      True  — SVF saw a write/delete on this param (it initializes the struct).
+      False — SVF analyzed the function and this param has accesses, all reads
+              (it consumes the struct, doesn't initialize it).
+      None  — SVF had no usable access data for this param (function inlined
+              away / not in the report) → caller falls back to naming.
+
+    ``conditions`` is the raw conditions.json structure: either a ``list`` of
+    per-function dicts (``{function_name, param_0:{access_type_set:[...]}, ...}``)
+    or a mapping ``{name: that_dict}``. Anything else → all args tagged None.
+    """
+    by_name: Dict[str, Dict[str, Any]] = {}
+    if isinstance(conditions, list):
+        by_name = {e["function_name"]: e for e in conditions
+                   if isinstance(e, dict) and "function_name" in e}
+    elif isinstance(conditions, dict):
+        by_name = {k: v for k, v in conditions.items() if isinstance(v, dict)}
+
+    for api in apis:
+        fname = api.get("function_name", "")
+        args = api.get("arguments", api.get("arguments_info", [])) or []
+        entry = by_name.get(fname)
+        for i, arg in enumerate(args):
+            verdict: Optional[bool] = None
+            if entry is not None:
+                pinfo = entry.get(f"param_{i}")
+                ats = pinfo.get("access_type_set") if isinstance(pinfo, dict) else None
+                if ats:  # analyzed AND has accesses
+                    verdict = any(a.get("access") in ("write", "delete")
+                                  for a in ats)
+            arg["_svf_writes"] = verdict
 
 
 # =============================================================================
@@ -279,6 +374,7 @@ class _Channel(Enum):
     """Delivery channel for a produced handle. Metadata only — not in ranking."""
     RETURN = "return"
     OUT_POINTER = "out_pointer"
+    INIT = "init"  # caller-allocated struct initialized in-place (foo_init(foo*))
 
 
 @dataclass(frozen=True)
@@ -596,19 +692,52 @@ def extract_api_effects(
         # so it composes with downstream queries instead of being a special
         # case in the ranker.
         raw_productions = list(_produced(api))
+        _chan = {0: _Channel.RETURN, 1: _Channel.OUT_POINTER, 2: _Channel.INIT}
         productions = tuple(
             HandleProduction(
-                handle=h, channel=_Channel.RETURN if ch == 0 else _Channel.OUT_POINTER,
+                handle=h, channel=_chan.get(ch, _Channel.OUT_POINTER),
                 confidence=float(conf),
             )
             for h, ch, conf in raw_productions
-            if h not in use_set and h not in _value_types
+            # produces ∩ consumes = ∅ (iterator/forwarder exclusion) — EXEMPT the
+            # INIT channel (ch==2): an in-place initializer legitimately both
+            # reads and writes the caller-declared struct it produces.
+            if (ch == 2 or h not in use_set) and h not in _value_types
         )
+        # A caller-alloc initializer is the ORIGIN of the struct it sets up, not
+        # a consumer of a pre-existing one: drop the INIT-produced handle from
+        # its USE set so the role reconciler reads it as CREATOR (produces ∧
+        # ¬requires, not MUTATOR) and ``_build_prefix`` — which only chains
+        # CREATORs — will prepend it (``deflateInit_`` before ``deflate``).
+        _init_handles = {p.handle for p in productions if p.channel is _Channel.INIT}
+        if _init_handles:
+            use_set = use_set - _init_handles
         def_set = frozenset(p.handle for p in productions)
         effects[name] = APIEffect(
             name=name, use=use_set, def_=def_set,
             productions=productions, raw=api,
         )
+
+    # Demote INIT-channel productions for any handle type that already has a
+    # real (return / out-pointer) creator: the genuine factory wins, and the
+    # init-named API reverts to a plain consumer of an externally-produced
+    # handle. This keeps the caller-alloc channel from competing with a proper
+    # creator (only fires for types like z_stream that have NO other producer).
+    real_produced = {
+        p.handle for e in effects.values() for p in e.productions
+        if p.channel in (_Channel.RETURN, _Channel.OUT_POINTER)
+    }
+    if real_produced:
+        for nm, e in list(effects.items()):
+            kept = tuple(p for p in e.productions
+                         if not (p.channel is _Channel.INIT
+                                 and p.handle in real_produced))
+            if len(kept) != len(e.productions):
+                effects[nm] = APIEffect(
+                    name=e.name, use=e.use,
+                    def_=frozenset(p.handle for p in kept),
+                    productions=kept, raw=e.raw,
+                )
 
     # Apply lifecycle pairs as KILL edges on the destroy side. The destroy
     # API's KILL set picks up every handle the paired init API DEFs (handles

@@ -57,12 +57,36 @@ any sequence is proposed, deterministically (0 LLM):
 Rule: when IR and doc disagree on role, **doc wins for role, IR wins for
 mechanism** — recorded in a per-API `evidence` log (auditable). This is the
 role authority (demoting the heuristic `ConditionManager` to one IR-evidence
-source). A typedef-handle recovery pass (`analysis/handle_typedef_recovery.py`)
-restores opaque-handle identity the compiler IR collapses to `void*`/`i8*`
-(re-typing back to `cmsHPROFILE` / `cmsHTRANSFORM` from public headers) so the
-dependency graph is connected where a naive IR graph is empty and specific
-where a void*-graph would over-connect. Built at Step 5g; writes
-`state/api_semantic_model.json` (cached → 0-token re-runs).
+source).
+
+Two orthogonal recovery passes restore handle relations the raw IR view drops:
+
+- **Identity** — a typedef-handle recovery pass
+  (`analysis/handle_typedef_recovery.py`) restores opaque-handle identity the
+  compiler IR collapses to `void*`/`i8*` (re-typing back to `cmsHPROFILE` /
+  `cmsHTRANSFORM` from public headers) so the dependency graph is connected
+  where a naive IR graph is empty and specific where a void*-graph would
+  over-connect.
+- **Production** — a caller-allocated, in-place-initialized struct
+  (`z_stream` ← `deflateInit_(z_stream*)`) is recovered as a *producer* via the
+  **SVF-write-gated INIT channel** in `analysis/usedef.py`
+  (`annotate_svf_writes` → `extract_produced_handles`). The IR's classic
+  producer model sees only return-value and out-pointer (`T**`) creators, so a
+  single-pointer initializer is indistinguishable by arity from a plain
+  consumer and the struct looks unproduced — the whole zlib deflate/inflate
+  family is then unconstructable. The INIT channel fires only when (a) the API
+  is init-named (anti-stems exclude `deinit`/`free`/`reset`/…), (b) SVF's
+  per-arg value-flow (`conditions.json` `access_type_set`) did **not**
+  positively observe the param read-only — `True`=write→produce, `False`=reads
+  only→skip (correctly rejecting `pthread_create(attr*)`), `None`=no SVF data→
+  trust naming — and (c) no real return/out-ptr creator already exists for that
+  type (else demote). The init-produced handle is dropped from the API's USE
+  set so the reconciler reads it as CREATOR (not MUTATOR) and `_build_prefix`
+  prepends it (`deflateInit_` → `deflate` → `deflateEnd`). SVF annotation is
+  wired at Step 5g/12 in `data_context.py`.
+
+Built at Step 5g; writes `state/api_semantic_model.json` (cached → 0-token
+re-runs).
 
 ### G2 — sequence constructor (`analysis/sequence_constructor.py`)
 

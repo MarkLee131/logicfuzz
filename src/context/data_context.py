@@ -933,6 +933,22 @@ class FuzzingContext:
                 except Exception as _tre:
                     log.debug('   5g typedef-handle recovery skipped: %s', _tre)
 
+            # Annotate args with the SVF per-arg write signal (conditions.json)
+            # so the caller-alloc INIT producer channel (usedef) is SVF-gated: an
+            # init-named single-pointer struct (``deflateInit_(z_stream*)``)
+            # counts as PRODUCING the struct unless SVF positively saw it
+            # read-only. Without this the deflate/inflate family's z_stream looks
+            # unproduced and the whole family is unconstructable. Best-effort;
+            # absent conditions → naming-only fallback.
+            try:
+                from liberator_adapter.analysis.usedef import annotate_svf_writes
+                _cond_path = Path(f"./results/{project_name}/conditions.json")
+                if _cond_path.exists():
+                    with open(_cond_path) as _cf:
+                        annotate_svf_writes(project_apis, json.load(_cf))
+            except Exception as _ae:
+                log.debug('   5g/12 SVF-write annotation skipped: %s', _ae)
+
             _reconcile_kwargs = dict(
                 project=project_name,
                 condition_info=condition_info,
