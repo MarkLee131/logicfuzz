@@ -82,16 +82,6 @@ class Result:
     self.benchmark = benchmark
     self.result = result
 
-def generate_benchmarks(args: argparse.Namespace) -> None:
-  """The FI-driven benchmark generator was removed.
-
-  Provide benchmarks via ``--benchmark-yaml`` or ``--benchmarks-directory``.
-  """
-  raise SystemExit(
-      "--generate-benchmarks is no longer supported (FuzzIntrospector "
-      "harness oracle removed). Pass an explicit YAML via -y / "
-      "--benchmark-yaml.")
-
 def prepare_experiment_targets(
     args: argparse.Namespace) -> list[benchmarklib.Benchmark]:
   """Constructs a list of experiment configs based on the |BENCHMARK_DIR| and
@@ -103,9 +93,6 @@ def prepare_experiment_targets(
         'the files in %s.', args.benchmark_yaml, args.benchmarks_directory)
     benchmark_yamls = [args.benchmark_yaml]
   else:
-    if args.generate_benchmarks:
-      generate_benchmarks(args)
-
     benchmark_yamls = [
         os.path.join(args.benchmarks_directory, file)
         for file in os.listdir(args.benchmarks_directory)
@@ -1296,22 +1283,6 @@ def parse_args() -> argparse.Namespace:
       '--oss-fuzz-dir',
       help='OSS-Fuzz dir path to use. Create temporary directory by default.',
       default='')
-  parser.add_argument(
-      '-g',
-      '--generate-benchmarks',
-      help=('[DEPRECATED] FuzzIntrospector benchmark generation was removed; '
-            'pass an explicit benchmark YAML via -y instead.'),
-      type=str)
-  parser.add_argument(
-      '-gp',
-      '--generate-benchmarks-projects',
-      help='Projects to generate benchmarks for in a comma separated string.',
-      type=str)
-  parser.add_argument('-gm',
-                      '--generate-benchmarks-max',
-                      help='Max targets to generate per benchmark heuristic.',
-                      type=int,
-                      default=5)
   parser.add_argument('--extract-only',
                       action='store_true',
                       default=False,
@@ -1501,15 +1472,9 @@ def parse_args() -> argparse.Namespace:
             benchmark_yaml.endswith('yml')), (
                 "--benchmark-yaml needs to take an YAML file.")
 
-  bench_yml = bool(benchmark_yaml)
-  bench_dir = bool(args.benchmarks_directory)
-  bench_gen = bool(args.generate_benchmarks)
-  num_options = int(bench_yml) + int(bench_dir) + int(bench_gen)
-  assert num_options == 1, (
-      'One and only one of --benchmark-yaml, --benchmarks-directory and '
-      '--generate-benchmarks. --benchmark-yaml takes one benchmark YAML file, '
-      '--benchmarks-directory takes: a directory of them and '
-      '--generate-benchmarks generates them during analysis.')
+  assert int(bool(benchmark_yaml)) + int(bool(args.benchmarks_directory)) == 1, (
+      'Provide one and only one of --benchmark-yaml (a single YAML file) or '
+      '--benchmarks-directory (a directory of YAML files).')
 
   # Validate cloud experiment configs.
   assert (
