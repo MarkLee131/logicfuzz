@@ -808,25 +808,19 @@ class BuilderRunner:
       logger.debug('No cached image found for %s with %s sanitizer', 
                    self.benchmark.project, sanitizer)
 
-    # Fast path: reuse pre-built base image if present, just retag.
-    # NOTE: the base image holds source + deps but NOT a compiled fuzzer
-    # binary, so this only skips the docker-build step. We still need to
-    # fall through to `docker run ... compile` below to actually produce
-    # the fuzz target binary.
+    # We MUST run the generated project's `docker build` here: its Dockerfile is
+    # the ONLY place our generated driver is COPY'd over the project's target
+    # source (evaluator.py appends `COPY <driver> <target_path>`). A previous
+    # "fast path" retagged the BASE project image (gcr.io/oss-fuzz/<base>, split
+    # off the generated name) and set image_already_tagged=True to skip the
+    # build — but that base image holds the ORIGINAL fuzzer source, so the
+    # coverage/fuzzing build then compiled+measured the BASELINE target (e.g.
+    # zlib's checksum_fuzzer.c, lcms's cms_gdb_fuzzer) instead of our driver,
+    # silently reporting baseline coverage for every sample. The generated
+    # Dockerfile FROMs the cached base layer, so building is still fast. Do NOT
+    # reintroduce a base-image retag that skips this build.
     new_tag = f'gcr.io/oss-fuzz/{generated_project}'
     image_already_tagged = False
-    base_project = generated_project.split('-', 1)[0]
-    if base_project and base_project != generated_project:
-      base_tag = f'gcr.io/oss-fuzz/{base_project}'
-      inspect = sp.run(['docker', 'image', 'inspect', base_tag],
-                       stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-      if inspect.returncode == 0:
-        retag = sp.run(['docker', 'tag', base_tag, new_tag],
-                       stdout=sp.PIPE, stderr=sp.PIPE)
-        if retag.returncode == 0:
-          logger.info('Reused %s as %s (skip image rebuild)',
-                      base_tag, new_tag)
-          image_already_tagged = True
     # Build the image (host network + legacy builder for IPv6 apt access)
     if not image_already_tagged:
       command = [
