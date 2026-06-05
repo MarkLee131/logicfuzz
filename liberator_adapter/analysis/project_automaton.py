@@ -1,9 +1,8 @@
 """Project-adaptive API protocol automaton — orchestrator.
 
 Glue: trace extraction → PTA construction → EDSM merge (with optional LLM
-oracle) → on-disk persistence. Pure new module; calling it does NOT change
-``FuzzingContext``, agents, or any production-pipeline behaviour. P3 will
-wire its output back; for now this is exploratory.
+oracle) → on-disk persistence. The artifact it produces is consumed by L4
+ranking (Step 5e2), the Prototyper, and the closed-loop feedback.
 
 Persistence layout::
 
@@ -96,14 +95,14 @@ class AutomatonArtifact:
         trace_paths: Dict[int, List] = {}
         root_rep = self.edsm.uf.find(0)
         # DFS over witness-tagged children
-        def walk(node_id: int, path: List, seen_traces: Set[int]):
+        def walk(node_id: int, path: List):
             node = self.pta.nodes[node_id]
             for tid in node.witness_traces:
                 if tid not in trace_paths or len(path) > len(trace_paths[tid]):
                     trace_paths[tid] = list(path)
             for label, child_id in node.children.items():
-                walk(child_id, path + [label], seen_traces)
-        walk(0, [], set())
+                walk(child_id, path + [label])
+        walk(0, [])
         for tid, labels in trace_paths.items():
             cur = root_rep
             ok = True
@@ -230,16 +229,15 @@ class AutomatonArtifact:
                 # type-feasible).
                 roots = [r for r in roots
                          if r not in seq_set and r not in creators_to_prepend]
-                # Phase A F2: drop roots the caller's retry loop has
-                # already tried and seen fail.
+                # Drop roots the caller asked to exclude (e.g. already tried).
                 if exclude_filter is not None:
                     roots = [r for r in roots if not exclude_filter(r)]
                 if not roots:
                     continue
-                # Phase A F1: idiom-aware preference. Try preferred roots
-                # first; only fall back to the highest-ranked if none of
-                # the top-K are idiom-blessed. This makes graft robust
-                # against IR mod/ref false-positive CREATE labels.
+                # Idiom-aware preference: try preferred roots first; only fall
+                # back to the highest-ranked if none of the top-K are
+                # idiom-blessed. Makes graft robust against IR mod/ref
+                # false-positive CREATE labels.
                 chosen: Optional[str] = None
                 if prefer_filter is not None:
                     preferred = [r for r in roots if prefer_filter(r)]
@@ -393,6 +391,8 @@ class AutomatonArtifact:
         # from runtime; the tag goes into ``function_name`` so persistence
         # still distinguishes them from static traces.
         next_trace_id = self.n_traces
+        new_trace_pairs = []  # (trace_id, seq) for non-empty seqs — the ids
+                              # the PTA actually consumed, reused for persist
         for seq in api_sequences:
             if not seq:
                 continue
@@ -411,6 +411,7 @@ class AutomatonArtifact:
                 ],
             )
             self.pta.add_trace(next_trace_id, trace)
+            new_trace_pairs.append((next_trace_id, seq))
             next_trace_id += 1
 
         # Identify the newly-added node ids (everything beyond the prior
@@ -432,9 +433,11 @@ class AutomatonArtifact:
         self.n_merged_states = self.edsm.n_output_states
 
         delta = {
-            "added_traces": len(api_sequences),
+            "added_traces": len(new_trace_pairs),
             "added_nodes": self.pta.size() - prev_node_count,
-            "delta_states": prev_merged - self.n_merged_states,  # negative = compression
+            # negative = compression (same sign convention as closed_loop's
+            # delta_merged_states = n_merged_states - prev_merged)
+            "delta_states": self.n_merged_states - prev_merged,
             "merged_states": self.n_merged_states,
         }
 
@@ -456,9 +459,7 @@ class AutomatonArtifact:
                         "line": 0,
                         "api_calls": [{"api_name": n} for n in seq],
                     }
-                    for nid, seq in enumerate(
-                        api_sequences, start=self.n_traces - len(api_sequences),
-                    )
+                    for nid, seq in new_trace_pairs
                 ]
                 traces_path.write_text(
                     json.dumps(prior + new_records, indent=2),
