@@ -112,6 +112,16 @@ unless a test pins the behavior.
   remainder or restoring the matching is a semantic decision about the upstream
   port, not a sweep cleanup. Left intact as a reversible toggle.
 
+### D4. `DriverEnhancer` thin public accessors with no callers
+- **File:** `liberator_adapter/driver/driver_enhancer.py`
+- **Observation:** `get_loop_pattern`, `get_callback_infos`, and
+  `is_structured_parser` are one-line pass-throughs to `self.cache` with zero
+  callers in the repo or tests.
+- **Why deferred:** `DriverEnhancer` is an adapter port and these read like an
+  intended-stable external API surface. Left in place pending a decision on
+  whether the accessor surface is contractual; the genuinely dead utilities and
+  internals around them were removed.
+
 ### D2. `tools/p0_trace_survey/extract_traces.py` fork of `analysis/static_trace.py`
 - **Opportunity:** the survey tool carries a 484-line older fork of
   `static_trace` (same `CallSite`/`StaticTrace`/`ProjectTraceReport`/

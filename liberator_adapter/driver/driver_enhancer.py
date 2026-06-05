@@ -17,9 +17,7 @@ from dataclasses import dataclass, field
 from liberator_adapter.common.api import Api
 from liberator_adapter.constraints.special_patterns import (
     SpecialPatternAnalyzer,
-    VarLenAnalyzer,
     VarLenRelation,
-    LoopPatternAnalyzer,
     LoopPatternInfo,
     CallbackAnalyzer,
     CallbackInfo,
@@ -45,7 +43,6 @@ class EnhancedCallbackStubGenerator:
 
     def __init__(self, callback_analyzer: Optional[CallbackAnalyzer] = None):
         self.callback_analyzer = callback_analyzer or CallbackAnalyzer()
-        self._generated_stubs: Dict[str, str] = {}  # func_name -> stub_code
 
     def set_llm_client(self, llm_client: LLMClient):
         """Set LLM client"""
@@ -88,12 +85,10 @@ class EnhancedCallbackStubGenerator:
             stub = callback_info.stub_code
             # Replace placeholder name
             stub = self._customize_stub_name(stub, func_name, callback_info)
-            self._generated_stubs[func_name] = stub
             return stub, callback_info.callback_type
 
         # Generate from template
         stub = self._generate_from_template(func_name, callback_info)
-        self._generated_stubs[func_name] = stub
         return stub, callback_info.callback_type
 
     def _customize_stub_name(self, stub: str, func_name: str,
@@ -190,10 +185,6 @@ int {func_name}(void* item, void* user_data) {{
         # ``void f(void)``. 2026-05 DriverEnhancer review (issue #1).
         return templates.get(callback_info.callback_type, "")
 
-    def get_all_stubs(self) -> Dict[str, str]:
-        """Get all generated stubs"""
-        return self._generated_stubs.copy()
-
 
 # =============================================================================
 # API Pattern Information Cache
@@ -245,14 +236,6 @@ class DriverEnhancer:
 
         if adapted_client:
             self.stub_generator.set_llm_client(adapted_client)
-
-    def set_llm_client(self, llm_client: LLMClient):
-        """Set LLM client"""
-        # Wrap the LLM model in an adapter to provide query() method
-        adapted_client = create_llm_adapter(llm_client)
-        self.llm_client = adapted_client
-        self.pattern_analyzer.set_llm_client(adapted_client)
-        self.stub_generator.set_llm_client(adapted_client)
 
     def analyze_api(self, api: Api) -> None:
         """
@@ -353,55 +336,3 @@ class DriverEnhancer:
         """Clear cache"""
         self.cache = APIPatternCache()
         self.pattern_analyzer.clear_cache()
-
-
-# The earlier ``enhance_context_get_function_pointer`` decorator was a
-# planned alternative path for Context.get_function_pointer that used
-# DriverEnhancer to produce smarter stubs. It was defined but never
-# wired in (no production caller); CBFactory.``_get_enhanced_function_pointer``
-# in 2026-05 takes its place. Removed in the 2026-05 DriverEnhancer
-# review (issue #3 — dead code, same pattern as the dead methods we
-# removed from Prototyper earlier this month).
-
-
-# =============================================================================
-# Utility Functions
-# =============================================================================
-
-def create_driver_enhancer(llm_client: Optional[LLMClient] = None) -> DriverEnhancer:
-    """Create DriverEnhancer instance"""
-    return DriverEnhancer(llm_client)
-
-
-def analyze_api_patterns(apis: List[Api],
-                         llm_client: Optional[LLMClient] = None) -> APIPatternCache:
-    """
-    Analyze special patterns for API list
-
-    Args:
-        apis: API list
-        llm_client: LLM client (optional)
-
-    Returns:
-        APIPatternCache: Analysis result cache
-    """
-    enhancer = DriverEnhancer(llm_client)
-    enhancer.analyze_apis(apis)
-    return enhancer.cache
-
-
-def get_varlen_for_api(api: Api,
-                       llm_client: Optional[LLMClient] = None) -> List[VarLenRelation]:
-    """Quickly get var-len relations for a single API"""
-    adapted_client = create_llm_adapter(llm_client)
-    analyzer = VarLenAnalyzer(adapted_client)
-    result = analyzer.analyze(api)
-    return result.relations
-
-
-def get_loop_info_for_api(api: Api,
-                          llm_client: Optional[LLMClient] = None) -> LoopPatternInfo:
-    """Quickly get loop pattern information for a single API"""
-    adapted_client = create_llm_adapter(llm_client)
-    analyzer = LoopPatternAnalyzer(adapted_client)
-    return analyzer.analyze(api)
