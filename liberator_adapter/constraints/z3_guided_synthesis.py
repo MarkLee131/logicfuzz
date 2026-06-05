@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Set, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-from z3 import Solver, Bool, Int, And, Implies, sat, unsat
+from z3 import Solver, Bool, Int, Implies, sat, unsat
 Z3_AVAILABLE = True
 
 logger = logging.getLogger(__name__)
@@ -546,26 +546,6 @@ class IncrementalZ3Solver:
                            f"requires_{consumer_api}_{type_key}",
                            GuidanceConstraintType.RESOURCE_EXISTENCE)
 
-    def add_order_constraint(self, before_api: str, after_api: str):
-        """
-        Assert that one API must be called before another.
-
-        Args:
-            before_api: API that must come first
-            after_api: API that must come after
-        """
-        before_order = self._get_or_create_order_var(before_api)
-        after_order = self._get_or_create_order_var(after_api)
-        before_called = self._get_or_create_api_var(before_api)
-        after_called = self._get_or_create_api_var(after_api)
-
-        # If both are called, before must come first
-        self.add_constraint(
-            Implies(And(before_called, after_called), before_order < after_order),
-            f"order_{before_api}_before_{after_api}",
-            GuidanceConstraintType.ACCESS_ORDER
-        )
-
     def check(self) -> SatisfiabilityResult:
         """
         Check satisfiability of current constraints.
@@ -703,15 +683,6 @@ class IncrementalZ3Solver:
         finally:
             # Always pop back
             self.pop()
-
-    def get_available_resources(self) -> Dict[str, Set[str]]:
-        """Get currently available resources by type"""
-        return dict(self.resource_types)
-
-    def has_resource(self, type_str: str) -> bool:
-        """Check if a resource of given type is available"""
-        type_key = self._normalize_type(type_str)
-        return type_key in self.resource_types and len(self.resource_types[type_key]) > 0
 
     def reset(self):
         """Reset solver to initial state"""
@@ -866,39 +837,6 @@ class UnsatCoreDiagnoser:
                 missing.append(type_str)
         return missing
 
-    def suggest_producers(self, missing_type: str,
-                          available_producers: Dict[str, List[str]]) -> List[str]:
-        """
-        Suggest producer APIs for a missing resource type.
-
-        Args:
-            missing_type: The type that needs to be produced
-            available_producers: Mapping from type to producer API names
-
-        Returns:
-            List of suggested producer API names
-        """
-        type_key = missing_type.replace(" ", "").replace("const", "").strip()
-
-        suggestions = []
-
-        # Direct match
-        if type_key in available_producers:
-            suggestions.extend(available_producers[type_key])
-
-        # Try without pointer
-        if type_key.endswith("*"):
-            base_type = type_key[:-1]
-            if base_type in available_producers:
-                suggestions.extend(available_producers[base_type])
-
-        # Try with pointer
-        ptr_type = type_key + "*"
-        if ptr_type in available_producers:
-            suggestions.extend(available_producers[ptr_type])
-
-        return list(set(suggestions))  # Deduplicate
-
 
 # ============================================================
 # Z3-Guided Synthesis Controller
@@ -948,40 +886,6 @@ class Z3GuidedSynthesisController:
         """Reset controller state for new synthesis"""
         self.solver.reset()
 
-    def evaluate_source_apis(self, source_apis: List[Any],
-                             get_required_types: callable,
-                             get_produced_types: callable) -> List[Tuple[Any, float]]:
-        """
-        Evaluate and rank source APIs by feasibility and complexity.
-
-        Args:
-            source_apis: List of source API objects
-            get_required_types: Function to get required types for an API
-            get_produced_types: Function to get produced types for an API
-
-        Returns:
-            List of (api, score) tuples, sorted by score (lower is better)
-        """
-        ranked = []
-
-        for api in source_apis:
-            api_name = api.function_name if hasattr(api, 'function_name') else str(api)
-            required = get_required_types(api)
-            produced = get_produced_types(api)
-
-            result = self.solver.check_candidate(api_name, required, produced)
-
-            if result.is_feasible:
-                ranked.append((api, result.score))
-            else:
-                logger.debug(f"[Z3Guided] Source API {api_name} not feasible: "
-                            f"missing {result.missing_resources}")
-
-        # Sort by score (lower is better)
-        ranked.sort(key=lambda x: x[1])
-
-        return ranked
-
     def add_api_to_sequence(self, api: Any, position: int,
                             required_types: List[str],
                             produced_types: List[str],
@@ -1030,47 +934,9 @@ class Z3GuidedSynthesisController:
         """Create a checkpoint for potential backtracking"""
         return self.solver.push()
 
-    def rollback(self, levels: int = 1):
-        """Rollback to previous checkpoint"""
-        self.solver.pop(levels)
-
     def rollback_to(self, level: int):
         """Rollback to specific checkpoint level"""
         self.solver.pop_to(level)
-
-    def get_diagnosis(self, unsat_core: Optional[List[str]] = None) -> UnsatDiagnosis:
-        """
-        Get diagnosis for current or provided unsat core.
-
-        Args:
-            unsat_core: Optional unsat core (uses last check result if None)
-        """
-        if unsat_core is None:
-            result = self.solver.check()
-            unsat_core = result.unsat_core if result.is_unsat else []
-
-        return self.diagnoser.diagnose(unsat_core or [])
-
-    def suggest_recovery(self, diagnosis: UnsatDiagnosis,
-                         type_to_producers: Dict[str, List[str]]) -> List[str]:
-        """
-        Suggest recovery actions based on diagnosis.
-
-        Args:
-            diagnosis: UnsatDiagnosis from diagnoser
-            type_to_producers: Mapping from type to producer API names
-
-        Returns:
-            List of suggested API names to try
-        """
-        suggestions = []
-
-        if diagnosis.diagnosis_type == DiagnosisType.MISSING_RESOURCE:
-            for missing_type in diagnosis.missing_resources:
-                producers = self.diagnoser.suggest_producers(missing_type, type_to_producers)
-                suggestions.extend(producers)
-
-        return list(set(suggestions))  # Deduplicate
 
     def get_automaton_stats(self) -> Optional[Dict[str, Any]]:
         """Phase H: telemetry on automaton-guard prunings. ``None`` when no
