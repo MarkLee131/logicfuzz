@@ -229,19 +229,6 @@ class StateMachineValidationResult:
         }
 
 
-class StateMachineFilterStrategy(Enum):
-    """Strategy for filtering sequences by state machine validity."""
-
-    # Keep only sequences with no violations
-    STRICT = "strict"
-
-    # Keep sequences that can be fixed (missing init/destroy)
-    FIXABLE = "fixable"
-
-    # Keep sequences with only non-critical violations
-    PERMISSIVE = "permissive"
-
-
 # =============================================================================
 # State Machine Analyzer
 # =============================================================================
@@ -276,8 +263,7 @@ class StateMachineAnalyzer:
     def analyze(
         self,
         project_apis: List[Dict[str, Any]],
-        lifecycle_analysis: Optional[Dict[str, Any]] = None,
-        condition_info: Optional[Dict[str, Any]] = None
+        lifecycle_analysis: Optional[Dict[str, Any]] = None
     ) -> StateMachineAnalysis:
         """
         Analyze project APIs to extract state machine.
@@ -285,7 +271,6 @@ class StateMachineAnalyzer:
         Args:
             project_apis: List of API dictionaries.
             lifecycle_analysis: L2 LifecycleAnalysis result (serialized).
-            condition_info: Condition info with sources/sinks.
 
         Returns:
             StateMachineAnalysis with transitions and constraints.
@@ -317,12 +302,9 @@ class StateMachineAnalyzer:
                 constraints[api] = constraint
                 api_roles[api] = constraint.roles.copy()
 
-        # condition_info source/sink hints were previously consumed by
-        # ``_derive_from_condition_info`` here, but that method had a
-        # ``pass``-body for loop and produced no transitions — see the
-        # 2026-05 L1-L5 refactor for the removal. If we ever need
-        # source/sink-derived transitions back, add a real implementation
-        # rather than restoring the no-op.
+        # No source/sink-derived transitions: the former
+        # _derive_from_condition_info had a no-op body and was removed. Add a
+        # real implementation here if such transitions are ever needed.
 
         analysis = StateMachineAnalysis(
             transitions=transitions,
@@ -718,7 +700,6 @@ class StateMachineAnalyzer:
 def analyze_state_machine(
     project_apis: List[Dict[str, Any]],
     lifecycle_analysis: Optional[Dict[str, Any]] = None,
-    condition_info: Optional[Dict[str, Any]] = None,
     logger_instance: Optional[logging.Logger] = None
 ) -> StateMachineAnalysis:
     """
@@ -727,14 +708,13 @@ def analyze_state_machine(
     Args:
         project_apis: List of API dictionaries.
         lifecycle_analysis: L2 LifecycleAnalysis result (serialized).
-        condition_info: Condition info with sources/sinks.
         logger_instance: Optional logger.
 
     Returns:
         StateMachineAnalysis result.
     """
     analyzer = StateMachineAnalyzer(logger_instance=logger_instance)
-    return analyzer.analyze(project_apis, lifecycle_analysis, condition_info)
+    return analyzer.analyze(project_apis, lifecycle_analysis)
 
 
 def filter_sequences_by_state_machine(

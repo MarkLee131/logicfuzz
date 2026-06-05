@@ -30,6 +30,26 @@ unless a test pins the behavior.
 - **Equivalence:** behavior-preserving (the override equalled the global the
   body already used).
 
+### A3. Dead filter-strategy enums (`LifecycleFilterStrategy`, `StateMachineFilterStrategy`)
+- **Files:** `constraints/lifecycle_analyzer.py`, `constraints/state_machine_analyzer.py`,
+  `constraints/__init__.py`
+- **Change:** removed both `Enum` classes and their package re-exports. Neither
+  had any member reference anywhere — `filter_sequences_*` compare against bare
+  string literals (`'strict'` / `'auto_complete'` / `'fixable'` / …), so the
+  enums were pure decoration.
+- **Equivalence:** no member was ever read; string-literal comparisons unchanged.
+
+### A4. `StateMachineAnalyzer.analyze(condition_info=…)` dead parameter
+- **Files:** `constraints/state_machine_analyzer.py` (+ `analyze_state_machine`
+  convenience fn), `src/context/data_context.py` call site
+- **Change:** removed the `condition_info` parameter threaded through
+  `analyze` → `analyze_state_machine` → the data_context call. Its only
+  consumer (`_derive_from_condition_info`) was a no-op that was already deleted,
+  so the value was carried but never read. The `condition_info` *variable* in
+  data_context stays — it still feeds ConditionManager and the lifecycle
+  analyzer; only the state-machine pass-through was dead.
+- **Equivalence:** the parameter reached no live read.
+
 ### A2. `_strip_function_bodies & 0` always-off toggle
 - **File:** `liberator_adapter/analysis/static_trace.py`
 - **Change:** removed a cryptic `PARSE_SKIP_FUNCTION_BODIES & 0` clang parse
@@ -54,6 +74,17 @@ unless a test pins the behavior.
   apply loop risks a subtle ordering/acceptance change, and there is no
   fine-grained test pinning the two paths' equivalence. Worth doing behind a
   dedicated regression test, not in a sweep.
+
+### D3. `Conditions.is_compatible_with` unconditional `return True`
+- **File:** `liberator_adapter/constraints/Conditions.py`
+- **Observation:** the method short-circuits with `return True` after the
+  file-path check, making ~100 lines of field-matching logic below it
+  unreachable.
+- **Why deferred:** this is a deliberate upstream-Liberator (FLAVIO) experiment
+  and matches documented behavior (the binding-layer notes record
+  "is_compatible_with returns True" as a known red herring). Excising the dead
+  remainder or restoring the matching is a semantic decision about the upstream
+  port, not a sweep cleanup. Left intact as a reversible toggle.
 
 ### D2. `tools/p0_trace_survey/extract_traces.py` fork of `analysis/static_trace.py`
 - **Opportunity:** the survey tool carries a 484-line older fork of

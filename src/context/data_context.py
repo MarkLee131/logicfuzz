@@ -681,7 +681,6 @@ class FuzzingContext:
             sm_analysis = analyze_state_machine(
                 project_apis,
                 lifecycle_analysis=lifecycle_analysis_result,
-                condition_info=condition_info,
                 logger_instance=log
             )
             state_machine_analysis_result = sm_analysis.to_dict()

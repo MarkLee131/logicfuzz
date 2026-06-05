@@ -203,19 +203,6 @@ class LifecycleValidationResult:
     details: Dict[str, Any] = field(default_factory=dict)
 
 
-class LifecycleFilterStrategy(Enum):
-    """Strategy for filtering sequences by lifecycle validity."""
-
-    # Keep only sequences with complete lifecycle (all resources cleaned)
-    STRICT = "strict"
-
-    # Keep sequences that can be auto-completed with cleanup
-    AUTO_COMPLETE = "auto_complete"
-
-    # Keep all sequences but annotate with needed cleanup
-    ANNOTATE_ONLY = "annotate_only"
-
-
 # =============================================================================
 # Lifecycle Analyzer
 # =============================================================================
