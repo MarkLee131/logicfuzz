@@ -8,7 +8,7 @@ This module establishes clear data ownership:
 """
 
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, Any, List, Optional, Set, Tuple
+from typing import Dict, Any, List, Optional, Set, Tuple
 from pathlib import Path
 import logging
 import json
