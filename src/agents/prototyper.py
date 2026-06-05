@@ -1390,7 +1390,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 hole_name = hole.get('name', f'HOLE_{i}')
                 hole_type = hole.get('hole_type', 'UNKNOWN')
                 placeholder = hole.get('placeholder', f'__HOLE_{hole_name}__')
-                is_simple = hole.get('is_simple', False)
 
                 # Build description based on hole type
                 desc = self._describe_hole(hole)
@@ -1465,9 +1464,8 @@ Output your fuzz driver code inside <fuzz_target> tags.
         """Get this trial's active Z3 skeleton.
 
         Trial N picks ``skeleton_drivers[(N-1) % K]`` — the same rotation
-        used at the prompt-rendering top of ``__call__``. Both call sites
-        (hole-merge and ``_get_generation_mode``) get the SAME skeleton
-        the prompt was built from.
+        used at the prompt-rendering top of ``__call__``, so the hole-merge
+        path gets the SAME skeleton the prompt was built from.
 
         Returns:
             Tuple of (skeleton_code, holes_list, api_sequence) or
@@ -1893,7 +1891,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
         # Build header includes to add
         header_lines = []
         for header in missing_headers:
-            # Use quotes for project headers (not angle brackets)
+            # Project headers via angle brackets (OSS-Fuzz sets the include path)
             header_lines.append(f'#include <{header}>')
 
         # Find the best place to insert headers (after existing includes)

@@ -151,7 +151,6 @@ class LangGraphCoverageAnalyzer(LangGraphAgent, ToolCallingMixin):
             no_improvement_count=state.get("no_coverage_improvement_count", 0),
             iteration=state.get("current_iteration", 0),
             notes="CoverageAnalyzer completed")
-        session_memory = state.get("session_memory", session_memory)
 
         self._langgraph_logger.flush_agent_logs(self.name)
         return {"coverage_analysis": result, "session_memory": session_memory}

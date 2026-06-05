@@ -143,8 +143,6 @@ class LangGraphImprover(LangGraphAgent, ToolCallingMixin):
                                  "no_coverage_improvement_count", 0),
                              iteration=state.get("current_iteration", 0),
                              notes=notes)
-        updated_session_memory = state.get("session_memory",
-                                           updated_session_memory)
 
         state_update = {
             "fuzz_target_source": improved_code,
