@@ -1,4 +1,5 @@
 """A tool for LLM agents to interact within a project's docker container."""
+import atexit
 import logging
 import os
 import subprocess as sp
@@ -25,6 +26,44 @@ _DISABLE_REUSE = bool(int(os.environ.get('LIBERATOR_DISABLE_CONTAINER_REUSE',
 # (image_name, language) -> (container_id, refcount)
 _SHARED_CONTAINERS: Dict[Tuple[str, str], Tuple[str, int]] = {}
 _SHARED_CONTAINERS_LOCK = threading.Lock()
+
+
+def _docker_stop_and_remove(container_id: str) -> bool:
+  """Stops then removes a container so it doesn't linger as an Exited shell.
+
+  `docker stop` is synchronous (it waits for the container to halt, sending
+  SIGKILL after a grace period), so the subsequent `docker rm` reliably
+  succeeds. Returns True if the container is gone afterwards.
+  """
+  if not container_id:
+    return True
+  sp.run(['docker', 'stop', container_id], stdout=sp.PIPE, stderr=sp.PIPE,
+         check=False)
+  result = sp.run(['docker', 'rm', container_id], stdout=sp.PIPE,
+                  stderr=sp.PIPE, check=False)
+  return result.returncode == 0
+
+
+def _cleanup_shared_containers() -> None:
+  """atexit hook: stop+remove any shared containers still alive at exit.
+
+  Covers paths where `terminate()` wasn't called on every tool (e.g. an
+  unhandled exception or an early sys.exit). This does NOT run on SIGKILL
+  (`kill -9`); those leak and are reclaimed by a manual prune.
+  """
+  with _SHARED_CONTAINERS_LOCK:
+    targets = [(key[0], cid) for key, (cid, _) in _SHARED_CONTAINERS.items()]
+    _SHARED_CONTAINERS.clear()
+  for image_name, cid in targets:
+    try:
+      _docker_stop_and_remove(cid)
+      logger.debug('atexit: removed shared container %s for %s', cid[:12],
+                   image_name)
+    except Exception as e:  # pylint: disable=broad-except
+      logger.debug('atexit: failed to remove container %s: %s', cid, e)
+
+
+atexit.register(_cleanup_shared_containers)
 
 
 class ProjectContainerTool(BaseTool):
@@ -196,7 +235,7 @@ class ProjectContainerTool(BaseTool):
     """Terminates the container.
 
     For shared containers, just decrements the refcount. The container
-    is only `docker stop`'d when the last user releases it.
+    is only stopped+removed when the last user releases it.
     """
     if self._container_is_shared and not _DISABLE_REUSE:
       key = (self.image_name, self.benchmark.language)
@@ -215,10 +254,9 @@ class ProjectContainerTool(BaseTool):
                        cid[:12], self.image_name, new_refs)
           return True
         _SHARED_CONTAINERS.pop(key, None)
-    # Last user (or non-shared mode) — actually stop the container.
-    terminate_container_command = ['docker', 'stop', self.container_id]
-    result = self._execute_command(terminate_container_command)
-    return result.returncode == 0
+    # Last user (or non-shared mode) — stop AND remove so the container
+    # doesn't linger as an Exited shell (the source of container pile-up).
+    return _docker_stop_and_remove(self.container_id)
 
   def write_to_file(self, content: str, file_path: str) -> None:
     replace_file_content_command = (
