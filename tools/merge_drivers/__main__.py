@@ -75,6 +75,40 @@ def _cmd_merge(args: argparse.Namespace) -> int:
     if missing:
         print(f"error: missing inputs: {missing}", file=sys.stderr)
         return 2
+    # Only merge drivers whose trial actually BUILT. ``fuzz_targets/`` holds the
+    # best source of EVERY trial — including ones that failed to compile (the
+    # eval still writes ``best_result.fuzz_target_source`` regardless of
+    # ``compiles``). Those failures take two shapes that both poison the fused
+    # build: an unfilled bare skeleton (LLM never produced a buildable driver →
+    # leftover ``HOLE[...]`` + unsafe defaults) and a driver that references a
+    # hallucinated / non-exported symbol (compiles but won't link, e.g. lcms
+    # ``cmsBuildGammaTHR``). The pipeline merge
+    # (run_single_fuzz._maybe_merge_drivers) excludes both via the trial's
+    # ``compiles==True`` flag. We reuse that SAME authoritative signal — it is
+    # persisted per trial at ``<base>/status/<NN>/result.json`` — instead of any
+    # build-independent heuristic, so the filter can't regress a driver that
+    # genuinely builds. Fallback (no status file, e.g. ad-hoc inputs): drop bare
+    # skeletons by their leftover ``HOLE[`` marker.
+    def _trial_failed_to_build(p: Path) -> bool:
+        status = p.parent.parent / "status" / p.stem / "result.json"
+        if status.exists():
+            try:
+                return json.load(status.open()).get("compiles") is False
+            except Exception:
+                pass  # unreadable status → fall through to the static check
+        return "HOLE[" in p.read_text(encoding="utf-8", errors="replace")
+
+    kept = [p for p in inputs if not _trial_failed_to_build(p)]
+    dropped = [p for p in inputs if p not in kept]
+    if dropped:
+        print(f"[merge] skipped {len(dropped)} non-compiling driver(s) "
+              f"(trial compiles=False / unfilled skeleton): "
+              f"{[p.name for p in dropped]}", file=sys.stderr)
+    if len(kept) < 2:
+        print(f"error: only {len(kept)} buildable driver(s) after dropping "
+              f"non-compiling ones; need >=2 to merge", file=sys.stderr)
+        return 2
+    inputs = kept
     drv = SynthesizedDriver.from_paths(
         inputs,
         mode=DispatchMode(args.mode),
