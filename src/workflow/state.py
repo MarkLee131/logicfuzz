@@ -1,6 +1,6 @@
 """State management for LangGraph-based fuzzing workflow."""
 
-from typing_extensions import TypedDict, NotRequired, Annotated
+from typing_extensions import TypedDict, NotRequired
 from typing import List, Dict, Any, Optional
 
 
@@ -95,15 +95,12 @@ class FuzzingWorkflowState(TypedDict):
     # so the routing layer remains the single source of truth.
     baseline_diff_retry_count: NotRequired[int]
 
-    validation_error: NotRequired[str]  # Validation error message
-    validation_failure_count: NotRequired[int]  # Number of validation failures
-
     # === Execution Results (from ExecutionStage) ===
     run_success: NotRequired[bool]
     run_error: NotRequired[str]
     run_log: NotRequired[str]
     artifact_path: NotRequired[str]
-    crash_func: NotRequired[str]
+    crash_func: NotRequired[Optional[Dict[str, Any]]]
     crashes: NotRequired[bool]
     crash_info: NotRequired[Dict[
         str,
@@ -174,11 +171,6 @@ class FuzzingWorkflowState(TypedDict):
     # When disabled, agents won't see consensus constraints from previous iterations
     use_session_memory: NotRequired[bool]
 
-    # === Fake Definition Detection ===
-    # Result of fake definition check (LLM-hallucinated functions)
-    # Set by supervisor when build fails with undefined reference errors
-    fake_definition_result: NotRequired[Dict[str, Any]]
-
     # === Target API Validation (AST-based) ===
     # Result of AST-based validation checking if driver actually calls target APIs
     # Set by build_node after successful compilation
@@ -191,19 +183,6 @@ class FuzzingWorkflowState(TypedDict):
     # from data instead of priors. See run_single_fuzz._fuzzing_pipeline for
     # the dump to trial_NN/build_attempts.json.
     build_attempts: NotRequired[List[Dict[str, Any]]]
-
-
-class WorkerState(TypedDict):
-    """State for worker nodes in parallel execution."""
-
-    task_id: str  # Unique task identifier
-    task_type: str  # Type of task (compile, analyze, etc.)
-    input_data: Dict[str, Any]  # Input data for the task
-    output_data: NotRequired[Dict[str, Any]]  # Task output
-    status: NotRequired[str]  # Task status
-    error: NotRequired[str]  # Error message if task failed
-    start_time: NotRequired[float]  # Task start timestamp
-    end_time: NotRequired[float]  # Task completion timestamp
 
 
 def create_initial_state(
@@ -269,9 +248,6 @@ def create_initial_state(
             "coverage_strategies": [],  # Coverage optimization strategies
             "coverage_attempts": []  # History of coverage improvement attempts
         },
-        # Project-level mode: No validation fields needed
-        validation_error="",
-        validation_failure_count=0,
         # Session memory toggle
         use_session_memory=use_session_memory,
     )
@@ -345,39 +321,6 @@ def get_token_usage_summary(state: FuzzingWorkflowState) -> str:
             summary += f"  Total Tokens:      {stats.get('total_tokens', 0):,}\n"
 
     summary += f"{'='*60}\n"
-    return summary
-
-
-def get_state_summary(state: FuzzingWorkflowState) -> str:
-    """Get a human-readable summary of the current state."""
-
-    benchmark = state.get("benchmark", {})
-    project = benchmark.get("project", "unknown")
-    iteration = state.get("current_iteration", 0)
-    status = state.get("workflow_status", "unknown")
-
-    summary = f"Fuzzing workflow for {project} (iteration {iteration}, status: {status})"
-
-    # Add build status
-    if state.get("compile_success") is not None:
-        build_status = "successful" if state["compile_success"] else "failed"
-        summary += f"\n  Build: {build_status}"
-
-    # Add coverage info
-    coverage = state.get("coverage_results", {}).get("coverage")
-    if coverage is not None:
-        summary += f"\n  Coverage: {coverage:.2%}"
-
-    # Add crash info
-    crashes = len(state.get("crash_results", []))
-    if crashes > 0:
-        summary += f"\n  Crashes: {crashes} found"
-
-    # Add error info
-    errors = len(state.get("errors", []))
-    if errors > 0:
-        summary += f"\n  Errors: {errors} recorded"
-
     return summary
 
 
@@ -530,42 +473,6 @@ def add_decision(state: FuzzingWorkflowState,
     state["session_memory"]["decisions"] = decisions[-10:]
 
 
-def set_archetype(state: FuzzingWorkflowState,
-                  archetype_type: str,
-                  lifecycle_phases: List[str],
-                  source: str,
-                  iteration: int = None) -> None:
-    """
-    Set the identified API archetype pattern.
-    
-    Args:
-        state: Workflow state
-        archetype_type: Archetype type (e.g., "stateful_decoder", "simple_parser")
-        lifecycle_phases: List of lifecycle phases
-        source: Source agent name
-        iteration: Iteration where this archetype was identified
-    """
-    if "session_memory" not in state:
-        state["session_memory"] = {
-            "api_constraints": [],
-            "archetype": None,
-            "known_fixes": [],
-            "decisions": [],
-            "coverage_strategies": [],
-            "coverage_attempts": []
-        }
-
-    state["session_memory"]["archetype"] = {
-        "type":
-        archetype_type,
-        "lifecycle_phases":
-        lifecycle_phases,
-        "source":
-        source,
-        "iteration":
-        iteration if iteration is not None else state.get(
-            "current_iteration", 0)
-    }
 
 
 def add_coverage_strategy(state: FuzzingWorkflowState,
