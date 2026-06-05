@@ -50,6 +50,32 @@ unless a test pins the behavior.
   analyzer; only the state-machine pass-through was dead.
 - **Equivalence:** the parameter reached no live read.
 
+### A5. `acceptance_rate` walk's dead `seen_traces` recursion parameter
+- **File:** `liberator_adapter/analysis/project_automaton.py`
+- **Change:** the inner `walk(node_id, path, seen_traces)` DFS threaded a
+  `seen_traces` set (seeded `set()` at the call) that was never read or
+  mutated. Dropped the parameter and the seed.
+- **Equivalence:** the set was inert; traversal unchanged.
+
+### A6. `n_unsatisfiable_targets` always-zero construct metric
+- **Files:** `liberator_adapter/analysis/sequence_constructor.py`,
+  `src/context/data_context.py` (log line), `tests/test_p1_sequence_constructor.py`
+- **Change:** removed the `n_unsatisfiable` counter, the
+  `n_unsatisfiable_targets` metric, the "(%d unsatisfiable)" log fragment, and
+  the test key assertion. The drop-on-unsatisfiable behavior was removed long
+  ago (targets always become holes now), so the counter was pinned at 0 and the
+  log always printed "(0 unsatisfiable)".
+- **Equivalence:** the value was a constant 0; nothing branched on it.
+
+### A7. `LLMEquivalenceOracle(disable_llm=…)` dead config knob
+- **File:** `liberator_adapter/analysis/llm_oracle.py`
+- **Change:** removed the `disable_llm` constructor parameter, the field, and
+  the `_get_model` early-out branch. Nothing in the repo ever passed it True,
+  and `_get_model` already returns `None` on any import/construction failure, so
+  the deferred-only mode it selected is reachable without the knob.
+- **Equivalence:** the knob's only effect (return None) is the same path
+  `_get_model` already takes when the model can't be built.
+
 ### A2. `_strip_function_bodies & 0` always-off toggle
 - **File:** `liberator_adapter/analysis/static_trace.py`
 - **Change:** removed a cryptic `PARSE_SKIP_FUNCTION_BODIES & 0` clang parse

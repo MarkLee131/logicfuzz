@@ -21,7 +21,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from liberator_adapter.analysis.edsm import EDSMContext, OracleVerdict
 from liberator_adapter.analysis.pta import PTANode
@@ -175,12 +175,10 @@ class LLMEquivalenceOracle:
                  library_name: str,
                  library_purpose: str = "",
                  model_name: str = "gpt-4o-mini",
-                 cache_path: Optional[Path] = None,
-                 disable_llm: bool = False):
+                 cache_path: Optional[Path] = None):
         self.library_name = library_name
         self.library_purpose = library_purpose
         self.model_name = model_name
-        self.disable_llm = disable_llm
         self._cache = _OracleCache(cache_path)
         self._chat_model = None
         self._n_calls = 0
@@ -190,8 +188,6 @@ class LLMEquivalenceOracle:
     def _get_model(self):
         if self._chat_model is not None:
             return self._chat_model
-        if self.disable_llm:
-            return None
         try:
             from src.llm.models import get_chat_model
             self._chat_model = get_chat_model(self.model_name, temperature=0.0)
