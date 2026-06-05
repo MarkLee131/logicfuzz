@@ -102,11 +102,6 @@ class StaticTrace:
     def n_bound_args(self) -> int:
         return sum(len(c.arg_bindings) for c in self.api_calls)
 
-    @property
-    def n_total_args(self) -> int:
-        # Caller fills in actual arg count; we only track bindings.
-        return self.n_bound_args  # placeholder; report carries the real total
-
     def to_dict(self) -> Dict[str, Any]:
         return {
             "function_name": self.function_name,
@@ -498,9 +493,9 @@ def _parse_translation_unit(index: Index,
         return index.parse(
             str(file_path),
             args=args,
+            # Function bodies must be parsed — the walker needs them.
             options=TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
-            | TranslationUnit.PARSE_INCOMPLETE
-            | TranslationUnit.PARSE_SKIP_FUNCTION_BODIES & 0,
+            | TranslationUnit.PARSE_INCOMPLETE,
         )
     except Exception as e:
         logger.debug("parse failed for %s: %s", file_path, e)
