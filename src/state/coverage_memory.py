@@ -233,33 +233,16 @@ def make_snapshot(
     )
 
 
-def harvest_trial_outcomes(
-    trial_results: List,
-    repair_log_path: Optional[Path] = None,
-) -> List[TrialOutcome]:
+def harvest_trial_outcomes(trial_results: List) -> List[TrialOutcome]:
     """Convert the legacy ``src.results.TrialResult`` objects from a
     ``_fuzzing_pipelines`` run into Phase C ``TrialOutcome`` records.
 
     The legacy class carries full ``result_history``; we summarise to
     the fields the CoverageMemory consumer needs: coverage, line_diff,
-    success, crashes — plus the repair provenance loaded from
-    ``repair_log.json`` if available. Defensive against partial trials
-    (missing best_result, no run_result, etc.) — failure becomes
-    ``success=False`` not a raised exception.
+    success, crashes. Defensive against partial trials (missing
+    best_result, no run_result, etc.) — failure becomes ``success=False``
+    not a raised exception.
     """
-    repair_by_seq: Dict[str, dict] = {}
-    if repair_log_path and repair_log_path.exists():
-        try:
-            with repair_log_path.open(encoding='utf-8') as f:
-                rl = json.load(f)
-            for tr in rl.get('traces', []):
-                key = ','.join(tr.get('final_sequence')
-                               or tr.get('original_sequence') or [])
-                if key:
-                    repair_by_seq[key] = tr
-        except Exception:
-            pass
-
     outcomes: List[TrialOutcome] = []
     for tr in trial_results or []:
         if tr is None:
@@ -288,17 +271,6 @@ def harvest_trial_outcomes(
         except Exception:
             success = False
 
-        # Best-effort: read api_sequence from the trial's metadata if
-        # available. Many TrialResult instances carry it via work_dirs
-        # snapshots; absent → empty list (no harm).
-
-        # Match repair provenance by sequence string.
-        repaired = False
-        inserted: List[str] = []
-        # repair_log keys by sequence; without sequence info we can't
-        # match per-trial. This is best-effort until a stronger
-        # identifier is wired through.
-
         outcomes.append(TrialOutcome(
             trial_id=int(trial_id) if trial_id is not None else -1,
             api_sequence=api_sequence,
@@ -306,8 +278,6 @@ def harvest_trial_outcomes(
             final_line_diff_pct=line_diff_pct,
             crashes_found=crashes,
             success=success,
-            skeleton_repair_applied=repaired,
-            skeleton_repair_inserted=inserted,
         ))
     return outcomes
 

@@ -21,11 +21,10 @@ It does **not** drop L4 candidates. L4 is a noisy oracle; the
 Planner adds signal, not replacement.
 
 Phase D is the first stage to actively *consume* the multi-iteration
-state (CoverageMemory). Today the consumption is one-iteration-deep —
-look at the previous iteration's repair_log to avoid generating
-candidates that needed structural repair. When the CEGAR loop driver
-lands (Phase C completion), Phase D will read the path frontier and
-plan candidates targeting it directly.
+state (CoverageMemory): it idiom-aligns and reranks L4 candidates and
+synthesizes missing ones. When the CEGAR loop driver lands (Phase C
+completion), Phase D will read the path frontier and plan candidates
+targeting it directly.
 
 State produced (for Phase E and operator inspection):
   ``results/<project>/state/plan_ledger.json`` — per-candidate

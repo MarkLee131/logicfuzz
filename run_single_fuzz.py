@@ -752,8 +752,8 @@ def _persist_phase_c_snapshot(
 ) -> None:
   """Phase C foundation — write an ``IterationSnapshot`` to
   ``results/<project>/state/coverage_memory.json`` summarising this
-  run's trials, the merge outcome, repair telemetry from Phase A, and
-  the ratio-to-baseline derived from OSS-Fuzz's published coverage.
+  run's trials, the merge outcome, and the ratio-to-baseline derived
+  from OSS-Fuzz's published coverage.
 
   Single-iteration snapshots are the current MVP; appending across
   iterations is what the future CEGAR loop driver will do. Phase D
@@ -772,21 +772,9 @@ def _persist_phase_c_snapshot(
 
   project = getattr(benchmark, 'project', None) or 'unknown'
   state_dir = Path('results') / project / 'state'
-  repair_log_path = state_dir / 'repair_log.json'
 
-  outcomes = harvest_trial_outcomes(trial_results, repair_log_path)
+  outcomes = harvest_trial_outcomes(trial_results)
   baseline = load_baseline_line_counts(project, log=logger)
-
-  # Pull repair summary (top-level counts) from the repair log if present.
-  repair_summary: dict = {}
-  if repair_log_path.exists():
-    try:
-      import json
-      with repair_log_path.open(encoding='utf-8') as f:
-        rl = json.load(f)
-      repair_summary = rl.get('summary', {}) or {}
-    except Exception:
-      pass
 
   merged_count = 0
   if merged_path:
@@ -803,7 +791,6 @@ def _persist_phase_c_snapshot(
       merged_driver_count=merged_count,
       baseline_line_count=(baseline['total'] if baseline else None),
       baseline_covered_lines=(baseline['covered'] if baseline else None),
-      repair_summary=repair_summary,
   )
   persist_snapshot(project, snap, state_dir=state_dir)
 
