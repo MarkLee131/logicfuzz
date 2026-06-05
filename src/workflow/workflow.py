@@ -65,8 +65,7 @@ class FuzzingWorkflow:
         Args:
             benchmark: Benchmark to process
             trial: Trial number
-            workflow_type: Type of workflow to run
-            
+
         Returns:
             Final workflow state
         """

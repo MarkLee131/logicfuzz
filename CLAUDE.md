@@ -118,8 +118,7 @@ duplicating here just rots.
 
 | Agent | Tools | Purpose |
 |-------|-------|---------|
-| ProjectAnalyzer (pre-prototyper) | - | Derives `project_understanding` before driver synthesis |
-| Prototyper | - (context pre-fetched) | Generate initial driver. Reads `library_purpose`, `protocol_templates`, `sequence_invariants`, `project_understanding`, `skeleton_drivers[(N-1) % K]`, **Phase B idioms** |
+| Prototyper | - (context pre-fetched) | Generate initial driver. Reads `library_purpose`, `protocol_templates`, `sequence_invariants`, `skeleton_drivers[(N-1) % K]`, **Phase B idioms** |
 | Fixer | BashExecuteTool | Fix compilation errors with error triage |
 | CoverageAnalyzer | BashExecuteTool | Diagnose low coverage, suggest improvements |
 | CrashAnalyzer | BashExecuteTool, GDBExecuteTool | Determine if crash is driver bug or real bug |
