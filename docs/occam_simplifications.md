@@ -144,6 +144,17 @@ unless a test pins the behavior.
   synthesis boundary and changes the "z3 optional" contract surface; better as a
   focused change than folded into a dead-code sweep.
 
+### D7. RunningContext commented-out debug scaffolding
+- **File:** `liberator_adapter/constraints/RunningContext.py`
+- **Observation:** ~30 commented `# from IPython import embed; embed(); exit(1)`
+  lines plus two fully-commented method bodies (`get_value_that_satisfy`,
+  `should_have_init_or_setby`) remain as dead scaffolding.
+- **Why deferred:** the blocks contain whitespace-only and trailing-whitespace
+  lines that make exact-match edits fragile, and a blind `sed` over `# ...IPython`
+  risks clipping adjacent live comments. The two LIVE IPython-embed crash sites
+  were fixed; the commented residue is cosmetic and best removed in a dedicated
+  pass (or with the formatter) rather than a risky bulk delete here.
+
 ### D2. `tools/p0_trace_survey/extract_traces.py` fork of `analysis/static_trace.py`
 - **Opportunity:** the survey tool carries a 484-line older fork of
   `static_trace` (same `CallSite`/`StaticTrace`/`ProjectTraceReport`/

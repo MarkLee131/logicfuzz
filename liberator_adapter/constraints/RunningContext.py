@@ -1,6 +1,6 @@
 from typing import List, Set, Dict, Tuple, Optional, Any
 
-import random, string, traceback, sys
+import random, string, traceback
 
 from liberator_adapter.driver import Context
 from liberator_adapter.driver.ir import Type, PointerType, TypeTag
@@ -168,10 +168,6 @@ class RunningContext(Context):
 
         # TODO: handle dependency fields here?
 
-    attempt = 2
-
-    # def try_to_get_var(self, type: Type, cond: ValueMetadata, api_name: Api,
-    #                     arg_pos: int) -> Value:
     def try_to_get_var(self, api_call: ApiCall, api_cond: FunctionConditions,
                        arg_pos: int) -> Value:
 
@@ -713,9 +709,8 @@ class RunningContext(Context):
                 # print(f"=> {t} not in context, new one")
                 try:
                     v = self.create_new_var(type, cond, is_ret)
-                except:
-                    print("within 'not self.has_vars_type(type):'")
-                    from IPython import embed; embed(); exit()
+                except Exception:
+                    raise ConditionUnsat(traceback.format_stack())
             else:
                 # I might get an existing one
                 if random.getrandbits(1) == 1:
@@ -855,8 +850,6 @@ class RunningContext(Context):
                 elif len(type_strs) == 1:
                     type_str = type_strs[0]
                 else:
-                    print(f"Really don't know what to do with {type_strings}")
-                    from IPython import embed; embed(); exit(1)
                     raise Exception(f"Really don't know what to do with {type_strings}")
                 
 
