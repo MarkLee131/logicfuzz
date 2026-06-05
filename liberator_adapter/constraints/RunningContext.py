@@ -290,11 +290,12 @@ class RunningContext(Context):
                 if (isinstance(val, Variable) and 
                     isinstance(val.get_type(), PointerType)):
                     val = val.get_address()
-            except Exception as e:
-                print("randomly_gimme_a_var empty?!")
-                from IPython import embed; embed(); exit(1)
-                # else:
-                #     raise ConditionUnsat()
+            except Exception:
+                # No satisfying variable for this arg — signal unsatisfiable so
+                # the caller (CBFactory) rejects this binding path instead of
+                # crashing. (Was an interactive IPython embed + exit(1), which
+                # aborted non-interactive synthesis runs.)
+                raise ConditionUnsat(traceback.format_stack())
         else:
             raise_an_exception = False
 
@@ -490,7 +491,7 @@ class RunningContext(Context):
                 if isinstance(d_type, PointerType):
                     tt = d_type.get_base_type()
                 is_setby = ConditionManager.instance().is_setby(api_call, arg_pos)
-                is_init = ConditionManager.instance().is_setby(api_call, arg_pos)
+                is_init = ConditionManager.instance().is_init(api_call, arg_pos)
                 if ((DataLayout.instance().is_fuzz_friendly(tt.get_token()) and 
                      not is_setby and not is_init) or
                     not tt.is_incomplete):
@@ -686,7 +687,7 @@ class RunningContext(Context):
                     vp = self.create_new_buffer(type, cond, is_ret)
                  
                 if vp is None:
-                    raise ConditionUnsat()
+                    raise ConditionUnsat(traceback.format_stack())
 
                 # if ((random.getrandbits(1) == 0 or
                 #     not self.has_vars_type(type, cond)) and 
@@ -833,9 +834,6 @@ class RunningContext(Context):
                 if t in RunningContext.type_to_hash:
                     type_strs += [t[:-1]]
             
-            if len(type_str):
-                raise Exception(f"Cannot find type hash for {type_strings}")
-
             type_hash = None
             type_str = None
             for s in type_strs:
@@ -1093,12 +1091,12 @@ class RunningContext(Context):
 
     def generate_buffer_init(self) -> List[Statement]:
         if not self.auxiliary_operations_set:
-            raise ("auxiliary_operations_set False, try generate_auxiliary_operations")
+            raise RuntimeError("auxiliary_operations_set False, try generate_auxiliary_operations")
         return self.buff_init
     
     def get_counter_size(self):
         if not self.auxiliary_operations_set:
-            raise ("auxiliary_operations_set False, try generate_auxiliary_operations")
+            raise RuntimeError("auxiliary_operations_set False, try generate_auxiliary_operations")
         return self.counter_size
 
     def generate_buffer_decl(self) -> List[Statement]:
