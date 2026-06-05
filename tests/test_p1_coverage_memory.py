@@ -85,14 +85,10 @@ def test_persist_roundtrip_preserves_snapshots():
             trial_results=[TrialOutcome(
                 trial_id=1, api_sequence=['cJSON_Parse'],
                 final_coverage_pct=0.25, success=True,
-                skeleton_repair_applied=True,
-                skeleton_repair_inserted=['cJSON_Parse'],
             )],
             merged_driver_path='/tmp/merged.c',
             merged_driver_count=1,
             baseline_line_count=2321, baseline_covered_lines=1022,
-            repair_summary={'candidates_total': 10,
-                           'candidates_repaired_success': 2},
         )
         mem = CoverageMemory(project='cjson')
         mem.append(snap)
@@ -104,9 +100,7 @@ def test_persist_roundtrip_preserves_snapshots():
         rt = loaded.snapshots[0]
         assert rt.iteration_idx == 0
         assert rt.trial_count == 1
-        assert rt.trial_results[0].skeleton_repair_applied is True
-        assert rt.trial_results[0].skeleton_repair_inserted == ['cJSON_Parse']
-        assert rt.repair_summary['candidates_repaired_success'] == 2
+        assert rt.trial_results[0].api_sequence == ['cJSON_Parse']
         # Derived fields preserved
         assert abs(rt.baseline_coverage_pct - 1022 / 2321) < 1e-9
 

@@ -13,7 +13,6 @@ records:
 
 - which trials produced drivers
 - per-trial coverage profile (already available from execution.py)
-- whether the trial's skeleton was repaired by Phase A (provenance)
 - the merged driver path + how many of the trials made it in
 - post-merge aggregate coverage and ratio vs OSS-Fuzz baseline
 
@@ -49,7 +48,7 @@ class TrialOutcome:
     """One trial's outcome — input to PostMergeEvaluator."""
     trial_id: int
     api_sequence: List[str]
-    """Names of APIs in the synthesized driver (post-repair if applicable)."""
+    """Names of APIs in the synthesized driver."""
     final_coverage_pct: Optional[float] = None
     """Driver's PC% on the OSS-Fuzz benchmark; None if not measured."""
     final_line_diff_pct: Optional[float] = None
@@ -57,10 +56,6 @@ class TrialOutcome:
     crashes_found: int = 0
     success: bool = True
     """False if build/run failed entirely."""
-    skeleton_repair_applied: bool = False
-    """True iff Phase A repaired this trial's skeleton."""
-    skeleton_repair_inserted: List[str] = field(default_factory=list)
-    """APIs the repair engine grafted in. Empty if not repaired."""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -98,10 +93,6 @@ class IterationSnapshot:
     aggregate_line_diff_pct: Optional[float] = None
     """Lines our trials cover that baseline doesn't / total. Direct
     "are we finding new paths" indicator."""
-
-    # Phase A telemetry (Phase B telemetry lives in idioms.json)
-    repair_summary: Dict[str, int] = field(default_factory=dict)
-    """e.g. ``{'candidates_total': 10, 'repaired_success': 2, ...}``"""
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -189,7 +180,6 @@ def make_snapshot(
     merged_driver_count: int = 0,
     baseline_line_count: Optional[int] = None,
     baseline_covered_lines: Optional[int] = None,
-    repair_summary: Optional[Dict[str, int]] = None,
 ) -> IterationSnapshot:
     """Build a snapshot, computing the derived ratio fields.
 
@@ -229,7 +219,6 @@ def make_snapshot(
         baseline_coverage_pct=baseline_pct,
         coverage_ratio_to_baseline=ratio,
         aggregate_line_diff_pct=aggregate_diff,
-        repair_summary=repair_summary or {},
     )
 
 
