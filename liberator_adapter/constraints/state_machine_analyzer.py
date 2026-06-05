@@ -175,12 +175,6 @@ class StateMachineAnalysis:
         """Get state constraint for an API."""
         return self.constraints.get(api_name)
 
-    def get_role(self, api_name: str, resource_type: str) -> APIRole:
-        """Get role of an API for a specific resource type."""
-        if api_name in self.api_roles:
-            return self.api_roles[api_name].get(resource_type, APIRole.NEUTRAL)
-        return APIRole.NEUTRAL
-
     def get_stats(self) -> Dict[str, Any]:
         """Get analysis statistics."""
         role_counts = {role.value: 0 for role in APIRole}

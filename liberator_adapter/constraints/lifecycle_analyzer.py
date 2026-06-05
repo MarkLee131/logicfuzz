@@ -152,10 +152,6 @@ class LifecycleAnalysis:
         """Get destroy APIs for an init API."""
         return self.init_to_destroy.get(init_api, [])
 
-    def get_init_for_destroy(self, destroy_api: str) -> List[str]:
-        """Get init APIs for a destroy API."""
-        return self.destroy_to_init.get(destroy_api, [])
-
     def get_stats(self) -> Dict[str, Any]:
         """Get analysis statistics."""
         return {
@@ -261,26 +257,6 @@ class LifecycleAnalyzer:
         (r'^(.+)_ref$', r'\1_unref'),
         (r'^(.+)_dup$', r'\1_free'),
     ]
-
-    # Semantic patterns: groups of init APIs that share a destroy API
-    # Format: (init_pattern_regex, destroy_api_name)
-    SEMANTIC_PATTERNS = [
-        # Common pattern: parse_* -> free_data
-        (r'^.+_parse_.+_reply$', 'free_data'),
-        (r'^.+_parse$', 'free'),
-    ]
-
-    # Known init keywords
-    INIT_KEYWORDS = (
-        '_init', '_create', '_new', '_open', '_alloc', '_start',
-        '_begin', '_acquire', '_dup', '_ref', '_parse'
-    )
-
-    # Known destroy keywords
-    DESTROY_KEYWORDS = (
-        '_destroy', '_delete', '_free', '_close', '_cleanup', '_fini',
-        '_dealloc', '_stop', '_end', '_release', '_unref', '_unlock'
-    )
 
     def __init__(self, logger_instance: Optional[logging.Logger] = None):
         """Initialize Lifecycle Analyzer."""
