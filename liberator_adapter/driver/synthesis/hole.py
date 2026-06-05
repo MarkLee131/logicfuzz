@@ -171,20 +171,6 @@ class InitValueHole(SimpleHole):
         return True
 
 
-@dataclass
-class LoopBoundHole(SimpleHole):
-    """Loop bound hole"""
-
-    kind: HoleKind = field(default=HoleKind.LOOP_BOUND, init=False)
-    suggested_bound: int = 100      # Suggested bound value
-
-    def get_placeholder(self) -> str:
-        return f"__LOOPBOUND_{self.name}__"
-
-    def validate_fill(self, value: Any) -> bool:
-        return isinstance(value, int) and 0 < value <= 10000
-
-
 # =============================================================================
 # ComplexHole - Holes requiring LLM filling
 # =============================================================================
@@ -236,31 +222,6 @@ class LoopConditionHole(ComplexHole):
         return f"__LOOPCOND_{self.name}__"
 
 
-@dataclass
-class ErrorHandlingHole(ComplexHole):
-    """Error handling hole"""
-
-    kind: HoleKind = field(default=HoleKind.ERROR_HANDLING, init=False)
-    error_source: str = ""          # Error source (which API call)
-    error_type: str = ""            # Error type (NULL, negative, exception)
-    cleanup_needed: List[str] = field(default_factory=list)  # Resources that need cleanup
-
-    def get_placeholder(self) -> str:
-        return f"__ERRHANDLE_{self.name}__"
-
-
-@dataclass
-class ResourceCleanupHole(ComplexHole):
-    """Resource cleanup hole"""
-
-    kind: HoleKind = field(default=HoleKind.RESOURCE_CLEANUP, init=False)
-    resources: List[str] = field(default_factory=list)  # Resources that need cleanup
-    cleanup_order: List[str] = field(default_factory=list)  # Suggested cleanup order
-
-    def get_placeholder(self) -> str:
-        return f"__CLEANUP_{self.name}__"
-
-
 # =============================================================================
 # HoleSet - Hole Collection Management
 # =============================================================================
@@ -283,22 +244,6 @@ class HoleSet:
         """Get unfilled holes"""
         return [h for h in self.holes.values() if not h.is_filled]
 
-    def get_simple_holes(self) -> List[Hole]:
-        """Get all simple holes"""
-        return [h for h in self.holes.values() if h.is_simple]
-
-    def get_complex_holes(self) -> List[Hole]:
-        """Get all complex holes"""
-        return [h for h in self.holes.values() if not h.is_simple]
-
-    def get_by_kind(self, kind: HoleKind) -> List[Hole]:
-        """Get holes by type"""
-        return [h for h in self.holes.values() if h.kind == kind]
-
-    def get_by_priority(self, priority: HolePriority) -> List[Hole]:
-        """Get holes by priority"""
-        return [h for h in self.holes.values() if h.priority == priority]
-
     def fill(self, name: str, value: Any, reason: str = "") -> bool:
         """Fill hole"""
         hole = self.holes.get(name)
@@ -313,11 +258,6 @@ class HoleSet:
     def all_filled(self) -> bool:
         """Check if all holes are filled"""
         return all(h.is_filled for h in self.holes.values())
-
-    def get_critical_unfilled(self) -> List[Hole]:
-        """Get unfilled critical holes"""
-        return [h for h in self.holes.values()
-                if not h.is_filled and h.priority == HolePriority.CRITICAL]
 
     def __len__(self) -> int:
         return len(self.holes)
@@ -364,27 +304,3 @@ def create_loop_condition_hole(name: str, loop_type: str,
     )
 
 
-def create_error_handling_hole(name: str, error_source: str,
-                               cleanup_needed: List[str]) -> ErrorHandlingHole:
-    """Create error handling hole"""
-    return ErrorHandlingHole(
-        name=name,
-        error_source=error_source,
-        cleanup_needed=cleanup_needed,
-        priority=HolePriority.HIGH
-    )
-
-
-def classify_hole_for_param(param_type: str, param_name: str,
-                            has_varlen_relation: bool,
-                            is_callback: bool) -> HoleKind:
-    """Determine what type of hole is needed based on parameter characteristics"""
-    if is_callback:
-        return HoleKind.CALLBACK_IMPL
-    if has_varlen_relation:
-        return HoleKind.BUFFER_SIZE
-    if "size" in param_name.lower() or "len" in param_name.lower():
-        return HoleKind.ARRAY_LENGTH
-    if "*" in param_type:
-        return HoleKind.INIT_VALUE
-    return HoleKind.INIT_VALUE

@@ -148,14 +148,6 @@ class DriverSkeleton:
         """Add hole"""
         self.holes.add(hole)
 
-    def get_unfilled_holes(self) -> List[Hole]:
-        """Get unfilled holes"""
-        return self.holes.get_unfilled()
-
-    def is_complete(self) -> bool:
-        """Check if skeleton is complete (all holes filled)"""
-        return self.holes.all_filled()
-
     def to_dict(self) -> Dict[str, Any]:
         """
         Serialize skeleton to dictionary for storage and JSON serialization.
@@ -235,7 +227,6 @@ class SkeletonGenerator:
     """
 
     def __init__(self):
-        self._var_counter = 0
         self._hole_counter = 0
 
         # Type to initialization value mapping
@@ -283,7 +274,6 @@ class SkeletonGenerator:
         Returns:
             DriverSkeleton: Skeleton with holes
         """
-        self._var_counter = 0
         self._hole_counter = 0
 
         skeleton = DriverSkeleton(
@@ -925,11 +915,6 @@ class SkeletonGenerator:
             code="\n".join(cleanup_lines),
         )
         skeleton.add_cleanup(cleanup_stmt)
-
-    def _next_var_id(self) -> int:
-        """Get next variable ID"""
-        self._var_counter += 1
-        return self._var_counter
 
     def _next_hole_id(self) -> int:
         """Get next Hole ID"""

@@ -34,15 +34,11 @@ from liberator_adapter.driver.synthesis.hole import (
     BufferSizeHole,
     ArrayLengthHole,
     InitValueHole,
-    LoopBoundHole,
     CallbackImplHole,
     LoopConditionHole,
-    ErrorHandlingHole,
-    ResourceCleanupHole,
     create_buffer_size_hole,
     create_callback_hole,
     create_loop_condition_hole,
-    create_error_handling_hole,
 )
 
 from liberator_adapter.driver.synthesis.skeleton_generator import (
@@ -68,15 +64,11 @@ __all__ = [
     "BufferSizeHole",
     "ArrayLengthHole",
     "InitValueHole",
-    "LoopBoundHole",
     "CallbackImplHole",
     "LoopConditionHole",
-    "ErrorHandlingHole",
-    "ResourceCleanupHole",
     "create_buffer_size_hole",
     "create_callback_hole",
     "create_loop_condition_hole",
-    "create_error_handling_hole",
     # Skeleton
     "DriverSkeleton",
     "SkeletonVariable",
