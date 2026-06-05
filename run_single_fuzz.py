@@ -3,7 +3,6 @@
 
 import argparse
 import dataclasses
-import datetime
 import logging
 import os
 from multiprocessing import pool
@@ -17,7 +16,7 @@ from experiment import oss_fuzz_checkout, textcov
 from experiment.benchmark import Benchmark
 from experiment.workdir import WorkDirs
 from src.llm import models
-from results import BenchmarkResult, Result, TrialResult
+from results import BenchmarkResult, TrialResult
 
 # WARN: Avoid high value for NUM_EVA for local experiments.
 # NUM_EVA controls the number of fuzz targets to evaluate in parallel by each
