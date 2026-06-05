@@ -59,7 +59,6 @@ from .coverage_ranker import (
     CoverageRanker,
     CoverageRankingResult,
     SequenceScore,
-    rank_sequences_by_coverage,
     select_top_k_sequences,
 )
 

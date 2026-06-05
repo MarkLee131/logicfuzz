@@ -1,17 +1,17 @@
 """
 L4: Coverage Ranker - Rank and select sequences by coverage potential.
 
-Uses a principled approach without empirical weights:
-1. Hierarchical sorting (B): diversity -> entry point position -> length
-2. Greedy selection (D): maximize API coverage in selected set
+Ranking (G3): when a project automaton is present, its acceptance_score is
+the PRIMARY sort axis (reachability-first) and diversity is demoted to a
+tiebreak; without an automaton, diversity leads. Selection is greedy
+max-coverage over the ranked pool.
 
 This is the fourth filter in the Progressive Filter Pipeline:
     L0 (Type) -> L1 (Entry Point) -> L2 (Lifecycle) -> L3 (StateMachine) -> L4 (Ranking)
 
 Design principles:
 1. No empirical weights - all rules are deterministic and explainable
-2. Diversity = coverage potential (more unique APIs = more code paths)
-3. Greedy selection maximizes marginal contribution
+2. Greedy selection maximizes marginal API coverage contribution
 """
 
 import logging
@@ -110,9 +110,9 @@ class CoverageRanker:
     L4 Filter: Rank sequences by coverage potential and select Top-K.
 
     Ranking approach (no empirical weights):
-    1. Primary: API diversity = unique_apis / sequence_length
-    2. Secondary: Entry point position (earlier is better)
-    3. Tertiary: Sequence length (longer covers more)
+    1. Primary: automaton acceptance_score when an automaton is present
+       (G3, reachability-first); else API diversity = unique_apis / length
+    2. Tiebreak: entry-point position (earlier better), then length
 
     Selection approach:
     - Greedy selection maximizing marginal API coverage
@@ -430,35 +430,11 @@ class CoverageRanker:
 # Convenience Functions
 # =============================================================================
 
-def rank_sequences_by_coverage(
-    sequences: List[List[str]],
-    entry_point_names: Optional[Set[str]] = None,
-    top_k: int = 10,
-    logger_instance: Optional[logging.Logger] = None
-) -> CoverageRankingResult:
-    """
-    Convenience function to rank and select sequences.
-
-    Args:
-        sequences: List of API name sequences.
-        entry_point_names: Set of entry point API names (from L1).
-        top_k: Number of sequences to select.
-        logger_instance: Optional logger.
-
-    Returns:
-        CoverageRankingResult with ranked and selected sequences.
-    """
-    ranker = CoverageRanker(logger_instance=logger_instance)
-    return ranker.rank_and_select(sequences, entry_point_names, top_k)
-
-
 def select_top_k_sequences(
     sequences: List[List[str]],
     entry_point_analysis: Optional[Dict[str, Any]] = None,
     top_k: int = 10,
     logger_instance: Optional[logging.Logger] = None,
-    existing_coverage: Optional[Dict[str, float]] = None,
-    important_apis: Optional[Set[str]] = None,
     automaton_artifact: Optional[Any] = None,
     automaton_n_sample_paths: int = 8,
     automaton_post_extend_depth: int = 2,
@@ -475,10 +451,6 @@ def select_top_k_sequences(
         entry_point_analysis: L1 analysis result (serialized).
         top_k: Number of sequences to select.
         logger_instance: Optional logger.
-        existing_coverage: Dict of function_name -> coverage % (0-100).
-                          Used for coverage-aware filtering to prioritize
-                          sequences targeting uncovered code.
-        important_apis: Set of API names that should be kept regardless of coverage.
         automaton_artifact: Optional ``AutomatonArtifact`` from
             ``learn_project_automaton``. When supplied, three signals plug
             into the ranker:

@@ -821,7 +821,6 @@ class FuzzingContext:
                 entry_point_analysis=entry_point_analysis_result,
                 top_k=filter_top_k,
                 logger_instance=log,
-                existing_coverage=existing_coverage if existing_coverage else None,
                 automaton_artifact=automaton_artifact,
                 length_floor_safe_apis=length_floor_safe or None,
             )
