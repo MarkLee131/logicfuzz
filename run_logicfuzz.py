@@ -1277,10 +1277,6 @@ def parse_args() -> argparse.Namespace:
                       help=('Models available: '
                             f'{", ".join(models.get_available_models())}.'))
   parser.add_argument('-w', '--work-dir', default=RESULTS_DIR)
-  parser.add_argument('--context',
-                      action='store_true',
-                      default=False,
-                      help='Add context to function under test.')
   parser.add_argument(
       '-e',
       '--introspector-endpoint',
@@ -1362,13 +1358,6 @@ def parse_args() -> argparse.Namespace:
       default=0,
       help=('Delay each experiment by certain seconds (e.g., 10s) to avoid '
             'exceeding quota limit in large scale experiments.'))
-  parser.add_argument('-p',
-                      '--prompt-builder',
-                      help='The prompt builder to use for harness generation.',
-                      default='DEFAULT')
-  # Note: Agent mode (LangGraph) is now the default and only mode.
-  # The --agent flag has been removed.
-  parser.add_argument('--custom-pipeline', type=str, default='')
   parser.add_argument('-mr',
                       '--max-round',
                       type=int,
