@@ -740,10 +740,6 @@ class CBFactory(Factory):
 
         return init_chain if init_chain else None
 
-    def _normalize_type(self, type_str: str) -> str:
-        """Normalize a type string for consistent comparison"""
-        return type_str.replace(" ", "").replace("const", "").strip()
-
     def _track_api_in_z3(self, api: Api, position: int):
         """
         Track an API addition in the Z3 controller state.
@@ -920,10 +916,6 @@ class CBFactory(Factory):
                     return (best_api, api_call, new_ctx, init_chain)
 
         return (best_api, None, None, best_unsat)
-
-    def get_random_source_api(self):
-        """Randomly select a source API"""
-        return self.bias.get_random_candidate([], self.source_api)
 
     def get_random_candidate(self, candidate_api):
         """Randomly select one from candidate APIs"""
@@ -1496,10 +1488,12 @@ class CBFactory(Factory):
         drv_calls: List[Tuple[Api, ApiCall]] = []
 
         for pos, api in enumerate(api_sequence):
-            cond = self.conditions.get_function_conditions(api.function_name)
-            if cond is None:
+            try:
+                cond = self.conditions.get_function_conditions(api.function_name)
+            except KeyError:
                 # Missing FunctionConditions for this API — upstream
                 # cannot wire it. Treat as infeasible on this path.
+                # (get_function_conditions raises KeyError, never returns None.)
                 logger.info(
                     "[CBFactory.binding] reject seq=%s at pos=%d (%s): "
                     "no FunctionConditions for this API",
