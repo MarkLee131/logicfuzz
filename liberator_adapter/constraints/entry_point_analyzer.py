@@ -519,7 +519,6 @@ class EntryPointAnalyzer:
             project_apis,
             consumed_handle_keys=self._consumed_handle_keys,
             extract_produced_handles=self._extract_produced_handles,
-            is_handle_type=self._is_handle_type,
             normalize_handle_type=self._normalize_handle_type,
         )
         graph = UseDefGraph(effects)

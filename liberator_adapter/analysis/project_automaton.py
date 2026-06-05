@@ -583,7 +583,6 @@ def learn_project_automaton(
         lifecycle_pairs=lifecycle_pairs,
         consumed_handle_keys=classifier._consumed_handle_keys,
         extract_produced_handles=classifier._extract_produced_handles,
-        is_handle_type=classifier._is_handle_type,
         normalize_handle_type=classifier._normalize_handle_type,
     )
     graph = UseDefGraph(effects)

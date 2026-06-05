@@ -141,10 +141,11 @@ def _strip_one_pointer_level(type_str: str) -> Optional[str]:
     norm = _normalize_type_str(type_str)
     if "*" not in norm:
         return None
+    # Drop exactly ONE '*' token (the normalizer space-separates them), not the
+    # whole trailing run: rstrip(' *') would strip every level, turning
+    # ``foo ***`` into ``foo *`` instead of ``foo * *``.
     idx = norm.rfind("*")
-    return (norm[:idx] + norm[idx + 1:]).strip().rstrip(" *") + (
-        "" if norm.count("*") == 1 else " *"
-    )
+    return (norm[:idx] + norm[idx + 1:]).rstrip()
 
 
 def _get_is_const(arg: Dict[str, Any]) -> bool:
@@ -621,7 +622,7 @@ class Typestate:
 
 
 # =============================================================================
-# Effect extraction (placeholder — real wiring in A1.delegate step)
+# Effect extraction
 # =============================================================================
 
 def extract_api_effects(
@@ -630,16 +631,14 @@ def extract_api_effects(
     lifecycle_pairs: Optional[List[Tuple[str, str]]] = None,
     consumed_handle_keys: Optional[Any] = None,
     extract_produced_handles: Optional[Any] = None,
-    is_handle_type: Optional[Any] = None,
     normalize_handle_type: Optional[Any] = None,
 ) -> List[APIEffect]:
     """Build APIEffects from project APIs.
 
-    The four primitive callables default to the canonical implementations
-    in this module (``consumed_handle_keys`` / ``extract_produced_handles`` /
-    ``is_handle_type`` / ``normalize_handle_type``). Callers may still pass
-    overrides for testing or to plug in alternate handle-classification
-    policies, but most production callers should omit them.
+    The primitive callables default to the canonical implementations in this
+    module (``consumed_handle_keys`` / ``extract_produced_handles`` /
+    ``normalize_handle_type``). Callers may still pass overrides for testing,
+    but most production callers should omit them.
 
     ``lifecycle_pairs`` is a list of ``(init_api_name, destroy_api_name)``
     derived from ``LifecycleAnalyzer``. Each pair contributes a KILL edge on
