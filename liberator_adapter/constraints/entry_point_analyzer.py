@@ -287,8 +287,6 @@ class EntryPointInfo:
     size_arg_index: int = -1  # -1 if no separate size argument
     size_arg_type: Optional[str] = None
 
-    # Matching info
-    matched_pattern: Optional[str] = None
     confidence: float = 1.0
 
     def to_dict(self) -> Dict[str, Any]:
@@ -359,7 +357,6 @@ class EntryPointAnalysis:
 
     # Analysis metadata
     total_apis: int = 0
-    analysis_version: str = "1.1"
 
     def __post_init__(self):
         """Ensure entry_point_names is populated."""
@@ -803,29 +800,6 @@ class EntryPointAnalyzer:
 
         return None
 
-    # Heuristic: arg types that almost certainly aren't *handles* and so should
-    # not register the API as an indirect consumer (avoids treating something
-    # like ``my_api(int flags, const uint8_t* data, size_t size)`` as needing
-    # an "int producer"). Buffer / size types are filtered separately.
-    _NON_HANDLE_PRIMITIVES: Tuple[str, ...] = (
-        "int", "long", "short", "char", "size_t", "ssize_t", "bool", "float",
-        "double", "void", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
-        "int8_t", "int16_t", "int32_t", "int64_t", "unsigned",
-    )
-
-    # Creator name patterns ranked best-first when picking the canonical creator
-    # for an indirect entry's handle.
-    _CREATOR_PRIORITY_PATTERNS: Tuple[str, ...] = (
-        "_new", "_create", "_alloc", "_init", "_open",
-    )
-
-    # Production channels for handle delivery. Used to abstract away the C/C++
-    # idiomatic differences between "return the handle directly" and "write
-    # the handle into a caller-supplied out-pointer". Lower numeric weight =
-    # preferred when ranking competing creators.
-    _CHANNEL_RETURN: int = 0
-    _CHANNEL_OUT_POINTER: int = 1
-
     def _check_indirect_consumer(
         self, api: Dict[str, Any]
     ) -> Optional[Tuple[EntryPointInfo, int, str]]:
@@ -944,14 +918,6 @@ class EntryPointAnalyzer:
     def _consumed_handle_keys(self, api: Dict[str, Any]) -> Set[str]:
         from liberator_adapter.analysis.usedef import consumed_handle_keys
         return consumed_handle_keys(api)
-
-    # NOTE: `_find_buffer_size_positions`, `_count_pointer_levels`,
-    # `_strip_one_pointer_level`, `_extract_return_type` were removed in
-    # the 2026-05 L1-L5 refactor — they had no callers in this module
-    # and the canonical implementations live in
-    # `liberator_adapter/analysis/usedef.py`. See
-    # `docs/synthesis_refactor_2026_05.md` for the same pattern applied
-    # to the synthesis subsystem.
 
     def _get_is_const(self, arg: Dict[str, Any]) -> bool:
         """Extract const qualifier from argument.
