@@ -80,7 +80,7 @@ def get_argument_info(type):
         n_asterix = type_str.count("*") + type_str.count("[")
         if "[" in type_str:
             # stuffs like char[100] into char*
-            type_str = re.sub('\[\d*\]', '*', type_str)
+            type_str = re.sub(r'\[\d*\]', '*', type_str)
 
         type_str_token = type_str.strip().replace("*", " * ").split()
         for bad_token in ["enum", "struct"]:
@@ -272,6 +272,28 @@ def get_stub_file(include_folder, public_headers):
 
     # from IPython import embed; embed(); exit()
 
+    # Pre-split the public-header entries that carry a directory component so
+    # we can do a path-suffix match below. The public_headers list is generated
+    # relative to the PROJECT root (e.g. ``/src/libpcap`` -> ``pcap/pcap.h``),
+    # but ``include_folder`` is frequently the PARENT of the project dir
+    # (auto-detected ``/src``), so the on-disk rel_path gains an extra leading
+    # segment (``libpcap/pcap/pcap.h``). An exact rel_path / basename match then
+    # silently drops every header, yielding an empty stub and 0 extracted APIs
+    # (observed on libpcap, pugixml). A suffix match makes the pairing robust to
+    # that prefix difference without loosening it to a bare-basename match
+    # (which would over-include same-named headers from unrelated subtrees).
+    public_headers_with_dir = {p for p in public_headers_lst if "/" in p}
+
+    def _header_is_public(basename, rel_path):
+        if basename in public_headers_lst or rel_path in public_headers_lst:
+            return True
+        # Path-suffix match: tolerate a differing leading directory prefix
+        # between the discovered rel_path and the curated public-header entry.
+        for entry in public_headers_with_dir:
+            if rel_path == entry or rel_path.endswith("/" + entry):
+                return True
+        return False
+
     with open(stub_file, 'w') as tmp:
         for root, _, files in os.walk(include_folder):
             for h in files:
@@ -279,10 +301,10 @@ def get_stub_file(include_folder, public_headers):
                 if not (h.endswith(".h") or h.endswith(".h++") or h.endswith(".hh")
                     or h.endswith(".hpp")):
                     continue
-                # Match by filename or relative path
+                # Match by filename or relative path (prefix-tolerant)
                 h_path = os.path.join(root, h)
                 rel_path = os.path.relpath(h_path, include_folder)
-                if h in public_headers_lst or rel_path in public_headers_lst:
+                if _header_is_public(h, rel_path):
                     tmp.write(f"#include \"{h_path}\"\n")
 
         tmp.write("\n")
