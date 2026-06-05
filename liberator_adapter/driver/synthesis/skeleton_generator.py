@@ -489,9 +489,17 @@ class SkeletonGenerator:
             "#include <string.h>",
         ]
 
-        # C++ projects use FuzzedDataProvider for structured fuzzing
-        if is_cpp:
-            includes.append("#include <fuzzer/FuzzedDataProvider.h>")
+        # NOTE: we deliberately do NOT emit ``#include <fuzzer/FuzzedDataProvider.h>``.
+        # The deterministic renderer never produces any FuzzedDataProvider usage
+        # (the body is plain C: ``(void)data; if (size < 1) return 0; ...``), so the
+        # include was always DEAD. It is also C++-only (its header pulls in
+        # <algorithm>): in a C project an unfilled skeleton that reaches the merged
+        # build carries it into a ``.c`` file → compiled with $CC → "fatal error:
+        # 'algorithm' file not found" → the whole merged build dies (observed on
+        # lcms driver 06). LLM-filled drivers get it stripped by the prototyper
+        # C-fixer, so only bare skeletons detonated. Invariant: includes must match
+        # actual usage — if a future renderer emits FDP usage, add the header next
+        # to that emission, gated on real use (and on the project being C++).
 
         return includes
 
