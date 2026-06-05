@@ -193,20 +193,6 @@ class BuilderRunner:
     return function_name.removeprefix('operator')
 
 
-  def _contains_target_function(self, target_path: str) -> bool:
-    """Validates if the LLM-generated code contains the target function.
-    
-    This is a legacy method kept for compatibility. For C/C++, use
-    _contains_target_cpp_function() instead.
-    """
-    with open(target_path) as generated_code_file:
-      generated_code = generated_code_file.read()
-
-    min_func_name = self._get_minimum_func_name(
-        self.benchmark.function_signature)
-
-    return min_func_name in generated_code
-
   def _remove_comments_and_strings(self, code: str) -> str:
     """Remove C/C++ comments and string literals from code for validation.
     
@@ -1290,7 +1276,7 @@ class CloudBuilderRunner(BuilderRunner):
     if blobs:
       blob = blobs[0]
       artifact_path = os.path.join(artifact_dir, os.path.basename(blob.name))
-      # TOOD: Some try-catch here.
+      # TODO: Some try-catch here.
       blob.download_to_filename(artifact_path)
       run_result.artifact_path = artifact_path
     else:

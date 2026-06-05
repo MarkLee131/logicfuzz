@@ -155,6 +155,28 @@ unless a test pins the behavior.
   were fixed; the commented residue is cosmetic and best removed in a dedicated
   pass (or with the formatter) rather than a risky bulk delete here.
 
+### D8. `scripts/run_extended_fuzzing_v2.py` parallel fork
+- **Files:** `scripts/run_extended_fuzzing.py` (v1, canonical — referenced by
+  CLAUDE.md/README and several scripts/tests) vs `run_extended_fuzzing_v2.py`
+  (731 lines, only invoked by `scripts/batch_24h_fuzzing.sh`).
+- **Why deferred:** v2 is referenced by a live shell wrapper and has its own CLI
+  (`ExtendedFuzzingRunner`), so it isn't dead — but it duplicates v1 with no code
+  sharing. Whether v2 is the intended successor or an abandoned experiment is a
+  product call; consolidating means porting `batch_24h_fuzzing.sh` to v1's
+  interface. Left for the user to decide.
+
+### D9. Evaluator legacy LLM-stub call sites
+- **File:** `experiment/evaluator.py`
+- **Observation:** `_fix_generated_fuzz_target`, `triage_crash`, and
+  `extend_build_with_corpus` are now no-op stubs (they log "Legacy ... called"
+  and return NOT_APPLICABLE — the real LLM work moved to the LangGraph agents),
+  but the eval flow STILL calls them (lines ~464/539/591), e.g.
+  `run_result.triage = self.triage_crash(...)`.
+- **Why deferred:** removing the stubs requires also removing their call sites
+  and reasoning about the fields they set (run_result.triage, etc.) so the
+  control flow and downstream consumers stay correct. A focused eval-flow change,
+  not a sweep.
+
 ### D2. `tools/p0_trace_survey/extract_traces.py` fork of `analysis/static_trace.py`
 - **Opportunity:** the survey tool carries a 484-line older fork of
   `static_trace` (same `CallSite`/`StaticTrace`/`ProjectTraceReport`/
