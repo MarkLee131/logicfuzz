@@ -186,3 +186,51 @@ unless a test pins the behavior.
 - **Why deferred:** the duplicate lives in a standalone dev/survey tool with
   its own expectations; re-pointing it at `liberator_adapter.analysis.
   static_trace` could change survey output. A separate, verified change.
+
+---
+
+## Applied (src/ + tools review)
+
+### A8. Redundant `session_memory` re-fetch after in-place merge
+- **Files:** `src/agents/coverage_analyzer.py`, `src/agents/improver.py`
+- **Change:** dropped `session_memory = state.get("session_memory", session_memory)`
+  immediately after `merge_session_memory_updates`, which already returns the
+  in-place-mutated `state["session_memory"]` the local already pointed at — a
+  self-assignment.
+- **Equivalence:** same object before and after.
+
+## Deferred (low-value cleanups recorded for human review)
+
+These are real but low-leverage; each is a small equivalence-preserving change
+left out of the sweep to avoid churn / subtle-state risk:
+
+- **D10. tool_calling_mixin dup helpers** — `_truncate` and
+  `_extract_token_usage_from_response` (`src/agents/tool_calling_mixin.py`)
+  duplicate `LangGraphAgent.truncate_tool_output` / `_extract_token_usage`
+  (`base.py`). Agents inherit both; the mixin copies could delegate. (MRO/name
+  divergence means it's a real refactor, not a delete.)
+- **D11. `state.py` 6× lazy-init dict literal** — the `session_memory`
+  default-init dict is copy-pasted across `add_api_constraint`/`add_known_fix`/
+  `add_decision`/`add_coverage_strategy`/`add_coverage_attempt`; one copy is
+  out of sync. Factor into a `_ensure_session_memory(state)` helper.
+- **D12. `adapters.py` always-default RunResult kwargs** — `log_path`,
+  `corpus_path`, `textcov_diff` read state keys no node writes, so they pass
+  constant empties into `RunResult`; drop them and let RunResult defaults stand.
+- **D13. `coverage_memory.harvest_trial_outcomes` empty `api_sequence`** — never
+  populated (the legacy TrialResult has no API-name list); either wire real
+  extraction or drop the field from the persisted snapshot.
+- **D14. `UnifiedCodeValidator.validate(project_name=…)`** — accepted +
+  documented "for project-specific rules" but never read; two callers pass it.
+- **D15. `compilation_error_triage.triage` `error_text`** — assigned at the top
+  but never read (the loop iterates `build_errors` directly).
+- **D16. `merge.IndividualDriver.modified_content(total_drivers=…)`** — the param
+  is `del`'d as "reserved for future per-driver guard macros"; drop until needed.
+- **D17. supervisor `_end_workflow` `messages` write** — LangGraph drops the
+  non-schema `messages` key (nothing reads it), but the docstring claims it
+  surfaces the reason; untangle the two together.
+- **D18. `path_planner` module docstring framing** — still says the planner sits
+  strictly "between L4 and Z3"; since G2 model-driven construction now leads,
+  the framing understates where candidates come from.
+- **D19. `format_session_memory_for_prompt` archetype branch** — reads
+  `session_memory["archetype"]`, which is now never populated (its only writer
+  `set_archetype` was deleted as dead); the reader branch is effectively dead.
