@@ -144,7 +144,7 @@ def test_seed_filters_unknown_apis():
 
 def test_metrics_shape():
     res = construct_sequences(reconcile(_managed_lib()))
-    for k in ("n_sequences", "n_targets_attempted", "n_unsatisfiable_targets",
+    for k in ("n_sequences", "n_targets_attempted",
               "api_coverage", "handle_types", "avg_length"):
         assert k in res.metrics
 

@@ -1316,11 +1316,10 @@ class FuzzingContext:
                     }
                     log.info(
                         '  5h/12 ✅ G2 construct-from-model: %d constructed '
-                        '(%d unsatisfiable) merged with %d grammar floor → '
+                        'merged with %d grammar floor → '
                         '%d candidates to Z3 (gap+reachability-ranked, budget=%d); '
                         'G5 gap: reached %d/%d baseline-uncovered APIs',
                         _cres.metrics['n_sequences'],
-                        _cres.metrics['n_unsatisfiable_targets'],
                         len(_grammar_candidates), len(api_sequences), _budget,
                         _cres.metrics.get('gap_apis_reached', 0),
                         _cres.metrics.get('gap_apis_total', 0),

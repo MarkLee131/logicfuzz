@@ -263,7 +263,6 @@ def construct_sequences(
     # what directs generation at baseline-uncovered code.
     gap_apis = gap_apis or set()
     n_attempted = 0
-    n_unsatisfiable = 0   # retained for telemetry; best-effort never drops now
     if do_bottomup:
         targets: List[APISemantics] = []
         seen_targets: Set[str] = set()
@@ -334,7 +333,6 @@ def construct_sequences(
         "n_seeded_from_automaton": n_seeded,
         "n_seeded_from_idioms": n_idiom,
         "n_targets_attempted": n_attempted,
-        "n_unsatisfiable_targets": n_unsatisfiable,
         "n_ordering_dropped": n_ordering_dropped,
         "n_before_ordering_filter": n_before_filter,
         "api_coverage": len(api_cov),
