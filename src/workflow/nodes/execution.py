@@ -6,11 +6,10 @@ ExecutionStage functionality.
 """
 import os
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from langchain_core.runnables import RunnableConfig
 import logger
-from src.workflow.adapters import StateAdapter
 from src.workflow.state import FuzzingWorkflowState
 from src.utils.unified_validator import UnifiedCodeValidator, format_validation_report
 from experiment import builder_runner as builder_runner_lib
@@ -277,8 +276,6 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     args = configurable["args"]
     
     # Deserialize benchmark and work_dirs from dicts
-    from experiment.benchmark import Benchmark
-    from experiment.workdir import WorkDirs
     benchmark = Benchmark.from_dict(state["benchmark"])
     trial = state["trial"]
     work_dirs = WorkDirs.from_dict(state["work_dirs"])
@@ -310,7 +307,6 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     
     # Set up evaluator
     evaluator = Evaluator(builder_runner, benchmark, work_dirs)
-    generated_target_name = os.path.basename(benchmark.target_path)
     generated_oss_fuzz_project = f'{benchmark.id}-{trial}'
     generated_oss_fuzz_project = oss_fuzz_checkout.rectify_docker_tag(
         generated_oss_fuzz_project)
@@ -459,7 +455,6 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     baseline_available = False
     if run_result.coverage_summary:
         generated_target_name = os.path.basename(benchmark.target_path)
-        from experiment import evaluator as evaluator_lib
         total_lines = evaluator_lib.compute_total_lines_without_fuzz_targets(
             run_result.coverage_summary, generated_target_name)
 
@@ -684,8 +679,6 @@ def build_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str,
     args = configurable["args"]
     
     # Deserialize benchmark and work_dirs from dicts
-    from experiment.benchmark import Benchmark
-    from experiment.workdir import WorkDirs
     benchmark = Benchmark.from_dict(state["benchmark"])
     trial = state["trial"]
     work_dirs = WorkDirs.from_dict(state["work_dirs"])
