@@ -1344,18 +1344,6 @@ def parse_args() -> argparse.Namespace:
                       dest='use_session_memory',
                       help='Disable session memory (short-memory) for cross-agent consensus sharing.')
 
-  # Evaluation knob: disable L5 novelty filter to maximise total coverage
-  # (use when comparing against developer-written / OGHarn baselines).
-  parser.add_argument('--no-coverage-filter',
-                      action='store_true',
-                      default=False,
-                      dest='no_coverage_filter',
-                      help='Disable L5 CoverageAwareFilter so candidate '
-                           'sequences are NOT filtered by novelty vs '
-                           'existing OSS-Fuzz coverage. Use for paper '
-                           'comparisons where total coverage is the metric. '
-                           'Equivalent to LOGICFUZZ_DISABLE_COVERAGE_FILTER=1.')
-
   # Phase G: closed-loop CBFactory feedback
   parser.add_argument('--closed-loop',
                       action='store_true',
@@ -1454,8 +1442,6 @@ def parse_args() -> argparse.Namespace:
   # Apply evaluation profile (only fills flags the user did not set
   # explicitly — explicit always wins).
   if args.eval_profile:
-    if not args.no_coverage_filter:
-      args.no_coverage_filter = True
     if not args.closed_loop:
       args.closed_loop = True
     if not args.merge_drivers:
@@ -1818,10 +1804,6 @@ def main():
   # an env var. Coverage queries default to the public OSS-Fuzz introspector.
   if args.introspector_endpoint:
     os.environ['LOGICFUZZ_FI_ENDPOINT'] = args.introspector_endpoint
-
-  # Forward --no-coverage-filter to data_context via env var (read in Step 5f).
-  if args.no_coverage_filter:
-    os.environ['LOGICFUZZ_DISABLE_COVERAGE_FILTER'] = '1'
 
   run_single_fuzz.prepare(args.oss_fuzz_dir)
 

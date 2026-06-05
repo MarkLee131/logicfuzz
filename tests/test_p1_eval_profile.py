@@ -1,9 +1,7 @@
 """Tests for the --eval profile shortcut in run_logicfuzz.py.
 
-The flag bundles --no-coverage-filter + --closed-loop into a single
-named profile. Documented compatibility note (CLAUDE.md "Failed
-Attempts"): L5 novelty filter must stay default-ON for production runs;
---eval is the explicit opt-in for paper-style evaluations.
+The flag bundles --closed-loop + --merge-drivers into a single named
+profile (the explicit opt-in for paper-style evaluations).
 
 Approach: spawn a subprocess that intercepts argparse.parse_args via a
 monkeypatch, lets the run_logicfuzz argument definitions execute, then
@@ -29,15 +27,12 @@ _orig = argparse.ArgumentParser.parse_args
 def _patched(self, *a, **k):
     ns = _orig(self, *a, **k)
     if getattr(ns, 'eval_profile', False):
-        if not getattr(ns, 'no_coverage_filter', False):
-            ns.no_coverage_filter = True
         if not getattr(ns, 'closed_loop', False):
             ns.closed_loop = True
         if not getattr(ns, 'merge_drivers', False):
             ns.merge_drivers = True
     print('@@ARGS@@' + json.dumps({
         'eval_profile':       getattr(ns, 'eval_profile', None),
-        'no_coverage_filter': getattr(ns, 'no_coverage_filter', None),
         'closed_loop':        getattr(ns, 'closed_loop', None),
         'closed_loop_iters':  getattr(ns, 'closed_loop_iters', None),
         'merge_drivers':      getattr(ns, 'merge_drivers', None),
@@ -67,15 +62,12 @@ def _run_argparse(extra_argv):
 def test_no_eval_keeps_defaults():
     args = _run_argparse(['-y', 'comparison/cjson.yaml'])
     assert args['eval_profile'] is False
-    assert args['no_coverage_filter'] is False
     assert args['closed_loop'] is False
 
 
 def test_eval_implies_both_subflags():
     args = _run_argparse(['-y', 'comparison/cjson.yaml', '--eval'])
     assert args['eval_profile'] is True
-    assert args['no_coverage_filter'] is True, \
-        '--eval must imply --no-coverage-filter'
     assert args['closed_loop'] is True, \
         '--eval must imply --closed-loop'
 
@@ -91,7 +83,7 @@ def test_eval_respects_explicit_iters_override():
 
 def test_eval_implies_merge_drivers():
     """--eval is the only documented way to opt into the full
-    evaluation profile (no-coverage-filter + closed-loop + merge-drivers)."""
+    evaluation profile (closed-loop + merge-drivers)."""
     args = _run_argparse(['-y', 'comparison/cjson.yaml', '--eval'])
     assert args['merge_drivers'] is True
 
