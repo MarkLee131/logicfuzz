@@ -31,7 +31,6 @@ from src.llm import models
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
-import tempfile
 from typing import Optional, List
 
 # Liberator-related helpers (used to perform local Clang extraction)
@@ -43,8 +42,6 @@ from liberator_adapter.common.utils import Utils
 from liberator_adapter.common.datalayout import DataLayout
 from liberator_adapter.constraints.ConditionManager import ConditionManager
 from liberator_adapter.common import FunctionConditionsSet
-from liberator_adapter.driver.factory import Factory
-from liberator_adapter.project_driver_generator import ProjectDriverGenerator
 from liberator_adapter.dependency import DependencyGraph
 
 logger = logging.getLogger(__name__)
