@@ -144,10 +144,6 @@ class PromptManager:
             self._cache[filename] = load_prompt_file(filename)
         return self._cache[filename]
 
-    def clear_cache(self):
-        """Clear the prompt cache."""
-        self._cache.clear()
-
 
 # Global prompt manager instance
 _prompt_manager = PromptManager()

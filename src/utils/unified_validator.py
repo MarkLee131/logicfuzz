@@ -62,16 +62,6 @@ class ValidationIssue:
 
 
 @dataclass
-class CallingInfo:
-    """Information about a function call extracted from AST."""
-    caller_name: str
-    caller_decl_loc: str
-    callee_name: str
-    callee_decl_loc: str
-    calling_loc: str
-
-
-@dataclass
 class UnifiedValidationResult:
     """Comprehensive validation result."""
     # Overall status
@@ -97,10 +87,6 @@ class UnifiedValidationResult:
 
     # Metadata
     validation_methods_used: List[str] = field(default_factory=list)
-
-    def get_issues_by_category(self, category: ValidationCategory) -> List[ValidationIssue]:
-        """Get all issues of a specific category."""
-        return [i for i in self.issues if i.category == category]
 
     def get_errors(self) -> List[ValidationIssue]:
         """Get all error-level issues."""
@@ -643,8 +629,7 @@ class UnifiedCodeValidator:
         """AST-based target API check using libclang Python via
         ``FunctionBodyWalker`` — the same walker the automaton subsystem
         uses. 2026-05 refactor replaced the external CGProcessor binary
-        path with this in-process implementation; see
-        ``docs/supervisor_validator_refactor_2026_05.md``.
+        path with this in-process implementation.
         """
         try:
             from liberator_adapter.analysis.static_trace import (

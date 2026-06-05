@@ -15,8 +15,7 @@ Multi-TU layout (per PromeFuzz ``synthesize_into_one``):
        ``synthesized/*.{c,cpp}`` under the OSS-Fuzz build environment
        (``$CC``, ``$CFLAGS``, ``$LIB_FUZZING_ENGINE``, ``$WORK``,
        ``$OUT``). The snippet is meant to be appended to the OSS-Fuzz
-       project's ``build.sh`` (or applied via ``apply_to_oss_fuzz_project``
-       below).
+       project's ``build.sh``.
 
 Why multi-TU rather than single-file flattening: when two drivers each
 declare ``static int compare(...)`` or include the same header that
@@ -547,72 +546,3 @@ class SynthesizedDriver:
         return synth_dir
 
 
-# ---------------------------------------------------------------- OSS-Fuzz inject
-
-
-def apply_to_oss_fuzz_project(
-    synth_dir: Path,
-    oss_fuzz_dir: Path,
-    project: str,
-    target_name: str = "synthesized_fuzzer",
-    extra_libs: str = "",
-    extra_includes: str = "",
-    new_project_name: Optional[str] = None,
-) -> Path:
-    """Copy ``synth_dir`` into an OSS-Fuzz project and patch its build.sh.
-
-    Mirrors what ``run_extended_fuzzing.py:_setup_oss_fuzz_project`` does
-    for a single driver, but for the merged harness. Returns the path to
-    the new generated project (``oss_fuzz_dir/projects/<new_project_name>``).
-
-    Caller is responsible for running ``infra/helper.py build_image`` and
-    ``build_fuzzers`` against ``new_project_name``.
-    """
-    src_proj = oss_fuzz_dir / "projects" / project
-    if not src_proj.exists():
-        raise FileNotFoundError(f"OSS-Fuzz project not found: {src_proj}")
-
-    if new_project_name is None:
-        import time
-        new_project_name = f"{project}-merged-{int(time.time())}"
-
-    dst_proj = oss_fuzz_dir / "projects" / new_project_name
-    if dst_proj.exists():
-        shutil.rmtree(dst_proj)
-    shutil.copytree(src_proj, dst_proj)
-
-    # Copy synthesized/ into the project so it lands at /src/synthesized/
-    # inside the build container.
-    dst_synth = dst_proj / "synthesized"
-    if dst_synth.exists():
-        shutil.rmtree(dst_synth)
-    shutil.copytree(synth_dir, dst_synth)
-
-    # Dockerfile: COPY synthesized/ into /src/.
-    dockerfile = dst_proj / "Dockerfile"
-    if dockerfile.exists():
-        with open(dockerfile, "a") as f:
-            f.write("\nCOPY synthesized /src/synthesized\n")
-
-    # build.sh: append the compile + link snippet.
-    drv = SynthesizedDriver.from_paths(
-        sorted(synth_dir.glob("*.c")) + sorted(synth_dir.glob("*.cpp"))
-        + sorted(synth_dir.glob("*.cc")) + sorted(synth_dir.glob("*.cxx"))
-    )
-    snippet = drv.emit_oss_fuzz_build_snippet(
-        target_name=target_name,
-        extra_libs=extra_libs,
-        extra_includes=extra_includes,
-        synth_dir_var="/src/synthesized",
-    )
-    # The synthesized/ glob will pick up entry.* AND each <id>.* — but
-    # the from_paths() call above also includes entry.{c,cpp}. We must
-    # exclude entry from the glob in the snippet rebuild — emit_oss_fuzz_
-    # _build_snippet is fine because it just iterates *.c/*.cpp.
-    # Rebuilding `drv` here purely to keep is_cpp consistent with the
-    # *files on disk*, not the original drivers list.
-    build_sh = dst_proj / "build.sh"
-    with open(build_sh, "a") as f:
-        f.write(snippet)
-
-    return dst_proj

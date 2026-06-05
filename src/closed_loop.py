@@ -26,8 +26,7 @@ Each iteration:
    that keeps the automaton evolving. If a future refactor introduces a
    "weighted random sample from L4 top-K + sample_paths injection"
    strategy, the 4 signals can be re-applied without breaking the
-   diversity property — see ``docs/comprehender_closedloop_refactor_2026_05.md``
-   §2 for the open design question.
+   diversity property.
 4. Records per-iteration deltas (Δmerged_states, Δtraces, n_drivers
    synthesized, automaton strength).
 5. Early-stops when ``|Δmerged_states| ≤ early_stop_delta`` for two
