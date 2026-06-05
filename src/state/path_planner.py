@@ -53,9 +53,9 @@ class CandidatePlan:
     """One planned candidate sequence with its rationale.
 
     The Planner attaches this to every candidate flowing into Z3
-    synthesis. Downstream layers (Phase A repair, Phase E shape) see
-    the plan and can adjust their behaviour — e.g. shape can pick
-    "long+deep" for a candidate whose plan targets a deep-parse path.
+    synthesis. Downstream layers (e.g. Phase E shape) see the plan and
+    can adjust their behaviour — e.g. shape can pick "long+deep" for a
+    candidate whose plan targets a deep-parse path.
     """
     sequence_names: List[str]
     origin: CandidateOrigin
@@ -272,8 +272,9 @@ class PathPlanner:
         absent from L4's output.
 
         Conservative: only emits a 1-element sequence (the idiom-named
-        API alone). The repair engine will graft a creator prefix if
-        needed; the LLM prototyper will flesh out the rest.
+        API alone). The G2 sequence constructor / CBFactory supply any
+        needed creator prefix by construction; the LLM prototyper will
+        flesh out the rest.
         """
         synth: List[List[str]] = []
         idiom_apis = _idioms_implicating_apis(

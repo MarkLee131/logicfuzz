@@ -73,19 +73,12 @@ Output JSON shape (include EVERY function from the input):
 
 @dataclass
 class LibraryComprehension:
-    """Output of comprehender-A. Mutable so crash-learner (B) can append later."""
+    """Output of comprehender-A: library purpose + per-API usage summaries."""
     purpose: str = ""
     functions: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {"purpose": self.purpose, "functions": dict(self.functions)}
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LibraryComprehension":
-        return cls(
-            purpose=data.get("purpose", ""),
-            functions=dict(data.get("functions", {})),
-        )
 
 
 @dataclass

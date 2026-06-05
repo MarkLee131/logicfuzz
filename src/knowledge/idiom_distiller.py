@@ -20,9 +20,8 @@ Distilled idioms feed:
 - **Prototyper**: as a high-priority ``<library_idioms>`` block in the
   prompt — turns "look at this for inspiration" into "you MUST include
   the min-size guard / null-terminator / cleanup pattern shown here".
-- **Phase D (Planner)** [future]: pick idioms aligned to target paths.
-- **Phase A (Repair Engine)** [future]: graft can prefer creators that
-  match library idioms.
+- **Phase D (Planner)**: pick idioms aligned to target paths
+  (idiom-alignment rerank in ``path_planner``).
 
 The idiom set is persisted as JSON to
 ``results/<project>/state/idioms.json`` for inspection and cross-run
