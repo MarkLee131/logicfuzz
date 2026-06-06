@@ -295,3 +295,21 @@ CALLSPEC（每调用一行）:
 - **CALLSPEC 尚未落地**：今天是"一块成体系 + 一堆散块"，T4 才把散块收进来。**这步会改 LLM 行为，必须端到端 A/B**（旧/新提示词比覆盖+token）。
 
 **给你拍板**：(a) CALLSPEC 字段集是否就用 5.3 这版？(b) `value_intent` 要不要拆成 typed `{kind,payload}`，还是保持串先跑 A/B？(c) 砍 driver_knowledge 3 份原文 → 换 1 个压缩范例，是否同意（这是最大 token 节省，但也动 few-shot）？
+
+### 决定（2026-06-06，已拍板）
+- (a) ✅ **CALLSPEC 就用 5.3 这版**（暂定）。
+- (b) ◐ **轻拆**：给 `value_intent` 加一个 `kind` 标签（`ENUM|RANGE|STRUCTURED_INPUT|LENGTH|HANDLE|OUTPUT`）让 CALLSPEC 表可扫；payload 保持串。**不做完整 typed-value 重构**（影响小，等下游符号消费者真需要再拆——empirical-before-parametric）。
+- (c) ✅ **砍原文**，但用 §5.5 的方法选范例（不是"前 3"）。
+
+## 5.5 选择方法：不要 top-N，要 *scope + 相关性阈值*
+**反模式**：`max_drivers=3` / `limit=8/20/12` 这些**固定 top-N 截断**没道理。正确做法分两种 regime：
+
+**A. 任务范围内的数据 → 只给范围、不截断（范围内穷举）。** `api_sequences`/`project_apis`/`dep_graph` 不该是全局 top-N——真正相关的只有**当前 active skeleton 序列里的那几个 API + 它们的直接 producer**。就一小撮，穷举、确定性。CALLSPEC 本就 per-call → 这些 cap 直接消失。
+
+**B. 大候选池（参考驱动 / 跨项目语料）→ 相关性阈值 + token 预算，不是 count-N：**
+- **结构签名（主，确定性、精确）**：拿候选驱动对 *当前序列* 打分——{API 集、句柄类型目录、生命周期 n-gram、creator/parser 入口类型} 的重叠。我们有精确结构，所以比 embedding **又便宜又准**。取所有 score ≥ τ 的、按分排，直到 token 预算 B；若无人过 τ，取最佳 1 个（资料稀薄的库也有兜底）。→ "所有相关的"，不是"前 3"。
+- **embedding（次，仅跨库/跨命名）**：结构签名在**同领域、不同 API 命名**的兄弟库上会失配（T7 高天花板那种"另一个 JSON parser"）——这正是语义 embedding 该上的地方。**先结构、量化它漏了什么、只为跨命名残差补 embedding**（别一上来就建向量库）。
+
+**落点**：
+- `driver_knowledge`（**同项目**驱动，1-15 个）：用结构签名对当前序列选最相关的（压缩版），token 预算封顶——同项目用结构足矣，**不需要 embedding**。
+- T7（**跨项目**语料）：结构签名为主 + embedding 补跨命名残差，阈值而非 top-k。
