@@ -621,6 +621,23 @@ def _reconcile_args(
         else:
             resolved[i] = ir_arg.get(i, ArgRole.UNKNOWN)
 
+    # Role-precision: an arg the SVF analyzed and saw ONLY reads on cannot be
+    # OUTPUT, even if the LLM said so (e.g. lcms cmsAppendNamedColor's PCS[] /
+    # Colorant[] input arrays were labelled OUTPUT → wrong "fresh local, do not
+    # pre-fill" hole intent). Veto OUTPUT → IR type-pattern fallback. Strict
+    # ``is False`` gate: args without SVF data (None) and genuinely-written
+    # out-pointers (True) are untouched.
+    for i in range(len(args)):
+        if resolved.get(i) is ArgRole.OUTPUT and isinstance(args[i], dict) \
+                and args[i].get("_svf_writes") is False:
+            fallback = ir_arg.get(i, ArgRole.UNKNOWN)
+            if fallback is ArgRole.OUTPUT:
+                fallback = ArgRole.UNKNOWN
+            resolved[i] = fallback
+            log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
+                                fallback.value, 0.7, won=True,
+                                note="OUTPUT vetoed: SVF saw read-only access"))
+
     # Pair each LENGTH with the nearest preceding INPUT_BUFFER.
     out_args: List[ArgSemantics] = []
     for i, arg in enumerate(args):
