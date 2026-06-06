@@ -82,7 +82,7 @@
 | T4 | **LLM 瘦身 → 一张 typed CALLSPEC DSL 表。** 砍掉 3 份原文驱动 + 一套 role 分类 + 过时的 fuzz_introspector 指令；把重叠的 API/skeleton 视图收成「每个调用一行」的元组 `step │ api │ role │ ret │ args=[(i,type,argrole,pairs_with)] │ needs │ precond/cleanup │ value_intent`；加一个全局 token 预算仲裁。 | B3 | 高/小 | 🚧 **部分**（✅ 已删过时 fuzz_introspector 工具指令；CALLSPEC 重构**待你拍板字段集**后做，需端到端 A/B） |
 | T5 | **把绑定失败原因 + 分析器找到的 producer**，标到 unchecked-skeleton 路径的洞上（数据已由新遥测 + `find_producer_apis` 算出）。 | B4 | 高/小 | **待做**（遥测已加；只差把原因接进洞标注——见 B4 表 #3） |
 | T6 | **文档先验默认开 + @return 结构化契约 + README 代码块。** | B1 | 高/小 | 🚧 **部分**：① 默认开+删 opt-out = ✅ **已完成**（B1-③，token 已查清为负）；② `@return`/`@retval` → 结构化 NULL/所有权契约 = **待做**（并入 T3）；③ README quick-start = ❌ **不做**（oss-fuzz docker 下"可运行范例"=项目自身驱动，交给 T8） |
-| T8 | **从本项目自己的驱动里挖调用序列 + 实参来源**喂进自动机/构造器（复用 `static_trace.extract_project_traces`，也跑在驱动 `.c` 上，而不只 tests）。 | B1 | 中 | **已确认可做**（B1-②，你批"可直接优化"；从第二梯队上调到第一梯队） |
+| T8 | **从本项目自己的驱动里挖调用序列 + 实参来源**喂进自动机/构造器（复用 `static_trace.extract_project_traces`，也跑在驱动 `.c` 上，而不只 tests）。 | B1 | 中 | ✅ **已落地**：Step 5e2 把驱动语料目录追加进 automaton 的 consumer_paths。离线验证 c-ares 3 驱动→3 trace（含真实 `LLVMFuzzerTestOneInput: malloc→ares_create_query→free→free`）。构造式 EDSM 低风险；门控 + `LOGICFUZZ_DISABLE_DRIVER_TRACES=1` 杀手锏；175 tests。probe: `scripts/t8_driver_traces_probe.py` |
 
 ### 第二梯队——更大，或需要新技术（先报你批准）
 
