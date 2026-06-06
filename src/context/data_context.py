@@ -762,6 +762,20 @@ class FuzzingContext:
                     p for p in consumer_candidates
                     if (src_root / p).exists() and (src_root / p).is_dir()
                 ]
+                # T8: also learn from the project's OWN existing OSS-Fuzz driver
+                # sources — the single most authoritative example of a valid
+                # fuzz-entry sequence (tests/examples are good, but the driver
+                # IS the target shape). Appended as an absolute path so
+                # _enumerate_source_files picks up its .c/.cc files (pathlib:
+                # root / "/abs" == "/abs"). EDSM merge is constructive, so this
+                # only grows the accepted language with authoritative traces.
+                # Kill-switch: LOGICFUZZ_DISABLE_DRIVER_TRACES=1 (A/B + safety).
+                if not os.environ.get('LOGICFUZZ_DISABLE_DRIVER_TRACES'):
+                    _drv_root = _resolve_drivers_root(project_name)
+                    if _drv_root is not None and _drv_root.is_dir():
+                        consumer_paths.append(str(_drv_root.resolve()))
+                        log.info('  5e2/12 T8: +own OSS-Fuzz driver corpus into '
+                                 'automaton traces (%s)', _drv_root)
                 if not consumer_paths:
                     log.debug('  5e2/12 No consumer-path dirs under %s; skipping automaton', src_root)
                 else:
