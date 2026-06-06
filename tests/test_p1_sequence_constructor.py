@@ -76,6 +76,25 @@ def _ordering_clean(apis, model, sequences):
     return True
 
 
+def _no_genuine_ordering_faults(apis, model, sequences):
+    """Graceful-degradation contract (B): the only ordering fault allowed is a
+    USE_BEFORE_INIT on an ORPHAN handle (no in-project producer) — those are
+    island APIs intentionally kept as holes for the LLM. Any other fault, or a
+    USE_BEFORE_INIT where a producer exists, is genuine."""
+    graph = UseDefGraph(extract_api_effects(
+        apis, lifecycle_pairs=_lifecycle_pairs(model) or None))
+    producers = {h for e in graph.all_effects() for h in e.def_}
+    ts = Typestate(graph)
+    for seq in sequences:
+        for r in ts.check(seq):
+            if r.kind.name not in _ORDERING_FAULTS:
+                continue
+            if r.kind.name == "USE_BEFORE_INIT" and r.handle not in producers:
+                continue  # orphan handle → allowed (graceful degradation)
+            return False
+    return True
+
+
 # --------------------------------------------------------------------------- core contract
 
 def test_constructs_lifecycle_complete_chain():
@@ -96,22 +115,28 @@ def test_ordering_clean_by_construction():
     assert _ordering_clean(apis, model, res.sequences)
 
 
-def test_orphan_target_dropped_by_ordering_filter():
-    """A consumer requiring a handle with no creator yields no *usable* driver.
-
-    Post-redesign, prefix-building is best-effort (it never drops a target — an
-    unmet requirement just becomes a hole). The guarantee that we don't emit a
-    use-before-init driver is enforced downstream by the Typestate self-filter
-    (``project_apis`` supplied): the orphan's required Ghost* is USE'd with no
-    prior DEF ⇒ USE_BEFORE_INIT ⇒ the sequence is filtered out."""
+def test_orphan_target_kept_for_graceful_degradation():
+    """B graceful degradation: a consumer requiring a handle with NO creator (an
+    island API — opaque / void* / no producer) is NOT dropped. The orphan's
+    USE_BEFORE_INIT is kept so the unchecked render path leaves Ghost* as a hole
+    for the LLM to construct/NULL — that is how we recover the ~302/452 gap APIs
+    the baselines reach. The LOGICFUZZ_STRICT_ORDERING kill-switch restores the
+    old drop behavior."""
     apis = [
         _api("orphan_use", [_arg("Ghost *")], ret="int"),  # no Ghost creator
         _api("thing_create", [], ret="Thing *"),
     ]
     model = reconcile(apis)
-    # With the Typestate oracle (project_apis), the orphan sequence is dropped.
+    # Default (graceful): the island API survives as a candidate.
     res = construct_sequences(model, project_apis=apis)
-    assert all("orphan_use" not in s for s in res.sequences)
+    assert any("orphan_use" in s for s in res.sequences)
+    # Strict kill-switch: the old behavior — orphan dropped by the filter.
+    os.environ["LOGICFUZZ_STRICT_ORDERING"] = "1"
+    try:
+        res_strict = construct_sequences(model, project_apis=apis)
+        assert all("orphan_use" not in s for s in res_strict.sequences)
+    finally:
+        os.environ.pop("LOGICFUZZ_STRICT_ORDERING", None)
 
 
 def test_creator_gets_create_destroy_coverage():
@@ -168,5 +193,16 @@ def test_viability_constructed_off_one_and_ordering_clean(project):
     res = construct_sequences(
         model, project_apis=apis, lifecycle_pairs=_lifecycle_pairs(model))
     assert len(res.sequences) > 1
-    # Self-filtered output is ordering-clean by the independent oracle.
-    assert _ordering_clean(apis, model, res.sequences)
+    # New contract (B graceful degradation): no GENUINE ordering faults; orphan
+    # USE_BEFORE_INIT (island APIs, no producer) is intentionally kept.
+    assert _no_genuine_ordering_faults(apis, model, res.sequences)
+    # Strict mode still yields fully ordering-clean output, and graceful keeps
+    # at least as many sequences (the breadth gain).
+    os.environ["LOGICFUZZ_STRICT_ORDERING"] = "1"
+    try:
+        res_strict = construct_sequences(
+            model, project_apis=apis, lifecycle_pairs=_lifecycle_pairs(model))
+        assert _ordering_clean(apis, model, res_strict.sequences)
+        assert len(res.sequences) >= len(res_strict.sequences)
+    finally:
+        os.environ.pop("LOGICFUZZ_STRICT_ORDERING", None)

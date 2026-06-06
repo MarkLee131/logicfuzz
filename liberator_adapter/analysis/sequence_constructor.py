@@ -305,6 +305,7 @@ def construct_sequences(
     # ordering-clean by the same walker CBFactory's lifecycle gate uses.
     n_before_filter = len(seqs)
     n_ordering_dropped = 0
+    n_orphan_kept = 0   # island-API sequences kept via graceful degradation (B)
     if project_apis:
         try:
             from liberator_adapter.analysis.usedef import (
@@ -314,10 +315,32 @@ def construct_sequences(
                 list(project_apis),
                 lifecycle_pairs=list(lifecycle_pairs) if lifecycle_pairs else None,
             )))
+            # Graceful degradation (B): a USE_BEFORE_INIT on an ORPHAN handle —
+            # one no in-project API produces — is NOT a fixable ordering fault.
+            # It is an "island" API (opaque / void* / no producer) that the
+            # baselines reach but our construct-from-model used to drop here,
+            # walling ~302/452 gap APIs out of every candidate sequence. Keep
+            # those sequences: the unchecked render path leaves the orphan handle
+            # as a HOLE and the LLM constructs/NULLs it (T5 / CALLSPEC hints).
+            # Only a USE_BEFORE_INIT where a producer EXISTS (the prefix should
+            # have called it), or any other ordering fault, stays fatal.
+            # Kill-switch: LOGICFUZZ_STRICT_ORDERING=1 restores the old behavior.
+            import os as _os
+            _strict = bool(_os.environ.get("LOGICFUZZ_STRICT_ORDERING"))
             kept: List[List[str]] = []
             for s in seqs:
                 viols = _ts.check(s)
-                if any(v.kind.name in _ORDERING_FAULTS for v in viols):
+                fatal = False
+                for v in viols:
+                    if v.kind.name not in _ORDERING_FAULTS:
+                        continue
+                    if (not _strict and v.kind.name == "USE_BEFORE_INIT"
+                            and not idx.producers.get(v.handle)):
+                        n_orphan_kept += 1
+                        continue  # orphan handle → keep (LLM fills the hole)
+                    fatal = True
+                    break
+                if fatal:
                     n_ordering_dropped += 1
                 else:
                     kept.append(s)
@@ -334,6 +357,7 @@ def construct_sequences(
         "n_seeded_from_idioms": n_idiom,
         "n_targets_attempted": n_attempted,
         "n_ordering_dropped": n_ordering_dropped,
+        "n_orphan_kept": n_orphan_kept,
         "n_before_ordering_filter": n_before_filter,
         "api_coverage": len(api_cov),
         "handle_types": len(handle_cov),
