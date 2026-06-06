@@ -123,6 +123,40 @@ def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
     return None
 
 
+def _producer_index(model: APISemanticModel) -> Dict[str, List[str]]:
+    """``handle_type -> [api names that produce it]``, from the model's use-def
+    ``produces`` sets. Lets T5 name the actual creator for a required handle."""
+    idx: Dict[str, List[str]] = {}
+    if model is None:
+        return idx
+    for name, sem in model.apis.items():
+        for h in getattr(sem, "produces", ()) or ():
+            idx.setdefault(h, []).append(name)
+    return idx
+
+
+def _handle_provenance(sem, name, produced_so_far, prod_idx) -> List[str]:
+    """T5: for each handle this API REQUIRES but that isn't produced earlier in
+    the sequence (and isn't its own caller-alloc), say which producer to call —
+    or, the load-bearing case, that NO producer exists (opaque / direct-entry
+    handle) so the binding layer would give up. That tells the LLM to construct
+    or NULL it instead of waiting for a creator that never comes (B4 #3)."""
+    self_prod = set(getattr(sem, "produces", ()) or ())
+    needed = set(getattr(sem, "requires", ()) or ()) - self_prod - produced_so_far
+    notes: List[str] = []
+    for h in sorted(needed):
+        producers = [p for p in prod_idx.get(h, []) if p != name]
+        if producers:
+            notes.append(f"needs handle {h}: produced by {', '.join(producers[:3])} "
+                         f"— ensure one is called earlier in the driver")
+        else:
+            notes.append(f"needs handle {h}: NO project API produces it "
+                         f"(opaque / direct-entry) — construct a zeroed/minimal "
+                         f"instance or pass NULL if the API tolerates it; do NOT "
+                         f"leave it uninitialized")
+    return notes
+
+
 def value_intents_for_sequence(
     model: APISemanticModel,
     api_sequence: Sequence[str],
@@ -130,11 +164,12 @@ def value_intents_for_sequence(
 ) -> List[Dict[str, Any]]:
     """Per-API, per-arg value intents for a skeleton's sequence.
 
-    Returns a list of ``{api, role, args: [{index, role, type, intent,
-    pairs_with}]}`` records; APIs absent from the model or with no
-    intent-bearing args are dropped, so the result is the minimal set the
-    Prototyper needs to render.
+    Returns a list of ``{api, role, args: [...], handle_provenance: [...]}``
+    records; APIs absent from the model or with nothing to say are dropped, so
+    the result is the minimal set the Prototyper needs to render.
     """
+    prod_idx = _producer_index(model)
+    produced_so_far: set = set()
     out: List[Dict[str, Any]] = []
     for name in api_sequence:
         sem = model.get(name) if model else None
@@ -152,12 +187,17 @@ def value_intents_for_sequence(
                 "pairs_with": arg.pairs_with,
                 "intent": intent,
             })
-        if arg_records:
-            out.append({
+        prov = _handle_provenance(sem, name, produced_so_far, prod_idx)
+        produced_so_far |= set(getattr(sem, "produces", ()) or ())
+        if arg_records or prov:
+            rec: Dict[str, Any] = {
                 "api": name,
                 "role": sem.role.value,
                 "args": arg_records,
-            })
+            }
+            if prov:
+                rec["handle_provenance"] = prov
+            out.append(rec)
     return out
 
 
@@ -170,6 +210,8 @@ def render_value_intents(intents: Sequence[Dict[str, Any]]) -> str:
         lines.append(f"- {rec['api']} [{rec['role']}]:")
         for a in rec["args"]:
             lines.append(f"    arg{a['index']} ({a['type']}): {a['intent']}")
+        for p in rec.get("handle_provenance", []):
+            lines.append(f"    ⚙ {p}")
     return "\n".join(lines)
 
 
