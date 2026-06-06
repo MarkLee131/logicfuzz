@@ -47,19 +47,6 @@ class Arg:
     def __eq__(self, other):
         return hash(self) == hash(other)
 
-    @classmethod
-    def from_clang_data(cls, name: str, flag: str, type_str: str,
-                        is_const: 'List[bool]', size: int = 0,
-                        is_type_incomplete: bool = False) -> 'Arg':
-        """Create Arg from clang data (without LLVM-specific fields)."""
-        return cls(
-            name=name,
-            flag=flag,
-            size=size,
-            type=type_str,
-            is_const=is_const,
-            is_type_incomplete=is_type_incomplete
-        )
 
 class Api:
     function_name: str

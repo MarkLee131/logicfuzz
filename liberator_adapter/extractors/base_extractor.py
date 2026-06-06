@@ -143,37 +143,6 @@ class BaseAPIExtractor:
                 f"Failed to copy file to container: {e.stderr}"
             )
     
-    def _copy_dir_to_container(
-        self,
-        host_dir: Path,
-        container_dir: str
-    ) -> str:
-        """
-        Copy directory to container
-        
-        Args:
-            host_dir: Directory path on host
-            container_dir: Target directory path in container
-        
-        Returns:
-            Directory path in container
-        """
-        if not host_dir.exists():
-            raise FileNotFoundError(f"Source directory not found: {host_dir}")
-        
-        try:
-            cmd = [
-                'docker', 'cp',
-                str(host_dir),
-                f'{self.container.container_id}:{container_dir}'
-            ]
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-            logger.info(f"Copied directory to container: {host_dir} -> {container_dir}")
-            return container_dir
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"Failed to copy directory to container: {e.stderr}"
-            )
     
     def _copy_from_container(
         self,
@@ -261,31 +230,6 @@ class BaseAPIExtractor:
         
         return result
     
-    def _find_file_in_container(
-        self,
-        search_paths: list[str],
-        check_executable: bool = False
-    ) -> Optional[str]:
-        """
-        Find file in multiple possible paths in container
-        
-        Args:
-            search_paths: List of paths to search
-            check_executable: Whether to check file executability
-        
-        Returns:
-            Found file path, or None if not found
-        """
-        for path in search_paths:
-            if self._file_exists_in_container(path):
-                if check_executable:
-                    result = self.container.execute(
-                        f'test -x "{path}" && echo "executable" || echo "not_executable"'
-                    )
-                    if result.stdout.strip() != 'executable':
-                        continue
-                return path
-        return None
     
     def cleanup(self):
         """Clean up resources (close container, etc.)"""

@@ -56,17 +56,6 @@ class LLMAdapter:
             logger.error(f"LLM query failed: {e}")
             raise
 
-    def complete(self, prompt: str) -> str:
-        """
-        Complete a prompt (alias for query).
-
-        Args:
-            prompt: The prompt text
-
-        Returns:
-            The completion text
-        """
-        return self.query(prompt)
 
 
 def create_llm_adapter(

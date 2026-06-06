@@ -56,25 +56,7 @@ class LiberatorPromptManager:
             self._cache[filename] = load_prompt_file(filename)
         return self._cache[filename]
 
-    def _format_prompt(self, template: str, **kwargs) -> str:
-        """Format prompt template"""
-        result = template
-        for key, value in kwargs.items():
-            placeholder = "{" + key + "}"
-            result = result.replace(placeholder, str(value))
-        return result
 
-    def get_raw_template(self, prompt_name: str) -> str:
-        """
-        Get raw prompt template (unformatted)
-
-        Args:
-            prompt_name: Prompt file name (without .txt)
-
-        Returns:
-            Raw template content
-        """
-        return self._get_prompt(f"{prompt_name}_prompt.txt")
 
     def clear_cache(self):
         """Clear cache"""

@@ -66,46 +66,7 @@ class CustomLoggerAdapter(logging.LoggerAdapter):
         for agent_name, chat_history in result.chat_history.items())
     self.write_to_file(chat_history_path, chat_history)
 
-  def download_gcs_file(self, local_path: str, gs_url: str) -> bool:
-    """Downloads a file from Google Cloud storage to a local file."""
-    parsed_url = urlparse(gs_url)
-    if parsed_url.scheme != "gs":
-      logging.error("URL must start with 'gs://': %s", parsed_url)
 
-    bucket_name = parsed_url.netloc
-    blob_name = parsed_url.path.lstrip("/")
-
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-
-    if blob.exists():
-      # Download blob to a temporary file
-      with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp_path = tmp.name
-      blob.download_to_filename(tmp_path)
-      # Append the temporary file's content to the local file
-      with open(tmp_path, 'rb') as tmp_file, open(local_path,
-                                                  'ab') as local_file:
-        local_file.write(tmp_file.read())
-
-      os.remove(tmp_path)
-      return True
-    return False
-
-  def download_run_log(self, result: RunResult) -> None:
-    local_run_log_path = os.path.join(result.work_dirs.run_logs,
-                                      f'{result.trial:02d}.log')
-    if self.download_gcs_file(local_run_log_path, result.run_log):
-      info('Downloading cloud run log: %s to %s',
-           result.log_path,
-           local_run_log_path,
-           trial=result.trial)
-    else:
-      warning('Cloud run log gsc file does not exit: %s to %s',
-              result.log_path,
-              local_run_log_path,
-              trial=result.trial)
 
 def debug(msg: object,
           *args: object,

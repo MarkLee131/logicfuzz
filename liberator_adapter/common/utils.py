@@ -563,18 +563,3 @@ class Utils:
 
         return enum_list
     
-    @staticmethod
-    def calc_api_seq_str(driver, api = None) -> str:
-        
-        api_seq = []
-        for s in driver:
-            api_seq += [s[0].original_api.function_name]
-        api_seq_str = ";".join(api_seq)
-        
-        if api is not None:
-            if api_seq_str == "":
-                api_seq_str += f"{api.function_name}"
-            else:
-                api_seq_str += f";{api.function_name}"
-                
-        return api_seq_str

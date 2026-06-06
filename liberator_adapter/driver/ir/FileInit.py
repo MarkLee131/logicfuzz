@@ -23,9 +23,10 @@ class FileInit(Statement):
         self.buffer = buffer
         self.len_var = len_var
 
-    # for an element, the hash is just the key + type
+    # See BuffDecl.__hash__: same upstream-shared bug — self.token is never
+    # set on FileInit, so hash on the buffer token like the sibling classes.
     def __hash__(self):
-        return hash(self.token + str(self.__class__.__name__))
+        return hash(self.buffer.get_token() + str(self.__class__.__name__))
 
     def __str__(self):
         return f"{self.__class__.__name__}(name={self.buffer.get_token()})"

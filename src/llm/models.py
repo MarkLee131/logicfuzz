@@ -121,11 +121,3 @@ def get_available_models() -> List[str]:
     return list(MODEL_REGISTRY.keys())
 
 
-def get_model_with_tools(name: str,
-                         tools: List[Any],
-                         temperature: float = TEMPERATURE,
-                         max_tokens: int = MAX_TOKENS,
-                         **kwargs) -> Runnable:
-    """Get a LangChain chat model with tools bound."""
-    model = get_chat_model(name, temperature, max_tokens, **kwargs)
-    return model.bind_tools(tools)
