@@ -568,7 +568,8 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                     condition_text = driver_knowledge_text = synthesis_base_text = ""
                     api_sequences_text = ""
             except Exception as _e:
-                logger.warning(f"CALLSPEC render failed (non-critical): {_e}")
+                logger.warning(f"CALLSPEC render failed (non-critical): {_e}",
+                               trial=self.trial)
 
         # Add extern "C" guidance if needed
         extern_c_note = ""
