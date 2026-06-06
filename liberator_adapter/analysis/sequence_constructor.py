@@ -29,6 +29,7 @@ one implementation.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -72,6 +73,10 @@ class _Index:
     entries: List[APISemantics]                 # APIs with an INPUT_BUFFER arg
     consumers: List[APISemantics]               # CONSUMER role
     creators: List[APISemantics]                # CREATOR role
+    # Density (LOGICFUZZ_DENSE_CONSTRUCT): handle type → CONSUMERs that read it /
+    # pure getters (CONSUMER that requires a handle but produces nothing).
+    consumers_by_handle: Dict[str, List[APISemantics]] = field(default_factory=dict)
+    getters: Dict[str, List[APISemantics]] = field(default_factory=dict)
 
 
 def _build_index(model: APISemanticModel) -> _Index:
@@ -81,6 +86,8 @@ def _build_index(model: APISemanticModel) -> _Index:
     entries: List[APISemantics] = []
     consumers: List[APISemantics] = []
     creators: List[APISemantics] = []
+    consumers_by_handle: Dict[str, List[APISemantics]] = {}
+    getters: Dict[str, List[APISemantics]] = {}
 
     for sem in model.apis.values():
         for t in sem.produces:
@@ -94,10 +101,52 @@ def _build_index(model: APISemanticModel) -> _Index:
             creators.append(sem)
         elif sem.role is APIRole.CONSUMER:
             consumers.append(sem)
+            for t in sem.requires:
+                consumers_by_handle.setdefault(t, []).append(sem)
+            if sem.requires and not sem.produces:   # pure read of an open handle
+                for t in sem.requires:
+                    getters.setdefault(t, []).append(sem)
         if any(a.role is ArgRole.INPUT_BUFFER for a in sem.args):
             entries.append(sem)
 
-    return _Index(producers, destroyers, mutators, entries, consumers, creators)
+    return _Index(producers, destroyers, mutators, entries, consumers, creators,
+                  consumers_by_handle, getters)
+
+
+def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
+             max_extra: int, repeat: bool) -> List[str]:
+    """Append extenders that USE already-open handles (mutators/consumers/getters
+    whose ``requires`` ⊆ ``opened``) to thicken a thin lifecycle chain toward the
+    PromeFuzz density band (5.6–7.6 calls). Extenders produce nothing new, so the
+    opened set is unchanged and the Typestate self-filter still passes — they add
+    only scalar/buffer holes the LLM was going to fill anyway. Deterministic
+    (symbolic structure); the LLM still owns the leaf values."""
+    in_seq = set(core_seq)
+    cands: Dict[str, APISemantics] = {}
+    for t in opened:
+        for sem in idx.mutators.get(t, []) + idx.consumers_by_handle.get(t, []):
+            if sem.name in in_seq or sem.name in cands:
+                continue
+            if set(getattr(sem, "requires", ()) or ()) <= opened:
+                cands[sem.name] = sem
+    if not cands:
+        return list(core_seq)
+
+    def _rank(sem: APISemantics):
+        if sem.role is APIRole.MUTATOR:
+            return (0, sem.name)
+        is_getter = bool(getattr(sem, "requires", ())) and not getattr(sem, "produces", ())
+        return (2 if is_getter else 1, sem.name)   # consumer(1) then getter(2)
+
+    ordered = sorted(cands.values(), key=_rank)[:max(0, max_extra)]
+    extra = [s.name for s in ordered]
+    if repeat:   # PF-style: re-call one CONFIG-bearing consumer/getter in a 2nd state
+        for s in ordered:
+            if s.role is not APIRole.MUTATOR and any(
+                    a.role is ArgRole.CONFIG for a in s.args):
+                extra.append(s.name)
+                break
+    return list(core_seq) + extra
 
 
 # =============================================================================
@@ -212,6 +261,10 @@ def construct_sequences(
     ``project_apis`` to skip the filter (model-only, e.g. unit tests).
     """
     idx = _build_index(model)
+    _dense = bool(os.environ.get("LOGICFUZZ_DENSE_CONSTRUCT"))
+    _dense_max_extra = int(os.environ.get("LOGICFUZZ_DENSE_MAX_EXTRA", "4"))
+    _dense_repeat = bool(os.environ.get("LOGICFUZZ_DENSE_REPEAT_CONSUMER"))
+    n_densified = 0
 
     seqs: List[List[str]] = []
     seen: Set[Tuple[str, ...]] = set()
@@ -285,7 +338,12 @@ def construct_sequences(
             prefix, opened = _build_prefix(target, idx, max_prefix_depth)
             # The target itself opens handles if it is also a producer.
             opened = set(opened) | set(target.produces)
-            seq = prefix + [target.name] + _closing_destroyers(opened, idx)
+            core = prefix + [target.name]
+            if _dense:
+                core = _densify(core, opened, idx, _dense_max_extra, _dense_repeat)
+                if len(core) > len(prefix) + 1:
+                    n_densified += 1
+            seq = core + _closing_destroyers(opened, idx)
             _add(seq)
 
         # 3. create→destroy coverage for creators no target reached.
@@ -356,6 +414,7 @@ def construct_sequences(
         "n_seeded_from_automaton": n_seeded,
         "n_seeded_from_idioms": n_idiom,
         "n_targets_attempted": n_attempted,
+        "n_densified": n_densified,
         "n_ordering_dropped": n_ordering_dropped,
         "n_orphan_kept": n_orphan_kept,
         "n_before_ordering_filter": n_before_filter,
