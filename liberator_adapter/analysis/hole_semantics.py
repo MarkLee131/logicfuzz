@@ -21,10 +21,17 @@ from typing import Any, Dict, List, Optional, Sequence
 
 
 def _hard_nullguard() -> bool:
-    """LOGICFUZZ_HARD_NULLGUARD=1 escalates the advisory NULL/return contracts +
-    opaque-handle provenance into MANDATORY guidance (driver-quality / low-FP).
-    Default off so the effect is A/B-measurable."""
-    return os.environ.get("LOGICFUZZ_HARD_NULLGUARD") == "1"
+    """Escalate the advisory NULL/return contracts + opaque-handle provenance
+    into MANDATORY guidance (driver-quality / low-FP).
+
+    Enabled by LOGICFUZZ_HARD_NULLGUARD=1, AND **implied by**
+    LOGICFUZZ_DENSE_CONSTRUCT — the ablation (2026-06-07) showed density ALONE is
+    harmful (lcms density-only = 0 branches, drivers SEGV; c-ares trial-01
+    136→14): the denser chain adds crash surface that only the hard guard
+    survives (combo = 206 vs density-only = 0). Density must never run without
+    the guard. Default off so the plain config stays A/B-measurable."""
+    return (os.environ.get("LOGICFUZZ_HARD_NULLGUARD") == "1"
+            or os.environ.get("LOGICFUZZ_DENSE_CONSTRUCT") == "1")
 
 from liberator_adapter.analysis.api_semantic_model import (
     ArgRole,

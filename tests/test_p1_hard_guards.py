@@ -9,9 +9,11 @@ from liberator_adapter.analysis.hole_semantics import (
 
 @pytest.fixture(autouse=True)
 def _clear_env():
-    os.environ.pop("LOGICFUZZ_HARD_NULLGUARD", None)
+    for k in ("LOGICFUZZ_HARD_NULLGUARD", "LOGICFUZZ_DENSE_CONSTRUCT"):
+        os.environ.pop(k, None)
     yield
-    os.environ.pop("LOGICFUZZ_HARD_NULLGUARD", None)
+    for k in ("LOGICFUZZ_HARD_NULLGUARD", "LOGICFUZZ_DENSE_CONSTRUCT"):
+        os.environ.pop(k, None)
 
 
 class _Sem:
@@ -41,6 +43,15 @@ def test_hard_provenance_is_factory_chain():
     note = _handle_provenance(_Sem(), "g", set(), {"H*": ["mk"]})[0]
     assert "BUILD IT" in note and "mk(" in note
     assert "Do NOT pass NULL" in note
+
+
+def test_dense_construct_implies_hard_guard():
+    # Coupling safety fix: density alone is harmful (ablation: lcms density-only
+    # = 0, SEGV), so DENSE_CONSTRUCT must auto-enable the guard.
+    os.environ["LOGICFUZZ_DENSE_CONSTRUCT"] = "1"
+    assert _hard_nullguard()
+    rc = {"f": {"may_return_null": True}}
+    assert _ret_contract_note("f", rc).startswith("MUST-GUARD")
 
 
 def test_orphan_handle_unchanged_in_hard_mode():
