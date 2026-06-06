@@ -175,19 +175,50 @@ step │ api │ role │ ret(type, nullable?) │
 
 ---
 
-# 三、附：fse26_tlr（TLR）参考价值分析
+# 三、附：fse26_tlr（TLR）参考价值分析（冷静版）
 
-**结论：有参考价值、很对路——但要分清"可迁移的思想"和"不适用的场景"。**
+**结论：借鉴价值有限，而且恰恰不在"那个秀的自动机 formalism"上。不强行借鉴是对的。**
 
-**TLR 是什么**：用 LLM 修 C 内存错误（UAF/double-free/leak）。核心：(a) ASan/Valgrind + PoC 复现；(b) 用**有限 typestate 自动机（FTA）**（alloc→live→dead→错误态）+ GDB 单步，**只在 typestate 跳变点**抽上下文（位置+状态转移+backtrace），拼成"简洁但语义丰富"的 context trace；(c) 结构化 prompting 喂 LLM。
+**TLR 是什么**：用 LLM 修 C 内存错误（UAF/DF/leak）。(a) ASan/Valgrind + PoC 复现；(b) 一张手写的**内存错误有限 typestate 自动机（FTA）** + GDB 单步，**只在 typestate 跳变点**抽上下文，拼成精简 context trace；(c) 结构化 prompting 喂 LLM。
 
-**中规中矩、可直接迁移**：
-1. **「用 typestate 自动机做选择性上下文」这条主心骨，正是我们 B3/B4/T4 要的。** 关键证据是它的 ablation（Fig 10）：TLR-F（只给错误文件）7 正确；TLR-M（把 backtrace 里**所有**函数都倒进去）11；TLR-NT（去掉 typestate trace）15；**完整 TLR（typestate 选择性上下文）22 正确、新引入 bug 仅 1 个**。**注意：TLR-M「全量倒」反而比选择性的 TLR 差**，且 TLR 比 SWE-agent **省 97% token**。这就是"喂对的、不是喂最多的"的同行评审 + ablation 实证——我们把"协议 typestate/语义模型"当上下文选择器、产出 CALLSPEC，与之**同构**。
-2. **结构化分阶段 prompting** → 借鉴到 T4。
-3. **动态 replay（ASan/GDB）+ typestate 抽路径** → 验证我们 T12（动态反馈）方向可行。
+**那个"秀"的自动机本体，对我们不转移——两条硬理由**：
+1. **领域不同**：它建的是**"内存错误 typestate"**（uninit→live→dead→error）。我们要的是**"API 协议 typestate"**（句柄生命周期），而这个**我们已经有了**（`usedef.py` 的 `Typestate` 解释器 + project-adaptive automaton）。它的 formalism 套不到我们的对象上。
+2. **阶段更要命**：TLR 是**事后**——有 PoC、bug 已知，拿 GDB **replay 一条具体执行轨迹**，自动机只是**在这条已知轨迹上做"留哪些快照"的过滤器**。我们是**前向合成**，没有执行、没有轨迹可走；它的 error-propagation-path 抽取在生成阶段**没有对应物**。
+   → 自动机本体、replay 管线、传播路径推断规则，**都不搬**。硬搬即"强行借鉴"。
 
-**不适用 / 不直接迁移**：
-1. TLR 的 FTA 建的是**"内存错误 typestate"**（为修复）；我们已有**"API 协议 typestate"自动机**（为生成）。**不照搬它的 error-FTA，搬的是"typestate 引导选择性上下文"这个模式。**
-2. TLR 是**事后（post-hoc）**：有 PoC、错误已知去 replay；**生成是前向合成**，没有错误可 replay。它的"错误传播路径抽取"在生成阶段无直接对应物（硬对应是我们的 creator→consumer→destroyer 生命周期路径，已有）；它的 replay 真正对应我们**后续修复/优化阶段**（暂搁）。
+**唯一过硬、且我们已独立拥有的一条原则**：它的 ablation（Fig 10）证明**"用 typestate 选择性投喂" > "全量倒"**——把 backtrace 全函数倒进去的 TLR-M=11，远不如完整选择性系统 TLR=22，且比 SWE-agent **省 97% token**。但这条原则**正是我们 B3/T4 已经在走的方向**。所以 TLR 对我们的价值是：
 
-**一句话**：**继续自己的路线**，但把 TLR 验证过的"**用 typestate/语义模型对 LLM 做选择性、最小、结构化的信息投喂**"当作 **T4（CALLSPEC DSL）的理论背书 + 设计模板**——这恰好坐实了你在 B3 的方向。
+> **一篇同行评审 + ablation，帮我们背书了一个我们本来就在做的判断。** 是"related-work 里的一个引用 / 设计 sanity-check"，**不是可以挖的机制**；对"正确 + 高 coverage"是**零代码增量**。（formalism 写论文时能让表述更严谨，但与 coverage 目标正交。）
+
+**唯一"如果……才"的例外**：**如果**将来上 T12（轻量动态运行做取值反馈），它那个**"只在 typestate 跳变点快照、不逐行记录"的工程小技巧可直接复用**，让运行时 trace 保持精简。条件性、未来式，且只是工程模式。
+
+**一句话**：继续自己的路线。把 TLR 降格为"佐证 B3 方向的一个引用"即可。**但它点醒了一件我们自己的事**——见下节：我们其实**已有 typestate 建模**，却**没把它（和 SVF）紧密喂给那个"裁决 sequence 合法性"的 LLM**。这才是 TLR 这面镜子照出的、我们能立刻改的真问题。
+
+---
+
+# 四、由 TLR 反观自身：typestate / SVF / LLM 三者**没紧密结合**（可立即用奥卡姆修）
+
+## 现状：我们**已经**有精确的 typestate 建模
+- `liberator_adapter/analysis/usedef.py`：`APIEffect`（每个 API 的 USE/DEF/KILL 摘要）、`UseDefGraph`、`Typestate.check(sequence)` → 精确的 `ViolationRecord`（USE_BEFORE_INIT / DESTROY_BEFORE_INIT / DOUBLE_DESTROY / USE_AFTER_DESTROY / REINIT_WITHOUT_DESTROY），逐句、逐句柄。
+- L2/L3 过滤器（lifecycle / state_machine）**已经在调它**做"留/弃"。project-adaptive automaton 也是 typestate（句柄状态向量）。
+→ **typestate 我们不缺，缺的是把它的"诊断输出"喂给 LLM。**
+
+## 问题：LLM 裁决 sequence 合法性时，几乎看不到符号证据（松耦合）
+`Comprehender-B`（`comprehender.py:comprehend_sequences`）让 LLM 判某条 API 序列语义是否 VALID/SUBOPTIMAL/INVALID，**喂进 prompt 的只有**：
+- 序列（**只有函数名** `A -> B -> C`）、每 API 的 usage 文本、`allowed_apis`；
+- `static_facts`（`comprehender.py:_build_static_facts`）= **只有聚合计数**（"3 init / 5 source / 2 sink"）+ 最多 8 条 init/destroy 对。
+
+**它看不到**：① 这条序列的 **typestate 裁决结果**（`Typestate.check(seq)` 的 violations——我们算了，当过滤器用完就丢）；② 序列里这几个 API 的 **per-API USE/DEF/KILL**（SVF 已算，`automaton.graph.all_effects()` 就有）。
+→ **LLM 只能从"名字 + 散文"里重新猜句柄生命周期结构**——既浪费、又容易幻觉，而且**真正能让它精确裁决的符号证据被我们扣下了**。这正是你说的"没紧密结合 SVF + typestate + LLM"。
+（讽刺的是：prefilter 注释已经写明"acc<1.0 → 交给 LLM，因为没见过≠非法"——可一旦交给 LLM，我们却几乎不给它符号证据，等于**让它空手裁决**。）
+
+## 奥卡姆修法（不引入任何新分析，只接线 + 剪裁）
+把 `static_facts`（聚合计数）换成**"针对当前这条序列"的选择性符号证据块**：
+1. **typestate 裁决**：对该序列跑 `Typestate.check(seq)`，把 violations 渲染成精确事实——"位置 2：USE 句柄 `sqlite3_stmt*`，但本序列中无任何 API DEF 它 → USE_BEFORE_INIT"。
+2. **per-API USE/DEF/KILL**：**只渲染本序列涉及的那几个 API**（选择性——正是 TLR 那条有用的"上下文剪裁"：只给与本次决策相关的最小事实，不倒全量、不给聚合计数）。
+3. **LLM 干它本职**：裁决这个 violation 是**真问题**（真 UAF/缺 creator → INVALID）还是**误报**（被 USE 的句柄其实是直接 fuzz 入口、不需要项目内 producer → VALID）。这恰好就是 prefilter 担心的"没见过≠非法"那个软判断——**但现在 LLM 是带着符号证据裁决，而不是空手猜**。
+
+**为什么是奥卡姆**：`Typestate.check` 和 `all_effects()` **都已存在**；改动集中在 `_build_static_facts`（升级成 per-sequence）+ 在调用点把 effects/typestate 传进去。**零新分析、零新依赖**，只是把已算出的符号输出**选择性**接进 LLM 的 prompt。
+**分工更干净**：符号层陈述**事实**（句柄 H 在位置 2 被 USE、全程未被 DEF），LLM 只做**软裁决**（这是致命还是合法入口模式）。
+**注意主线**：这不是新功能，是**把现有三者拧紧**，且与 B3/T4 的 CALLSPEC 同源（CALLSPEC 给 Prototyper，本项给 Comprehender-B 裁决器）——**不偏离主线**。
+**待你拍板**：(a) violations 渲染到什么粒度（一句话/带句柄类型与位置）；(b) 要不要同时给"正向证据"（哪个 API DEF 了哪个句柄）还是只在有 violation 时给；(c) 改 LLM prompt → 需一次小 A/B（看 INVALID 误杀率、token）。
