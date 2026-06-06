@@ -58,6 +58,11 @@ class FuzzingWorkflowState(TypedDict):
     improver_baseline_coverage: NotRequired[float]
     improver_baseline_source: NotRequired[str]
     improver_rolled_back: NotRequired[bool]
+    # Keep-best (all paths): the highest coverage + its source seen this trial,
+    # so a regressing iteration (improver / fixer / §10B) never ships a worse
+    # driver than the trial already achieved.
+    best_coverage: NotRequired[float]
+    best_source: NotRequired[str]
 
     # Multi-hop reasoning chain summary (2026-05-12, opt-in via
     # --multihop-prototyper). Per-hop character counts for the Hop 1-4

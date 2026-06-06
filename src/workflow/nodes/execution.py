@@ -185,6 +185,25 @@ def validate_target_api_calls(
     }
 
 
+def _keep_best(cur_cov, cur_src, best_cov, best_src, threshold: float = 0.85):
+    """Keep the best (coverage, source) a trial has reached across ALL paths.
+
+    Returns ``(final_cov, final_src, best_cov, best_src, restored)``. When this
+    iteration matches or beats the best, it becomes the new best. When it
+    regresses below ``threshold`` of the best (and a best exists), the best
+    driver is restored so a regressing improver / fixer / §10B pass never ships
+    a worse driver than the trial already achieved. The threshold tolerates
+    measurement noise (same 0.85 as the improver-rollback gate).
+    """
+    best_cov = best_cov or 0.0
+    best_src = best_src or ""
+    if cur_cov >= best_cov:
+        return cur_cov, cur_src, cur_cov, cur_src, False
+    if best_src and cur_cov < best_cov * threshold:
+        return best_cov, best_src, best_cov, best_src, True
+    return cur_cov, cur_src, best_cov, best_src, False
+
+
 def extract_fuzzing_summary(raw_log: str) -> str:
     """
     Extract key information from fuzzing log to reduce token usage.
@@ -615,6 +634,21 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
                 trial=trial,
             )
 
+    # Keep-best (general, ALL paths). The improver-rollback above only guards
+    # the improver; the fixer and the §10B baseline-diff path also re-generate
+    # the driver and can regress coverage with no guard — that is how c-ares
+    # trial 02 shipped 804 branches after peaking at 1419. Track the best
+    # (coverage, source) this trial has reached and restore it when an iteration
+    # regresses substantively, so we ship the best driver, not the last.
+    (final_coverage_percent, final_fuzz_target_source,
+     best_cov, best_src, keep_best_restored) = _keep_best(
+        final_coverage_percent, final_fuzz_target_source,
+        state.get("best_coverage"), state.get("best_source"))
+    if keep_best_restored:
+        logger.warning(
+            f'Keep-best: restored the best driver of this trial '
+            f'({best_cov:.2%}) over a regressed iteration.', trial=trial)
+
     # Create state update
     state_update = {
         "run_success": run_result.succeeded if hasattr(run_result, 'succeeded') else True,
@@ -625,6 +659,8 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         "crash_func": run_result.semantic_check.crash_func if (hasattr(run_result, 'semantic_check') and run_result.semantic_check) else "",
         "coverage_summary": run_result.coverage_summary,
         "coverage_percent": final_coverage_percent,
+        "best_coverage": best_cov,
+        "best_source": best_src,
         "line_coverage_diff": coverage_diff,
         "no_coverage_improvement_count": no_improvement_count,  # Track consecutive iterations without improvement
         "current_iteration": current_iteration,  # Increment iteration counter
@@ -649,9 +685,9 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
             "content": f"Execution {'successful' if run_result.succeeded else 'failed'}"
         }]
     }
-    if rollback_applied:
+    if rollback_applied or keep_best_restored:
         state_update["fuzz_target_source"] = final_fuzz_target_source
-        state_update["improver_rolled_back"] = True
+        state_update["improver_rolled_back"] = rollback_applied or keep_best_restored
 
     logger.info(f'Execution completed: success={state_update["run_success"]}, '
                f'crashes={state_update["crashes"]}, coverage={final_coverage_percent:.2%}, '
