@@ -157,19 +157,34 @@ def _handle_provenance(sem, name, produced_so_far, prod_idx) -> List[str]:
     return notes
 
 
+def _ret_contract_note(name, ret_contracts) -> Optional[str]:
+    """T3/T6②: a per-API return-contract note so the driver guards the return.
+    Prevents the unchecked-creator-return SEGV that poisons the merged harness."""
+    c = (ret_contracts or {}).get(name)
+    if not c:
+        return None
+    if c.get("may_return_null"):
+        return ("⚠ returns NULL on failure → NULL-check this return before "
+                "binding/using it")
+    if c.get("error_sentinel"):
+        return (f"⚠ return is an error/status value ({c['error_sentinel']}) "
+                f"→ check it before relying on success")
+    return None
+
+
 def value_intents_for_sequence(
     model: APISemanticModel,
     api_sequence: Sequence[str],
     vocab=None,
     svf_index=None,
+    ret_contracts=None,
 ) -> List[Dict[str, Any]]:
     """Per-API, per-arg value intents for a skeleton's sequence.
 
-    Returns a list of ``{api, role, args: [...], handle_provenance: [...]}``
-    records; APIs absent from the model or with nothing to say are dropped, so
-    the result is the minimal set the Prototyper needs to render. ``svf_index``
-    (T1) carries per-param ``set_by`` so an output/mutated arg's data-source
-    args are surfaced.
+    Returns a list of ``{api, role, args: [...], handle_provenance: [...],
+    ret_contract: str}`` records; APIs absent from the model or with nothing to
+    say are dropped. ``svf_index`` (T1) carries per-param ``set_by``;
+    ``ret_contracts`` (T3) carries per-API return NULL/error contracts.
     """
     prod_idx = _producer_index(model)
     produced_so_far: set = set()
@@ -197,7 +212,8 @@ def value_intents_for_sequence(
             arg_records.append(rec_a)
         prov = _handle_provenance(sem, name, produced_so_far, prod_idx)
         produced_so_far |= set(getattr(sem, "produces", ()) or ())
-        if arg_records or prov:
+        ret_note = _ret_contract_note(name, ret_contracts)
+        if arg_records or prov or ret_note:
             rec: Dict[str, Any] = {
                 "api": name,
                 "role": sem.role.value,
@@ -205,6 +221,8 @@ def value_intents_for_sequence(
             }
             if prov:
                 rec["handle_provenance"] = prov
+            if ret_note:
+                rec["ret_contract"] = ret_note
             out.append(rec)
     return out
 
@@ -227,6 +245,8 @@ def render_value_intents(intents: Sequence[Dict[str, Any]]) -> str:
                              f"(non-empty / valid) values so the write is non-trivial.")
             if parts:
                 lines.append(f"    arg{a['index']} ({a['type']}): {' | '.join(parts)}")
+        if rec.get("ret_contract"):
+            lines.append(f"    {rec['ret_contract']}")
         for p in rec.get("handle_provenance", []):
             lines.append(f"    ⚙ {p}")
     return "\n".join(lines)
@@ -237,19 +257,21 @@ def annotate_skeletons(
     model: APISemanticModel,
     vocab=None,
     svf_index=None,
+    ret_contracts=None,
 ) -> int:
     """Attach a ``value_intents`` block to each skeleton in place.
 
     Returns the number of skeletons that received at least one intent. Safe
-    on missing/empty inputs (returns 0). ``vocab`` is the optional T2
-    named-constant vocabulary; ``svf_index`` is the optional T1 ``set_by`` map.
+    on missing/empty inputs (returns 0). ``vocab`` = T2 named-constant
+    vocabulary; ``svf_index`` = T1 ``set_by`` map; ``ret_contracts`` = T3
+    per-API return NULL/error contracts.
     """
     if not skeleton_drivers or model is None:
         return 0
     n = 0
     for sk in skeleton_drivers:
         seq = sk.get("api_sequence") or []
-        intents = value_intents_for_sequence(model, seq, vocab, svf_index)
+        intents = value_intents_for_sequence(model, seq, vocab, svf_index, ret_contracts)
         sk["value_intents"] = intents
         if intents:
             n += 1

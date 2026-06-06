@@ -1963,8 +1963,12 @@ class FuzzingContext:
                 _const_vocab = _build_constant_vocabulary(project_name, log)
                 # T1: per-param SVF set_by (param→param init dependency).
                 _svf_index = _build_svf_index(project_name, log)
+                # T3/T6②: per-API return NULL/error contracts (NULL-check guard).
+                from liberator_adapter.analysis.error_contracts import extract_error_contracts
+                _ret_contracts = extract_error_contracts(project_name)
                 _n_annot = annotate_skeletons(
-                    skeleton_drivers, api_semantic_model, _const_vocab, _svf_index)
+                    skeleton_drivers, api_semantic_model, _const_vocab,
+                    _svf_index, _ret_contracts)
                 log.info('  10b/12 ✅ G4 value-intent: %d/%d skeletons annotated'
                          ' (%d enum families)',
                          _n_annot, len(skeleton_drivers),
