@@ -74,30 +74,32 @@
 ### 第一梯队——确定性、低风险、高杠杆（不需要新技术；先做）
 每一条都用工具已有的、或能廉价拿到的数据，去堵一道边界泄漏：
 
-| # | 改动 | 边界 | 杠杆/工作量 | 状态 |
+| # | 改动 | 边界 | 杠杆/工作量 | 状态（按讨论刷新 2026-06-06） |
 |---|------|------|------------|------|
-| T1 | **别再把 SVF 压成一个 bit。** 把 per-arg 字段写掩码 + `set_by` 初始化依赖边 + `len_depends_on`/`is_array` 从 conditions.json 提升进 `APISemanticModel` 和 G4 洞的取值意图。 | B2 | 高/中 | 待做 |
-| T2 | **为 CONFIG 参数做符号化 enum/#define 抽取。** 扫头文件拿到参数 typedef 的合法枚举/常量集，用真实取值集替换泛泛的 `VARY_RANGE`。 | B4 | 高/中 | ✅ 已完成（`named_constants.py`；lcms 11 个枚举、zlib `Z_*` 已端到端验证） |
-| T3 | **逐 API 抽取错误返回 / NULL 后置条件**，作为强制的洞/守卫约束（修掉 creator NULL 检查 bug）。 | B2 | 高/中 | 待做 |
-| T4 | **LLM 瘦身 → 一张 typed CALLSPEC DSL 表。** 砍掉 3 份原文驱动 + 一套 role 分类 + 过时的 fuzz_introspector 指令；把重叠的 API/skeleton 视图收成「每个调用一行」的元组 `step │ api │ role │ ret │ args=[(i,type,argrole,pairs_with)] │ needs │ precond/cleanup │ value_intent`；加一个全局 token 预算仲裁。 | B3 | 高/小 | 🚧 部分（已删过时工具指令；CALLSPEC 重构待做，且需端到端 A/B 验证） |
-| T5 | **把绑定失败原因 + 分析器找到的 producer**，标到 unchecked-skeleton 路径的洞上（数据已由新遥测 + `find_producer_apis` 算出）。 | B4 | 高/小 | 待做 |
-| T6 | **文档先验默认开**；把 `@return`/`@retval` 解析成结构化的错误/所有权契约；把 README 第一个用法**代码块**当 few-shot。 | B1 | 高/小 | 待做 |
+| T1 | **别再把 SVF 压成一个 bit。** 把 per-arg 字段写掩码 + `set_by` 初始化依赖边 + `len_depends_on`/`is_array` 从 conditions.json 提升进 `APISemanticModel` 和 G4 洞的取值意图。 | B2 | 高/中 | **待做**（纯接线，数据已在 conditions.json；待 B2 讨论敲定后做） |
+| T2 | **为 CONFIG 参数做符号化 enum/#define 抽取。** 扫头文件拿到参数 typedef 的合法枚举/常量集，用真实取值集替换泛泛的 `VARY_RANGE`。 | B4 | 高/中 | ✅ **已完成**（`named_constants.py`；lcms 11 枚举、zlib `Z_*` 端到端验证；+6 测试） |
+| T3 | **逐 API 抽取错误返回 / NULL 后置条件**，作为强制的洞/守卫约束（修掉 creator NULL 检查 bug）。 | B2 | 高/中 | **待做**（需一遍 IR 后置条件分析；与 T6② @return 契约合流） |
+| T4 | **LLM 瘦身 → 一张 typed CALLSPEC DSL 表。** 砍掉 3 份原文驱动 + 一套 role 分类 + 过时的 fuzz_introspector 指令；把重叠的 API/skeleton 视图收成「每个调用一行」的元组 `step │ api │ role │ ret │ args=[(i,type,argrole,pairs_with)] │ needs │ precond/cleanup │ value_intent`；加一个全局 token 预算仲裁。 | B3 | 高/小 | 🚧 **部分**（✅ 已删过时 fuzz_introspector 工具指令；CALLSPEC 重构**待你拍板字段集**后做，需端到端 A/B） |
+| T5 | **把绑定失败原因 + 分析器找到的 producer**，标到 unchecked-skeleton 路径的洞上（数据已由新遥测 + `find_producer_apis` 算出）。 | B4 | 高/小 | **待做**（遥测已加；只差把原因接进洞标注——见 B4 表 #3） |
+| T6 | **文档先验默认开 + @return 结构化契约 + README 代码块。** | B1 | 高/小 | 🚧 **部分**：① 默认开+删 opt-out = ✅ **已完成**（B1-③，token 已查清为负）；② `@return`/`@retval` → 结构化 NULL/所有权契约 = **待做**（并入 T3）；③ README quick-start = ❌ **不做**（oss-fuzz docker 下"可运行范例"=项目自身驱动，交给 T8） |
+| T8 | **从本项目自己的驱动里挖调用序列 + 实参来源**喂进自动机/构造器（复用 `static_trace.extract_project_traces`，也跑在驱动 `.c` 上，而不只 tests）。 | B1 | 中 | **已确认可做**（B1-②，你批"可直接优化"；从第二梯队上调到第一梯队） |
 
 ### 第二梯队——更大，或需要新技术（先报你批准）
 
-| # | 改动 | 为什么需要你拍板 |
-|---|------|------------------|
-| T7 | **跨项目驱动检索**：给 `extracted_fuzz_drivers/`（外加拉取更大的 OSS-Fuzz 语料）建索引，按 API 形态签名（creator/parser 入口类型、不透明句柄目录、出错返回模式）取 k-NN 同类驱动注入到资料稀薄的库。 | 最大的一块输入信号，但要建语料 + 一个检索/嵌入组件。 |
-| T8 | **从本项目自己的驱动里挖调用序列 + 实参来源**喂进自动机/构造器（把 `static_trace.extract_project_traces` 也用在驱动 `.c` 上，而不只是 tests）。 | 中等工作量；会改变自动机学习的来源。 |
-| T9 | **给 gap API 加静态 CFG 可达性权重**进 L4（从 bitcode 数它能传递可达的未覆盖块数）。 | 需要对 bitcode 做一遍调用图分析。 |
-| T10 | **泛化格式入口解码器**：用符号常量传播去推解析器入口的校验（替掉硬编的 2 种格式）。 | **新技术：轻量符号执行 / 取值约束分析。** |
-| T11 | **符号化的形态变体骨架**（NULL_INJECT / double-free / 乱序销毁），让错误路径分支变得可达（LLM 仍只填叶子取值）。 | 中等；改动骨架发射器结构（generation.md F5）。 |
-| T12 | **动态取值反馈闭环**：编译并跑一个微探针（或从某次 trial 里挖出存活的取值），把可用的叶子取值/初始化链钉进下一个骨架的洞（Phase C 的「读」侧）。 | **新技术：轻量动态运行。** |
+| # | 改动 | 为什么需要你拍板 | 讨论结论 |
+|---|------|------------------|------|
+| T7 | **跨项目驱动检索**：给 `extracted_fuzz_drivers/`（外加拉取更大的 OSS-Fuzz 语料）建索引，按 API 形态签名取 k-NN 同类驱动注入到资料稀薄的库。 | 最大的一块输入信号，但要建语料 + 检索组件。 | **需讨论**（B1-①）。拆「检索（传统轻量）+ 决策（规则触发是否跨项目 → LLM 在 k 个里精选）」两层。**三个待拍板**：(a) 显式策略 planner 还是先塞进 PathPlanner；(b) 语料范围（本地 3 项目 vs 拉 OSS-Fuzz）；(c) 是否让它统一调度"信息预算"。 |
+| T9 | **给 gap API 加静态 CFG 可达性权重**进 L4（从 bitcode 数它能传递可达的未覆盖块数）。 | 需要对 bitcode 做一遍调用图分析。 | **先量化再定**（B2）：先测当前 L4 错配了多少高价值 gap API，值不值得做调用图。 |
+| T10 | **泛化格式入口解码器**：用符号常量传播去推解析器入口的校验（替掉硬编的 2 种格式）。 | **新技术：轻量符号执行 / 取值约束分析。** | 对应 B4 表 #2。待你批新技术。 |
+| T11 | **符号化的形态变体骨架**（NULL_INJECT / double-free / 乱序销毁），让错误路径分支变得可达（LLM 仍只填叶子取值）。 | 中等；改动骨架发射器结构（generation.md F5）。 | 对应 B4 表 #4。 |
+| T12 | **动态取值反馈闭环**：编译并跑一个微探针（或从某次 trial 里挖出存活的取值），把可用的叶子取值/初始化链钉进下一个骨架的洞（Phase C 的「读」侧）。 | **新技术：轻量动态运行。** | 对应 B4 表 #5。待你批新技术。 |
 
-### 建议的起步顺序
-**T2 + T4 + T5 是最好的第一刀**——杠杆最高、风险低，而且互相成全：T2 把真实合法值给 LLM，T5 告诉它哪些参数难、难在哪，T4 把淹没这两个信号的冗余文本清掉。T1/T3/T6 紧随其后（都是确定性的）。T7（跨项目）是第二梯队里天花板最高的一项。T10/T12 是两处「新技术（符号执行 / 动态运行）」明显能回本的地方——是提议，不是擅自决定。
+### 起步顺序（按讨论刷新）
+- **已落地**：T2 ✅、T4① 删过时工具指令 ✅、T6① 文档先验默认开 ✅。
+- **可立即继续（确定性、你已确认或低风险）**：**T8**（本项目驱动挖序列，你已批）、**T5**（绑定原因接进洞，遥测已就绪）、**T1**（SVF 接线）、**T3+T6②**（NULL/@return 契约）。
+- **要你先拍板再动**：**T4 的 CALLSPEC 字段集**（B3 重点）、**T7 的跨项目三问**（B1-①）、**T10/T12 新技术**（B4 #2/#5）。
 
-> 说明：T4 里的 CALLSPEC 重构会**以单测无法捕捉的方式改变 LLM 行为**，要确认它真能提覆盖、且不致退化，需要一次端到端 A/B（用旧/新提示词在 cjson/zlib/lcms 上各跑一遍、比覆盖率）。
+> 说明：T4 的 CALLSPEC 重构会**以单测无法捕捉的方式改变 LLM 行为**，要确认它真能提覆盖、且不致退化，需要一次端到端 A/B（用旧/新提示词在 cjson/zlib/lcms 上各跑一遍、比覆盖率）。
 
 
 
@@ -127,9 +129,10 @@
 **确认 = T8。** 复用现成 `static_trace.extract_project_traces`（已是 libclang use-def 走查），把它也跑在驱动 `.c` 上（不只 tests），重建 API n-gram 序列 + "哪个返回喂哪个实参"的来源图，喂进自动机/构造器。驱动是"合法 fuzz 入口序列"最权威的范例，确定性、复用已有走查，我可直接做。
 
 ### B1-③ 文档先验 / README / 种子 / build.sh（你已确认：默认开、不可关）
-**确认 = T6 主体**：doxygen/readme 先验默认开、去掉关闭开关；重点把 `@return`/`@retval` 解析成**结构化错误/所有权契约**（正是修"creator 返回值漏 NULL 检查"的料）。
-- **token**：`@param`/`@return` 本就短且高信号，并进 CALLSPEC 几乎不增负担。
-- **quick-start 存疑（你说得对）**：当前直接用 oss-fuzz docker，"可运行范例"其实就是项目自己的 OSS-Fuzz 驱动（B1-② 已在挖），README 代码块价值存疑且易重复 → **建议先不做**，把"范例"交给 B1-②（本项目驱动）+ B1-①（同类驱动）。**种子语料**先不进生成阶段，留到 T10/T12 的格式/动态线一起考虑。
+- **① 默认开 + 删 opt-out = ✅ 已落地**（commit B1-③）：`prepare()` 两个先验参数默认 `True`，删掉 `--use-doxygen-priors`/`--use-readme-purpose` 两个 CLI 开关，CLI 层不可关（参数保留仅供测试程序化 A/B）。
+- **token（你顾虑的点，已查清=不费反省）**：doxygen 先验**省 token**——某 API 有实质 docstring（≥40 字符）时，comprehender 直接用它组 usage 行、**跳过该 API 的 LLM 调用**（`comprehender.py:_doc_derived_usage`）；readme 只一次性加一段 3–15 行 purpose，可忽略。
+- **② `@return`/`@retval` → 结构化 NULL/所有权契约 = 待做**（这是真正修"creator 返回值漏 NULL 检查"的料），并入 T3 一起做。
+- **③ quick-start = ❌ 不做（你说得对）**：当前直接用 oss-fuzz docker，"可运行范例"其实就是项目自己的 OSS-Fuzz 驱动（B1-② 在挖），README 代码块价值存疑且易重复 → 把"范例"交给 B1-②（本项目驱动）+ B1-①（同类驱动）。**种子语料**先不进生成阶段，留到 T10/T12 一起考虑。
 
 ## B2 · 静态分析（需讨论）
 "算出来没用上 / 本可算没算"，逐子项：
