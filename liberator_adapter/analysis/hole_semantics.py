@@ -21,7 +21,10 @@ from liberator_adapter.analysis.api_semantic_model import (
     ArgRole,
     APISemanticModel,
 )
-from liberator_adapter.analysis.named_constants import enum_members_for_type
+from liberator_adapter.analysis.named_constants import (
+    enum_members_for_type,
+    render_constant_vocabulary,
+)
 
 _INT_TYPES = ("int", "size_t", "uint", "long", "short", "unsigned",
               "int8", "int16", "int32", "int64", "char")
@@ -268,6 +271,11 @@ def annotate_skeletons(
     """
     if not skeleton_drivers or model is None:
         return 0
+    # Render the named-constant vocabulary ONCE; attach to each annotated
+    # skeleton so the Prototyper can inject the <library_constants> block the
+    # per-arg ENUM/CONFIG intents reference (T2 payoff — previously the block
+    # was computed but never rendered into any prompt).
+    vocab_block = render_constant_vocabulary(vocab) if vocab else ""
     n = 0
     for sk in skeleton_drivers:
         seq = sk.get("api_sequence") or []
@@ -275,4 +283,6 @@ def annotate_skeletons(
         sk["value_intents"] = intents
         if intents:
             n += 1
+            if vocab_block:
+                sk["library_constants"] = vocab_block
     return n

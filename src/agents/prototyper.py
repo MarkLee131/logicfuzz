@@ -1425,6 +1425,14 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if value_intents:
             try:
                 from liberator_adapter.analysis import render_value_intents
+                # Inject the <library_constants> vocabulary the per-arg ENUM /
+                # CONFIG intents reference, BEFORE the intents that cite it.
+                lib_const = skeleton.get('library_constants')
+                if lib_const:
+                    holes_desc_lines.append("")
+                    holes_desc_lines.append("<library_constants>")
+                    holes_desc_lines.append(lib_const)
+                    holes_desc_lines.append("</library_constants>")
                 block = render_value_intents(value_intents)
                 if block:
                     holes_desc_lines.append("")
