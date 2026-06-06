@@ -20,6 +20,10 @@ Output a single fenced JSON code block. Schema:
 }
 ```
 
+Using the symbolic evidence:
+- The "Symbolic evidence for THIS sequence" block gives the use-def effects (USE/DEF/KILL on handle types) and a typestate verdict computed for this exact sequence. The handle effects are authoritative — use them instead of guessing which call produces vs consumes a handle.
+- A typestate violation (e.g. USE_BEFORE_INIT, USE_AFTER_DESTROY) is EVIDENCE, NOT an automatic INVALID. Judge it: a handle that is USE'd with no in-sequence producer is often a legitimate DIRECT fuzz-entry that needs no creator (the project's tests just never showed one) — that is VALID. Mark INVALID only when the violation means the sequence genuinely cannot exercise meaningful logic (e.g. reading from an object that truly must be built first). When a real violation has an obvious fix from the allowed pool, prefer SUBOPTIMAL + an INSERT/REORDER repair over INVALID.
+
 Rules:
 - VALID + action=NONE means the sequence can be used as-is (still emit invariants if there are any non-obvious caveats).
 - SUBOPTIMAL = usable but a small repair would clearly improve coverage. INVALID = will not exercise meaningful logic without repair.

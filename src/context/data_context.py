@@ -1496,6 +1496,17 @@ class FuzzingContext:
                     automaton_artifact.acceptance_score
                     if automaton_artifact is not None else None
                 ),
+                # Tight SVF⊕typestate⊕LLM coupling: hand the per-sequence
+                # use-def graph to the adjudicator so it judges typestate
+                # violations on evidence, not on a re-guess from names/prose.
+                # A/B + regression kill-switch: LOGICFUZZ_DISABLE_SEQFACTS=1
+                # reverts Comprehender-B to the names+prose+counts diet.
+                use_def_graph=(
+                    automaton_artifact.graph
+                    if (automaton_artifact is not None
+                        and not os.environ.get("LOGICFUZZ_DISABLE_SEQFACTS"))
+                    else None
+                ),
             )
             sequence_semantics_dicts = [s.to_dict() for s in sequence_semantics]
 

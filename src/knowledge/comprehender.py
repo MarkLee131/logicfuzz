@@ -366,6 +366,57 @@ def _build_static_facts(condition_info: Dict[str, Any],
     return "\n".join(lines) if lines else "(no additional static facts)"
 
 
+def _build_sequence_facts(seq_list: Sequence[str], use_def_graph: Any) -> str:
+    """Per-sequence symbolic evidence for the LLM adjudicator.
+
+    Tightens the SVF ⊕ typestate ⊕ LLM coupling: instead of re-guessing the
+    handle lifecycle from names + prose, the LLM is handed (1) the per-API
+    USE/DEF/KILL on handle types — for ONLY the APIs in THIS sequence — and
+    (2) this sequence's typestate verdict (violation kind + handle + position).
+    Selective by construction (TLR's context-pruning lesson): no aggregate
+    dump, only what bears on judging this one sequence. Returns "" when no
+    graph or nothing to say, so the caller falls back cleanly.
+    """
+    if use_def_graph is None:
+        return ""
+    try:
+        from liberator_adapter.analysis.usedef import Typestate
+    except Exception:
+        return ""
+    lines: List[str] = []
+    eff_lines: List[str] = []
+    for name in seq_list:
+        eff = use_def_graph.effect(name)
+        if eff is None:
+            continue
+        parts = []
+        if eff.def_:
+            parts.append(f"DEF {{{', '.join(sorted(eff.def_))}}}")
+        if eff.use:
+            parts.append(f"USE {{{', '.join(sorted(eff.use))}}}")
+        if eff.kill:
+            parts.append(f"KILL {{{', '.join(sorted(eff.kill))}}}")
+        if parts:
+            eff_lines.append(f"  {name}: {'; '.join(parts)}")
+    if eff_lines:
+        lines.append("Handle effects on this sequence's APIs "
+                     "(USE=consumes / DEF=produces / KILL=destroys a handle type):")
+        lines.extend(eff_lines)
+    try:
+        violations = Typestate(use_def_graph).check([s for s in seq_list if s])
+    except Exception:
+        violations = []
+    if violations:
+        lines.append("Typestate verdict for THIS sequence "
+                     "(EVIDENCE to adjudicate — NOT an automatic INVALID):")
+        for v in violations[:8]:
+            where = ("after the sequence" if v.position >= len(seq_list)
+                     else f"position {v.position}")
+            who = v.api_name or "(sequence end)"
+            lines.append(f"  ⚠ {where}, {who}: handle {v.handle} → {v.kind.value}")
+    return "\n".join(lines)
+
+
 class Comprehender:
     """Orchestrates comprehender-A and comprehender-B."""
 
@@ -677,6 +728,7 @@ class Comprehender:
                              condition_info: Optional[Dict[str, Any]] = None,
                              lifecycle_analysis: Optional[Dict[str, Any]] = None,
                              automaton_acceptance_fn: Optional[Any] = None,
+                             use_def_graph: Optional[Any] = None,
                              ) -> List[SequenceSemantics]:
         """Per-sequence semantic verdict. Cache-aware.
 
@@ -750,6 +802,10 @@ class Comprehender:
                 f"  {name}: {api_usages.get(name, '(no usage available)')}"
                 for name in seq_list
             )
+            # Per-sequence symbolic evidence (typestate verdict + per-API
+            # USE/DEF/KILL for just this sequence) — tight SVF⊕typestate⊕LLM
+            # coupling. Empty when no graph, so behavior is unchanged then.
+            seq_facts = _build_sequence_facts(seq_list, use_def_graph)
             user = self.prompts.build_user_prompt(
                 "comprehender_sequence",
                 library_name=self.project_name,
@@ -757,6 +813,7 @@ class Comprehender:
                 sequence=" -> ".join(seq_list),
                 api_usages=usages_block,
                 static_facts=static_facts,
+                sequence_facts=seq_facts or "(none for this sequence)",
                 allowed_apis=allowed_text or "(none)",
             )
             raw = self._invoke(system, user)

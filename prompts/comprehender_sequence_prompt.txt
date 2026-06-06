@@ -13,6 +13,10 @@ Static-analysis facts (lifecycle / state-machine — already satisfied, do not r
 
 {STATIC_FACTS}
 
+Symbolic evidence for THIS sequence (use-def + typestate; authoritative facts — adjudicate, do not re-derive):
+
+{SEQUENCE_FACTS}
+
 Allowed API pool for any patched sequence:
 
 {ALLOWED_APIS}
