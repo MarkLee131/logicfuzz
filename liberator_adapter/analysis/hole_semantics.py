@@ -15,6 +15,7 @@ Deterministic (no LLM): the intent is a pure function of ``ArgRole`` + type.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Sequence
 
 from liberator_adapter.analysis.api_semantic_model import (
@@ -250,6 +251,74 @@ def render_value_intents(intents: Sequence[Dict[str, Any]]) -> str:
                 lines.append(f"    arg{a['index']} ({a['type']}): {' | '.join(parts)}")
         if rec.get("ret_contract"):
             lines.append(f"    {rec['ret_contract']}")
+        for p in rec.get("handle_provenance", []):
+            lines.append(f"    ⚙ {p}")
+    return "\n".join(lines)
+
+
+_KIND_BY_ROLE = {
+    "INPUT_BUFFER": "INPUT",
+    "LENGTH": "LENGTH",
+    "OUTPUT": "OUTPUT",
+    "HANDLE_IN": "HANDLE",
+    "NULLABLE_HANDLE": "HANDLE?",
+}
+
+
+_INTENT_LABEL_RE = re.compile(r"^[A-Z][A-Z_]*(\s*\([^)]*\))?:\s*")
+
+
+def _kind_tag(arg_rec: Dict[str, Any]) -> str:
+    """The CALLSPEC ``kind`` tag for an arg (light-split of value_intent —
+    a scannable tag; the detail stays in the intent payload)."""
+    role = arg_rec.get("role", "")
+    if role == "CONFIG":
+        return "ENUM" if (arg_rec.get("intent") or "").startswith("ENUM") else "RANGE"
+    return _KIND_BY_ROLE.get(role, role or "?")
+
+
+def _compact_intent(intent: str) -> str:
+    """Drop the leading ``LABEL:`` / ``LABEL (..):`` from an intent — the
+    CALLSPEC ``[kind]`` tag already carries the category, so the prose label
+    is redundant (HANDLE twice, OUTPUT twice, …)."""
+    return _INTENT_LABEL_RE.sub("", intent or "").strip()
+
+
+def render_callspec(intents: Sequence[Dict[str, Any]],
+                    signatures: Optional[Dict[str, str]] = None) -> str:
+    """T4: render the per-call CALLSPEC table from the value-intent records.
+
+    One block per call (in order): api + role + return contract + signature,
+    then one line per intent-bearing arg `(i, type) [kind] payload`, then the
+    handle-provenance (needs/produces). Consolidates what was previously
+    scattered across api_understanding / sequence_signatures / project_apis /
+    dep_graph / value_intents into a single typed view. Additive; the live
+    prompt wiring (and the block cuts) are gated separately.
+    """
+    if not intents:
+        return ""
+    signatures = signatures or {}
+    lines = ["CALLSPEC — fill each hole so these hold (calls run in this order):"]
+    for i, rec in enumerate(intents, 1):
+        api = rec["api"]
+        head = f"#{i} {api} [{rec['role']}]"
+        lines.append(head)
+        if signatures.get(api):
+            lines.append(f"    sig: {signatures[api]}")
+        if rec.get("ret_contract"):
+            lines.append(f"    {rec['ret_contract']}")
+        for a in rec.get("args", []):
+            seg = f"    arg{a['index']} ({a['type']}) [{_kind_tag(a)}]"
+            payload = []
+            if a.get("intent"):
+                payload.append(_compact_intent(a["intent"]))
+            if a.get("pairs_with") is not None:
+                payload.append(f"len↔arg{a['pairs_with']}")
+            if a.get("populated_from"):
+                payload.append("data from arg" + ",arg".join(str(x) for x in a["populated_from"]))
+            if payload:
+                seg += " — " + " | ".join(payload)
+            lines.append(seg)
         for p in rec.get("handle_provenance", []):
             lines.append(f"    ⚙ {p}")
     return "\n".join(lines)

@@ -57,6 +57,7 @@ from liberator_adapter.analysis.hole_semantics import (
     annotate_skeletons,
     value_intents_for_sequence,
     render_value_intents,
+    render_callspec,
 )
 from liberator_adapter.analysis.coverage_gap import (
     compute_gap_apis,
@@ -98,6 +99,7 @@ __all__ = [
     "annotate_skeletons",
     "value_intents_for_sequence",
     "render_value_intents",
+    "render_callspec",
     "compute_gap_apis",
     "locate_baseline_textcov",
     "parse_textcov_covered",
