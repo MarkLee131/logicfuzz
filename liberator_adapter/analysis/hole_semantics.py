@@ -21,6 +21,7 @@ from liberator_adapter.analysis.api_semantic_model import (
     ArgRole,
     APISemanticModel,
 )
+from liberator_adapter.analysis.named_constants import enum_members_for_type
 
 _INT_TYPES = ("int", "size_t", "uint", "long", "short", "unsigned",
               "int8", "int16", "int32", "int64", "char")
@@ -55,8 +56,13 @@ def _format_for_api(api_name: str):
     return None
 
 
-def _arg_intent(arg, api_name: str = "") -> Optional[str]:
-    """Value intent for one argument, or ``None`` when nothing to say."""
+def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
+    """Value intent for one argument, or ``None`` when nothing to say.
+
+    ``vocab`` is the optional named-constant vocabulary (T2): when an enum/flag
+    CONFIG arg's type is a known true enum, the intent carries the exact legal
+    constant set instead of a blind range hint.
+    """
     role = arg.role
     if role is ArgRole.INPUT_BUFFER:
         fmt = _format_for_api(api_name)
@@ -93,17 +99,34 @@ def _arg_intent(arg, api_name: str = "") -> Optional[str]:
                 "in this sequence (never NULL, never freed).")
     if role is ArgRole.NULLABLE_HANDLE:
         return "NULLABLE_HANDLE: may be NULL; exercise both NULL and a live handle."
-    if role is ArgRole.CONFIG and _is_scalar_int(arg.type_str):
-        # The P-gen-8 index/flag hole: vary across valid and invalid.
-        return ("VARY_RANGE: cover both in-range values (drive the success / "
-                "found branch) and out-of-range / boundary values (drive the "
-                "error-handling / not-found branch).")
+    if role is ArgRole.CONFIG:
+        # T2: if this CONFIG arg's type is a known true enum, hand the LLM the
+        # exact legal constant set so it stops guessing out-of-enum numbers.
+        # (Enum/signature typedefs like cmsColorSpaceSignature are not scalar
+        # ints by spelling, so this is gated on vocab membership, not type name.)
+        members = enum_members_for_type(vocab, arg.type_str) if vocab else []
+        if members:
+            shown = ", ".join(members[:12])
+            more = "" if len(members) <= 12 else f" (+{len(members)-12} more in <library_constants>)"
+            return (f"ENUM ({arg.type_str}): pass a LEGAL constant — one of "
+                    f"{{{shown}}}{more}. Prefer the value that drives the most "
+                    f"code; also try a boundary/invalid value for the error path.")
+        if _is_scalar_int(arg.type_str):
+            # Plain-int flag/index hole: vary across valid and invalid, and
+            # prefer a named constant from the library vocabulary over a raw
+            # magic number.
+            return ("VARY_RANGE: cover both in-range values (drive the success "
+                    "/ found branch) and out-of-range / boundary values (drive "
+                    "the error-handling / not-found branch). If a legal named "
+                    "constant fits this arg, use one from <library_constants> "
+                    "rather than a raw number.")
     return None
 
 
 def value_intents_for_sequence(
     model: APISemanticModel,
     api_sequence: Sequence[str],
+    vocab=None,
 ) -> List[Dict[str, Any]]:
     """Per-API, per-arg value intents for a skeleton's sequence.
 
@@ -119,7 +142,7 @@ def value_intents_for_sequence(
             continue
         arg_records: List[Dict[str, Any]] = []
         for arg in sem.args:
-            intent = _arg_intent(arg, name)
+            intent = _arg_intent(arg, name, vocab)
             if intent is None:
                 continue
             arg_records.append({
@@ -153,18 +176,20 @@ def render_value_intents(intents: Sequence[Dict[str, Any]]) -> str:
 def annotate_skeletons(
     skeleton_drivers: Sequence[Dict[str, Any]],
     model: APISemanticModel,
+    vocab=None,
 ) -> int:
     """Attach a ``value_intents`` block to each skeleton in place.
 
     Returns the number of skeletons that received at least one intent. Safe
-    on missing/empty inputs (returns 0).
+    on missing/empty inputs (returns 0). ``vocab`` is the optional T2
+    named-constant vocabulary used to give enum CONFIG args their legal set.
     """
     if not skeleton_drivers or model is None:
         return 0
     n = 0
     for sk in skeleton_drivers:
         seq = sk.get("api_sequence") or []
-        intents = value_intents_for_sequence(model, seq)
+        intents = value_intents_for_sequence(model, seq, vocab)
         sk["value_intents"] = intents
         if intents:
             n += 1

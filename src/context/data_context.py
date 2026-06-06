@@ -1926,9 +1926,16 @@ class FuzzingContext:
         if skeleton_drivers and api_semantic_model is not None:
             try:
                 from liberator_adapter.analysis import annotate_skeletons
-                _n_annot = annotate_skeletons(skeleton_drivers, api_semantic_model)
-                log.info('  10b/12 ✅ G4 value-intent: %d/%d skeletons annotated',
-                         _n_annot, len(skeleton_drivers))
+                # T2: named-constant vocabulary from the public headers, so enum
+                # CONFIG args get their exact legal constant set (e.g. lcms
+                # cmsColorSpaceSignature, zlib Z_*) instead of a blind range.
+                _const_vocab = _build_constant_vocabulary(project_name, log)
+                _n_annot = annotate_skeletons(
+                    skeleton_drivers, api_semantic_model, _const_vocab)
+                log.info('  10b/12 ✅ G4 value-intent: %d/%d skeletons annotated'
+                         ' (%d enum families)',
+                         _n_annot, len(skeleton_drivers),
+                         len((_const_vocab or {}).get('enums', {})))
             except Exception as _he:
                 log.warning('G4 hole annotation failed (non-critical): %s', _he)
 
@@ -2328,6 +2335,38 @@ def _strip_license_header(source: str) -> str:
     if not is_license:
         return source.lstrip('\n')
     return '\n'.join(lines[region_end:]).lstrip('\n')
+
+
+def _build_constant_vocabulary(project_name: str, log) -> Dict[str, Any]:
+    """T2: extract the named-constant vocabulary (true enums + prefix-grouped
+    #defines) from the project's public headers, for enum CONFIG value-intents.
+
+    Best-effort: resolves public-header basenames against the cached source
+    tree by glob; returns ``{}`` on any failure (the caller falls back to the
+    generic range hint).
+    """
+    import glob as _glob
+    from liberator_adapter.analysis.named_constants import extract_constant_vocabulary
+    try:
+        ph_file = Path(f'./results/{project_name}/public_headers.txt')
+        names = []
+        if ph_file.exists():
+            names = [ln.strip() for ln in ph_file.read_text().splitlines() if ln.strip()]
+        roots = [f'./results/{project_name}/src_ossfuzz', f'./results/{project_name}']
+        paths = []
+        for nm in names:
+            base = os.path.basename(nm)
+            for root in roots:
+                hits = _glob.glob(os.path.join(root, '**', base), recursive=True)
+                if hits:
+                    paths.append(hits[0])
+                    break
+        if not paths:
+            return {}
+        return extract_constant_vocabulary(paths)
+    except Exception as exc:
+        log.debug('   10b constant-vocabulary build skipped: %s', exc)
+        return {}
 
 
 def _extract_existing_driver_knowledge(project_name: str,
