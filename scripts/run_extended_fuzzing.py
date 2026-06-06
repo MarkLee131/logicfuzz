@@ -31,7 +31,7 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -781,13 +781,22 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
 
             # Parse libFuzzer stats
             for line in content.split('\n'):
-                if 'stat::number_of_executed_units:' in line:
-                    stats['total_executions'] = int(line.split(':')[-1].strip())
-                elif 'stat::average_exec_per_sec:' in line:
-                    stats['exec_per_sec'] = float(line.split(':')[-1].strip())
-                elif 'stat::new_units_added:' in line:
-                    stats['corpus_size'] = int(line.split(':')[-1].strip())
-                elif 'cov:' in line:
+                # Live progress line — present even in -fork=1 mode, e.g.:
+                #   #21732764: cov: 931 ft: 2798 corp: 808 exec/s: 2014 ... time: 14402s
+                # The `stat::` final-stats lines only print on a CLEAN exit; we
+                # SIGTERM the fuzzer at the time cap and the fork parent routes
+                # final stats differently, so they were never present mid-run
+                # (=> execs always reported 0). Parse the live `#<n>:` counter
+                # and `exec/s:` here, and let stat:: override below if it shows.
+                if 'exec/s:' in line:
+                    m_units = re.search(r'#(\d+)', line)
+                    if m_units:
+                        stats['total_executions'] = max(
+                            stats['total_executions'], int(m_units.group(1)))
+                    m_eps = re.search(r'exec/s:\s*(\d+)', line)
+                    if m_eps and int(m_eps.group(1)) > 0:
+                        stats['exec_per_sec'] = float(m_eps.group(1))
+                if 'cov:' in line:
                     # Parse coverage from progress lines like "#1234 NEW cov: 567"
                     match = re.search(r'cov:\s*(\d+)', line)
                     if match:
@@ -795,6 +804,14 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
                             stats['edge_coverage'],
                             int(match.group(1))
                         )
+                # Authoritative final stats (clean-exit only) override the live
+                # counters when present.
+                if 'stat::number_of_executed_units:' in line:
+                    stats['total_executions'] = int(line.split(':')[-1].strip())
+                elif 'stat::average_exec_per_sec:' in line:
+                    stats['exec_per_sec'] = float(line.split(':')[-1].strip())
+                elif 'stat::new_units_added:' in line:
+                    stats['corpus_size'] = int(line.split(':')[-1].strip())
 
         except Exception as e:
             logger.warning(f"Failed to parse stats: {e}")
@@ -1023,19 +1040,28 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
             coverage_data = self._measure_coverage()
 
         if coverage_data is None:
-            # Use edge coverage from libFuzzer as fallback
-            coverage_data = CoverageData(
-                line_coverage_percent=0.0,
-                branch_coverage_percent=0.0,
-                function_coverage_percent=0.0,
-                lines_covered=0,
-                lines_total=0,
-                branches_covered=0,
-                branches_total=0,
-                functions_covered=0,
-                functions_total=0,
-                edge_coverage=stats['edge_coverage']
-            )
+            # No full measurement this interval (we only run the expensive
+            # llvm-cov pass every 3rd snapshot). Carry forward the LAST real
+            # measurement so the timeline/diffs aren't a 0→N→0 sawtooth — only
+            # the live edge count (from libFuzzer cov: lines) is fresh. Before
+            # this fix, fabricating a 0.0 CoverageData made 2-of-3 rows report
+            # 0.00% and clobbered prev_coverage, poisoning every diff.
+            if self.prev_coverage is not None:
+                coverage_data = replace(
+                    self.prev_coverage, edge_coverage=stats['edge_coverage'])
+            else:
+                coverage_data = CoverageData(
+                    line_coverage_percent=0.0,
+                    branch_coverage_percent=0.0,
+                    function_coverage_percent=0.0,
+                    lines_covered=0,
+                    lines_total=0,
+                    branches_covered=0,
+                    branches_total=0,
+                    functions_covered=0,
+                    functions_total=0,
+                    edge_coverage=stats['edge_coverage']
+                )
         else:
             coverage_data.edge_coverage = stats['edge_coverage']
 
