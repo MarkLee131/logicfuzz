@@ -1,146 +1,79 @@
-# Generation-Stage Information Audit (2026-06)
+# 生成阶段信息利用审计（2026-06）
 
-Scope: the **driver-generation** stage only (repair / optimize / root-cause are
-deferred). Question: is the tool squeezing the valuable information out of its
-inputs and its own analyses, feeding the LLM the *right* (not the *most*)
-information, and dividing labor between symbolic methods and the LLM the way a
-human expert would?
+**范围**：只审计**驱动生成（driver-generation）**阶段；修复、优化驱动、根因分析暂时搁置。
+**要回答的问题**：当前工具有没有把输入、以及自身分析里有价值的信息榨干？喂给 LLM 的是**对的**信息，还是**最多**的信息？符号方法（静态分析 + Z3 + 程序合成）和 LLM 之间的分工，有没有像人类专家那样各司其职、各扬其长？
 
-Method: a 4-axis adversarial audit (input sources, static analysis, LLM input
-diet, symbolic↔LLM synergy), each grounded in file:line.
+**方法**：四个维度的对抗式审计（输入来源、静态分析、LLM 输入、符号↔LLM 协同），每条结论都落到 `file:line`。
 
 ---
 
-## Thesis
+## 核心判断
 
-The **division of labor is correct in principle** — Z3 + use-def + typestate
-own program *structure* (lifecycle, handle wiring, call order); the LLM owns
-*soft* decisions (values, semantics, hole-fill). The problem is **information
-loss at every boundary**: rich signals are computed and then thrown away before
-they reach the decision that needs them, while the LLM is simultaneously
-*over*-fed low-signal, redundant text. The tool dumps everything it computed and
-loses everything it should have distilled.
+**大方向上分工是对的**——Z3 + use-def + typestate 负责程序*结构*（生命周期、句柄接线、调用顺序），LLM 负责*软*决策（取值、语义、填洞）。问题出在**信息在每一道边界上都在漏**：丰富的信号被算出来之后，还没传到真正需要它的那个决策点，就被丢掉了；与此同时，LLM 又被灌进大量低信号、重复的文本。**工具把自己算出来的东西一股脑全倒给 LLM，却把本该提炼出来的关键信息扔了。**
 
-A human expert does the opposite: reads a *few* precise facts (header enums, the
-parser's front-gate bytes, @return NULL-contracts, the sibling driver's call
-chain) and writes a tight driver. The gap between the two is this audit.
+人类专家恰好相反：只看*几条*精确的事实（头文件里的枚举、解析器入口的魔数/长度校验、`@return` 的 NULL 契约、同类项目现成驱动的调用链），就能写出一个紧凑到位的驱动。这份审计，量的就是两者之间的差距。
 
 ---
 
-## The convergent finding: information leaks at 5 boundaries
+## 收敛结论：信息在 5 道边界上流失
 
-### B1. Input sources → knowledge (Axis 1) — massively under-extracted
-- **Cross-project transfer is entirely absent.** Generation for project X reads
-  ONLY X's own drivers (`_resolve_drivers_root(project_name)` keys strictly on
-  the name, `data_context.py:2157`); grep for retrieval/transfer/similar finds
-  nothing. The repo already has a corpus (`extracted_fuzz_drivers/`, and the GCS
-  puller grabs "all projects"). A new/thin library gets nothing, even when a
-  structurally-near library (another JSON/image/codec parser) has a battle-tested
-  driver showing the exact creator→parse→consume→free idiom. **Biggest free,
-  high-signal source, 100% unused.**
-- **The existing driver's call SEQUENCE + arg-provenance is discarded.** Only 3
-  verbatim sources + 10 regex idioms survive (`idiom_distiller.py`); the
-  authoritative API n-gram + which-return-feeds-which-arg graph is never
-  reconstructed. The automaton learns sequences from tests/examples but
-  *pointedly not from the driver sources* — the single most authoritative valid
-  fuzz-entry example.
-- **Doc priors default OFF** (`--use-doxygen-priors` / `--use-readme-purpose`).
-  Default runs fabricate library purpose from the project name and never read
-  `@param` ownership or `@return`/`@retval` NULL-contracts — exactly the signal
-  the "generated drivers miss NULL-checks on creator returns" memory note needs.
-- README **Quick-Start code blocks** (a free worked example) are explicitly
-  stripped; **seed corpus** (real input format/magic bytes) is fuzz-time only,
-  invisible to generation; **build.sh/.dict/.options** (required -D defines,
-  format dictionary, max_len) unmined.
+### B1. 输入来源 → 知识层（维度一）——榨取严重不足
+- **完全没有跨项目迁移。** 给项目 X 生成时，只读 X 自己的驱动（`_resolve_drivers_root(project_name)` 严格按项目名取键，`data_context.py:2157`）；grep 检索/迁移/相似一类逻辑，一处都没有。仓库里其实已经攒了一份语料（`extracted_fuzz_drivers/`，而且 GCS 拉取脚本是按「所有项目」拉的）。一个全新的、自身资料稀薄的库，就什么都拿不到——哪怕有一个结构上很接近的库（另一个 JSON/图像/编解码解析器）已经有一份久经考验的驱动，清清楚楚演示了 creator→parse→consume→free 这套惯用法。**这是最大的一块免费、高信号来源，利用率为零。**
+- **现成驱动的调用序列 + 实参来源被丢掉了。** 只有 3 份原文 + 10 条正则惯用法（`idiom_distiller.py`）留了下来；最权威的 API n-gram 序列、以及「哪个返回值喂给哪个实参」的来源图，从没被重建过。自动机（automaton）从 tests/examples 里学序列，却*偏偏不从驱动源码里学*——而驱动恰恰是「合法 fuzz 入口序列」最权威的范例。
+- **文档先验默认关闭**（`--use-doxygen-priors` / `--use-readme-purpose`）。默认跑法下，库的用途是从项目名硬编出来的，从不读 `@param` 的所有权语义、也不读 `@return`/`@retval` 的 NULL 契约——而这恰恰是「生成的驱动漏掉对 creator 返回值的 NULL 检查」那条记忆所需要的信号。
+- README 里的 **Quick-Start 代码块**（一个免费的可运行示例）被显式剥掉了；**种子语料**（真实输入格式 / 魔数）只在 fuzz 阶段用，对生成阶段不可见；**build.sh/.dict/.options**（必需的 `-D` 宏、格式字典、`max_len`）也没被挖。
 
-### B2. Static analysis → model (Axis 2) — rich SVF data destroyed at the boundary
-- **The whole per-param `access_type_set` is reduced to ONE boolean.**
-  `usedef.py:363` collapses ~969 field-level struct accesses + create/delete
-  provenance + per-field write masks (per lcms) into `_svf_writes`. Everything
-  else is dropped.
-- **`set_by` (param→param init-dependency graph, ~75 edges on lcms)** is not
-  lifted into `APISemanticModel`/the constructor — the model's requires/produces
-  is purely handle-type-keyed and cannot express "arg0 struct is populated by
-  param_2/param_3".
-- **No error-return / NULL postconditions** extracted from the IR (`if (p==NULL)
-  return; if (rc<0) goto err`) — recoverable from the bitcode the extractor
-  already loads. This *is* the NULL-check bug.
-- **No real CFG reachability.** L4 "reachability-first" is automaton *acceptance*
-  (protocol-order fit), not static reachability of uncovered blocks; the gap
-  signal is flat function presence/absence.
-- **No enum/value domains** for CONFIG scalar args (switch tables, enum defs,
-  equality guards bound which values reach interesting code).
+### B2. 静态分析 → 模型（维度二）——丰富的 SVF 数据在边界处被销毁
+- **整个 per-param `access_type_set` 被压成了一个布尔值。** `usedef.py:363` 把每参数约 969 处字段级 struct 访问 + create/delete 来源 + 逐字段写掩码（lcms 数据）统统压成 `_svf_writes` 一个 bool，其余全扔。
+- **`set_by`（参数→参数 的初始化依赖图，lcms 上约 75 条边）** 没被提升进 `APISemanticModel` / 序列构造器——模型的 requires/produces 纯按句柄类型建键，根本表达不了「arg0 这个 struct 是由 param_2/param_3 填充的」。
+- **没有抽取错误返回 / NULL 后置条件**（IR 里的 `if (p==NULL) return; if (rc<0) goto err`）——这些从 extractor 已经加载的 bitcode 里完全恢复得出来。这*就是*那个 NULL 检查 bug 的根。
+- **没有真正的 CFG 可达性。** L4 所谓「可达性优先」其实是自动机*接受度*（协议顺序匹配），不是对未覆盖基本块的静态可达性；gap 信号只是函数级的有/无。
+- **没有 CONFIG 标量参数的枚举/取值域**（switch 表、enum 定义、相等性守卫，本可界定哪些取值能进到有意思的代码）。
 
-### B3. Model → LLM (Axis 3) — over-fed, redundant, stale
-- **Two redundant role taxonomies** both injected (the demoted name-heuristic
-  `classify_project_apis` AND the reconciled `APISemanticModel` roles).
-- **3 FULL existing driver source files** dumped (the single biggest token sink)
-  overlapping with `<library_idioms>`/`<code_patterns>` that already distilled
-  them.
-- **System prompt advertises a REMOVED tool**: `fuzz_introspector_query` +
-  "Query source code"/"Query usage examples" directives in 4 places, but
-  `get_tools()==[]` → phantom tool calls, wasted attention.
-- Overlapping API views (`<api_sequences>`/`<sequence_api_signatures>`/
-  `<project_apis>`/`<dependency_graph>`), duplicated skeleton renderings, the
-  "call more APIs" rule restated 3–4×, no global token budget.
+### B3. 模型 → LLM（维度三）——喂得太多、重复、过时
+- **两套冗余的 role 分类**同时塞进提示词（被降级的命名启发式 `classify_project_apis`，以及已经协调过的 `APISemanticModel` roles）。
+- **3 份完整的现成驱动源码**被原样倒进提示词（单项最大的 token 消耗），还跟已经提炼好的 `<library_idioms>` / `<code_patterns>` 大量重叠。
+- **系统提示词还在宣传一个已删除的工具**：`fuzz_introspector_query` 加 4 处「去查源码」/「去查用法示例」的指令，可 `get_tools()==[]` → 诱发幻觉工具调用、白白消耗注意力。
+- 多个重叠的 API 视图（`<api_sequences>` / `<sequence_api_signatures>` / `<project_apis>` / `<dependency_graph>`）、重复的 skeleton 渲染、「多调几个 API」这条规则重复说了 3–4 遍，而且没有全局 token 预算。
 
-### B4. Symbolic gives up where the LLM is then left to guess (Axis 4)
-- **CONFIG/enum args** get only `VARY_RANGE: cover in-range and out-of-range`
-  (`hole_semantics.py:96`); the LLM *guesses* legal values (e.g. lcms
-  `TYPE_RGB_8`, intent 0–3; zlib level 0–9). A trivial header enum/#define scan
-  keyed to the arg typedef would supply these deterministically.
-- **Format front-gate hardcodes only 2 formats** (ICC `acsp@36`, IT8);
-  everything else gets a vague header/body hint → parsers stay shallow (the
-  "uncovered branches inside covered functions" lesson).
-- **Binding-failure REASON dies as telemetry.** When `try_to_get_var` raises
-  `ConditionUnsat` (incomplete_opaque / struct_needs_init / has_source), the
-  reason — now recorded by `_record_binding_rejection` (new) — never reaches the
-  hole annotation on the `create_skeleton_unchecked` path, so the LLM doesn't
-  learn "this arg needs an init chain / is opaque".
-- **Happy-path-only skeletons** (create→use(valid)→destroy) make error/UAF/
-  NULL-as-handle/reordered-destroy branches unreachable *by construction*.
-- **No dynamic value feedback.** Phase C `coverage_memory.json` is write-only;
-  when a trial reaches a deep branch, the working value is lost.
+### B4. 符号方法在它放弃的地方，把锅甩给 LLM 去猜（维度四）
+- **CONFIG/枚举参数**只拿到 `VARY_RANGE：覆盖合法与非法取值`（`hole_semantics.py:96`）；LLM 只能*猜*合法值（lcms `TYPE_RGB_8`、intent 0–3；zlib level 0–9）。其实按参数 typedef 去扫一下头文件的 enum/#define，就能确定性地给出这些值。
+- **格式入口（front-gate）只硬编了 2 种格式**（ICC `acsp@36`、IT8）；其余一律给一句含糊的 header/body 提示 → 解析器只能浅尝辄止（即「已覆盖函数内部仍有未覆盖分支」那条教训）。
+- **绑定失败的原因沦为只写不读的遥测。** `try_to_get_var` 抛 `ConditionUnsat`（incomplete_opaque / struct_needs_init / has_source）时，原因——现在由新加的 `_record_binding_rejection` 记下来了——却从没流到 `create_skeleton_unchecked` 路径上的洞标注里，于是 LLM 永远不知道「这个参数需要一条初始化链 / 是不透明类型」。
+- **只走 happy-path 的骨架**（create→use(合法)→destroy）——错误处理 / UAF / 把 NULL 当句柄 / 乱序销毁这些分支，从构造上就*不可能*被覆盖到。
+- **没有动态取值反馈。** Phase C 的 `coverage_memory.json` 只写不读；某次 trial 好不容易让一个取值进到了深层分支，这个事实却丢了。
 
-### B5. The human-expert contrast (unified)
-An expert writing a high-coverage driver for lcms `cmsDoTransform` / a zlib
-deflate chain: (1) reads header **enums** for legal constants; (2) reads the
-parser **source/IR** for the front-gate byte predicate (magic / length-prefix /
-version); (3) reads **@return** for NULL-contracts; (4) **copies** the existing
-or sibling driver's call sequence + input demux; (5) knows from the **call graph**
-which API gates the most uncovered code. The tool is strong on (lifecycle +
-handle wiring) but skips most of (1)–(5).
+### B5. 人类专家对照（统一版）
+一个专家给 lcms `cmsDoTransform` / zlib deflate 链写高覆盖驱动时会做五件事：(1) 读头文件**枚举**拿合法常量；(2) 读解析器**源码/IR**拿入口字节谓词（魔数 / 长度前缀 / 版本）；(3) 读 **@return** 拿 NULL 契约；(4) **照抄**本项目或同类项目现成驱动的调用序列 + 输入分发；(5) 从**调用图**判断哪个 API 把守着最多未覆盖代码。工具在（生命周期 + 句柄接线）上很强，但 (1)–(5) 基本都跳过了。
 
 ---
 
-## Prioritized plan
+## 优先级方案
 
-### Tier 1 — deterministic, low-risk, high-leverage (no new technique; do first)
-Each plugs a boundary leak using data the tool already has or can get cheaply:
+### 第一梯队——确定性、低风险、高杠杆（不需要新技术；先做）
+每一条都用工具已有的、或能廉价拿到的数据，去堵一道边界泄漏：
 
-| # | Change | Boundary | Leverage / effort |
-|---|--------|----------|-------------------|
-| T1 | **Stop collapsing SVF to one bit.** Lift per-arg field-write masks + `set_by` init-dep edges + `len_depends_on`/`is_array` from conditions.json into `APISemanticModel` and the G4 hole value-intents. | B2 | high / med |
-| T2 | **Symbolic enum/#define extractor for CONFIG args.** Scan public headers for the arg typedef's legal enum/constant set; replace the generic `VARY_RANGE` string with the actual value set. | B4 | high / med |
-| T3 | **Extract error-return / NULL postcondition per API** from the IR; emit as a mandatory hole/guard constraint (fixes the NULL-check-creator bug). | B2 | high / med |
-| T4 | **LLM diet surgery → one typed CALLSPEC DSL table.** Cut the 3 verbatim driver dumps + one role taxonomy + the stale fuzz_introspector directives; collapse the overlapping API/skeleton views into one per-call tuple `step | api | role | ret | args=[(i,type,argrole,pairs_with)] | needs | precond/cleanup | value_intent`; add a global token-budget arbiter. | B3 | high / small |
-| T5 | **Surface binding-failure REASON + the producer the analyzer found** into the hole annotation on the unchecked-skeleton path (data already computed by the new telemetry + `find_producer_apis`). | B4 | high / small |
-| T6 | **Doc priors ON by default**; parse `@return`/`@retval` into a structured error/ownership contract; capture the README's first usage **code block** as a few-shot. | B1 | high / small |
+| # | 改动 | 边界 | 杠杆/工作量 | 状态 |
+|---|------|------|------------|------|
+| T1 | **别再把 SVF 压成一个 bit。** 把 per-arg 字段写掩码 + `set_by` 初始化依赖边 + `len_depends_on`/`is_array` 从 conditions.json 提升进 `APISemanticModel` 和 G4 洞的取值意图。 | B2 | 高/中 | 待做 |
+| T2 | **为 CONFIG 参数做符号化 enum/#define 抽取。** 扫头文件拿到参数 typedef 的合法枚举/常量集，用真实取值集替换泛泛的 `VARY_RANGE`。 | B4 | 高/中 | ✅ 已完成（`named_constants.py`；lcms 11 个枚举、zlib `Z_*` 已端到端验证） |
+| T3 | **逐 API 抽取错误返回 / NULL 后置条件**，作为强制的洞/守卫约束（修掉 creator NULL 检查 bug）。 | B2 | 高/中 | 待做 |
+| T4 | **LLM 瘦身 → 一张 typed CALLSPEC DSL 表。** 砍掉 3 份原文驱动 + 一套 role 分类 + 过时的 fuzz_introspector 指令；把重叠的 API/skeleton 视图收成「每个调用一行」的元组 `step │ api │ role │ ret │ args=[(i,type,argrole,pairs_with)] │ needs │ precond/cleanup │ value_intent`；加一个全局 token 预算仲裁。 | B3 | 高/小 | 🚧 部分（已删过时工具指令；CALLSPEC 重构待做，且需端到端 A/B 验证） |
+| T5 | **把绑定失败原因 + 分析器找到的 producer**，标到 unchecked-skeleton 路径的洞上（数据已由新遥测 + `find_producer_apis` 算出）。 | B4 | 高/小 | 待做 |
+| T6 | **文档先验默认开**；把 `@return`/`@retval` 解析成结构化的错误/所有权契约；把 README 第一个用法**代码块**当 few-shot。 | B1 | 高/小 | 待做 |
 
-### Tier 2 — larger or needs a NEW technique (flagging for your go-ahead)
-| # | Change | Why it needs sign-off |
-|---|--------|------------------------|
-| T7 | **Cross-project driver retrieval**: index `extracted_fuzz_drivers/` (+ pull the broader OSS-Fuzz corpus), inject k-NN sibling drivers for thin-artifact libraries (similarity by API-shape signature: creator/parser entry types, opaque-handle catalogue, return-on-error pattern). | Biggest input signal, but needs a corpus + a retrieval/embedding component. |
-| T8 | **Mine call-sequence + arg-provenance from the project's OWN drivers** into the automaton/constructor (reuse `static_trace.extract_project_traces` on driver `.c`, not just tests). | Medium build; changes what the automaton learns from. |
-| T9 | **Static CFG reachability weight** for gap APIs into L4 (count transitively-reachable uncovered blocks from the bitcode). | Needs a call-graph pass over the bitcode. |
-| T10 | **Generalize the format front-gate decoder** via symbolic constant-propagation into the parser's entry check (replace the 2 hardcoded formats). | **NEW TECHNIQUE: lightweight symbolic execution / value-constraint pass.** |
-| T11 | **Symbolic shape-variant skeletons** (NULL_INJECT / double-free / reordered-destroy) so error-path branches become reachable (LLM still only fills leaves). | Medium; structural change to the skeleton emitter (generation.md F5). |
-| T12 | **Dynamic value-feedback loop**: compile-and-run a micro-probe (or mine surviving values from a trial) and pin the working leaf value / init-chain into the next skeleton's hole (read side of Phase C). | **NEW TECHNIQUE: lightweight dynamic running.** |
+### 第二梯队——更大，或需要新技术（先报你批准）
 
-### Recommended start
-T2 + T4 + T5 are the best first cut — highest leverage, low risk, and they
-compose: T2 gives the LLM the real legal values, T5 tells it which args are
-hard and why, and T4 stops drowning both signals in redundant text. T1/T3/T6
-follow (all deterministic). T7 (cross-project) is the highest-ceiling Tier-2
-item. T10/T12 are the two places a **new technique (symbolic exec / dynamic
-running)** would clearly earn its keep — proposed, not assumed.
+| # | 改动 | 为什么需要你拍板 |
+|---|------|------------------|
+| T7 | **跨项目驱动检索**：给 `extracted_fuzz_drivers/`（外加拉取更大的 OSS-Fuzz 语料）建索引，按 API 形态签名（creator/parser 入口类型、不透明句柄目录、出错返回模式）取 k-NN 同类驱动注入到资料稀薄的库。 | 最大的一块输入信号，但要建语料 + 一个检索/嵌入组件。 |
+| T8 | **从本项目自己的驱动里挖调用序列 + 实参来源**喂进自动机/构造器（把 `static_trace.extract_project_traces` 也用在驱动 `.c` 上，而不只是 tests）。 | 中等工作量；会改变自动机学习的来源。 |
+| T9 | **给 gap API 加静态 CFG 可达性权重**进 L4（从 bitcode 数它能传递可达的未覆盖块数）。 | 需要对 bitcode 做一遍调用图分析。 |
+| T10 | **泛化格式入口解码器**：用符号常量传播去推解析器入口的校验（替掉硬编的 2 种格式）。 | **新技术：轻量符号执行 / 取值约束分析。** |
+| T11 | **符号化的形态变体骨架**（NULL_INJECT / double-free / 乱序销毁），让错误路径分支变得可达（LLM 仍只填叶子取值）。 | 中等；改动骨架发射器结构（generation.md F5）。 |
+| T12 | **动态取值反馈闭环**：编译并跑一个微探针（或从某次 trial 里挖出存活的取值），把可用的叶子取值/初始化链钉进下一个骨架的洞（Phase C 的「读」侧）。 | **新技术：轻量动态运行。** |
+
+### 建议的起步顺序
+**T2 + T4 + T5 是最好的第一刀**——杠杆最高、风险低，而且互相成全：T2 把真实合法值给 LLM，T5 告诉它哪些参数难、难在哪，T4 把淹没这两个信号的冗余文本清掉。T1/T3/T6 紧随其后（都是确定性的）。T7（跨项目）是第二梯队里天花板最高的一项。T10/T12 是两处「新技术（符号执行 / 动态运行）」明显能回本的地方——是提议，不是擅自决定。
+
+> 说明：T4 里的 CALLSPEC 重构会**以单测无法捕捉的方式改变 LLM 行为**，要确认它真能提覆盖、且不致退化，需要一次端到端 A/B（用旧/新提示词在 cjson/zlib/lcms 上各跑一遍、比覆盖率）。
