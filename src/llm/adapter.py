@@ -3,8 +3,7 @@ LLM Adapter
 
 Provides adapter classes that wrap LangChain chat models to provide
 the interfaces expected by different components:
-- query(prompt: str) -> str - for special_patterns.py, sequence_filter.py
-- complete(prompt: str) -> str - for hole_filler.py
+- query(prompt: str) -> str - for special_patterns.py and data_context.py
 """
 
 from typing import Optional, Union

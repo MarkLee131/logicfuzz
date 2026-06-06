@@ -249,7 +249,6 @@ class ClangAPIExtractor(BaseAPIExtractor):
         # Handle public_headers_file - if host path, copy to container
         container_public_headers = None
         if public_headers_file:
-            from pathlib import Path
             host_path = Path(public_headers_file)
             if host_path.exists():
                 # File is on host, need to copy to container

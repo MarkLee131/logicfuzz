@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import os, json, argparse
-import matplotlib.pyplot as plt
 
 tot_api = {
     "pthreadpool":30,

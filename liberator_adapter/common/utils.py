@@ -224,8 +224,7 @@ class Utils:
                     apis_clang_list[function_name] = copy.deepcopy(api)
 
         if duplicate_count > 0:
-            import logging
-            logging.debug(f"Handled {duplicate_count} overloaded C++ functions in apis_clang")
+            logger.debug(f"Handled {duplicate_count} overloaded C++ functions in apis_clang")
 
         return apis_clang_list
 

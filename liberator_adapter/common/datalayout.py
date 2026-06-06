@@ -23,7 +23,7 @@ class DataLayout:
     #                 "u_char*", "u_char**"]
 
     def __init__(self):
-        raise Exception("ConditionManager can be obtained through instance() class method")
+        raise Exception("DataLayout can be obtained through instance() class method")
     
     @classmethod
     def instance(cls):

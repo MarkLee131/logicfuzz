@@ -1,4 +1,4 @@
-from typing import List, Set, Dict, Tuple, Optional
+from typing import List, Dict
 from .ir import Statement, ApiCall, Function
 from liberator_adapter.common import Api
 

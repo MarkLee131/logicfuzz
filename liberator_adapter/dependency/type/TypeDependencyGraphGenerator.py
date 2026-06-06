@@ -1,14 +1,11 @@
-import json, os
 import logging
 
-from liberator_adapter.common import Utils, Api, Arg
+from liberator_adapter.common import Api, Arg
 from liberator_adapter.dependency import DependencyGraphGenerator, DependencyGraph
 from liberator_adapter.constraints.provenance_checker import ProvenanceChecker, ProvenanceInfo, ProvenanceTag
 
 # Z3 constraint pruning (required)
-from liberator_adapter.constraints.z3_solver import (
-    Z3DependencyPruner, is_z3_available
-)
+from liberator_adapter.constraints.z3_solver import Z3DependencyPruner
 Z3_AVAILABLE = True  # Z3 is now required
 
 logger = logging.getLogger(__name__)
