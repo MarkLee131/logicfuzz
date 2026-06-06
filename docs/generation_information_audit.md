@@ -235,3 +235,63 @@ step │ api │ role │ ret(type, nullable?) │
   - 早前混合子集里"`ares_strerror` 被误杀"经查是**空 facts 序列上的 LLM 采样噪声**（A/B prompt 相同 → 非本特性）。
   - **结论：净正向、无回归**（救回假 INVALID，零新误杀）。注意：小样本/单项目/harness 强制全过 LLM（无 prefilter、project static_facts 为空）使绝对 INVALID 率比线上严，但 A vs B 隔离有效。
 - **仍可做**：更大样本 + 多项目 + 线上完整 prepare() 的端到端覆盖对照（接 docker）。
+
+---
+
+# 五、审查：喂给 LLM 的数据能否 formalize？是否合理？
+
+**问题**：把喂进 LLM 的数据抽象成字段 = schema 吗？这些数据能 formalize 吗？合理吗？
+**一句话结论**：**能 formalize；但当前不合理**——Prototyper 提示词是 ~18 个临时拼起来的块，约 1/3 是**重复 / 死代码 / 原文倒灌**。我这几轮加的 value-intents 是其中**唯一一块成体系的 typed schema**；其余是历史堆积。合理化 = 把"该留的"收敛成一张 CALLSPEC、把"重复/原文"砍掉（即 T4）。
+
+## 5.1 完整清单：Prototyper 实际喂了什么（按组装顺序，`prototyper.py:460-560`）
+
+| 块 | 内容 | 来源 | 形态 | 评判 |
+|---|---|---|---|---|
+| `skeleton_code` | 空串 | `_retrieve_skeleton`（stub `return ""`）| 死 | ❌ **CUT**（死桩）|
+| `srs_specification` | 函数分析摘要 | function_analysis | 散文 | ◐ 审视（低信号？）|
+| `api_understanding` | 7-role **名称启发式**分类 | `classify_project_apis` | 散文表 | ❌ **CUT**（与 reconciled role 重复；G1 已降级名称启发式）|
+| `library_purpose` | 一句话用途 | comprehender | 文本 | ✅ KEEP |
+| `api_usages` | per-API 用法散文 | comprehender | 散文 | ◐ MERGE→CALLSPEC |
+| `api_sequences` | 候选序列(名字) ×8 | api_sequences | 名字列表 | ◐ MERGE→skeleton |
+| `sequence_signatures` | 序列 API 的签名+用法 | project_apis+usages | 半结构 | ✅ KEEP→**CALLSPEC 核心** |
+| `sequence_invariants` | Comprehender-B 不变式 | sequence_semantics | 文本 | ✅ KEEP |
+| `protocol_templates` | 自动机接受路径 | automaton | 序列 | ✅ KEEP |
+| `project_apis` | top-20 签名 | project_apis | 签名表 | ❌ **CUT**（sequence_signatures 的低保真重复）|
+| `dep_graph` | per-API 依赖 ×12 | dependency_graph | 图 | ◐ MERGE（与 handle_provenance/wiring 重叠）|
+| `condition_info` | **聚合** role 计数 | condition_info | 聚合数 | ❌ CUT/RETYPE（per-sequence facts 已超越）|
+| `skeleton_template`+`holes` | 骨架代码 + 洞 + **value_intents + library_constants** | CBFactory + hole_semantics | **typed schema** | ✅ **KEEP（核心）** |
+| `include_path_context` | 头文件/包含路径 | headers | 结构 | ✅ KEEP |
+| `driver_knowledge` | **3 份完整驱动源码** | existing drivers | 原文倒灌 | ❌ **CUT→压缩**（最大 token sink；与 idioms 重复）|
+| `baseline_recovery` | §10B 回归恢复提示 | baseline_diff | 文本 | ◐ 条件保留 |
+| `synthesis_base` | **同一** active_skeleton 的"refine-this"视图 | active_skeleton | 代码 | ❌ **CUT**（skeleton_template 的重复视图，已取证两者同吃 `active_skeleton`）|
+| `extern_c_note` | `extern "C"` 样板 | 静态 | 样板 | ◐ 移到 system prompt |
+
+**Comprehender-B**（序列合法性裁决，`comprehender.py`）：`sequence`(名字) + `api_usages`(散文) + `static_facts`(聚合计数, RETYPE) + **`sequence_facts`(per-API USE/DEF/KILL + typestate 裁决, ✅ typed)** + `allowed_apis`(名字)。
+
+## 5.2 合理性判决（量化）
+~18 个 Prototyper 块里：
+- **✅ 该留、且已/可 typed**：~6（skeleton+holes 的 value_intents/library_constants、sequence_signatures、sequence_invariants、protocol_templates、library_purpose、include_path）。
+- **❌ 重复/死/原文倒灌**：~6（skeleton_code 死桩、api_understanding 第二套 role、project_apis 重复、synthesis_base 重复骨架、condition_info 聚合、driver_knowledge 3 份原文）。
+- **◐ 可并入或迁移**：~5（api_usages/api_sequences/dep_graph 并入 CALLSPEC；baseline_recovery 条件；extern_c 进 system）。
+
+→ **三套"API 视图"**（api_understanding / sequence_signatures / project_apis / dep_graph 各说一遍同一批 API）+ **两套骨架视图** + **两套 role 分类** + **3 份原文驱动**：这就是"不合理"的实证。**不是 schema 的问题，是没把它们收成一个 schema。**
+
+## 5.3 formalize 的目标：一张 CALLSPEC（T4）
+把上面 ✅+◐ 收敛成**每个调用一行的 typed 元组** + 少量项目级 slot：
+
+```
+CALLSPEC（每调用一行）:
+  step | api | role(APIRole) | signature | ret_contract(nullable?/sentinel) |
+  args[ (i, type, argrole(ArgRole), value_intent, pairs_with, populated_from) ] |
+  needs[handle←producer | orphan] | produces[handle] | precond | cleanup
+项目级 slot（各一次、token-bounded）:
+  library_purpose · library_constants · idioms · protocol_templates · 1 个压缩范例
+```
+每个字段都已有权威来源（见第三/四节 + ②′ 表）。这张表**替掉** api_understanding / api_sequences / sequence_signatures / project_apis / dep_graph / condition_info / synthesis_base / driver_knowledge 八个块。
+
+## 5.4 诚实的自我批评（即便已 typed 的部分）
+- **`value_intent` 仍是自然语言串**，不是真正 typed 的值（例如 `"VARY_RANGE: …"` / `"ENUM (T): one of {…}"`）。这是**符号→LLM 的交接点**，本就该软；但要更严格可把它拆成 `{kind: ENUM|RANGE|STRUCTURED_INPUT|LENGTH|HANDLE, payload: …}`，渲染时再转串。**是否值得，取决于 LLM 对结构化 vs 散文 intent 的敏感度——需 A/B。**
+- **两个决策点 schema 尚未统一**：填洞用 value_intents、裁决用 sequence_facts，字段有重叠（role、USE/DEF/KILL vs handle_provenance）。可抽一个公共 `APIView` 基类，两处各取所需。
+- **CALLSPEC 尚未落地**：今天是"一块成体系 + 一堆散块"，T4 才把散块收进来。**这步会改 LLM 行为，必须端到端 A/B**（旧/新提示词比覆盖+token）。
+
+**给你拍板**：(a) CALLSPEC 字段集是否就用 5.3 这版？(b) `value_intent` 要不要拆成 typed `{kind,payload}`，还是保持串先跑 A/B？(c) 砍 driver_knowledge 3 份原文 → 换 1 个压缩范例，是否同意（这是最大 token 节省，但也动 few-shot）？
