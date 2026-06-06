@@ -122,6 +122,62 @@ matter of soft semantic judgment (leaf values).**
 > (losing the holes signal). We removed our own earlier classify-then-repair
 > stage (Phase A / F1–F4) entirely — construction is correct by construction.
 
+#### ②′ The neuro-symbolic boundary is a *typed context schema*, not a prose dump
+
+Innovation ② says the LLM "fills only the holes." The **interface across that
+boundary** is itself a contribution. Rather than dump raw artifacts at the LLM
+(the prevailing practice — whole driver files, full signature lists, prose
+usage), we define a **typed, symbolically-grounded context schema**: each LLM
+decision is decomposed into a fixed set of **slots ("key aspects")**; each slot
+answers *one* semantic question a human driver-author would ask, and is
+**populated by the most authoritative source available** — static analysis where
+the answer is provable, the LLM only for the residual soft judgment. The LLM
+receives a minimal, structured context, never the underlying analysis.
+
+The schema is instantiated at the **two** generation-stage LLM decision points.
+
+**A. Hole-filling context** — per Z3-validated skeleton → Prototyper (`analysis/hole_semantics.py`):
+
+| Slot | Aspect it answers | Source | sym / LLM |
+|---|---|---|---|
+| `library_constants` | what are the legal enum/flag/format values? | header enum + grouped-`#define` scan (`named_constants.py`) | symbolic |
+| per-API `role` | creator / consumer / mutator / destroyer? | `APISemanticModel` reconcile (IR ⊕ doc ⊕ usage) | symbolic |
+| per-API `ret_contract` | does the return need a NULL/error guard? | conditions.json return-provenance + doxygen `@return` (`error_contracts.py`) | symbolic |
+| per-API `handle_provenance` | which producer makes a required handle — or none, so construct/NULL? | use-def `produces`/`requires` index | symbolic |
+| per-arg `role` (`ArgRole`) | input-buffer / length / output / handle / config? | reconcile + **SVF read/write veto** | symbolic |
+| per-arg `pairs_with` | which length pairs with which buffer? | reconcile LENGTH pairing | symbolic |
+| per-arg `populated_from` | which args carry the data that fills this one? | SVF `set_by` (conditions.json) | symbolic |
+| per-arg `intent` | the value constraint (in/out-of-range, format-shape, enum set …) | derived from role + type + vocabulary | symbolic → LLM |
+
+**B. Sequence-legality context** — per candidate sequence → Comprehender-B (`knowledge/comprehender.py`):
+
+| Slot | Aspect | Source | sym / LLM |
+|---|---|---|---|
+| `static_facts` | project role mix, verified init/destroy pairs | condition_info + lifecycle | symbolic |
+| per-API USE/DEF/KILL | what handle does each call consume / produce / destroy? | use-def (`APIEffect`) | symbolic |
+| typestate verdict | does *this exact* sequence have a USE_BEFORE_INIT / UAF / unclosed …? | `Typestate.check` → (kind, handle, position) | symbolic |
+| the ruling | is a flagged violation a real bug, or a legitimate direct-entry? | — | **LLM adjudicates** |
+
+**Schema, DSL, or "key aspects"?** Precisely a **typed schema** (a structured
+intermediate representation) whose fields *are* the key aspects of driver
+correctness. It is **not a DSL** in the formal sense — no grammar, no
+composition operators, no parser/evaluator; the rendered hints are
+natural-language constraints *derived from* the schema. The planned **CALLSPEC**
+(one typed per-call row consolidating these slots — `docs/generation_information_audit.md` T4)
+is the move toward a single compact *notation*, but it stays a schema-rendering,
+not a language.
+
+**Why it's a contribution, not prompt-engineering.** The schema operationalizes
+the neuro-symbolic split *at the prompt boundary*: the same analyses that gate
+and rank candidates (②) are reused to **specify the LLM's context slot-by-slot**,
+so *"feed the LLM the right information, not the most"* becomes a **typed
+contract** rather than a heuristic. The selective-context result TLR (FSE'26)
+validates by ablation — typestate-guided minimal context beats dumping
+everything, at a fraction of the tokens — is, in our setting, the **degenerate
+one-slot case** (typestate verdict only); we generalize it to a multi-aspect,
+multi-source, two-decision-point schema in which the symbolic layer authors the
+context and the LLM is invoked only on the slots that remain genuinely soft.
+
 ### ③ Project-adaptive usage knowledge + a closed loop — *learn how THIS library is actually used*
 
 LogicFuzz learns a **typestate automaton from the library's own tests and
@@ -265,6 +321,7 @@ backend/IR refactors.
 | Feasibility check | none (relevance) | Python-symbolic | SMT (Z3) + typestate |
 | Usage knowledge | RAG + LLM relevance | none | learned project automaton |
 | Coverage targeting | weighted score | none | gap-directed (baseline-uncovered) |
+| LLM context model | raw artifacts + RAG retrieval | n/a (no LLM) | **typed, symbolically-grounded schema** (slot-per-aspect, source-per-slot; ②′) |
 | Pre-LLM validity | none | full symbolic render | type+lifecycle+state+automaton |
 | Post-LLM validity | sanitizer loop | n/a (no LLM) | LangGraph build/fix |
 | Cross-round learning | crash → constraint | none | automaton viability growth |
