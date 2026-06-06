@@ -76,12 +76,12 @@
 
 | # | 改动 | 边界 | 杠杆/工作量 | 状态（按讨论刷新 2026-06-06） |
 |---|------|------|------------|------|
-| T1 | **别再把 SVF 压成一个 bit。** 把 per-arg 字段写掩码 + `set_by` 初始化依赖边 + `len_depends_on`/`is_array` 从 conditions.json 提升进 `APISemanticModel` 和 G4 洞的取值意图。 | B2 | 高/中 | **待做**（纯接线，数据已在 conditions.json；待 B2 讨论敲定后做） |
-| T2 | **为 CONFIG 参数做符号化 enum/#define 抽取。** 扫头文件拿到参数 typedef 的合法枚举/常量集，用真实取值集替换泛泛的 `VARY_RANGE`。 | B4 | 高/中 | ✅ **已完成**（`named_constants.py`；lcms 11 枚举、zlib `Z_*` 端到端验证；+6 测试） |
-| T3 | **逐 API 抽取错误返回 / NULL 后置条件**，作为强制的洞/守卫约束（修掉 creator NULL 检查 bug）。 | B2 | 高/中 | **待做**（需一遍 IR 后置条件分析；与 T6② @return 契约合流） |
+| T1 | **别再把 SVF 压成一个 bit。** 把 per-arg 字段写掩码 + `set_by` 初始化依赖边 + `len_depends_on`/`is_array` 从 conditions.json 提升进 `APISemanticModel` 和 G4 洞的取值意图。 | B2 | 高/中 | ✅ **已落地（set_by 部分）**：`_build_svf_index` 从 conditions.json 抽 set_by，洞标注写 `POPULATED_FROM argX,argY`。验证 lcms 75 条（`cmsAppendNamedColor.arg0`→arg2,3）。+4 测试。（len_depends_on/字段掩码与现有 LENGTH/OUTPUT 重叠，留后续） |
+| T2 | **为 CONFIG 参数做符号化 enum/#define 抽取。** 扫头文件拿到参数 typedef 的合法枚举/常量集，用真实取值集替换泛泛的 `VARY_RANGE`。 | B4 | 高/中 | ✅ **已完成 + 已闭环**（`named_constants.py`；lcms 11 枚举、zlib `Z_*`）。**fan-out 补**：`<library_constants>` 词表此前算了却没渲染进提示词，现已注入（annotate_skeletons 挂块 + prototyper 渲染）|
+| T3 | **逐 API 抽取错误返回 / NULL 后置条件**，作为强制的洞/守卫约束（修掉 creator NULL 检查 bug）。 | B2 | 高/中 | ✅ **已落地**（`error_contracts.py`，fan-out 子代理产出）：从 conditions.json return 指针 + doxygen @return 抽 NULL/error 契约，洞标注出 `⚠ returns NULL → NULL-check`。lcms 85 creators / c-ares 12 / cjson 18。+9 测试 |
 | T4 | **LLM 瘦身 → 一张 typed CALLSPEC DSL 表。** 砍掉 3 份原文驱动 + 一套 role 分类 + 过时的 fuzz_introspector 指令；把重叠的 API/skeleton 视图收成「每个调用一行」的元组 `step │ api │ role │ ret │ args=[(i,type,argrole,pairs_with)] │ needs │ precond/cleanup │ value_intent`；加一个全局 token 预算仲裁。 | B3 | 高/小 | 🚧 **部分**（✅ 已删过时 fuzz_introspector 工具指令；CALLSPEC 重构**待你拍板字段集**后做，需端到端 A/B） |
 | T5 | **把绑定失败原因 + 分析器找到的 producer**，标到 unchecked-skeleton 路径的洞上。 | B4 | 高/小 | ✅ **已落地**：从模型已有的 produces/requires 建 producer 索引，洞标注按序列写"needs handle T: produced by X,Y / 或 无 producer→构造或 NULL"；producer 在前则静默。离线验证 c-ares（`ares_cancel`→`ares_init`）；纯增量、不丢序列；+6 测试，181 pass |
-| T6 | **文档先验默认开 + @return 结构化契约 + README 代码块。** | B1 | 高/小 | 🚧 **部分**：① 默认开+删 opt-out = ✅ **已完成**（B1-③，token 已查清为负）；② `@return`/`@retval` → 结构化 NULL/所有权契约 = **待做**（并入 T3）；③ README quick-start = ❌ **不做**（oss-fuzz docker 下"可运行范例"=项目自身驱动，交给 T8） |
+| T6 | **文档先验默认开 + @return 结构化契约 + README 代码块。** | B1 | 高/小 | 🚧 **部分**：① 默认开+删 opt-out = ✅ **已完成**（B1-③，token 已查清为负）；② `@return`/`@retval` → 结构化 NULL/所有权契约 = ✅ **已落地**（并入 T3 的 `error_contracts.py`）；③ README quick-start = ❌ **不做**（oss-fuzz docker 下"可运行范例"=项目自身驱动，交给 T8） |
 | T8 | **从本项目自己的驱动里挖调用序列 + 实参来源**喂进自动机/构造器（复用 `static_trace.extract_project_traces`，也跑在驱动 `.c` 上，而不只 tests）。 | B1 | 中 | ✅ **已落地**：Step 5e2 把驱动语料目录追加进 automaton 的 consumer_paths。离线验证 c-ares 3 驱动→3 trace（含真实 `LLVMFuzzerTestOneInput: malloc→ares_create_query→free→free`）。构造式 EDSM 低风险；门控 + `LOGICFUZZ_DISABLE_DRIVER_TRACES=1` 杀手锏；175 tests。probe: `scripts/t8_driver_traces_probe.py` |
 
 ### 第二梯队——更大，或需要新技术（先报你批准）
@@ -89,15 +89,16 @@
 | # | 改动 | 为什么需要你拍板 | 讨论结论 |
 |---|------|------------------|------|
 | T7 | **跨项目驱动检索**：给 `extracted_fuzz_drivers/`（外加拉取更大的 OSS-Fuzz 语料）建索引，按 API 形态签名取 k-NN 同类驱动注入到资料稀薄的库。 | 最大的一块输入信号，但要建语料 + 检索组件。 | **需讨论**（B1-①）。拆「检索（传统轻量）+ 决策（规则触发是否跨项目 → LLM 在 k 个里精选）」两层。**三个待拍板**：(a) 显式策略 planner 还是先塞进 PathPlanner；(b) 语料范围（本地 3 项目 vs 拉 OSS-Fuzz）；(c) 是否让它统一调度"信息预算"。 |
-| T9 | **给 gap API 加静态 CFG 可达性权重**进 L4（从 bitcode 数它能传递可达的未覆盖块数）。 | 需要对 bitcode 做一遍调用图分析。 | **先量化再定**（B2）：先测当前 L4 错配了多少高价值 gap API，值不值得做调用图。 |
+| T9 | **给 gap API 加静态 CFG 可达性权重**进 L4。 | 需要对 bitcode 做一遍调用图分析。 | ❌ **不做（实测否决）**：`scripts/l4_reachability_probe.py` 测 c-ares/lcms/zlib——依赖图很平（max depth 1-3），deep gap API 仅 7.1%(32/452) 且集中在 c-ares 一族；planner 盲点是 depth-无关的（302/452 缺失、多为 shallow，重排权重救不了）。根因仍是 **binding 层**（#1）→ 这才是下一步真正的杠杆 |
 | T10 | **泛化格式入口解码器**：用符号常量传播去推解析器入口的校验（替掉硬编的 2 种格式）。 | **新技术：轻量符号执行 / 取值约束分析。** | 对应 B4 表 #2。待你批新技术。 |
 | T11 | **符号化的形态变体骨架**（NULL_INJECT / double-free / 乱序销毁），让错误路径分支变得可达（LLM 仍只填叶子取值）。 | 中等；改动骨架发射器结构（generation.md F5）。 | 对应 B4 表 #4。 |
 | T12 | **动态取值反馈闭环**：编译并跑一个微探针（或从某次 trial 里挖出存活的取值），把可用的叶子取值/初始化链钉进下一个骨架的洞（Phase C 的「读」侧）。 | **新技术：轻量动态运行。** | 对应 B4 表 #5。待你批新技术。 |
 
 ### 起步顺序（按讨论刷新）
-- **已落地**：T2 ✅、T4① 删过时工具指令 ✅、T6① 文档先验默认开 ✅。
-- **可立即继续（确定性、你已确认或低风险）**：**T8**（本项目驱动挖序列，你已批）、**T5**（绑定原因接进洞，遥测已就绪）、**T1**（SVF 接线）、**T3+T6②**（NULL/@return 契约）。
-- **要你先拍板再动**：**T4 的 CALLSPEC 字段集**（B3 重点）、**T7 的跨项目三问**（B1-①）、**T10/T12 新技术**（B4 #2/#5）。
+- **第一梯队确定性项已全部落地**：T1 ✅ T2 ✅(+闭环) T3/T6② ✅ T4① ✅ T5 ✅ T6① ✅ T8 ✅；外加 fan-out 的 **role-precision 修复**（SVF read-only 否决错误 OUTPUT）。共 198 测试全绿。
+- **实测否决**：**T9**（依赖图太平 + 盲点 depth-无关）→ 指向 binding 层。
+- **要你先拍板再动**：**T4 的 CALLSPEC 字段集**（B3 重点，最高杠杆）、**T7 的跨项目三问**（B1-①）、**T10/T12 新技术**（B4 #2/#5）。
+- **新的最高杠杆候选**：**binding 层**（task #14 / CLAUDE.md #1）——T9 的实测把"缺失的 gap API 多为 shallow、根因是 try_to_get_var 合成不出 opaque/void* 参数"坐实了。
 
 > 说明：T4 的 CALLSPEC 重构会**以单测无法捕捉的方式改变 LLM 行为**，要确认它真能提覆盖、且不致退化，需要一次端到端 A/B（用旧/新提示词在 cjson/zlib/lcms 上各跑一遍、比覆盖率）。
 
