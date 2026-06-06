@@ -626,9 +626,12 @@ def _preflight_filter_candidates(sources, work_dirs):
     pass
   # Drop ONLY genuine crash / no-progress; keep "couldn't vet" (binary missing
   # or broken-to-run, which is infra, not a driver defect).
+  # NB: preflight emits ``dead_on_empty (...)`` for a crash-on-empty (see
+  # preflight.py:219) — matching ``crash_on_empty`` here was dead code, so
+  # crashing drivers were never dropped and poisoned the merged harness.
   rejected = {r.driver_path for r in results
               if not r.accepted
-              and r.rejection_reason.startswith(('crash_on_empty', 'no_progress'))}
+              and r.rejection_reason.startswith(('dead_on_empty', 'no_progress'))}
   if rejected:
     logger.info(
         f'merge_drivers: preflight dropped {len(rejected)} crashing/'

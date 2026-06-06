@@ -39,7 +39,11 @@ def test_skip_when_too_few_binaries(monkeypatch, tmp_path):
 
 
 def test_drops_crashing_driver(monkeypatch, tmp_path):
-    """A crash_on_empty verdict drops exactly that driver."""
+    """A crashing driver (preflight's real ``dead_on_empty`` verdict) is dropped.
+
+    Regression: the filter used to match ``crash_on_empty``, a string preflight
+    never emits, so crashers were silently kept and poisoned the merge.
+    """
     srcs = [tmp_path / f"{i:02d}.fuzz_target" for i in (1, 2, 3)]
     monkeypatch.setattr(rsf, "_resolve_candidate_binary",
                         lambda s, w: Path(str(s) + ".bin"))
@@ -48,7 +52,7 @@ def test_drops_crashing_driver(monkeypatch, tmp_path):
         out = []
         for src, _b in pairs:
             if src.stem == "02":
-                out.append(_res(src, False, "crash_on_empty (artifact=x)"))
+                out.append(_res(src, False, "dead_on_empty (crash + edges=0 < 1)"))
             else:
                 out.append(_res(src, True))
         return out
