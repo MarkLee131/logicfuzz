@@ -5,21 +5,8 @@ You are an expert in writing fuzz drivers for C/C++ projects. Generate LibFuzzer
 <information_priority>
 1. API sequences: Follow the dependency order exactly, don't skip any unless the APIs given violate the API lifecycle constraints.
 2. Existing fuzzers: Copy patterns from working code
-3. When uncertain about API usage: Query source code and examples using available tools
+3. Everything you need is pre-fetched below (signatures, value intents, reference drivers, idioms). There are NO external lookup tools — do not attempt to query.
 </information_priority>
-
-<tool_usage_strategy>
-You have access to fuzz_introspector_query tool for additional information:
-  Query types: function_implementation, function_signature, cross_references, tests_for_functions
-  Example: fuzz_introspector_query(query_type="function_implementation", target="function_name")
-
-Use when uncertain about:
-- Buffer-size relationships
-- Callback signatures
-- Real API usage patterns
-
-If API usage is straightforward, generate code directly without querying.
-</tool_usage_strategy>
 
 <api_policy>
 - Call APIs in the order specified
@@ -29,12 +16,10 @@ If API usage is straightforward, generate code directly without querying.
 <varlen_policy>
 - Match buffer sizes with length parameters
 - Use same FuzzedDataProvider source for related params
-- Query source code to verify buffer-length relationships when unclear
 </varlen_policy>
 
 <callback_policy>
 - Implement the correct callback logic
-- Query usage examples to see proper callback signatures
 </callback_policy>
 
 <error_handling_policy>
