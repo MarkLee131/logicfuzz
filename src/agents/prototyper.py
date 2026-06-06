@@ -549,6 +549,27 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
             synthesis_base_text = self._format_synthesis_base_driver(
                 active_skeleton)
 
+        # T4 step2: CALLSPEC mode (gated, default OFF — LOGICFUZZ_CALLSPEC=1).
+        # Consolidate the overlapping API/skeleton views into one per-call typed
+        # table and suppress the redundant blocks (api_understanding, project_apis,
+        # dep_graph, condition, driver_knowledge, synthesis_base, api_sequences).
+        # Behavior-neutral when unset; A/B via the flag.
+        import os as _os
+        if _os.environ.get('LOGICFUZZ_CALLSPEC') and active_skeleton is not None:
+            try:
+                from liberator_adapter.analysis import render_callspec
+                _cs = render_callspec(
+                    active_skeleton.get('value_intents') or [],
+                    signatures=self._build_signature_map(
+                        active_skeleton.get('api_sequence') or [], project_apis))
+                if _cs:
+                    sequence_signatures_text = _cs
+                    api_understanding_text = project_apis_text = dep_graph_text = ""
+                    condition_text = driver_knowledge_text = synthesis_base_text = ""
+                    api_sequences_text = ""
+            except Exception as _e:
+                logger.warning(f"CALLSPEC render failed (non-critical): {_e}")
+
         # Add extern "C" guidance if needed
         extern_c_note = ""
         if needs_extern:
@@ -1433,10 +1454,14 @@ Output your fuzz driver code inside <fuzz_target> tags.
                     holes_desc_lines.append("<library_constants>")
                     holes_desc_lines.append(lib_const)
                     holes_desc_lines.append("</library_constants>")
-                block = render_value_intents(value_intents)
-                if block:
-                    holes_desc_lines.append("")
-                    holes_desc_lines.append(block)
+                # In CALLSPEC mode the per-arg intents already live in the
+                # CALLSPEC table — don't render them twice (keep library_constants).
+                import os as _os
+                if not _os.environ.get('LOGICFUZZ_CALLSPEC'):
+                    block = render_value_intents(value_intents)
+                    if block:
+                        holes_desc_lines.append("")
+                        holes_desc_lines.append(block)
             except Exception:
                 pass
 
@@ -1790,6 +1815,21 @@ Output your fuzz driver code inside <fuzz_target> tags.
         output.append("")
 
         return "\n".join(output)
+
+    def _build_signature_map(self, seq, project_apis) -> Dict[str, str]:
+        """{api: "ret fn(type name, …)"} for the sequence's APIs (CALLSPEC sig)."""
+        by_name = {a.get('function_name'): a for a in (project_apis or [])}
+        out: Dict[str, str] = {}
+        for name in seq or []:
+            a = by_name.get(name)
+            if not a:
+                continue
+            ret = (a.get('return_info') or {}).get('type_clang', 'void')
+            args = a.get('arguments_info') or a.get('arguments') or []
+            parts = [f"{arg.get('type_clang', arg.get('type', '?'))} "
+                     f"{arg.get('name', '')}".strip() for arg in args]
+            out[name] = f"{ret} {name}({', '.join(parts)})"
+        return out
 
     def _retrieve_skeleton(self, _function_analysis: dict) -> str:
         """Retrieve skeleton code based on archetype (currently disabled)."""
