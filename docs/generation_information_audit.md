@@ -313,3 +313,37 @@ CALLSPEC（每调用一行）:
 **落点**：
 - `driver_knowledge`（**同项目**驱动，1-15 个）：用结构签名对当前序列选最相关的（压缩版），token 预算封顶——同项目用结构足矣，**不需要 embedding**。
 - T7（**跨项目**语料）：结构签名为主 + embedding 补跨命名残差，阈值而非 top-k。
+
+---
+
+# 六、为什么 coverage 落后 baseline 这么多？方法论差距分析（2026-06-06）
+
+对照 PromeFuzz Table 2（24h，PromeFuzz/PromptFuzz/CKGFuzzer）。**一句话：差距主要是 API 广度差距，根因是我们 correct-by-construction 把"连不上的孤岛 API"整个排除在序列之外。**
+
+## 6.1 数据
+| | lcms | c-ares | zlib |
+|---|---|---|---|
+| public API | 1032 | 781 | 158 |
+| **我们候选序列覆盖的 API** | **166** | **60** | **67** |
+| **PromeFuzz #API（可运行 harness）** | **358** | **113** | **89** |
+| 我们 APIs/序列 均值 | 7.0 | 3.7 | 3.6 |
+
+外加 T9 实测：**302/452 个 gap API 从不出现在任何候选序列里**。
+
+## 6.2 三个叠加的成因
+1. **构造排除"孤岛 API"（主因）**。correct-by-construction 只把**符号上能连起来**的 API 串成序列；opaque/void* 参数、无项目内 producer 的深层 API 连不进任何链 → 从不进序列 → 从不成 driver。候选广度因此只有 PromeFuzz 的 ~46%(lcms)/53%(c-ares)。这正是文档里"lcms portfolio 被单一子系统主导、saturate 在 27-29%"的根。baseline 没这限制——LLM 想调哪个 API 就调，连不上就乱写/崩了再修。
+2. **漏斗只丢不修**。候选 166 → 可运行 driver ≪ 166（Z3 可行性 + 绑定 + 编译各丢一层），而我们**没有结构修复**（Phase A 已删）。PromeFuzz 的看家本领恰是 **repair loop**——harness 编译/运行失败就修，所以它的 358 是**可运行**的。我们为了 valid-by-construction 把失败直接丢——这就是广度的代价。
+3. **每 driver 太薄（c-ares/zlib）**。均值 3.6-3.7 个 API/序列 = 最小生命周期链（create→use→destroy）。高覆盖要的是**稠密 harness**（PromeFuzz lcms ~24 API/harness）。我们优化的是"每个调用都对"，不是"每个 driver 多调几个"。
+
+## 6.3 诚实的元判断
+**我们这一季的工作（CALLSPEC、schema、correctness）优化的是"精度"；baseline 赢在"广度 + 恢复力"。对原始 branch coverage，`广度 × 稠密度 × fuzz 时间`才是主项，而我们一直在拿广度/稠密度换 validity。** 三大创新（reconcile / 构造 / gap-direction）让我们**更准**，但没让我们**更广**。
+
+## 6.4 方法论修法（按杠杆排序；24h 跑之前要做的）
+1. **别再丢孤岛 API（最高杠杆，=binding 层 #14 的重构）**。把"绑定失败 → 丢 API"改成"绑定失败 → 把那几个参数当洞、连同 T5 来路 + ret_contract + CALLSPEC 签名一起交给 LLM 填"。**binding 从二元（bind-or-drop）改成优雅降级（bind-or-hint-and-defer）。** 我们这一季造的 hint（T5/CALLSPEC）正是 LLM 填这些洞需要的料——铺垫已就位。
+2. **让 LLM 加密 driver**。给它"骨架 + 这个子系统的 gap-API 清单"，让它顺手多织几个相关调用（提高 API/driver），尤其 c-ares/zlib。
+3. **漏斗变得能容错**。靠 LangGraph fixer 把编译失败救回来（别丢），缩小 候选→可运行 的衰减——像 PromeFuzz 那样 loss-tolerant。
+4. **按子系统多生成 driver**（gap API 按子系统聚类：lcms postscript/tag/optimizer）。
+5. **修测量**：coverage-build clobber（sancov 被覆盖→盲跑）+ 退化的 eval build（zlib 重测 baseline）会**放大**表观差距，跑 24h 前先修，免得白跑。
+
+## 6.5 张力（要你拍板）
+修法 1/2/3 本质是**为了广度，放松一点"correctness-first"**——让 LLM 去试那些符号搞不定的硬 API（可能失败、要修）。这跟我们"correct-by-construction、无 repair"的主线**有张力**。但可以两全：**符号保证它能保证的（可连核心），孤岛 API 给最大 hint 让 LLM best-effort**（失败交 fixer）——优雅降级，而非硬丢。这样既保创新、又拿广度。**是否走这条优雅降级路线，要你定。**
