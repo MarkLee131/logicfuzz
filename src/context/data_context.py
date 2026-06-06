@@ -267,8 +267,14 @@ class FuzzingContext:
                 llm_client: Any = None,
                 closed_loop_iters: int = 0,
                 closed_loop_early_stop: int = 0,
-                use_doxygen_priors: bool = False,
-                use_readme_purpose: bool = False) -> 'FuzzingContext':
+                # Doc priors are ON by default and not exposed as a CLI opt-out
+                # (B1-③): doxygen priors are token-NEGATIVE — a substantive
+                # docstring lets the comprehender SKIP that API's LLM call — and
+                # @param/@return carry ownership/NULL contracts the generated
+                # driver needs. Kept as params (not hardcoded) only so tests can
+                # A/B them programmatically.
+                use_doxygen_priors: bool = True,
+                use_readme_purpose: bool = True) -> 'FuzzingContext':
         """
         Prepare all fuzzing data using Liberator project-level modeling.
 

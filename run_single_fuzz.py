@@ -230,8 +230,7 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       llm_client=llm_client,  # Pass LLM for driver knowledge extraction
       closed_loop_iters=closed_loop_iters,
       closed_loop_early_stop=closed_loop_early_stop,
-      use_doxygen_priors=getattr(args, 'use_doxygen_priors', False) if args else False,
-      use_readme_purpose=getattr(args, 'use_readme_purpose', False) if args else False,
+      # Doc priors (doxygen + readme) are always on — see prepare() (B1-③).
     )
     return context.to_dict()
   except (ValueError, RuntimeError) as e:
