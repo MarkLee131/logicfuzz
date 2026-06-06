@@ -221,4 +221,11 @@ step │ api │ role │ ret(type, nullable?) │
 **为什么是奥卡姆**：`Typestate.check` 和 `all_effects()` **都已存在**；改动集中在 `_build_static_facts`（升级成 per-sequence）+ 在调用点把 effects/typestate 传进去。**零新分析、零新依赖**，只是把已算出的符号输出**选择性**接进 LLM 的 prompt。
 **分工更干净**：符号层陈述**事实**（句柄 H 在位置 2 被 USE、全程未被 DEF），LLM 只做**软裁决**（这是致命还是合法入口模式）。
 **注意主线**：这不是新功能，是**把现有三者拧紧**，且与 B3/T4 的 CALLSPEC 同源（CALLSPEC 给 Prototyper，本项给 Comprehender-B 裁决器）——**不偏离主线**。
-**待你拍板**：(a) violations 渲染到什么粒度（一句话/带句柄类型与位置）；(b) 要不要同时给"正向证据"（哪个 API DEF 了哪个句柄）还是只在有 violation 时给；(c) 改 LLM prompt → 需一次小 A/B（看 INVALID 误杀率、token）。
+
+### ✅ 已落地（commit「紧密结合 SVF⊕typestate⊕LLM」）
+按你拍板的 a/b/c 实现：
+- **(a) 带句柄类型 + 位置**：`comprehender._build_sequence_facts(seq, graph)` 渲染 `⚠ position N, <api>: handle <T> → <violation_kind>`。
+- **(b) 同时给正向证据**：每个本序列 API 的 `USE/DEF/KILL {句柄类型}`（**只本序列涉及的 API**，选择性剪裁）。
+- **(c) 改 prompt + 测试**：user 模板加 `{SEQUENCE_FACTS}` 块；system 加规则「违例是证据、非自动 INVALID；被 USE 的句柄若无 in-sequence producer 常是合法直接入口」（**防过度误杀的回归护栏**）。+5 单测、175 全绿。
+- **回归护栏**：① 门控——无 automaton → `use_def_graph=None` → 行为不变；② 杀手锏——`LOGICFUZZ_DISABLE_SEQFACTS=1` 即时回退做 A/B。
+- **仍需**：端到端覆盖 A/B（需清 `sequence_semantics` 缓存后真跑，看 INVALID 误杀率 + token）。
