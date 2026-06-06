@@ -15,8 +15,16 @@ Deterministic (no LLM): the intent is a pure function of ``ArgRole`` + type.
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List, Optional, Sequence
+
+
+def _hard_nullguard() -> bool:
+    """LOGICFUZZ_HARD_NULLGUARD=1 escalates the advisory NULL/return contracts +
+    opaque-handle provenance into MANDATORY guidance (driver-quality / low-FP).
+    Default off so the effect is A/B-measurable."""
+    return os.environ.get("LOGICFUZZ_HARD_NULLGUARD") == "1"
 
 from liberator_adapter.analysis.api_semantic_model import (
     ArgRole,
@@ -147,12 +155,21 @@ def _handle_provenance(sem, name, produced_so_far, prod_idx) -> List[str]:
     or NULL it instead of waiting for a creator that never comes (B4 #3)."""
     self_prod = set(getattr(sem, "produces", ()) or ())
     needed = set(getattr(sem, "requires", ()) or ()) - self_prod - produced_so_far
+    hard = _hard_nullguard()
     notes: List[str] = []
     for h in sorted(needed):
         producers = [p for p in prod_idx.get(h, []) if p != name]
         if producers:
-            notes.append(f"needs handle {h}: produced by {', '.join(producers[:3])} "
-                         f"— ensure one is called earlier in the driver")
+            if hard:
+                # Factory-chain directive: build the opaque handle for real
+                # (PromeFuzz reaches deep APIs this way) — never NULL/garbage it.
+                notes.append(f"needs handle {h}: BUILD IT — call {producers[0]}(...) "
+                             f"(and any prerequisite it needs) earlier, NULL-check "
+                             f"its result, then pass it here. Do NOT pass NULL or an "
+                             f"uninitialized value for this handle.")
+            else:
+                notes.append(f"needs handle {h}: produced by {', '.join(producers[:3])} "
+                             f"— ensure one is called earlier in the driver")
         else:
             notes.append(f"needs handle {h}: NO project API produces it "
                          f"(opaque / direct-entry) — construct a zeroed/minimal "
@@ -167,10 +184,18 @@ def _ret_contract_note(name, ret_contracts) -> Optional[str]:
     c = (ret_contracts or {}).get(name)
     if not c:
         return None
+    hard = _hard_nullguard()
     if c.get("may_return_null"):
+        if hard:
+            return ("MUST-GUARD: this return MAY be NULL — assign it to a named "
+                    "local and `if (!x) return 0;` BEFORE using/freeing/passing "
+                    "it. Skipping this guard is a driver bug (SEGV / false positive).")
         return ("⚠ returns NULL on failure → NULL-check this return before "
                 "binding/using it")
     if c.get("error_sentinel"):
+        if hard:
+            return (f"MUST-CHECK: return is an error/status ({c['error_sentinel']}) "
+                    f"— branch on it before using the object.")
         return (f"⚠ return is an error/status value ({c['error_sentinel']}) "
                 f"→ check it before relying on success")
     return None
