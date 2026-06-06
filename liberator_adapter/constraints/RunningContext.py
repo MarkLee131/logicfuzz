@@ -1,6 +1,6 @@
 from typing import List, Set, Dict, Tuple, Optional, Any
 
-import random, string, traceback
+import os, json, random, string, traceback
 
 from liberator_adapter.driver import Context
 from liberator_adapter.driver.ir import Type, PointerType, TypeTag
@@ -14,6 +14,26 @@ from liberator_adapter.driver.ir import (
     BuffDecl, BuffInit, FileInit, Statement, DynArrayInit,
     SetStringNull, Function, DynDblArrInit, Constant
 )
+
+
+def _record_binding_rejection(api_call, arg_pos, type_obj, reason):
+    """Best-effort empirical telemetry: when ``LOGICFUZZ_BINDING_TELEMETRY=<path>``
+    is set, append one JSONL record per ``try_to_get_var`` rejection so the
+    binding-layer bottleneck can be quantified by reason/type. No behavior
+    change — recording only, never raises."""
+    path = os.environ.get("LOGICFUZZ_BINDING_TELEMETRY")
+    if not path:
+        return
+    try:
+        tok = getattr(type_obj, "token", None) or str(type_obj)
+        with open(path, "a") as _f:
+            _f.write(json.dumps({
+                "fn": getattr(api_call, "function_name", "?"),
+                "arg": arg_pos, "type": tok, "reason": reason,
+            }) + "\n")
+    except Exception:
+        pass
+
 
 class RunningContext(Context):
     variables_alive     : List[Variable]
@@ -234,11 +254,11 @@ class RunningContext(Context):
         elif is_sink:
             val = self.get_value_that_strictly_satisfy(type, cond)
             if val is None:
-                if (Conditions.is_unconstraint(cond) and 
+                if (Conditions.is_unconstraint(cond) and
                     not type.is_incomplete):
                     val = self.randomly_gimme_a_var(type, cond, is_ret)
                 else:
-                    # raise ConditionUnsat()
+                    _record_binding_rejection(api_call, arg_pos, type, "sink_unsat")
                     raise ConditionUnsat(traceback.format_stack())
         # FLAVIO: this is an attempt to introduce NULL values in the code. It
         # does not working as expected so left it here for future refactor elif
@@ -291,9 +311,11 @@ class RunningContext(Context):
                 # the caller (CBFactory) rejects this binding path instead of
                 # crashing. (Was an interactive IPython embed + exit(1), which
                 # aborted non-interactive synthesis runs.)
+                _record_binding_rejection(api_call, arg_pos, type, "no_satisfying_var")
                 raise ConditionUnsat(traceback.format_stack())
         else:
             raise_an_exception = False
+            reject_reason = None
 
             # print("else:")
             if isinstance(type, PointerType):
@@ -307,6 +329,7 @@ class RunningContext(Context):
                     if tt.is_incomplete:
                         # raise ConditionUnsat()
                         raise_an_exception = True
+                        reject_reason = "incomplete_opaque"
                     if tt.tag == TypeTag.STRUCT:
                         call_can_be_done = self.is_init_api(api_call, api_cond, arg_pos)
                         type_is_friendly = DataLayout.instance().is_fuzz_friendly(tt.token)
@@ -321,8 +344,10 @@ class RunningContext(Context):
                         if (not call_can_be_done and 
                             type_is_friendly and needs_init_or_setby):                            
                             raise_an_exception = True
+                            reject_reason = "struct_needs_init"
                     if ConditionManager.instance().has_source(tt):
                         raise_an_exception = True
+                        reject_reason = "has_source"
                 # print(f"{tt}is not fuzz friendly")
                 # from IPython import embed; embed(); exit(1)
                 # raise ConditionUnsat()
@@ -334,8 +359,10 @@ class RunningContext(Context):
                 # from IPython import embed; embed(); exit(1)
                 # raise ConditionUnsat()
                 raise_an_exception = True
-            
+                reject_reason = "ret_unconstrained"
+
             if raise_an_exception:
+                _record_binding_rejection(api_call, arg_pos, type, reject_reason)
                 raise ConditionUnsat(traceback.format_stack())
             else:
                 val = self.create_new_var(type, cond, is_ret)
