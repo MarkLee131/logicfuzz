@@ -1961,8 +1961,10 @@ class FuzzingContext:
                 # CONFIG args get their exact legal constant set (e.g. lcms
                 # cmsColorSpaceSignature, zlib Z_*) instead of a blind range.
                 _const_vocab = _build_constant_vocabulary(project_name, log)
+                # T1: per-param SVF set_by (param→param init dependency).
+                _svf_index = _build_svf_index(project_name, log)
                 _n_annot = annotate_skeletons(
-                    skeleton_drivers, api_semantic_model, _const_vocab)
+                    skeleton_drivers, api_semantic_model, _const_vocab, _svf_index)
                 log.info('  10b/12 ✅ G4 value-intent: %d/%d skeletons annotated'
                          ' (%d enum families)',
                          _n_annot, len(skeleton_drivers),
@@ -2397,6 +2399,41 @@ def _build_constant_vocabulary(project_name: str, log) -> Dict[str, Any]:
         return extract_constant_vocabulary(paths)
     except Exception as exc:
         log.debug('   10b constant-vocabulary build skipped: %s', exc)
+        return {}
+
+
+def _build_svf_index(project_name: str, log) -> Dict[str, Dict[int, Dict[str, Any]]]:
+    """T1: lift the per-param SVF ``set_by`` (param→param init dependency) from
+    conditions.json into a ``{function: {param_idx: {"set_by": [idx,...]}}}``
+    index, so the G4 hole intents can tell the LLM which args carry the data
+    that populates an output/mutated arg (instead of collapsing it to one bit).
+
+    Best-effort: returns ``{}`` on any failure.
+    """
+    out: Dict[str, Dict[int, Dict[str, Any]]] = {}
+    try:
+        cpath = Path(f'./results/{project_name}/conditions.json')
+        if not cpath.is_file():
+            return {}
+        records = json.loads(cpath.read_text())
+        for entry in records if isinstance(records, list) else []:
+            fn = entry.get('function_name')
+            if not fn:
+                continue
+            for key, pinfo in entry.items():
+                if not (key.startswith('param_') and isinstance(pinfo, dict)):
+                    continue
+                set_by = pinfo.get('set_by') or []
+                if not set_by:
+                    continue
+                # set_by entries look like 'param_2' → lift to the int index 2.
+                src = [int(s.split('_')[1]) for s in set_by
+                       if isinstance(s, str) and s.startswith('param_') and s.split('_')[1].isdigit()]
+                if src:
+                    out.setdefault(fn, {})[int(key.split('_')[1])] = {'set_by': src}
+        return out
+    except Exception as exc:
+        log.debug('   10b SVF set_by index build skipped: %s', exc)
         return {}
 
 

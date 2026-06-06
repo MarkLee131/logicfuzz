@@ -161,12 +161,15 @@ def value_intents_for_sequence(
     model: APISemanticModel,
     api_sequence: Sequence[str],
     vocab=None,
+    svf_index=None,
 ) -> List[Dict[str, Any]]:
     """Per-API, per-arg value intents for a skeleton's sequence.
 
     Returns a list of ``{api, role, args: [...], handle_provenance: [...]}``
     records; APIs absent from the model or with nothing to say are dropped, so
-    the result is the minimal set the Prototyper needs to render.
+    the result is the minimal set the Prototyper needs to render. ``svf_index``
+    (T1) carries per-param ``set_by`` so an output/mutated arg's data-source
+    args are surfaced.
     """
     prod_idx = _producer_index(model)
     produced_so_far: set = set()
@@ -175,18 +178,23 @@ def value_intents_for_sequence(
         sem = model.get(name) if model else None
         if sem is None:
             continue
+        api_svf = (svf_index or {}).get(name, {})
         arg_records: List[Dict[str, Any]] = []
         for arg in sem.args:
             intent = _arg_intent(arg, name, vocab)
-            if intent is None:
+            set_by = (api_svf.get(arg.index) or {}).get("set_by")
+            if intent is None and not set_by:
                 continue
-            arg_records.append({
+            rec_a: Dict[str, Any] = {
                 "index": arg.index,
                 "role": arg.role.value,
                 "type": arg.type_str,
                 "pairs_with": arg.pairs_with,
-                "intent": intent,
-            })
+                "intent": intent or "",
+            }
+            if set_by:
+                rec_a["populated_from"] = set_by
+            arg_records.append(rec_a)
         prov = _handle_provenance(sem, name, produced_so_far, prod_idx)
         produced_so_far |= set(getattr(sem, "produces", ()) or ())
         if arg_records or prov:
@@ -209,7 +217,16 @@ def render_value_intents(intents: Sequence[Dict[str, Any]]) -> str:
     for rec in intents:
         lines.append(f"- {rec['api']} [{rec['role']}]:")
         for a in rec["args"]:
-            lines.append(f"    arg{a['index']} ({a['type']}): {a['intent']}")
+            parts = []
+            if a.get("intent"):
+                parts.append(a["intent"])
+            if a.get("populated_from"):
+                srcs = ", ".join(f"arg{i}" for i in a["populated_from"])
+                parts.append(f"POPULATED_FROM {srcs}: the API writes this arg "
+                             f"using those args — set them to meaningful "
+                             f"(non-empty / valid) values so the write is non-trivial.")
+            if parts:
+                lines.append(f"    arg{a['index']} ({a['type']}): {' | '.join(parts)}")
         for p in rec.get("handle_provenance", []):
             lines.append(f"    ⚙ {p}")
     return "\n".join(lines)
@@ -219,19 +236,20 @@ def annotate_skeletons(
     skeleton_drivers: Sequence[Dict[str, Any]],
     model: APISemanticModel,
     vocab=None,
+    svf_index=None,
 ) -> int:
     """Attach a ``value_intents`` block to each skeleton in place.
 
     Returns the number of skeletons that received at least one intent. Safe
     on missing/empty inputs (returns 0). ``vocab`` is the optional T2
-    named-constant vocabulary used to give enum CONFIG args their legal set.
+    named-constant vocabulary; ``svf_index`` is the optional T1 ``set_by`` map.
     """
     if not skeleton_drivers or model is None:
         return 0
     n = 0
     for sk in skeleton_drivers:
         seq = sk.get("api_sequence") or []
-        intents = value_intents_for_sequence(model, seq, vocab)
+        intents = value_intents_for_sequence(model, seq, vocab, svf_index)
         sk["value_intents"] = intents
         if intents:
             n += 1
