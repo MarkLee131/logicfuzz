@@ -228,4 +228,9 @@ step │ api │ role │ ret(type, nullable?) │
 - **(b) 同时给正向证据**：每个本序列 API 的 `USE/DEF/KILL {句柄类型}`（**只本序列涉及的 API**，选择性剪裁）。
 - **(c) 改 prompt + 测试**：user 模板加 `{SEQUENCE_FACTS}` 块；system 加规则「违例是证据、非自动 INVALID；被 USE 的句柄若无 in-sequence producer 常是合法直接入口」（**防过度误杀的回归护栏**）。+5 单测、175 全绿。
 - **回归护栏**：① 门控——无 automaton → `use_def_graph=None` → 行为不变；② 杀手锏——`LOGICFUZZ_DISABLE_SEQFACTS=1` 即时回退做 A/B。
-- **仍需**：端到端覆盖 A/B（需清 `sequence_semantics` 缓存后真跑，看 INVALID 误杀率 + token）。
+- **✅ 冒烟 A/B 已跑**（c-ares，离线复用缓存 + 真 LLM gpt-4o-mini，temp=0，12 条 facts-bearing 序列）：
+  - **噪声地板** A1 vs A2（同 prompt 复跑）= **0/12**（facts-bearing 序列上 temp=0 确定）。
+  - **facts 信号** A1 vs B = **1/12 翻转，且是 rescue**（`INVALID→SUBOPTIMAL`：`ares_dns_parse→…→destroy` 的 DEF→USE→destroy 证据让 LLM 看出"可插消费者修复"而非死序列）；**新增误杀 = 0**。
+  - 早前混合子集里"`ares_strerror` 被误杀"经查是**空 facts 序列上的 LLM 采样噪声**（A/B prompt 相同 → 非本特性）。
+  - **结论：净正向、无回归**（救回假 INVALID，零新误杀）。注意：小样本/单项目/harness 强制全过 LLM（无 prefilter、project static_facts 为空）使绝对 INVALID 率比线上严，但 A vs B 隔离有效。
+- **仍可做**：更大样本 + 多项目 + 线上完整 prepare() 的端到端覆盖对照（接 docker）。
