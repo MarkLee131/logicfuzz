@@ -549,13 +549,12 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
             synthesis_base_text = self._format_synthesis_base_driver(
                 active_skeleton)
 
-        # T4 step2: CALLSPEC mode (gated, default OFF — LOGICFUZZ_CALLSPEC=1).
-        # Consolidate the overlapping API/skeleton views into one per-call typed
-        # table and suppress the redundant blocks (api_understanding, project_apis,
-        # dep_graph, condition, driver_knowledge, synthesis_base, api_sequences).
-        # Behavior-neutral when unset; A/B via the flag.
-        import os as _os
-        if _os.environ.get('LOGICFUZZ_CALLSPEC') and active_skeleton is not None:
+        # T4: CALLSPEC — consolidate the overlapping API/skeleton views into one
+        # per-call typed table and suppress the redundant blocks (api_understanding,
+        # project_apis, dep_graph, condition, driver_knowledge, synthesis_base,
+        # api_sequences). Promoted to default after A/B (c-ares 1440>804 branches,
+        # lcms 88>0); the LOGICFUZZ_CALLSPEC gate was removed.
+        if active_skeleton is not None:
             try:
                 from liberator_adapter.analysis import render_callspec
                 _cs = render_callspec(
@@ -1446,23 +1445,16 @@ Output your fuzz driver code inside <fuzz_target> tags.
         value_intents = skeleton.get('value_intents') or []
         if value_intents:
             try:
-                from liberator_adapter.analysis import render_value_intents
-                # Inject the <library_constants> vocabulary the per-arg ENUM /
-                # CONFIG intents reference, BEFORE the intents that cite it.
+                # Inject the <library_constants> vocabulary the CALLSPEC per-arg
+                # ENUM / CONFIG intents reference.
                 lib_const = skeleton.get('library_constants')
                 if lib_const:
                     holes_desc_lines.append("")
                     holes_desc_lines.append("<library_constants>")
                     holes_desc_lines.append(lib_const)
                     holes_desc_lines.append("</library_constants>")
-                # In CALLSPEC mode the per-arg intents already live in the
-                # CALLSPEC table — don't render them twice (keep library_constants).
-                import os as _os
-                if not _os.environ.get('LOGICFUZZ_CALLSPEC'):
-                    block = render_value_intents(value_intents)
-                    if block:
-                        holes_desc_lines.append("")
-                        holes_desc_lines.append(block)
+                # The per-arg intents now live in the CALLSPEC table (T4) — don't
+                # render them twice here (library_constants above is kept).
             except Exception:
                 pass
 
