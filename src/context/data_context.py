@@ -307,6 +307,21 @@ class FuzzingContext:
 
         log = logger_instance or logger
 
+        # Breadth lever (2026-06): the skeleton/driver count caps API breadth.
+        # filter_top_k=10 → greedy max-coverage keeps only 10 sequences → ~45 of
+        # 297 lcms APIs reach drivers (vs PromeFuzz's 293 over 141 drivers).
+        # LOGICFUZZ_TOP_K raises the cap (offline: 10→45, 50→86, 100→136 APIs).
+        # The funnel, not candidate generation, is the bottleneck (the pool
+        # already covers all 297). Cost scales linearly (more LLM+build trials).
+        _env_top_k = os.environ.get("LOGICFUZZ_TOP_K")
+        if _env_top_k:
+            try:
+                filter_top_k = int(_env_top_k)
+                log.info(f'🔭 LOGICFUZZ_TOP_K={filter_top_k} (breadth: more '
+                         f'skeletons → more distinct APIs in the merged union)')
+            except ValueError:
+                pass
+
         # Try to load from cache first. LOGICFUZZ_NO_CACHE=1 forces a fresh
         # prepare() so iterative changes to Step 5h (construct) / Step 10
         # (skeleton synthesis) actually take effect — the cache hit otherwise
