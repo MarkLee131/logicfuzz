@@ -1,0 +1,21 @@
+#!/bin/bash -eu
+# OFG cache existence GATE for c-ares.
+#
+# This file's CONTENT is never executed — only its PRESENCE matters. Per
+# experiment/oss_fuzz_checkout.py (`_has_cache_build_script` ->
+# `_prepare_image_cache`), having fuzzer_build_script/<project> on disk enables
+# the cached-image fast path:
+#   1. the project image is built ONCE (infra/helper.py build_fuzzers), running
+#      the project's ORIGINAL projects/c-ares/build.sh, and is committed as a
+#      cached base image (address + coverage sanitizers);
+#   2. every later trial reuses that base image and RE-RUNS the SAME original
+#      build.sh, with OFG's generated driver .c swapped in.
+#
+# So the cache only works if projects/c-ares/build.sh is IDEMPOTENT on the
+# already-built image. Upstream's was NOT: `cd $SRC/googletest; mkdir build`
+# aborts the second time with "File exists" under `bash -eu`. The fix lives in
+# build.sh itself — `mkdir build` -> `mkdir -p build` — in the MarkLee131/oss-fuzz
+# fork that _clone_oss_fuzz_repo() re-clones fresh on every run. Nothing else in
+# build.sh is non-idempotent: the googletest/c-ares clones are Dockerfile RUN
+# layers (baked into the base image, not re-run), and buildconf/configure/make/
+# $CC/$CXX/zip all overwrite or update in place.
