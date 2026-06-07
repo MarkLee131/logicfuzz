@@ -73,6 +73,6 @@ CALLSPEC 已默认化、砍掉冗余块（见 generation.md §2）。**仍开放
 2. **多项目 coverage_diff 验证 + vs PromeFuzz/CKGFuzzer 补盲区对比**：把 lcms 的 PoC（876 行 IT8/CGATS 人写 driver 没覆盖、但互补）坐实成 contribution——需 (a) 跨项目可复现 + (b) 证我们补的 existing-driver gap 比 baseline 多。两者皆未测（见 generation.md §5）。
 3. **24h union 真跑**对标 PromeFuzz Table 2 绝对覆盖（成本已 OK，deferred）。这是真正的 headline test。
 4. **精益模式**：确定性 crash triage（`tools/merge_drivers/crash_frame.py` 已建）替 LLM crash 分析 + 跳过 per-driver optimize → 8.5 → ~3 LLM calls/driver。
-5. **build-cache 扩展**：给 cjson/zlib/c-ares/libpng 各加一个 `fuzzer_build_script/<project>` 增量构建脚本（lcms 已做，零新代码，复用 OFG ofg-cache，见 generation.md §4）。
+5. **build-cache 扩展（非"一文件一项目"，已查清）**：pub-llm 的 OFG 缓存 = 存在门控 `fuzzer_build_script/<project>` + 缓存镜像 + **重跑原 build.sh（靠幂等,make 变 no-op）**——脚本内容不被应用。lcms 已工作（build.sh 幂等）。扩展需**每项目让 build.sh 在缓存镜像上幂等**：c-ares 实测失败（`mkdir build` → File exists），修法 = **fork 改 `mkdir -p build`** 这类 1 行（fork=MarkLee131/oss-fuzz）；cjson 单文件库廉价、跳过。详见 generation.md §4。
 
 > **未走的方法论修法**（audit §6.4，deferred）：#3 漏斗容错（靠 LangGraph fixer 救回编译失败、像 PromeFuzz 那样 loss-tolerant）、#4 按子系统多生成 driver（lcms postscript/tag/optimizer 聚类）、§6.5 "放松一点 correctness 让 LLM 试硬 API"。目前优雅降级已在不牺牲主线的前提下拿到广度，这几条留作后续；其中"放松 correctness"与"correct-by-construction 无 repair"主线**有张力**，是否走需你定（倾向：符号保证可连核心、孤岛 API 给最大 hint 让 LLM best-effort、失败交 fixer——优雅降级而非硬丢）。

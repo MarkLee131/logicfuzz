@@ -135,24 +135,36 @@ with `/out`,`/work` cleared — so a 56-driver lcms run did ~57 full
 configure+make of liblcms2. Parallelism (`LLM_NUM_EXP=6`) was *not* the
 bottleneck.
 
-**Fix = zero new code, one config file** (commit `b00b1e34`). pub-llm already has
+**Fix = zero new code, one gate file** (commit `b00b1e34`). pub-llm already has
 the OSS-Fuzz `ofg-cache` fully wired (`prepare_cached_images` in
-`run_logicfuzz.py`; `build_target_local` already does
+`run_logicfuzz.py`; `build_target_local` does
 `is_image_cached → rewrite_project_to_cached_project → prepare_build`;
 `OFG_USE_CACHING=1` default). It only lacked a `fuzzer_build_script/<project>`
-for lcms (18 other projects already ship one). The added file
-(`fuzzer_build_script/lcms`) is the **incremental** build: skip `./configure &&
-make` (the static lib `src/.libs/liblcms2.a` is already in the cached base image,
-built once) and only compile + link the fuzz target against it.
+for lcms (18 other projects ship one).
 
-**Docker-measured (lcms top_k=8):** 2 cached images built (address + coverage),
-51 × "Using cached instance for lcms", 0 compile errors, trials build+run
-normally. The image is built once and reused by every trial.
+**How it actually works (verified empirically, NOT what it looks like):**
+`fuzzer_build_script/<project>` is used at `oss_fuzz_checkout.py:235` ONLY as an
+**existence gate** — its *content is never applied as build.sh* in pub-llm. The
+mechanism is: (1) `prepare_cached_images` builds the library into a committed
+image ONCE; (2) each trial `FROM`s that image and **re-runs the ORIGINAL
+build.sh**. So the speedup depends on the project's build.sh being **idempotent**
+on the prebuilt image — `make` becomes a no-op (lib already built), only the
+driver recompiles.
 
-**Extends to cjson/zlib/c-ares/libpng** the same way — one file each (open
-roadmap). NB a subagent earlier reimplemented a whole build-cache *layer* and
-branched from `main` (broke pub-llm) → reverted; the correct fix was the one
-config file (see memory `feedback_efficiency_and_simplicity`).
+**Docker-measured (lcms top_k=8):** 2 cached images built, 51 × "Using cached
+instance for lcms", 0 errors — lcms's `./configure && make` re-runs cleanly
+(make no-op) → partial speedup (skips the `make all` relink). The `fuzzer_build_script/lcms`
+file's content is moot (gate only); an empty file would behave identically.
+
+**Extension is NOT "one file each".** It needs each project's build.sh to be
+idempotent on the cached image. **c-ares FAILS** (verified): its build.sh does
+`cd $SRC/googletest; mkdir build` → "File exists" on re-run. Fix = make the
+build.sh idempotent in the **OSS-Fuzz fork** (`mkdir build` → `mkdir -p build`,
+etc.), a per-project ~1-line fork edit (fork = github.com/MarkLee131/oss-fuzz).
+cjson is a cheap single-file lib (low value). So the cache extension is a
+per-project fork-idempotency task, not a quick config drop — open roadmap.
+NB a subagent earlier reimplemented a whole build-cache *layer*, branched from
+`main` (broke pub-llm) → reverted (see memory `feedback_efficiency_and_simplicity`).
 
 ---
 
