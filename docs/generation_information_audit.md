@@ -69,7 +69,9 @@ CALLSPEC 已默认化、砍掉冗余块（见 generation.md §2）。**仍开放
 
 按杠杆排序：
 
-1. **binding 层 #14（最高杠杆）**：opaque / `void*` / 无 producer 的尾巴（lcms ~半数 API），`top_k` 够不到的硬骨头。CBFactory 的 `RunningContext.try_to_get_var` 合成不出这些参数 → API 整个被丢，深层 gap API（`cmsDoTransform` 等）永远成不了 skeleton。把"绑定失败 → 丢 API"改成"绑定失败 → 把那几个参数当洞，连同 T5 来路 + ret_contract + CALLSPEC 签名交给 LLM 填"（bind-or-hint-and-defer）——这一季造的 hint 正是填洞的料，铺垫已就位。**详细机制见 memory `project_binding_layer_unsat`**。
+1. **binding 层 #14（已重新 scope，框架已变）**：**"绑定失败→丢 API"那条已经修好了**——实测 lcms56 skeleton 合成 `z3_rejected=0`、226 序列全 emit（220 经 unchecked 路径），即 **B 优雅降级 + unchecked render 已把所有 opaque/无-producer API 当洞-skeleton 救回**，不再被丢。**真正剩下的是两件、都不是"API 被丢"**：
+   - **(a) 贪心选择重叠（较低杠杆，selection 算法）**：`select_top_k` 的 greedy max-cov 在 lcms 饱和 ~186/297（密 driver 重叠在热门 API 上）。修法 = diversity-aware 选择（罚重叠、选覆盖新 API 的序列），把 union 推向 297。改 `coverage_ranker`/`select_top_k`，不碰 binding。
+   - **(b) opaque 参数的【覆盖】(深 R&D，真·#14)**：opaque API 已成 skeleton,但 LLM 合成不出真的 `cmsHTRANSFORM` 类参数 → NULL/垃圾填 → API 被调但覆盖 ~0。这才是硬骨头：让 opaque 参数【可合成】(发现工厂链 / 动态反馈),不只是"当洞"。producer-channel 修复(2026-06-05,见 memory)已让 zlib `z_stream` 可构造 → 真覆盖 1874/3397;这一季的工厂链提示(T5 + hard-guard)在**有 producer** 处再加力。**truly-opaque(无 producer,如 lcms `cmsHTRANSFORM`)仍需新机制**(发现工厂链 / 动态反馈),是 #14 唯一剩下的硬核。**详见 memory `project_binding_layer_unsat`**(其"walls 深覆盖"框架正确,已记 z3_rejected=0)。
 2. **多项目 coverage_diff 验证 + vs PromeFuzz/CKGFuzzer 补盲区对比**：把 lcms 的 PoC（876 行 IT8/CGATS 人写 driver 没覆盖、但互补）坐实成 contribution——需 (a) 跨项目可复现 + (b) 证我们补的 existing-driver gap 比 baseline 多。两者皆未测（见 generation.md §5）。
 3. **24h union 真跑**对标 PromeFuzz Table 2 绝对覆盖（成本已 OK，deferred）。这是真正的 headline test。
 4. **精益模式**：确定性 crash triage（`tools/merge_drivers/crash_frame.py` 已建）替 LLM crash 分析 + 跳过 per-driver optimize → 8.5 → ~3 LLM calls/driver。
