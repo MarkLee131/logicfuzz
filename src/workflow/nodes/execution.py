@@ -649,6 +649,25 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
             f'Keep-best: restored the best driver of this trial '
             f'({best_cov:.2%}) over a regressed iteration.', trial=trial)
 
+    # File-restore (bug fix 2026-06-07): the on-disk ``NN.fuzz_target`` was
+    # written with THIS iteration's (regressed) source at build time (line ~338);
+    # rollback/keep-best above only updated STATE. The original design deferred
+    # the rebuild to "next loop's build" — but on the FINAL iteration there is no
+    # next loop, so without this the merge/eval ships the WORSE driver while the
+    # log/state claim the better one (observed: combo c-ares trial-01 shipped the
+    # 3-function regressed file). Re-write the file so disk matches the kept
+    # source; the merge rebuilds from it, so the right driver is fused.
+    if (rollback_applied or keep_best_restored) and final_fuzz_target_source:
+        try:
+            with open(fuzz_target_path, 'w') as _ft:
+                _ft.write(final_fuzz_target_source)
+            logger.debug(
+                f'Restored on-disk driver to the kept source '
+                f'({len(final_fuzz_target_source)} chars).', trial=trial)
+        except Exception as _e:
+            logger.warning(
+                f'Failed to re-write restored driver to disk: {_e}', trial=trial)
+
     # Create state update
     state_update = {
         "run_success": run_result.succeeded if hasattr(run_result, 'succeeded') else True,
