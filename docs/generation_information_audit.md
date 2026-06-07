@@ -371,8 +371,30 @@ CALLSPEC（每调用一行）:
 
 **消融结论**：density 与 guard **协同**——单独都不行（lcms density-only=0 全 SEGV、guard-only=54≈66），combo 才 206。**c-ares "回退"经子代理根因 = LLM n=1 采样方差**（density 对无句柄的纯 parser 是构造级 no-op，没接任何 extender；136→14 是 LLM 那次采样把 `abuf` 绑到 buffer 末尾→立即 ARES_EBADNAME），**非 density 系统性伤害**；且其中一部分是 keep-best 文件回写 bug 污染（已修）。
 
-**待办**：24h `--merge` union 跑（后台进行中）才能对标 PromeFuzz（their lcms ~13k / c-ares 6,106，24h 数十 driver union）。<br>
 **未走的修法**：§6.4-#3（漏斗容错/fixer 救回）、#4（按子系统多生成）、§6.5 的"放松 correctness 让 LLM 试硬 API"——目前优雅降级已在不牺牲主线的前提下拿到广度，这几条留作后续。
+
+## 6.7 广度诊断 + top_k 杠杆 + 端到端验证 + 诚实定位（2026-06-07 续）
+
+**用 API 数当 24h 的快代理**（PromeFuzz Table 2 报 #API）。诊断出**真瓶颈不是生成、是选择**：候选池（construct）已覆盖全部 297 lcms API，但 `filter_top_k=10` 的 greedy max-cov 只留 10 条 → 只有 ~45 API 进 driver。
+
+- **新杠杆 `LOGICFUZZ_TOP_K`**（`data_context.prepare`，需 `LOGICFUZZ_NO_CACHE=1` 重生 skeleton）。离线 greedy：top_k=100 → **c-ares 118≥113、zlib 95≥89 追平 PromeFuzz #API**；lcms 100→136、150→186（358 的尾巴是 opaque/无 producer，binding 层 #14 的限制，top_k 够不到）。
+- **密度共现融合**（`_densify` 第二源）：沿 automaton accepting-path 真实共现加密(= PromeFuzz call-scope/semantic 分组)，lcms 候选 6.6→**7.7 APIs/seq、median 7 = 追平 PromeFuzz 7.6**，跨多句柄工作流。默认 `max_extra=8`、`LOGICFUZZ_DENSE_COOCCUR=1`。
+- **成本（实测，gpt-4o，eval24 report.json）**：top_k=10 一跑 ≈ **$0.5–0.9**；top_k=56 ≈ $3–5。PromeFuzz 全 20 库套件 = $15.89。**成本非问题。**
+
+**baseline driver 数（subagent 数他们 examples/，22 库）**：PromeFuzz 均 95/中位 54（lcms 140）；PromptFuzz 留 ~69（生成 ~270 再按覆盖筛）；CKGFuzzer ~88-101（≈1/API）。**三家全是 volume-over-density**（每 driver ~5-6 API、融合成一个 fuzzer、覆盖制导筛）。**我们是唯一 few + dense + gap-directed**。
+
+**lcms56 端到端实测**：56 drivers → union **92 distinct API**、**6.9 API/driver**(密度真转化)；merge 43(quarantine 丢 1+preflight 丢 5)；merged harness 连续 fuzz 1h = **1424 branches，~30min plateau** → **覆盖是广度封顶,不是时间封顶**。
+
+**⚠️ 诚实修正(别再吹"3× 更省 driver")**：实测 lcms 92 API/56 driver = **1.64 新 API/driver,低于 PromeFuzz 的 2.56**。密 driver **互相重叠**(共现拉进相同热门 API),union 饱和快。所以"更省"比 subagent 估的弱——我们 driver 密但 union 增长不占优。
+
+**coverage_diff PoC(vs 人写 OSS-Fuzz `fuzzers.c`,各 30min,排除 driver TU)**：我们覆盖 **876 lcms 库行(整个 IT8/CGATS 解析器 cmscgats.c 723 + cmsmd5 153)人写 driver 一行没覆盖**；但**是互补**——人覆盖 596 行我们没碰(PostScript cmsps2.c,我们已知 binding 盲区)。总量我们 5953 < 人 7346。**结论：proof-of-concept(gap-direction 能补盲区),不是 contribution**——"不同 driver 覆盖不同代码"本属常态;要成卖点须证 **(a) 跨项目稳定可复现 + (b) 我们补的 existing-driver gap 比 PromeFuzz/CKGFuzzer 多**。两者皆未测。
+
+### 开放项(收尾时记录,后续做)
+- **生成太慢**(subagent 修中)：每 trial 重编整个库(~57 ./configure)+ fixer churn → 缓存库构建、只 relink driver + 并行。
+- **精益模式**：确定性 crash triage(crash_frame.py 已建)替 LLM crash 分析 + 跳过 per-driver optimize → 8.5→~3 calls/driver。
+- **多项目 coverage_diff 验证** + **vs PromeFuzz/CKGFuzzer 补盲区对比**(坐实 PoC)。
+- **binding 层 #14**：opaque/无 producer 尾巴(lcms ~半数 API),top_k 够不到的硬骨头。
+- **24h union 真跑**对标 PromeFuzz 绝对覆盖(成本已 OK,deferred)。
 
 
 TODO: 本文档需要更新，你要移除掉我们确认完成的任务和实现好的技术细节内容；只保留不确定的、需要你拍板的部分。 已完成的优化任务和新组件（包括schema定义、callspec设计、typestate快照等）可以简洁地更新到仓库的README或设计文档中，保持这个文档专注于待决策的事项和未来的计划。

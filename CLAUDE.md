@@ -39,8 +39,17 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 hint (low-FP). Auto-on under DENSE_CONSTRUCT.
 #   LOGICFUZZ_STRICT_ORDERING=1   revert B graceful degradation (drop orphan
 #                                 USE_BEFORE_INIT instead of keeping as a hole).
+#   LOGICFUZZ_DENSE_COOCCUR=0     density extends ONLY handle-sharing (drop the
+#                                 automaton-co-occurrence source; default on).
+#   LOGICFUZZ_DENSE_MAX_EXTRA=N   cap extra APIs appended per chain (default 8 →
+#                                 ~7.7 APIs/seq lcms = PromeFuzz parity).
+#   LOGICFUZZ_TOP_K=N             skeleton/driver count = the UNION-breadth lever
+#                                 (default filter_top_k=10; needs NO_CACHE=1 to
+#                                 regen skeletons). Target ≈ PromeFuzz drivers/2.5.
 # Measured lcms 30s: 66→206 br (+212%), FP 1→0. Couple density+guard always.
-LOGICFUZZ_DENSE_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/lcms.yaml --merge-drivers
+# §6.6/§6.7 of generation_information_audit.md has the full empirical arc + open items.
+LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_DENSE_CONSTRUCT=1 LOGICFUZZ_TOP_K=56 \
+  python3 run_logicfuzz.py -y comparison/lcms.yaml --merge-drivers
 
 # Synthesize a multi-task harness from successful trials at the eval tail
 python3 run_logicfuzz.py -y comparison/cjson.yaml --merge-drivers
