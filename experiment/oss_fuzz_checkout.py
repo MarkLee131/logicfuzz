@@ -1,3 +1,16 @@
+# Copyright 2024 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """
 Tools used for experiments.
 """
@@ -19,53 +32,44 @@ logger.setLevel(logging.DEBUG)
 
 BUILD_DIR: str = 'build'
 GLOBAL_TEMP_DIR: str = ''
-ENABLE_CACHING = bool(int(os.getenv('OFG_USE_CACHING', '1')))
+ENABLE_CACHING = bool(int(os.getenv('OFG_USE_CACHING', '0')))
+
+# --- Library build-cache (LOGICFUZZ_LIB_CACHE) ----------------------------
+# Default OFF. When ON, the project's library is compiled ONCE per run into a
+# committed Docker image (per sanitizer). Every trial then FROMs that image and
+# runs a *reduced* build script that only recompiles+links the one-file fuzz
+# driver, instead of re-running ``./configure && make`` (a full library rebuild)
+# inside every ``docker run ... compile``.
+#
+# Why this exists: each trial's build (build_target_local -> docker run compile)
+# executes the project's UNMODIFIED build.sh, which for autotools/cmake projects
+# (e.g. lcms: ``./configure --enable-shared=no && make -j$(nproc) all``) rebuilds
+# the entire library before compiling the single driver .c. The library is
+# byte-identical across trials, so that work is pure waste — measured ~57 full
+# lcms library rebuilds for a 56-driver run.
+#
+# This is the upstream OSS-Fuzz "ofg-cached" idea (commit a post-build container,
+# FROM it, swap in a reduced build script) but self-contained and auto-derived,
+# so it needs no hand-written ``fuzzer_build_script/<project>`` gate file and no
+# remote registry.
+#
+# Fail-safe contract: any error in cache preparation, or an un-reducible
+# build.sh, leaves ``_LIB_CACHE_READY`` empty for that (project, sanitizer) and
+# every consumer (build_target_local) falls back to the normal full build —
+# slower but correct. Default-off means behaviour is byte-identical to before
+# unless explicitly enabled.
+LIB_CACHE_ENABLED = bool(int(os.getenv('LOGICFUZZ_LIB_CACHE', '0')))
+# (project, sanitizer) -> reduced build.sh text. Populated by
+# prepare_library_cache; presence means the committed image was built.
+_LIB_CACHE_READY: dict = {}
 # Assume OSS-Fuzz is at repo root dir by default.
 # This will change if temp_dir is used.
 OSS_FUZZ_DIR: str = os.path.join(
     os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'oss-fuzz')
 CLEAN_UP_OSS_FUZZ = bool(int(os.getenv('OFG_CLEAN_UP_OSS_FUZZ', '1')))
 
-# Custom base-builder with LLVM 14 for bitcode extraction
-CUSTOM_BASE_BUILDER = 'logicfuzz/base-builder-llvm14'
-# Path to Dockerfile for building the custom base image
-CUSTOM_BASE_DOCKERFILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-    'docker', 'Dockerfile.base-builder-llvm14')
-
 VENV_DIR: str = 'venv'
 
-
-def ensure_custom_base_image_exists():
-  """Ensures the custom base-builder-llvm14 image exists, building it if necessary."""
-  # Check if image exists
-  result = sp.run(
-      ['docker', 'images', '-q', CUSTOM_BASE_BUILDER],
-      capture_output=True, text=True)
-  if result.stdout.strip():
-    logger.debug('Custom base image %s already exists', CUSTOM_BASE_BUILDER)
-    return True
-
-  # Image doesn't exist, try to build it
-  if not os.path.exists(CUSTOM_BASE_DOCKERFILE):
-    logger.error('Custom base image %s not found and Dockerfile missing: %s',
-                 CUSTOM_BASE_BUILDER, CUSTOM_BASE_DOCKERFILE)
-    return False
-
-  logger.info('Building custom base image %s (this may take a few minutes)...',
-              CUSTOM_BASE_BUILDER)
-  docker_dir = os.path.dirname(CUSTOM_BASE_DOCKERFILE)
-  result = sp.run(
-      ['docker', 'build', '-f', CUSTOM_BASE_DOCKERFILE,
-       '-t', CUSTOM_BASE_BUILDER, docker_dir],
-      capture_output=True, text=True)
-
-  if result.returncode != 0:
-    logger.error('Failed to build custom base image: %s', result.stderr)
-    return False
-
-  logger.info('Successfully built custom base image %s', CUSTOM_BASE_BUILDER)
-  return True
 
 def _remove_temp_oss_fuzz_repo():
   """Deletes the temporary OSS-Fuzz directory."""
@@ -77,6 +81,7 @@ def _remove_temp_oss_fuzz_repo():
     logger.warning('No permission to remove %s: %s', OSS_FUZZ_DIR, e)
   except FileNotFoundError as e:
     logger.warning('No OSS-Fuzz directory %s: %s', OSS_FUZZ_DIR, e)
+
 
 def _set_temp_oss_fuzz_repo():
   """Creates a temporary directory for OSS-Fuzz repo and update |OSS_FUZZ_DIR|.
@@ -90,10 +95,11 @@ def _set_temp_oss_fuzz_repo():
   atexit.register(_remove_temp_oss_fuzz_repo)
   _clone_oss_fuzz_repo()
 
+
 def _clone_oss_fuzz_repo():
   """Clones OSS-Fuzz to |OSS_FUZZ_DIR|."""
   clone_command = [
-      'git', 'clone', 'https://github.com/MarkLee131/oss-fuzz', '--depth', '1',
+      'git', 'clone', 'https://github.com/google/oss-fuzz', '--depth', '1',
       OSS_FUZZ_DIR
   ]
   proc = sp.Popen(clone_command,
@@ -104,6 +110,7 @@ def _clone_oss_fuzz_repo():
   if proc.returncode != 0:
     logger.info(stdout)
     logger.info(stderr)
+
 
 def clone_oss_fuzz(oss_fuzz_dir: str = ''):
   """Clones the OSS-Fuzz repository."""
@@ -135,6 +142,7 @@ def clone_oss_fuzz(oss_fuzz_dir: str = ''):
       logger.info('Copying: %s to %s', src_project, dst_project)
       shutil.copytree(src_project, dst_project)
 
+
 def postprocess_oss_fuzz() -> None:
   """Prepares the oss-fuzz directory for experiments."""
   # Write .gcloudignore to make submitting to GCB faster.
@@ -159,26 +167,19 @@ def postprocess_oss_fuzz() -> None:
                   capture_output=True,
                   stdin=sp.DEVNULL,
                   cwd=OSS_FUZZ_DIR)
-  # This venv is for OSS-Fuzz's own cloud build-functions (``infra/build/
-  # functions/``) — NOT used by our driver-generation pipeline (which invokes
-  # OSS-Fuzz via ``helper.py build_image`` in Docker). When upstream's pinned
-  # requirements drift off the local PyPI mirror (observed 2026-05-28:
-  # ``Brotli==1.0.9`` unavailable) a hard failure here aborts the whole run.
-  # Treat the install as best-effort and continue.
   result = sp.run([
       f'./{VENV_DIR}/bin/pip', 'install', '-r',
       'infra/build/functions/requirements.txt'
   ],
+                  check=True,
                   cwd=OSS_FUZZ_DIR,
                   stdin=sp.DEVNULL,
                   capture_output=True)
   if result.returncode:
-    logger.warning(
-        'OSS-Fuzz cloud-build-functions venv install failed (non-fatal — '
-        'driver gen runs OSS-Fuzz via Docker, not this venv). returncode=%d',
-        result.returncode)
-    logger.debug('stdout: %s', result.stdout)
-    logger.debug('stderr: %s', result.stderr)
+    logger.info('Failed to postprocess OSS-Fuzz (%s)', OSS_FUZZ_DIR)
+    logger.info('stdout: %s', result.stdout)
+    logger.info('stderr: %s', result.stderr)
+
 
 def list_c_cpp_projects() -> list[str]:
   """Returns a list of all c/c++ projects from oss-fuzz."""
@@ -193,6 +194,7 @@ def list_c_cpp_projects() -> list[str]:
         projects.append(project)
   return sorted(projects)
 
+
 def get_project_language(project: str) -> str:
   """Returns the |project| language read from its project.yaml."""
   project_yaml_path = os.path.join(OSS_FUZZ_DIR, 'projects', project,
@@ -205,6 +207,7 @@ def get_project_language(project: str) -> str:
   with open(project_yaml_path, 'r') as benchmark_file:
     data = yaml.safe_load(benchmark_file)
     return data.get('language', 'C++')
+
 
 def get_project_repository(project: str) -> str:
   """Returns the |project| repository read from its project.yaml."""
@@ -220,20 +223,24 @@ def get_project_repository(project: str) -> str:
     data = yaml.safe_load(benchmark_file)
     return data.get('main_repo', '')
 
+
 def _get_project_cache_name(project: str) -> str:
   """Gets name of cached container for a project."""
   return f'gcr.io.oss-fuzz.{project}_cache'
 
+
 def _get_project_cache_image_name(project: str, sanitizer: str) -> str:
   """Gets name of cached Docker image for a project and a respective
   sanitizer."""
-  return ('us-central1-docker.pkg.dev/oss-fuzz/logicfuzz/'
+  return ('us-central1-docker.pkg.dev/oss-fuzz/oss-fuzz-gen/'
           f'{project}-ofg-cached-{sanitizer}')
+
 
 def _has_cache_build_script(project: str) -> bool:
   """Checks if a project has cached fuzzer build script."""
   cached_build_script = os.path.join('fuzzer_build_script', project)
   return os.path.isfile(cached_build_script)
+
 
 def _prepare_image_cache(project: str) -> bool:
   """Prepares cached images of fuzzer build containers."""
@@ -301,6 +308,7 @@ def _prepare_image_cache(project: str) -> bool:
       logger.info('Could not rename image.')
   return True
 
+
 def prepare_cached_images(
     experiment_targets: list[benchmarklib.Benchmark]) -> None:
   """Builds cached Docker images for a set of targets."""
@@ -313,13 +321,14 @@ def prepare_cached_images(
   for project in all_projects:
     _prepare_image_cache(project)
 
+
 def is_image_cached(project_name: str, sanitizer: str) -> bool:
   """Checks whether a project has a cached Docker image post fuzzer
   building."""
   cached_image_name = _get_project_cache_image_name(project_name, sanitizer)
   try:
     sp.run(
-        ['docker', 'image', 'inspect', cached_image_name],
+        ['docker', 'manifest', 'inspect', cached_image_name],
         check=True,
         stdin=sp.DEVNULL,
         stdout=sp.DEVNULL,
@@ -328,6 +337,7 @@ def is_image_cached(project_name: str, sanitizer: str) -> bool:
     return True
   except sp.CalledProcessError:
     return False
+
 
 def rewrite_project_to_cached_project(project_name: str, generated_project: str,
                                       sanitizer: str) -> None:
@@ -388,6 +398,7 @@ def rewrite_project_to_cached_project(project_name: str, generated_project: str,
   with open(cached_dockerfile, 'w') as f:
     f.write(new_content)
 
+
 def prepare_build(project_name, sanitizer, generated_project):
   """Prepares the correct Dockerfile to be used for cached builds."""
   generated_project_folder = os.path.join(OSS_FUZZ_DIR, 'projects',
@@ -406,51 +417,293 @@ def prepare_build(project_name, sanitizer, generated_project):
     logger.info('Using original dockerfile')
     shutil.copy(original_dockerfile, dockerfile_to_use)
 
+
 def _build_image(project_name: str) -> str:
-  """Builds project image in OSS-Fuzz with host network. Uses legacy docker
-  builder (DOCKER_BUILDKIT=0) because buildkit's --network=host doesn't
-  consistently forward IPv6 to apt. Fast path: if an image already exists
-  for the project's base name (e.g. "libucl"), retag it to the generated
-  name and skip the rebuild — avoids fighting flaky archive.ubuntu.com."""
-  project_dir = os.path.join(OSS_FUZZ_DIR, 'projects', project_name)
-  dockerfile = os.path.join(project_dir, 'Dockerfile')
-  tag = f'gcr.io/oss-fuzz/{project_name}'
-
-  # Fast path: if the target tag already exists, skip the rebuild.
-  inspect = sp.run(['docker', 'image', 'inspect', tag],
-                   stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-  if inspect.returncode == 0:
-    logger.info('Reused existing image %s (no rebuild)', tag)
-    return tag
-
-  # Fast path: derive base project name (everything before the first '-')
-  # and retag the existing base image if present.
-  base_project = project_name.split('-', 1)[0]
-  if base_project and base_project != project_name:
-    base_tag = f'gcr.io/oss-fuzz/{base_project}'
-    inspect = sp.run(['docker', 'image', 'inspect', base_tag],
-                     stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-    if inspect.returncode == 0:
-      retag = sp.run(['docker', 'tag', base_tag, tag],
-                     stdout=sp.PIPE, stderr=sp.PIPE)
-      if retag.returncode == 0:
-        logger.info('Reused %s as %s (no rebuild)', base_tag, tag)
-        return tag
-
+  """Builds project image in OSS-Fuzz"""
+  adjusted_env = os.environ | {
+      'FUZZING_LANGUAGE': get_project_language(project_name)
+  }
   command = [
-      'docker', 'build', '--network=host', '-t', tag,
-      '-f', dockerfile, project_dir,
+      'python3', 'infra/helper.py', 'build_image', '--pull', project_name
   ]
-  build_env = os.environ | {'DOCKER_BUILDKIT': '0'}
   try:
-    sp.run(command, env=build_env,
-           stdout=sp.PIPE, stderr=sp.PIPE, check=True)
+    sp.run(command,
+           cwd=OSS_FUZZ_DIR,
+           env=adjusted_env,
+           stdout=sp.PIPE,
+           stderr=sp.PIPE,
+           check=True)
     logger.info('Successfully build project image for %s', project_name)
-    return tag
+    return f'gcr.io/oss-fuzz/{project_name}'
   except sp.CalledProcessError as e:
     logger.error('Failed to build project image for %s: %s', project_name,
                  e.stderr.decode('utf-8'))
     return ''
+
+
+# ===========================================================================
+# Library build-cache (LOGICFUZZ_LIB_CACHE). See the module-level flag comment.
+# ===========================================================================
+
+# Library-build command verbs that re-run ./configure / make for the *library*.
+# Lines starting with these are stripped from the reduced (per-trial) build
+# script, because the library is already compiled inside the cached base image.
+_LIBCACHE_CONFIGURE_RE = re.compile(
+    r'^\s*(\./)?(configure|autogen\.sh|autoreconf|bootstrap|buildconf|'
+    r'cmake|meson|automake|aclocal|libtoolize)\b')
+_LIBCACHE_MAKE_RE = re.compile(r'^\s*(make|ninja)\b')
+_LIBCACHE_FUZZ_TOKEN_RE = re.compile(r'fuzz', re.IGNORECASE)
+# A fuzzer-link step that does NOT go through make: ``$CC/$CXX ... $OUT`` or
+# ``-o $OUT/...``. Its presence is what makes a build.sh safely reducible.
+_LIBCACHE_FUZZER_LINK_RE = re.compile(
+    r'\$\{?(CC|CXX)\}?\b.*\$\{?OUT\}?|-o\s+["\']?\$\{?OUT\}?')
+
+
+def derive_library_cached_build_script(build_sh: str):
+  """Transforms a project ``build.sh`` into a reduced script that SKIPS the
+  library build (``./configure``/``make``/``cmake``) and only keeps the
+  fuzzer-compile + asset-copy steps. Returns the reduced script text, or
+  ``None`` when the build.sh cannot be safely reduced (so the caller falls
+  back to the full build).
+
+  Conservative by design — only reduces when BOTH hold:
+    * there is at least one fuzzer-link step that does not go through ``make``
+      (``$CC/$CXX ... $OUT``), proving the fuzzer is built without the library
+      make rule; and
+    * at least one library-build command was actually found to strip.
+
+  ``make`` lines whose text contains ``fuzz`` are KEPT (some projects build
+  the fuzzer via ``make fuzzers``); configure-family lines are always stripped.
+  Multi-line continuations (trailing ``\\``) are stripped as a unit.
+
+  Pure function (no Docker/IO) — unit-tested in
+  ossfuzz_py/unittests/test_lib_cache_build_script.py.
+  """
+  if not build_sh or not build_sh.strip():
+    return None
+  lines = build_sh.split('\n')
+  if not any(_LIBCACHE_FUZZER_LINK_RE.search(ln) for ln in lines):
+    return None
+
+  out_lines = []
+  stripped_any = False
+  in_continuation = False
+  for ln in lines:
+    if in_continuation:
+      out_lines.append('# [libcache-skipped] ' + ln)
+      in_continuation = ln.rstrip().endswith('\\')
+      continue
+    is_lib = bool(_LIBCACHE_CONFIGURE_RE.match(ln)) or (
+        bool(_LIBCACHE_MAKE_RE.match(ln))
+        and not _LIBCACHE_FUZZ_TOKEN_RE.search(ln))
+    if is_lib:
+      stripped_any = True
+      out_lines.append('# [libcache-skipped] ' + ln)
+      in_continuation = ln.rstrip().endswith('\\')
+    else:
+      out_lines.append(ln)
+
+  if not stripped_any:
+    return None
+
+  header = (
+      '#!/bin/bash -eu\n'
+      '# Auto-generated reduced build script (LOGICFUZZ_LIB_CACHE).\n'
+      '# Library build commands (configure/make/cmake) are skipped: the\n'
+      '# library is already compiled in the cached base image. Only the\n'
+      '# fuzz target is recompiled+linked below.\n')
+  body = '\n'.join(out_lines)
+  # Drop a leading shebang from the original to avoid a duplicate.
+  body = re.sub(r'^#!.*\n', '', body, count=1)
+  return header + body
+
+
+def _lib_cache_built_tag(project: str, sanitizer: str) -> str:
+  """Local Docker tag of the committed library-prebuilt image."""
+  name = rectify_docker_tag(f'{project}-libcache-{sanitizer}-built')
+  return f'gcr.io/oss-fuzz/{name}'
+
+
+def _local_image_exists(tag: str) -> bool:
+  """True iff a LOCAL Docker image with ``tag`` exists."""
+  try:
+    sp.run(['docker', 'image', 'inspect', tag],
+           check=True, stdin=sp.DEVNULL,
+           stdout=sp.DEVNULL, stderr=sp.STDOUT)
+    return True
+  except (sp.CalledProcessError, FileNotFoundError):
+    return False
+
+
+def lib_cache_ready(project: str, sanitizer: str) -> bool:
+  """True iff a usable library-prebuilt image exists for (project, sanitizer)
+  AND a reduced build script was derived for it."""
+  if not LIB_CACHE_ENABLED:
+    return False
+  if (project, sanitizer) not in _LIB_CACHE_READY:
+    return False
+  return _local_image_exists(_lib_cache_built_tag(project, sanitizer))
+
+
+def _build_library_cache_for(project: str, language: str,
+                             sanitizer: str) -> bool:
+  """Builds the project's library ONCE for ``sanitizer`` and commits it to a
+  local image, recording the reduced build script. Fail-safe: returns False
+  (and records nothing) on any error.
+  """
+  built_tag = _lib_cache_built_tag(project, sanitizer)
+  if _local_image_exists(built_tag):
+    # Re-derive the reduced script from the project's build.sh so an
+    # already-built image (e.g. from a prior run) is reusable.
+    build_sh_path = os.path.join(OSS_FUZZ_DIR, 'projects', project, 'build.sh')
+    try:
+      with open(build_sh_path) as f:
+        reduced = derive_library_cached_build_script(f.read())
+    except OSError:
+      reduced = None
+    if reduced:
+      _LIB_CACHE_READY[(project, sanitizer)] = reduced
+      logger.info('libcache: reusing existing image %s', built_tag)
+      return True
+    return False
+
+  # Isolated project copy so we never disturb the trial projects.
+  src_project = rectify_docker_tag(f'{project}-libcache-{sanitizer}')
+  build_sh_path = os.path.join(OSS_FUZZ_DIR, 'projects', project, 'build.sh')
+  try:
+    with open(build_sh_path) as f:
+      reduced = derive_library_cached_build_script(f.read())
+  except OSError as exc:
+    logger.warning('libcache: cannot read build.sh for %s: %s', project, exc)
+    return False
+  if not reduced:
+    logger.warning(
+        'libcache: build.sh for %s is not safely reducible; skipping cache '
+        '(trials will do full builds).', project)
+    return False
+
+  # Replicate the project and build its base image (clone + COPY build.sh/*.c).
+  try:
+    create_ossfuzz_project_by_name(project, src_project)
+  except Exception as exc:  # noqa: BLE001 — fail safe
+    logger.warning('libcache: failed to replicate %s: %s', project, exc)
+    return False
+  if not _build_image(src_project):
+    logger.warning('libcache: failed to build base image for %s', src_project)
+    return False
+
+  # Run the FULL build.sh once (compile the library + original fuzzers) in a
+  # NAMED (not --rm) container, then commit the container FS — which holds the
+  # compiled library in $SRC — to the cached image.
+  container = rectify_docker_tag(f'logicfuzz-libcache-{project}-{sanitizer}')
+  outdir = os.path.join(OSS_FUZZ_DIR, 'build', 'out', src_project)
+  workdir = os.path.join(OSS_FUZZ_DIR, 'build', 'work', src_project)
+  os.makedirs(outdir, exist_ok=True)
+  os.makedirs(workdir, exist_ok=True)
+  sp.run(['docker', 'rm', '-f', container], stdin=sp.DEVNULL,
+         stdout=sp.DEVNULL, stderr=sp.STDOUT, check=False)
+  run_cmd = [
+      'docker', 'run', '--name', container, '--privileged', '--shm-size=2g',
+      '--platform', 'linux/amd64', '-i',
+      '-e', 'FUZZING_ENGINE=libfuzzer', '-e', f'SANITIZER={sanitizer}',
+      '-e', 'ARCHITECTURE=x86_64', '-e', f'PROJECT_NAME={src_project}',
+      '-e', f'FUZZING_LANGUAGE={language}',
+      '-v', f'{outdir}:/out', '-v', f'{workdir}:/work',
+      '--entrypoint', '/bin/bash', f'gcr.io/oss-fuzz/{src_project}',
+      '-c', 'compile',
+  ]
+  try:
+    sp.run(run_cmd, cwd=OSS_FUZZ_DIR, stdin=sp.DEVNULL, check=True)
+  except (sp.CalledProcessError, FileNotFoundError) as exc:
+    logger.warning('libcache: full build failed for %s/%s: %s', project,
+                   sanitizer, exc)
+    sp.run(['docker', 'rm', '-f', container], stdin=sp.DEVNULL,
+           stdout=sp.DEVNULL, stderr=sp.STDOUT, check=False)
+    return False
+
+  try:
+    sp.run(['docker', 'commit', container, built_tag], stdin=sp.DEVNULL,
+           stdout=sp.DEVNULL, stderr=sp.STDOUT, check=True)
+  except sp.CalledProcessError as exc:
+    logger.warning('libcache: commit failed for %s/%s: %s', project, sanitizer,
+                   exc)
+    sp.run(['docker', 'rm', '-f', container], stdin=sp.DEVNULL,
+           stdout=sp.DEVNULL, stderr=sp.STDOUT, check=False)
+    return False
+  sp.run(['docker', 'rm', '-f', container], stdin=sp.DEVNULL,
+         stdout=sp.DEVNULL, stderr=sp.STDOUT, check=False)
+
+  _LIB_CACHE_READY[(project, sanitizer)] = reduced
+  logger.info('libcache: committed prebuilt library image %s', built_tag)
+  return True
+
+
+def prepare_library_cache(
+    experiment_targets: 'list[benchmarklib.Benchmark]') -> None:
+  """Serial pre-pass (call BEFORE any trial pool): build each project's library
+  once per sanitizer into a committed image. No-op unless LOGICFUZZ_LIB_CACHE=1.
+  Always fail-safe — never raises, so a cache miss just means full builds.
+  """
+  if not LIB_CACHE_ENABLED:
+    return
+  projects: dict = {}
+  for benchmark in experiment_targets:
+    projects.setdefault(benchmark.project, benchmark.language)
+  logger.info('libcache: preparing library cache for %d project(s)',
+              len(projects))
+  for project, language in projects.items():
+    for sanitizer in ('address', 'coverage'):
+      try:
+        _build_library_cache_for(project, language, sanitizer)
+      except Exception as exc:  # noqa: BLE001 — pre-pass must never break a run
+        logger.warning('libcache: unexpected error for %s/%s: %s', project,
+                       sanitizer, exc)
+
+
+def apply_library_cache(project: str, generated_project: str, sanitizer: str,
+                        target_path: str) -> bool:
+  """Rewrites a trial's generated project to build against the prebuilt library
+  image: FROM the committed image, swap in the reduced build script, and keep
+  only the driver COPY line(s). Returns True when applied, False to fall back.
+
+  Safe to skip (returns False) when the trial injected its own build script
+  (``agent-build.sh``) — we only reduced the project's DEFAULT build.sh.
+  """
+  reduced = _LIB_CACHE_READY.get((project, sanitizer))
+  if not reduced:
+    return False
+  folder = os.path.join(OSS_FUZZ_DIR, 'projects', generated_project)
+  dockerfile = os.path.join(folder, 'Dockerfile')
+  if not os.path.isfile(dockerfile):
+    return False
+  with open(dockerfile) as f:
+    content = f.read()
+  if 'agent-build.sh' in content:
+    # Custom per-trial build script present; our reduction does not apply.
+    return False
+  # The driver was appended as ``COPY <driver> <target_path>``; keep those.
+  driver_copies = [ln for ln in content.split('\n')
+                   if ln.startswith('COPY') and target_path in ln]
+  if not driver_copies:
+    return False
+
+  reduced_name = 'agent-libcache-build.sh'
+  try:
+    with open(os.path.join(folder, reduced_name), 'w') as f:
+      f.write(reduced)
+    new_lines = [f'FROM {_lib_cache_built_tag(project, sanitizer)}',
+                 f'COPY {reduced_name} /src/build.sh']
+    new_lines.extend(driver_copies)
+    with open(dockerfile, 'w') as f:
+      f.write('\n'.join(new_lines) + '\n')
+  except OSError as exc:
+    logger.warning('libcache: failed to apply cache for %s: %s',
+                   generated_project, exc)
+    return False
+  logger.info('libcache: trial %s builds against prebuilt %s library',
+              generated_project, sanitizer)
+  return True
+
 
 def rectify_docker_tag(docker_tag: str) -> str:
   # Replace "::" and any character not \w, _, or . with "-".
@@ -459,6 +712,7 @@ def rectify_docker_tag(docker_tag: str) -> str:
   # Docker fails with tags containing -_ or _-.
   valid_docker_tag = re.sub(r'[-_]{2,}', '-', valid_docker_tag)
   return valid_docker_tag
+
 
 def create_ossfuzz_project(benchmark: benchmarklib.Benchmark,
                            generated_oss_fuzz_project: str) -> str:
@@ -474,59 +728,9 @@ def create_ossfuzz_project(benchmark: benchmarklib.Benchmark,
   shutil.copytree(oss_fuzz_project_path, generated_project_path)
   return generated_project_path
 
-def patch_dockerfile_for_llvm14(generated_oss_fuzz_project: str) -> None:
-  """Patches project Dockerfile to use custom base-builder with LLVM 14.
-
-  Handles both:
-  - Direct FROM: FROM gcr.io/oss-fuzz-base/base-builder...
-  - Cached FROM: FROM $CACHE_IMAGE (with ARG CACHE_IMAGE=...)
-  """
-  dockerfile_path = os.path.join(OSS_FUZZ_DIR, 'projects',
-                                 generated_oss_fuzz_project, 'Dockerfile')
-  if not os.path.exists(dockerfile_path):
-    logger.warning('Dockerfile not found at %s', dockerfile_path)
-    return
-
-  with open(dockerfile_path, 'r') as f:
-    content = f.read()
-
-  new_content = content
-  patched = False
-
-  # Case 1: Direct base-builder reference
-  pattern1 = r'FROM\s+gcr\.io/oss-fuzz-base/base-builder\S*'
-  if re.search(pattern1, content):
-    new_content = re.sub(pattern1, f'FROM {CUSTOM_BASE_BUILDER}', new_content)
-    patched = True
-
-  # Case 2: Cached build using $CACHE_IMAGE variable
-  # Replace both the ARG line and the FROM line
-  if 'FROM $CACHE_IMAGE' in content or 'FROM ${CACHE_IMAGE}' in content:
-    # Replace the FROM line to use our custom image
-    new_content = re.sub(
-        r'FROM\s+\$\{?CACHE_IMAGE\}?',
-        f'FROM {CUSTOM_BASE_BUILDER}',
-        new_content
-    )
-    # Comment out the ARG CACHE_IMAGE line since we're not using it
-    new_content = re.sub(
-        r'^(ARG CACHE_IMAGE=.*)$',
-        r'# \1  # Replaced by LLVM14 builder',
-        new_content,
-        flags=re.MULTILINE
-    )
-    patched = True
-
-  if patched and new_content != content:
-    with open(dockerfile_path, 'w') as f:
-      f.write(new_content)
-    logger.info('Patched Dockerfile to use %s', CUSTOM_BASE_BUILDER)
-  elif not patched:
-    logger.warning('Could not find base-builder reference in Dockerfile')
 
 def prepare_project_image(benchmark: benchmarklib.Benchmark,
-                          project_name: str = '',
-                          use_llvm14_builder: bool = False) -> str:
+                          project_name: str = '') -> str:
   """Prepares original image of the |project|'s fuzz target build container."""
   project = benchmark.project
   generated_oss_fuzz_project = project_name or f'{benchmark.id}-{uuid.uuid4().hex}'
@@ -548,19 +752,8 @@ def prepare_project_image(benchmark: benchmarklib.Benchmark,
                 generated_oss_fuzz_project, image_name)
   else:
     logger.warning('Unable to find cached project image for %s', project)
-
-  # Patch Dockerfile to use custom base-builder with LLVM 14 if requested
-  # NOTE: Must be done AFTER caching logic, because caching rewrites Dockerfile
-  # from original_dockerfile which would undo the patch
-  if use_llvm14_builder:
-    # Ensure the custom base image exists (build if necessary)
-    if not ensure_custom_base_image_exists():
-      raise RuntimeError(
-          f'Custom base image {CUSTOM_BASE_BUILDER} not available. '
-          f'Please check docker/Dockerfile.base-builder-llvm14 exists.')
-    patch_dockerfile_for_llvm14(generated_oss_fuzz_project)
-
   return _build_image(generated_oss_fuzz_project)
+
 
 def create_ossfuzz_project_by_name(original_name: str,
                                    generated_oss_fuzz_project: str) -> str:
@@ -574,6 +767,7 @@ def create_ossfuzz_project_by_name(original_name: str,
   oss_fuzz_project_path = os.path.join(OSS_FUZZ_DIR, 'projects', original_name)
   shutil.copytree(oss_fuzz_project_path, generated_project_path)
   return generated_project_path
+
 
 def prepare_project_image_by_name(project_name: str) -> str:
   """Prepares original image of the |project_name|'s fuzz target build
