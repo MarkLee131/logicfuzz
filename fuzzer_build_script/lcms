@@ -1,0 +1,25 @@
+#!/bin/bash -eu
+# OFG incremental cache build for lcms (Little-CMS).
+#
+# The cached base image (built ONCE by _prepare_image_cache via
+# `infra/helper.py build_fuzzers`) already ran the full library build:
+#     ./configure --enable-shared=no && make -j$(nproc) all
+# so the static library src/.libs/liblcms2.a is present in $SRC/lcms. This
+# script SKIPS that (the per-trial ./configure && make that made generation
+# slow) and only compiles + links the fuzz target against the prebuilt lib.
+#
+# OFG overwrites the benchmark target's .c with the generated driver, so the
+# original build.sh fuzzer loop (minus the library build) rebuilds exactly the
+# generated target. The `[ -f ]` guard keeps it correct whether the cached
+# image preserved all fuzzer sources or only the injected one.
+FUZZERS="cmsIT8_load_fuzzer cms_transform_fuzzer cms_overwrite_transform_fuzzer \
+        cms_transform_all_fuzzer cms_profile_fuzzer cms_universal_transform_fuzzer \
+        cms_transform_extended_fuzzer cms_md5_fuzzer cms_dict_fuzzer \
+        cms_postscript_fuzzer cms_cie_cam02_fuzzer cms_gdb_fuzzer cms_cgats_fuzzer \
+        cms_virtual_profile_fuzzer cms_devicelink_fuzzer"
+for F in $FUZZERS; do
+    [ -f "$SRC/$F.c" ] || continue
+    $CC $CFLAGS -c -Iinclude "$SRC/$F.c" -o "$SRC/$F.o"
+    $CXX $CXXFLAGS "$SRC/$F.o" -o "$OUT/$F" \
+        $LIB_FUZZING_ENGINE src/.libs/liblcms2.a
+done
