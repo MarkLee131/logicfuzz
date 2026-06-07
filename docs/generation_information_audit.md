@@ -347,3 +347,32 @@ CALLSPEC（每调用一行）:
 
 ## 6.5 张力（要你拍板）
 修法 1/2/3 本质是**为了广度，放松一点"correctness-first"**——让 LLM 去试那些符号搞不定的硬 API（可能失败、要修）。这跟我们"correct-by-construction、无 repair"的主线**有张力**。但可以两全：**符号保证它能保证的（可连核心），孤岛 API 给最大 hint 让 LLM best-effort**（失败交 fixer）——优雅降级，而非硬丢。这样既保创新、又拿广度。**是否走这条优雅降级路线，要你定。**
+
+## 6.6 实现状态（2026-06-07）：breadth + low-FP 组合拳已落地（走了优雅降级路线）
+
+§6.4 修法 1/2 + §6.5 的优雅降级**已实现并实测**。详细机制写在 `docs/contributions_and_related_work.md`（设计/对标）+ `CLAUDE.md`（flags/组件）；这里只留状态 + 数据。
+
+**落地的杠杆**（都带 kill-switch，符合"符号定结构、LLM 填软值"）：
+| 杠杆 | 边界 | flag | 一句话 |
+|---|---|---|---|
+| **B 优雅降级** | 6.4-#1 | `LOGICFUZZ_STRICT_ORDERING` off | 孤岛 API（USE_BEFORE_INIT on orphan handle）不再被 ordering 过滤器丢，进候选→unchecked render 留洞→LLM 填 |
+| **density** | 6.4-#2 | `LOGICFUZZ_DENSE_CONSTRUCT` | 在生命周期链后附加 USE 已开句柄的 extender（mutator*→consumer*→getter*），稠密化薄 driver |
+| **hard-guard** | 低-FP | 由 density 蕴含 | ret_contract 升级 `MUST-GUARD if(!x)return0` + opaque 句柄工厂链提示；**density 必须配它**（消融证明 density-only 有害） |
+| **keep-best + 文件回写** | 低-FP | 默认 | 绝不 ship 比本 trial 峰值差的 driver；回退时把恢复源码**写回磁盘**（否则 merge ship 差驱动） |
+| **dead-filter 修复 + pre-ship 隔离** | 低-FP | 默认 | preflight 崩溃 drop 的死代码 bug 修复；merge 前用 trial 自身判定丢"立即崩溃0覆盖"假阳性（毒化融合 harness） |
+| **crash-frame classifier** | 低-FP | 复用核心 | 确定性 ASan 帧归因 driver-bug vs library-bug（符号事实，不交 LLM 裁） |
+
+**实测（30s A/B，best driver；非 24h，不可直接对标 PromeFuzz Table 2）：**
+| 项目 | baseline | combo(density+guard) | Δ覆盖 | baseline FP | combo FP |
+|---|---|---|---|---|---|
+| lcms | 66 | **206** | **+212%** | 1 | 0 |
+| c-ares | 1410 | 1412 | +0%（best 中性） | 4 | 4 |
+| zlib | 515 | **545**（trial01 85→399） | +6% | 0 | 3（pre-ship 隔离会在 merge 丢掉）|
+
+**消融结论**：density 与 guard **协同**——单独都不行（lcms density-only=0 全 SEGV、guard-only=54≈66），combo 才 206。**c-ares "回退"经子代理根因 = LLM n=1 采样方差**（density 对无句柄的纯 parser 是构造级 no-op，没接任何 extender；136→14 是 LLM 那次采样把 `abuf` 绑到 buffer 末尾→立即 ARES_EBADNAME），**非 density 系统性伤害**；且其中一部分是 keep-best 文件回写 bug 污染（已修）。
+
+**待办**：24h `--merge` union 跑（后台进行中）才能对标 PromeFuzz（their lcms ~13k / c-ares 6,106，24h 数十 driver union）。<br>
+**未走的修法**：§6.4-#3（漏斗容错/fixer 救回）、#4（按子系统多生成）、§6.5 的"放松 correctness 让 LLM 试硬 API"——目前优雅降级已在不牺牲主线的前提下拿到广度，这几条留作后续。
+
+
+TODO: 本文档需要更新，你要移除掉我们确认完成的任务和实现好的技术细节内容；只保留不确定的、需要你拍板的部分。 已完成的优化任务和新组件（包括schema定义、callspec设计、typestate快照等）可以简洁地更新到仓库的README或设计文档中，保持这个文档专注于待决策的事项和未来的计划。

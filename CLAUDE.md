@@ -30,6 +30,18 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml --closed-loop --closed-loop-it
 # A/B: disable G2 model-driven construction, fall back to random-walk grammar
 LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.yaml
 
+# Breadth + low-FP optimization round (2026-06, PromeFuzz-derived; see
+# generation_information_audit.md §6.6 + contributions doc). All gated:
+#   LOGICFUZZ_DENSE_CONSTRUCT=1   densify chains (append USE-of-open-handle
+#                                 extenders); IMPLIES the hard NULL-guard
+#                                 (density-only is harmful — ablation-proven).
+#   LOGICFUZZ_HARD_NULLGUARD=1    MUST-GUARD creator returns + opaque factory
+#                                 hint (low-FP). Auto-on under DENSE_CONSTRUCT.
+#   LOGICFUZZ_STRICT_ORDERING=1   revert B graceful degradation (drop orphan
+#                                 USE_BEFORE_INIT instead of keeping as a hole).
+# Measured lcms 30s: 66→206 br (+212%), FP 1→0. Couple density+guard always.
+LOGICFUZZ_DENSE_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/lcms.yaml --merge-drivers
+
 # Synthesize a multi-task harness from successful trials at the eval tail
 python3 run_logicfuzz.py -y comparison/cjson.yaml --merge-drivers
 
@@ -146,8 +158,11 @@ into `FuzzingContext` before agent turns. Remaining LangGraph tools:
 | Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter; **caller-alloc INIT producer channel** (`annotate_svf_writes` + `extract_produced_handles`) recovers in-place initializers (`deflateInit_(z_stream*)`) as creators, SVF-write-gated via `conditions.json`. Detail: `docs/generation.md` G1. |
 | Project automaton | `liberator_adapter/analysis/project_automaton.py` | `AutomatonArtifact` |
 | **APISemanticModel** (G1) | `liberator_adapter/analysis/api_semantic_model.py` | `reconcile()` → per-API role+arg semantics+evidence; role authority (demotes ConditionManager); 0 LLM; Step 5g. Detail: `docs/generation.md`. |
-| **Sequence Constructor** (G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences()` builds lifecycle-complete chains, **merged with** the grammar floor at Step 5h. A/B: `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1`. Detail: `docs/generation.md`. |
-| **Hole Semantics** (G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons()` attaches per-arg value intents at Step 10b (rendered into the hole prompt). |
+| **Sequence Constructor** (G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences()` builds lifecycle-complete chains, **merged with** the grammar floor at Step 5h. A/B: `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1`. **Breadth round (2026-06):** B graceful degradation keeps orphan-handle sequences (kill-switch `LOGICFUZZ_STRICT_ORDERING`); `_densify()` thickens chains under `LOGICFUZZ_DENSE_CONSTRUCT`. |
+| **Hole Semantics** (G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons()` attaches per-arg value intents at Step 10b (rendered into the hole prompt). **low-FP round:** `_hard_nullguard()` (on under `LOGICFUZZ_HARD_NULLGUARD` **or** `LOGICFUZZ_DENSE_CONSTRUCT`) escalates ret-contract to `MUST-GUARD` + opaque factory-chain hint. |
+| **Crash-frame classifier** | `tools/merge_drivers/crash_frame.py` | `classify_crash_frame(asan_log, driver_basename)` → driver/library/unknown (deterministic ASan frame attribution; driver-bug FP vs real library bug). |
+| **Pre-ship quarantine** | `run_single_fuzz.py:_is_immediate_crash_fp` + `_maybe_merge_drivers` | drops immediate-crash 0-coverage FP drivers from the merge (poison the fused harness); binary-free, uses the trial's own verdict. + dead-filter bugfix (`dead_on_empty`). |
+| **Keep-best + file-restore** | `src/workflow/nodes/execution.py:_keep_best` | never ship a driver worse than the trial's peak (all paths); restores the kept source **to disk** on rollback (else merge ships the regressed file). |
 | **Coverage Gap** (G5) | `liberator_adapter/analysis/coverage_gap.py` | `compute_gap_apis()` → baseline-uncovered APIs; directs Step 5h construction+ranking toward the gap. |
 | Comprehender | `src/knowledge/comprehender.py` | Two-stage knowledge extraction. Detail: `docs/knowledge_layer.md`. |
 | **Phase B Idiom Distiller** | `src/knowledge/idiom_distiller.py` | 10 L1 deterministic patterns; writes `state/idioms.json` |
