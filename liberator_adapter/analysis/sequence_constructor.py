@@ -30,6 +30,7 @@ one implementation.
 from __future__ import annotations
 
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -78,6 +79,132 @@ class _Index:
     consumers_by_handle: Dict[str, List[APISemantics]] = field(default_factory=dict)
     getters: Dict[str, List[APISemantics]] = field(default_factory=dict)
     by_name: Dict[str, APISemantics] = field(default_factory=dict)   # co-occurrence lookup
+    # Factory-chain recovery (LOGICFUZZ_FACTORY_CHAIN): handle type → CREATORs that
+    # produce it but whose ``produces`` set is EMPTY because the handle is a
+    # return-by-value opaque typedef (``typedef void* cmsHTRANSFORM``) — the IR
+    # desugars the return to ``void *`` so ``extract_produced_handles`` can't see
+    # it. Recovered by naming (see ``_recover_opaque_producers``). Empty unless the
+    # flag is on → strictly additive, never regresses the default path.
+    recovered_producers: Dict[str, List[APISemantics]] = field(default_factory=dict)
+
+
+def _factory_chain_on() -> bool:
+    # Default off. Robust to a literal "0"/"false" (a bare ``bool(get())`` would
+    # treat "0" as on), so an A/B probe can flip the value rather than unset it.
+    return os.environ.get("LOGICFUZZ_FACTORY_CHAIN", "").strip().lower() \
+        not in ("", "0", "false", "no", "off")
+
+
+# =============================================================================
+# Factory-chain recovery (LOGICFUZZ_FACTORY_CHAIN)
+# =============================================================================
+#
+# Problem (lcms ``cmsDoTransform``): an opaque handle declared ``typedef void*
+# cmsHTRANSFORM`` keeps its typedef name in *argument* positions (so a consumer's
+# ``requires`` correctly records ``cmshtransform``), but the *return* type of its
+# creator (``cmsCreateTransform``) is desugared to ``void *`` — so the use-def
+# walker records no produced handle and ``produces`` is EMPTY. The producer index
+# then has no entry for ``cmshtransform`` and ``_build_prefix`` leaves the arg a
+# NULL hole → the deep API covers ~0. (29/52 lcms creators are in this state.)
+#
+# Return-type matching can't recover the link (every such return is ``void``).
+# The one robust deterministic signal left is the C handle-object NAMING idiom:
+# ``<lib>Create<Name>`` / ``<lib>Open<Name>`` produces the ``<lib>H<NAME>`` handle.
+# We map an unproduced opaque (non-pointer) handle type to the CREATORs whose name
+# contains the type's stem as a complete camelCase word. This is reused by the
+# *existing* recursive ``_build_prefix`` so chaining becomes transitive for free.
+
+def _detect_lib_prefix(names: Sequence[str]) -> str:
+    """Most common 2-5 char leading token across API names (the library prefix,
+    e.g. ``cms``). Returns ``""`` when no token covers ≥40% of the names."""
+    c: Counter = Counter()
+    n_names = 0
+    for nm in names:
+        low = (nm or "").lstrip("_").lower()
+        if not low:
+            continue
+        n_names += 1
+        for length in (5, 4, 3, 2):
+            if len(low) > length:
+                c[low[:length]] += 1
+    if not c or not n_names:
+        return ""
+    best, cnt = c.most_common(1)[0]
+    return best if cnt >= 0.4 * n_names else ""
+
+
+def _opaque_stems(t_norm: str, lib_prefix: str) -> List[str]:
+    """Candidate name stems for an opaque handle type (lowercased, normalized).
+
+    ``cmshtransform`` → strip ``cms`` → ``htransform`` → also strip the ``H``
+    handle marker → ``{htransform, transform}``. Only stems ≥5 chars are kept so a
+    short stem can't spuriously match an unrelated creator. Caller guarantees
+    ``t_norm`` is a non-pointer typedef (pointer types are caller-alloc leaves).
+    """
+    s = t_norm
+    if lib_prefix and s.startswith(lib_prefix):
+        s = s[len(lib_prefix):]
+    out: Set[str] = set()
+    if len(s) >= 5:
+        out.add(s)
+    if s.startswith("h") and len(s) - 1 >= 5:
+        out.add(s[1:])
+    return [x for x in out if len(x) >= 5]
+
+
+def _word_in_name(stem: str, name: str) -> bool:
+    """True iff ``stem`` (lowercase) occurs in ``name`` as a complete camelCase /
+    snake word. Boundary = string edge, an uppercase letter, or a non-alpha char.
+
+    Rejects ``handle`` ⊂ ``...ErrorHandler`` (followed by lowercase ``r``) and
+    ``profile`` ⊂ ``Multiprofile`` (preceded by lowercase ``i``) while accepting
+    ``Transform`` / ``ProfileFrom`` — the camelCase word test that keeps recovery
+    precise."""
+    low = name.lower()
+    n = len(stem)
+    start = 0
+    while True:
+        i = low.find(stem, start)
+        if i < 0:
+            return False
+        j = i + n
+        start_ok = (i == 0) or name[i].isupper() or (not name[i - 1].isalpha())
+        end_ok = (j == len(name)) or name[j].isupper() or (not name[j].isalpha())
+        if start_ok and end_ok:
+            return True
+        start = i + 1
+
+
+def _recover_opaque_producers(
+    model: APISemanticModel,
+    producers: Dict[str, List[APISemantics]],
+    creators: List[APISemantics],
+) -> Dict[str, List[APISemantics]]:
+    """Map required-but-unproduced opaque (non-pointer typedef) handle types to
+    the CREATORs that produce them, recovered by the handle-object naming idiom.
+
+    Only fires for types that (a) some API ``requires``, (b) have NO real producer
+    (``produces``-derived), (c) are NON-pointer (a ``*`` means a caller-allocated
+    struct/scalar leaf — declare a local, don't factory it), and (d) name-match at
+    least one CREATOR. Everything else falls through to the existing hole path, so
+    this is purely additive."""
+    required: Set[str] = set()
+    for sem in model.apis.values():
+        required |= set(sem.requires)
+    unproduced = [t for t in required if t not in producers and "*" not in t]
+    if not unproduced:
+        return {}
+    lib_prefix = _detect_lib_prefix(list(model.apis.keys()))
+    out: Dict[str, List[APISemantics]] = {}
+    for t in unproduced:
+        stems = _opaque_stems(t, lib_prefix)
+        if not stems:
+            continue
+        matched = [c for c in creators
+                   if any(_word_in_name(st, c.name) for st in stems)]
+        if matched:
+            out[t] = matched
+    return out
 
 
 def _build_index(model: APISemanticModel) -> _Index:
@@ -110,9 +237,14 @@ def _build_index(model: APISemanticModel) -> _Index:
         if any(a.role is ArgRole.INPUT_BUFFER for a in sem.args):
             entries.append(sem)
 
+    recovered: Dict[str, List[APISemantics]] = {}
+    if _factory_chain_on():
+        recovered = _recover_opaque_producers(model, producers, creators)
+
     return _Index(producers, destroyers, mutators, entries, consumers, creators,
                   consumers_by_handle, getters,
-                  {sem.name: sem for sem in model.apis.values()})
+                  {sem.name: sem for sem in model.apis.values()},
+                  recovered_producers=recovered)
 
 
 def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
@@ -222,8 +354,17 @@ def _build_prefix(
         # Only real CREATORs build a prefix handle; getters/mutators would
         # drag in deep junk chains. No CREATOR ⇒ leave the type unmet.
         cands = [p for p in idx.producers.get(t, []) if p.role is APIRole.CREATOR]
+        from_recovery = False
+        if not cands and idx.recovered_producers:
+            # Factory-chain recovery (LOGICFUZZ_FACTORY_CHAIN): the type is a
+            # return-by-value opaque typedef whose creator's ``produces`` was
+            # erased by IR desugaring — recover its CREATORs by naming so the
+            # SAME recursion below chains them transitively to fuzzer leaves.
+            cands = idx.recovered_producers.get(t, [])
+            from_recovery = bool(cands)
         if not cands:
             return False
+
         # Prefer a creator that INGESTS FUZZER BYTES (has an INPUT_BUFFER arg,
         # e.g. cmsOpenProfileFromMem) over an equivalent synthetic creator
         # (cmsCreateBCHSWabstractProfile): both produce the same handle type, but
@@ -234,7 +375,23 @@ def _build_prefix(
         def _creator_key(s: APISemantics) -> Tuple[int, int, str]:
             is_entry = any(a.role is ArgRole.INPUT_BUFFER for a in s.args)
             return (0 if is_entry else 1, len(s.requires), s.name)
-        producer = sorted(cands, key=_creator_key)[0]
+
+        # Recovered opaque factories rank differently. The IR erased the inner
+        # handle args of several variants (cmsCreateMultiprofileTransform's profile
+        # ARRAY → requires=[]), so "fewest requires" would pick exactly the variant
+        # that builds NOTHING and returns NULL. Instead prefer a factory that
+        # requires ANOTHER recoverable opaque handle (cmsCreateTransform requires
+        # cmshprofile) — that is the genuinely DEEP factory whose dependency we can
+        # chain down to a byte-opener (cmsOpenProfileFromMem). Bytes first, then a
+        # deep opaque dependency, then the usual fewest-prereq / name tiebreak.
+        def _recovered_key(s: APISemantics) -> Tuple[int, int, int, str]:
+            is_entry = any(a.role is ArgRole.INPUT_BUFFER for a in s.args)
+            deep = any(h in idx.recovered_producers for h in s.requires)
+            return (0 if is_entry else 1, 0 if deep else 1,
+                    len(s.requires), s.name)
+
+        producer = sorted(
+            cands, key=_recovered_key if from_recovery else _creator_key)[0]
         in_progress.add(t)
         for rt in producer.requires:
             resolve(rt, depth + 1)   # best-effort: a sub-req hole is fine
@@ -242,6 +399,11 @@ def _build_prefix(
         if producer.name not in prefix:
             prefix.append(producer.name)
         satisfied.add(t)
+        # ``t`` is now an open handle. For real producers ``t ∈ produces`` so this
+        # is redundant; for a recovered opaque producer ``produces`` is empty, so
+        # this is what lets a destroyer close it (cmsDeleteTransform) and density
+        # see the handle. Safe either way.
+        opened.add(t)
         for pt in producer.produces:
             satisfied.add(pt)
             opened.add(pt)
@@ -470,6 +632,9 @@ def construct_sequences(
         # G5: how much of the baseline-uncovered API surface we now construct for.
         "gap_apis_total": len(gap_apis),
         "gap_apis_reached": len(gap_hit),
+        # Factory-chain recovery: # of opaque handle types whose CREATORs were
+        # recovered by naming (0 unless LOGICFUZZ_FACTORY_CHAIN is on).
+        "n_factory_recovered": len(idx.recovered_producers),
     }
     workflow_sequences = [s for s in seqs
                           if source_of.get(tuple(s)) == "workflow"]
