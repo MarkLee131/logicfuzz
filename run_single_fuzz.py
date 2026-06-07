@@ -572,6 +572,19 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
   return result
 
 
+def _is_immediate_crash_fp(br) -> bool:
+  """Pre-ship quarantine criterion: a compiled driver that crashed in-container
+  with ~0 coverage is an immediate-SEGV false positive (unchecked creator return
+  / garbage opaque arg — the class density can introduce on handle-ful drivers).
+  It poisons the single-process fused merge harness and contributes no coverage.
+  A crasher that made real progress (cov>0) is a normal fuzz target — keep it."""
+  if not getattr(br, 'crashes', False):
+    return False
+  cov_pcs = getattr(br, 'cov_pcs', 0) or 0
+  cov_frac = getattr(br, 'coverage', 0.0) or 0.0
+  return cov_pcs == 0 and cov_frac <= 0.001
+
+
 def _resolve_candidate_binary(src, work_dirs):
   """Best-effort: find a host-runnable libFuzzer binary for a driver source.
 
@@ -674,14 +687,34 @@ def _maybe_merge_drivers(benchmark: Benchmark,
   """
   from pathlib import Path
   successful_sources: List[Path] = []
+  quarantined = 0
   for tr in trial_results:
     if not tr or not getattr(tr, 'best_result', None):
       continue
-    if not getattr(tr.best_result, 'compiles', False):
+    br = tr.best_result
+    if not getattr(br, 'compiles', False):
+      continue
+    # Pre-ship quarantine (binary-free, complements preflight). A driver that
+    # crashed in-container with ~0 coverage is an immediate-SEGV false positive
+    # (unchecked creator return / garbage opaque arg — the class density can add
+    # on handle-ful drivers). In the single-process fused harness it crashes
+    # before any sub-driver runs → poisons the whole campaign, and it
+    # contributes no coverage anyway. Drop it here, using the trial's OWN run
+    # verdict, so the quarantine fires even when no host-runnable binary
+    # resolves for preflight. A crasher that made real progress (cov>0) is a
+    # normal fuzz target (-ignore_crashes=1 carries it) — keep it.
+    if _is_immediate_crash_fp(br):
+      quarantined += 1
+      logger.info(
+          f'merge: quarantined trial {tr.trial:02d} (immediate-crash FP, '
+          f'cov_pcs=0) — would poison the fused harness', trial=0)
       continue
     src = Path(work_dirs.fuzz_targets) / f'{tr.trial:02d}.fuzz_target'
     if src.exists():
       successful_sources.append(src)
+  if quarantined:
+    logger.info(f'merge: pre-ship quarantine dropped {quarantined} '
+                f'immediate-crash FP driver(s)', trial=0)
 
   if len(successful_sources) < 2:
     logger.info(
