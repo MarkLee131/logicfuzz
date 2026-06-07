@@ -390,7 +390,7 @@ CALLSPEC（每调用一行）:
 **coverage_diff PoC(vs 人写 OSS-Fuzz `fuzzers.c`,各 30min,排除 driver TU)**：我们覆盖 **876 lcms 库行(整个 IT8/CGATS 解析器 cmscgats.c 723 + cmsmd5 153)人写 driver 一行没覆盖**；但**是互补**——人覆盖 596 行我们没碰(PostScript cmsps2.c,我们已知 binding 盲区)。总量我们 5953 < 人 7346。**结论：proof-of-concept(gap-direction 能补盲区),不是 contribution**——"不同 driver 覆盖不同代码"本属常态;要成卖点须证 **(a) 跨项目稳定可复现 + (b) 我们补的 existing-driver gap 比 PromeFuzz/CKGFuzzer 多**。两者皆未测。
 
 ### 开放项(收尾时记录,后续做)
-- **生成太慢**(subagent 修中)：每 trial 重编整个库(~57 ./configure)+ fixer churn → 缓存库构建、只 relink driver + 并行。
+- **生成太慢**(诊断已坐实,代码待重做)：根因 = `builder_runner.build_target_local` 在 `docker run --rm` 里跑项目未改 build.sh(lcms=./configure+make 全量重编库)再编 driver,`--rm`+清 `/out,/work` → 每 trial 一次完整 ./configure&&make(~57 次)。现有 OSS-Fuzz ofg-cache 因 lcms 等无手写 `fuzzer_build_script` 静默 no-op。并行已是 `LLM_n=6`(非瓶颈)。**修法**:跑前预编库一次 `docker commit` 成镜像 + 每 trial FROM 它跑精简 build.sh(只 relink driver),估 5-10× build↓。⚠️ 子代理实现了但**branch base 错**(基于 main 的 `run_all_experiments.py`+`llm_toolkit`,与 pub-llm 不兼容)→ **已 revert**;需在 pub-llm 的 `build_target_local` + `run_logicfuzz.py` 上重做 + docker 验证。
 - **精益模式**：确定性 crash triage(crash_frame.py 已建)替 LLM crash 分析 + 跳过 per-driver optimize → 8.5→~3 calls/driver。
 - **多项目 coverage_diff 验证** + **vs PromeFuzz/CKGFuzzer 补盲区对比**(坐实 PoC)。
 - **binding 层 #14**：opaque/无 producer 尾巴(lcms ~半数 API),top_k 够不到的硬骨头。
