@@ -47,13 +47,14 @@ OPTIMIZATION PHASE:
                                                          ▼
                                                        END
 """
-from typing import Dict, Any
+import os
+from typing import Dict, Any, Optional, cast
 
 from langchain_core.runnables import RunnableConfig
 import logger
 from src.workflow.state import FuzzingWorkflowState, consolidate_session_memory
 from src.utils.compilation_error_triage import (
-    triage_build_errors, ErrorCategory, FixStrategy)
+    triage_build_errors, ErrorCategory)
 
 
 # ==================== Configuration Constants ====================
@@ -65,6 +66,103 @@ MAX_COVERAGE_IMPROVE_ITERATIONS = 1  # coverage_analyzer and improver run at mos
 MAX_FIXER_INVOCATIONS = 3            # Hard cap on total fixer invocations per trial
 LINE_COVERAGE_THRESHOLD = 0.1        # 10% real project coverage to consider "good"
 MAX_BASELINE_DIFF_RETRIES = 1        # §10B v2: one diff→re-prototype loop per trial
+
+
+# ==================== Lean Mode (roadmap item 4) ====================
+def _lean_mode() -> bool:
+    """LOGICFUZZ_LEAN_MODE: cut per-driver LLM calls (~8.5 → ~3) by
+    (i) replacing the 2-call LLM crash triage (CrashAnalyzer +
+    CrashFeasibilityAnalyzer) with the deterministic crash-frame classifier
+    and (ii) skipping the per-driver coverage-optimize loop
+    (coverage_analyzer → improver). OFF by default — when unset, routing is
+    byte-identical to the legacy state machine.
+    """
+    return bool(os.environ.get("LOGICFUZZ_LEAN_MODE"))
+
+
+def _crash_asan_log(state: FuzzingWorkflowState) -> str:
+    """Best-effort ASan/backtrace text for deterministic frame attribution.
+
+    ``execution_node`` stashes the libFuzzer/ASan output in
+    ``crash_info.stack_trace`` / ``crash_info.error_message`` (both populated
+    from ``run_result.crash_info``) and the condensed run summary in
+    ``run_log`` (which retains the ``AddressSanitizer`` / ``#N 0x.. in ..``
+    frames via ``extract_fuzzing_summary``). Concatenate what's available so
+    ``classify_crash_frame`` sees the in-source backtrace frames.
+    """
+    ci = state.get("crash_info") or {}
+    parts = [
+        ci.get("stack_trace", ""),
+        ci.get("error_message", ""),
+        state.get("run_log", ""),
+    ]
+    return "\n".join(p for p in parts if p)
+
+
+def _lean_crash_triage(state: FuzzingWorkflowState,
+                       trial: int) -> Optional[Dict[str, Any]]:
+    """Deterministic crash triage for LEAN MODE.
+
+    Returns synthetic ``crash_analysis`` + ``context_analysis`` verdicts that
+    the EXISTING router + caps + fixer plumbing consume exactly as if the LLM
+    CrashAnalyzer/CrashFeasibilityAnalyzer had produced them — but computed
+    from the ASan stack frames via ``classify_crash_frame`` (0 LLM calls):
+
+      * ``library`` frame → real bug → ``feasible=True``  → router END.
+      * ``driver``  frame → false positive → ``feasible=False`` → router
+        fixer (capped at MAX_CRASH_FIX_RETRIES, then END), unchanged.
+      * ``unknown``       → return ``None`` → fall back to the LLM path.
+
+    Returns ``None`` when not in lean mode, when there is no fresh crash, or
+    when a crash has already been triaged (so the 'unknown' LLM fallback runs
+    once and is not re-classified on the next supervisor visit).
+    """
+    if not _lean_mode():
+        return None
+    crashes = state.get("crashes", False)
+    run_error = state.get("run_error", "") or ""
+    is_crash = crashes or ("crash" in run_error.lower())
+    if not is_crash:
+        return None
+    if state.get("crash_analysis") is not None:
+        return None  # already triaged (e.g. LLM fallback for a prior 'unknown')
+
+    from tools.merge_drivers.crash_frame import classify_crash_frame
+    asan_log = _crash_asan_log(state)
+    driver_basename = f'{trial:02d}.fuzz_target'
+    verdict = classify_crash_frame(asan_log, driver_basename)
+    if verdict == "unknown":
+        logger.info(
+            'LEAN crash triage: unknown frame attribution, falling back to '
+            'LLM CrashAnalyzer/CrashFeasibilityAnalyzer', trial=trial)
+        return None
+
+    feasible = (verdict == "library")
+    logger.info(
+        f'LEAN crash triage: deterministic verdict={verdict} '
+        f'(feasible={feasible}) — skipping LLM crash analysis '
+        f'(saved 2 LLM calls)', trial=trial)
+    note = ('real library bug (keep)' if feasible
+            else 'driver false-positive (fix / merge-quarantine)')
+    return {
+        "crash_analysis": {
+            "source": "lean_crash_frame_classifier",
+            "verdict": verdict,
+            "true_bug": feasible,
+            "insight": (f'Deterministic ASan frame attribution: first '
+                        f'in-source crash frame is {verdict} code.'),
+            "analysis": f'Crash frame attributed to {verdict} → {note}.',
+            "analyzed": True,
+        },
+        "context_analysis": {
+            "source": "lean_crash_frame_classifier",
+            "verdict": verdict,
+            "feasible": feasible,
+            "analysis": f'Lean-mode deterministic verdict: {verdict}-frame '
+                        f'crash → {note}.',
+            "analyzed": True,
+        },
+    }
 
 
 def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[str, Any]:
@@ -87,6 +185,17 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
     if len(errors) >= max_errors:
         logger.warning(f'Too many errors ({len(errors)}), terminating workflow', trial=trial)
         return _end_workflow("too_many_errors", f"Workflow terminated due to {len(errors)} errors")
+
+    # LEAN MODE (roadmap item 4): replace the 2-call LLM crash triage with a
+    # deterministic crash-frame verdict. We synthesize the crash_analysis +
+    # context_analysis the LLMs would have produced and merge them into the
+    # routing state, so the existing router / caps / fixer plumbing handle
+    # them unchanged. 'unknown' attribution → no injection → the LLM path runs
+    # as a fallback. No-op (None) when LOGICFUZZ_LEAN_MODE is unset, leaving
+    # the off-path byte-identical.
+    lean_crash_verdict = _lean_crash_triage(state, trial)
+    if lean_crash_verdict:
+        state = cast(FuzzingWorkflowState, {**state, **lean_crash_verdict})
 
     # Determine next action
     next_action = _determine_next_action(state, trial)
@@ -117,6 +226,13 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
         "node_visit_counts": node_visit_counts,
         "session_memory": consolidate_session_memory(state),
     }
+
+    # Persist the deterministic lean crash verdicts (if any) so downstream
+    # consumers (CrashResult extraction, trial summary) and the crash_fix_info
+    # block below see the same crash_analysis + context_analysis the LLM path
+    # would have written.
+    if lean_crash_verdict:
+        result.update(lean_crash_verdict)
 
     # Pass error triage to fixer when routing due to build failure
     if next_action == "fixer" and state.get("compile_success") is False:
@@ -334,6 +450,16 @@ def _handle_optimization_phase(state: FuzzingWorkflowState, trial: int) -> str:
     # Execution failed
     if not run_success:
         return _handle_execution_failure(state, trial)
+
+    # LEAN MODE (roadmap item 4): after a clean build+run, skip the per-driver
+    # coverage-optimize loop (coverage_analyzer → improver) AND the §10B
+    # baseline-regression recovery — breadth comes from many-drivers + merge,
+    # so per-driver coverage refinement is low-value LLM spend. Ship as-is.
+    if _lean_mode():
+        logger.info(
+            'LEAN MODE: skipping per-driver coverage-optimize loop, '
+            'routing to END', trial=trial)
+        return "END"
 
     # Execution succeeded → check coverage
     return _handle_coverage_improvement(state, trial)
