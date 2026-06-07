@@ -77,6 +77,7 @@ class _Index:
     # pure getters (CONSUMER that requires a handle but produces nothing).
     consumers_by_handle: Dict[str, List[APISemantics]] = field(default_factory=dict)
     getters: Dict[str, List[APISemantics]] = field(default_factory=dict)
+    by_name: Dict[str, APISemantics] = field(default_factory=dict)   # co-occurrence lookup
 
 
 def _build_index(model: APISemanticModel) -> _Index:
@@ -110,33 +111,65 @@ def _build_index(model: APISemanticModel) -> _Index:
             entries.append(sem)
 
     return _Index(producers, destroyers, mutators, entries, consumers, creators,
-                  consumers_by_handle, getters)
+                  consumers_by_handle, getters,
+                  {sem.name: sem for sem in model.apis.values()})
 
 
 def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
-             max_extra: int, repeat: bool) -> List[str]:
-    """Append extenders that USE already-open handles (mutators/consumers/getters
-    whose ``requires`` ⊆ ``opened``) to thicken a thin lifecycle chain toward the
-    PromeFuzz density band (5.6–7.6 calls). Extenders produce nothing new, so the
-    opened set is unchanged and the Typestate self-filter still passes — they add
-    only scalar/buffer holes the LLM was going to fill anyway. Deterministic
-    (symbolic structure); the LLM still owns the leaf values."""
+             max_extra: int, repeat: bool,
+             cooccur: Optional[Dict[str, Set[str]]] = None) -> List[str]:
+    """Thicken a thin lifecycle chain toward the PromeFuzz density band (5.6–7.6
+    calls) from TWO sources:
+
+    (a) **handle-sharing extenders** — mutators/consumers/getters whose
+        ``requires`` ⊆ ``opened`` (valid by construction, no new unmet handle);
+    (b) **co-occurrence extenders** — APIs that appear together with this
+        sequence's APIs in the library's REAL usage paths (automaton
+        accepting-paths / idioms). This is exactly PromeFuzz's call-scope +
+        semantic grouping signal: it pulls in the semantically-related,
+        multi-handle workflow APIs that (a) misses (e.g. lcms build-tonecurve →
+        make-devicelink → close-profile, which span 3 handle types). A
+        co-occurrence extender is kept when its handle deps are already open
+        (valid) OR are entirely ORPHAN (no in-project producer) — the latter
+        becomes a hole the LLM fills (B graceful degradation), and the pre-ship
+        quarantine drops any that end up immediate-crash FPs.
+
+    Deterministic symbolic structure on both axes; the LLM still owns leaf
+    values. So we reach PromeFuzz's density but keep a lifecycle-valid core +
+    only hole what's genuinely unbindable → same density, lower FP."""
     in_seq = set(core_seq)
     cands: Dict[str, APISemantics] = {}
+    # (a) handle-sharing extenders
     for t in opened:
         for sem in idx.mutators.get(t, []) + idx.consumers_by_handle.get(t, []):
             if sem.name in in_seq or sem.name in cands:
                 continue
             if set(getattr(sem, "requires", ()) or ()) <= opened:
                 cands[sem.name] = sem
+    # (b) co-occurrence extenders (real usage grouping)
+    if cooccur:
+        related: Set[str] = set()
+        for a in core_seq:
+            related |= cooccur.get(a, set())
+        for name in sorted(related):
+            if name in in_seq or name in cands:
+                continue
+            sem = idx.by_name.get(name)
+            if sem is None:
+                continue
+            req = set(getattr(sem, "requires", ()) or ())
+            if req <= opened or all(not idx.producers.get(h) for h in req):
+                cands[name] = sem
     if not cands:
         return list(core_seq)
 
     def _rank(sem: APISemantics):
+        # handle-satisfiable extenders first (valid), then co-occurrence holes
+        sat = 0 if set(getattr(sem, "requires", ()) or ()) <= opened else 1
         if sem.role is APIRole.MUTATOR:
-            return (0, sem.name)
+            return (sat, 0, sem.name)
         is_getter = bool(getattr(sem, "requires", ())) and not getattr(sem, "produces", ())
-        return (2 if is_getter else 1, sem.name)   # consumer(1) then getter(2)
+        return (sat, 2 if is_getter else 1, sem.name)   # consumer(1) then getter(2)
 
     ordered = sorted(cands.values(), key=_rank)[:max(0, max_extra)]
     extra = [s.name for s in ordered]
@@ -265,6 +298,16 @@ def construct_sequences(
     _dense_max_extra = int(os.environ.get("LOGICFUZZ_DENSE_MAX_EXTRA", "4"))
     _dense_repeat = bool(os.environ.get("LOGICFUZZ_DENSE_REPEAT_CONSUMER"))
     n_densified = 0
+    # Co-occurrence map for density source (b): which APIs are used TOGETHER in
+    # the library's REAL usage paths (automaton accepting-paths + idioms) — the
+    # PromeFuzz call-scope/semantic grouping signal, which we already learn.
+    # LOGICFUZZ_DENSE_COOCCUR=0 disables just this source (handle-sharing only).
+    _cooccur: Dict[str, Set[str]] = {}
+    if _dense and os.environ.get("LOGICFUZZ_DENSE_COOCCUR", "1") != "0":
+        for _path in list(accepting_paths or []) + list(idiom_chains or []):
+            _ps = [a for a in _path if a and a in model.apis]
+            for _a in _ps:
+                _cooccur.setdefault(_a, set()).update(x for x in _ps if x != _a)
 
     seqs: List[List[str]] = []
     seen: Set[Tuple[str, ...]] = set()
@@ -340,7 +383,8 @@ def construct_sequences(
             opened = set(opened) | set(target.produces)
             core = prefix + [target.name]
             if _dense:
-                core = _densify(core, opened, idx, _dense_max_extra, _dense_repeat)
+                core = _densify(core, opened, idx, _dense_max_extra,
+                                _dense_repeat, _cooccur)
                 if len(core) > len(prefix) + 1:
                     n_densified += 1
             seq = core + _closing_destroyers(opened, idx)

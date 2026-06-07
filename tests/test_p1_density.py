@@ -54,3 +54,25 @@ def test_does_not_duplicate_apis_already_in_core():
     idx = _idx(mutators={"H": [mut]})
     out = _densify(["create", "mutate"], {"H"}, idx, max_extra=4, repeat=False)
     assert out.count("mutate") == 1
+
+
+def test_cooccurrence_pulls_in_related_api_without_shared_handle():
+    # A standalone API that CO-OCCURS in a real path but shares no open handle
+    # is pulled in (PromeFuzz call-scope/semantic grouping), not just handle users.
+    mut = _S("mutate", APIRole.MUTATOR, requires={"H"})
+    related = _S("related_op", APIRole.CONSUMER, requires=())   # no handle dep
+    idx = _idx(mutators={"H": [mut]}, by_name={"mutate": mut, "related_op": related})
+    cooccur = {"create": {"related_op"}}     # real path: create used with related_op
+    out = _densify(["create"], {"H"}, idx, max_extra=4, repeat=False, cooccur=cooccur)
+    assert "related_op" in out and "mutate" in out
+
+
+def test_cooccurrence_skips_api_needing_unproducible_nonorphan_handle():
+    # A co-occurring API needing a handle that HAS a producer (not open, not orphan)
+    # is skipped — keeping the chain ordering-clean (only orphan deps become holes).
+    needs = _S("needs_h2", APIRole.CONSUMER, requires={"H2"})
+    idx = _idx(producers={"H2": [_S("mk_h2", APIRole.CREATOR, produces={"H2"})]},
+               by_name={"needs_h2": needs})
+    out = _densify(["create"], {"H"}, idx, max_extra=4, repeat=False,
+                   cooccur={"create": {"needs_h2"}})
+    assert "needs_h2" not in out
