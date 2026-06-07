@@ -268,6 +268,33 @@ multi-TU + entry-dispatcher structure, then add four optimisations:
 exposed — `--mode cdf` / `uniform` — so the complexity can be A/B'd before being
 kept. Implementation lives in `tools/merge_drivers/{preflight,select,merge,corpus}.py`.)
 
+### Breadth + low-FP: borrow PromeFuzz's reach, keep our precision (2026-06)
+
+The honest gap analysis (`generation_information_audit.md` §6) found PromeFuzz's
+edge is **API breadth × driver density**, not novelty — our correct-by-
+construction stance dropped every API the symbolic layer couldn't connect
+(≈302/452 gap APIs never entered a candidate). The fix is *graceful degradation*,
+not abandoning the substrate: the symbolic layer authors **structure**, the LLM
+fills the **gaps it can't prove** — and a separate quality layer keeps the FP
+rate low (our actual differentiator: when our drivers crash, is it a real bug or
+a driver bug?).
+
+| lever (all gated) | borrowed-from-PromeFuzz / ours | what it does |
+|---|---|---|
+| **B graceful degradation** | ours (symbolic) | keep orphan-handle `USE_BEFORE_INIT` sequences → island/opaque APIs enter candidates; the unchecked render path leaves the un-bindable arg as a hole |
+| **density** (`_densify`) | PromeFuzz reach | append extenders that USE an already-open handle (`requires ⊆ opened`) → thin `create→use→destroy` chains thicken toward PromeFuzz's 5.6–7.6 calls/driver |
+| **hard NULL-guard + opaque factory hint** | ours (low-FP) | `MUST-GUARD` creator returns + "build the opaque handle via its producer"; density *requires* it (ablation: density-only SEGVs) |
+| **pre-ship quarantine + keep-best** | ours (low-FP) | drop immediate-crash 0-coverage FP drivers from the merge; never ship a driver worse than the trial's peak |
+
+**Neuro-symbolic split is preserved**: density only appends calls whose handle
+dependencies are *already symbolically satisfied*; the guard wording is driven by
+IR-derived `ret_contract` + the use-def producer index; the LLM still owns only
+the leaf values. **Measured (30s A/B, single best driver — not yet the 24h union):**
+lcms **66→206 br (+212%)**, FP 1→0; zlib +6%; c-ares neutral. Density and the
+guard are *synergistic* (neither alone helps — density-only = 0). The 24h
+`--merge` union vs PromeFuzz Table 2 (lcms ~13k, c-ares 6,106) is the pending
+headline test.
+
 ---
 
 ## 4. Comparison vs Liberator (symbolic baseline)
