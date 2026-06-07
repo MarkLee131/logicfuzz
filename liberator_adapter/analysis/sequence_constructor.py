@@ -295,7 +295,9 @@ def construct_sequences(
     """
     idx = _build_index(model)
     _dense = bool(os.environ.get("LOGICFUZZ_DENSE_CONSTRUCT"))
-    _dense_max_extra = int(os.environ.get("LOGICFUZZ_DENSE_MAX_EXTRA", "4"))
+    # Default 8 → ~7.7 APIs/seq on lcms (PromeFuzz parity 7.6) once co-occurrence
+    # is on; lower it (e.g. =4) for thinner drivers / fewer holes.
+    _dense_max_extra = int(os.environ.get("LOGICFUZZ_DENSE_MAX_EXTRA", "8"))
     _dense_repeat = bool(os.environ.get("LOGICFUZZ_DENSE_REPEAT_CONSUMER"))
     n_densified = 0
     # Co-occurrence map for density source (b): which APIs are used TOGETHER in
