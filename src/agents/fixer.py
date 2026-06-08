@@ -139,16 +139,22 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             combined, self.name, state.get("current_iteration", 0))
         session_memory = merge_session_memory_updates(state, updates)
 
+        # A crash-FP fix (crash_fix_info present, no build errors) is bounded by
+        # the supervisor's crash_fix_retry_count (MAX_CRASH_FIX_RETRIES), NOT by
+        # the compilation-retry budget. Only the build-error fix path consumes
+        # compilation_retry_count — conflating the two let one crash-fix push a
+        # build hiccup over MAX_COMPILATION_RETRIES and END for the wrong reason.
+        is_crash_fix = bool(crash_fix_info and not build_errors)
         state_update = {
             "fuzz_target_source": fuzz_target_code or current_code,
             "previous_fuzz_target_source": current_code,
-            "compile_success": None,
+            "compile_success": None,  # fixed driver must rebuild (both paths)
             "build_errors": [],
             "session_memory": session_memory,
-            # Always increment compilation_retry_count when fixer is called for build errors
-            "compilation_retry_count":
-            state.get("compilation_retry_count", 0) + 1
         }
+        if not is_crash_fix:
+            state_update["compilation_retry_count"] = \
+                state.get("compilation_retry_count", 0) + 1
 
         self._langgraph_logger.flush_agent_logs(self.name)
         return state_update

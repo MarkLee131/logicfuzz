@@ -9,7 +9,8 @@ from typing import Any, List, Optional
 from experiment.workdir import WorkDirs
 from experiment.benchmark import Benchmark
 from results import (Result, BuildResult, RunResult, AnalysisResult,
-                     FunctionAnalysisResult, CrashResult, CoverageResult)
+                     FunctionAnalysisResult, CrashResult, CrashContextResult,
+                     CoverageResult)
 from src.workflow.state import FuzzingWorkflowState
 
 
@@ -113,8 +114,14 @@ class StateAdapter:
                 state)
             result_history.append(run_result)
 
-        # Add AnalysisResult if analysis information exists
-        if state.get("analysis_complete"):
+        # Add an AnalysisResult whenever a crash verdict (deterministic lean OR
+        # the LLM crash path) or a coverage analysis exists.
+        # NOTE: this was gated on `state.get("analysis_complete")`, a key NOTHING
+        # in the repo ever writes — so the crash verdict (true_bug / feasible)
+        # never reached the trial result: `found_bug` counted every crash and a
+        # real library bug was indistinguishable from a driver false-positive.
+        if (state.get("crash_analysis") or state.get("context_analysis")
+                or state.get("coverage_analysis")):
             # Get the most recent RunResult or create a minimal one
             run_result_for_analysis = None
             for r in reversed(result_history):
@@ -133,6 +140,8 @@ class StateAdapter:
                 run_result=run_result_for_analysis,
                 crash_result=StateAdapter._extract_crash_result(
                     state, benchmark, trial, work_dirs),
+                crash_context_result=StateAdapter._extract_crash_context_result(
+                    state),
                 coverage_result=StateAdapter._extract_coverage_result(
                     state, benchmark, trial, work_dirs))
             # Set function_analysis as an attribute (not via __init__)
@@ -173,6 +182,26 @@ class StateAdapter:
                            insight=crash_data.get("insight", ""),
                            stacktrace=crash_data.get("stacktrace", ""),
                            chat_history={})
+
+    @staticmethod
+    def _extract_crash_context_result(
+            state: FuzzingWorkflowState) -> Optional[CrashContextResult]:
+        """Extract the crash *feasibility* verdict from state.
+
+        ``context_analysis`` carries the feasibility decision — written by the
+        lean deterministic crash-frame classifier (``feasible = verdict ==
+        'library'``) or the LLM CrashFeasibilityAnalyzer. Surfacing it here is
+        what lets ``TrialResult.is_semantic_error`` (and thus ``found_bug`` +
+        the merge quarantine) tell a real library bug from a driver FP.
+        """
+        ctx = state.get("context_analysis")
+        if not ctx:
+            return None
+        return CrashContextResult(
+            feasible=ctx.get("feasible", False),
+            analysis=ctx.get("analysis", ""),
+            source_code_evidence=ctx.get("source_code_evidence", ""),
+            recommendations=ctx.get("recommendations", ""))
 
     @staticmethod
     def _extract_coverage_result(

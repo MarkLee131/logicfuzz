@@ -585,6 +585,19 @@ def _is_immediate_crash_fp(br) -> bool:
   return cov_pcs == 0 and cov_frac <= 0.001
 
 
+def _trial_confirms_real_bug(tr) -> bool:
+  """True iff this trial's crash triage CONFIRMED a real (feasible) bug — a
+  library-frame crash kept by lean, or an LLM-feasible verdict. Such a driver is
+  KEPT in the merge even at 0 coverage (a genuine library crash may abort before
+  accumulating edges); only driver-FP / unverified immediate crashes are
+  quarantined. Relies on the verdict reaching ``TrialResult.is_semantic_error``
+  (the analysis-result fix in adapters.py). ``is_semantic_error`` is False both
+  for a real bug AND for 'no verdict', so we require an actual analysis result —
+  a no-verdict immediate crash stays quarantined (the safe default)."""
+  return (getattr(tr, 'best_analysis_result', None) is not None
+          and not getattr(tr, 'is_semantic_error', True))
+
+
 def _resolve_candidate_binary(src, work_dirs):
   """Best-effort: find a host-runnable libFuzzer binary for a driver source.
 
@@ -699,11 +712,12 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     # (unchecked creator return / garbage opaque arg — the class density can add
     # on handle-ful drivers). In the single-process fused harness it crashes
     # before any sub-driver runs → poisons the whole campaign, and it
-    # contributes no coverage anyway. Drop it here, using the trial's OWN run
-    # verdict, so the quarantine fires even when no host-runnable binary
-    # resolves for preflight. A crasher that made real progress (cov>0) is a
-    # normal fuzz target (-ignore_crashes=1 carries it) — keep it.
-    if _is_immediate_crash_fp(br):
+    # contributes no coverage anyway. A crasher that made real progress (cov>0)
+    # is a normal fuzz target (-ignore_crashes=1 carries it) — keep it.
+    # BUT never drop a crash the triage CONFIRMED feasible (a real library bug
+    # can abort at 0 coverage): gate the quarantine on the crash verdict so the
+    # low-FP classifier's "real bug" decision is honored, not just coverage.
+    if _is_immediate_crash_fp(br) and not _trial_confirms_real_bug(tr):
       quarantined += 1
       logger.info(
           f'merge: quarantined trial {tr.trial:02d} (immediate-crash FP, '

@@ -106,6 +106,17 @@ class LangGraphCrashAnalyzer(LangGraphAgent, ToolCallingMixin):
                     "severity": "low",
                     "analyzed": True,
                     "gdb_used": False
+                },
+                # The deterministic FP check already decided infeasibility, so
+                # emit the feasibility verdict too. Without it the router sees
+                # crash_analysis-but-no-context_analysis and burns a redundant
+                # LLM crash_feasibility_analyzer turn; with it the router goes
+                # straight to the (capped) fixer to repair the driver bug.
+                "context_analysis": {
+                    "feasible": False,
+                    "false_positive_type": fp_result["fp_type"],
+                    "analysis": fp_result["reason"],
+                    "analyzed": True,
                 }
             }
 

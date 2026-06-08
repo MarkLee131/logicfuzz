@@ -47,7 +47,6 @@ OPTIMIZATION PHASE:
                                                          ▼
                                                        END
 """
-import os
 from typing import Dict, Any, Optional, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -69,17 +68,6 @@ MAX_BASELINE_DIFF_RETRIES = 1        # §10B v2: one diff→re-prototype loop pe
 
 
 # ==================== Lean Mode (roadmap item 4) ====================
-def _lean_mode() -> bool:
-    """LOGICFUZZ_LEAN_MODE: cut per-driver LLM calls (~8.5 → ~3) by
-    (i) replacing the 2-call LLM crash triage (CrashAnalyzer +
-    CrashFeasibilityAnalyzer) with the deterministic crash-frame classifier
-    and (ii) skipping the per-driver coverage-optimize loop
-    (coverage_analyzer → improver). OFF by default — when unset, routing is
-    byte-identical to the legacy state machine.
-    """
-    return bool(os.environ.get("LOGICFUZZ_LEAN_MODE"))
-
-
 def _crash_asan_log(state: FuzzingWorkflowState) -> str:
     """Best-effort ASan/backtrace text for deterministic frame attribution.
 
@@ -113,12 +101,10 @@ def _lean_crash_triage(state: FuzzingWorkflowState,
         fixer (capped at MAX_CRASH_FIX_RETRIES, then END), unchanged.
       * ``unknown``       → return ``None`` → fall back to the LLM path.
 
-    Returns ``None`` when not in lean mode, when there is no fresh crash, or
-    when a crash has already been triaged (so the 'unknown' LLM fallback runs
-    once and is not re-classified on the next supervisor visit).
+    Returns ``None`` when there is no fresh crash, or when a crash has already
+    been triaged (so the 'unknown' LLM fallback runs once and is not
+    re-classified on the next supervisor visit).
     """
-    if not _lean_mode():
-        return None
     crashes = state.get("crashes", False)
     run_error = state.get("run_error", "") or ""
     is_crash = crashes or ("crash" in run_error.lower())
@@ -451,18 +437,15 @@ def _handle_optimization_phase(state: FuzzingWorkflowState, trial: int) -> str:
     if not run_success:
         return _handle_execution_failure(state, trial)
 
-    # LEAN MODE (roadmap item 4): after a clean build+run, skip the per-driver
-    # coverage-optimize loop (coverage_analyzer → improver) AND the §10B
-    # baseline-regression recovery — breadth comes from many-drivers + merge,
-    # so per-driver coverage refinement is low-value LLM spend. Ship as-is.
-    if _lean_mode():
-        logger.info(
-            'LEAN MODE: skipping per-driver coverage-optimize loop, '
-            'routing to END', trial=trial)
-        return "END"
-
-    # Execution succeeded → check coverage
-    return _handle_coverage_improvement(state, trial)
+    # After a clean build+run, skip the per-driver coverage-optimize loop
+    # (coverage_analyzer → improver) AND the §10B baseline-regression recovery —
+    # breadth comes from many-drivers + merge, so per-driver coverage refinement
+    # is low-value LLM spend. Ship as-is. (This was LEAN MODE, gated by
+    # LOGICFUZZ_LEAN_MODE; now the default — the gate was removed, so the
+    # coverage_analyzer/improver nodes are no longer reached on the success path.)
+    logger.info('Clean build+run → END (per-driver optimize loop skipped)',
+                trial=trial)
+    return "END"
 
 
 def _handle_execution_failure(state: FuzzingWorkflowState, trial: int) -> str:
@@ -603,12 +586,15 @@ def _handle_coverage_improvement(state: FuzzingWorkflowState, trial: int) -> str
 
 
 def route_condition(state: FuzzingWorkflowState) -> str:
-    """LangGraph conditional routing function."""
-    if "next_action" not in state:
-        raise KeyError("Workflow state is missing required 'next_action' for routing")
+    """LangGraph conditional routing function.
 
-    next_action = state["next_action"]
-
+    The keys here MUST stay in sync with the conditional-edge map in
+    `workflow.py` (`add_conditional_edges`). On a missing/unknown `next_action`
+    we END this trial with a loud error instead of raising: an uncaught raise
+    here is re-raised by `workflow.run` as a fatal RuntimeError that kills the
+    whole trial, whereas a routing slip should fail explicitly but scoped — end
+    just this trial cleanly. (Not a silent fallback: the error is logged.)
+    """
     action_to_node = {
         "prototyper": "prototyper",
         "fixer": "fixer",
@@ -619,13 +605,17 @@ def route_condition(state: FuzzingWorkflowState) -> str:
         "coverage_analyzer": "coverage_analyzer",
         "crash_feasibility_analyzer": "crash_feasibility_analyzer",
         "baseline_diff_analyzer": "baseline_diff_analyzer",
-        "END": "__end__"
+        "END": "__end__",
     }
 
-    if next_action not in action_to_node:
-        raise ValueError(f"Unknown next_action for routing: {next_action}")
-
-    return action_to_node[next_action]
+    next_action = state.get("next_action")
+    node = action_to_node.get(next_action)
+    if node is None:
+        logger.error(
+            'route_condition: missing/unknown next_action=%r → ending trial',
+            next_action, trial=state.get("trial", 0))
+        return "__end__"
+    return node
 
 
 __all__ = ['supervisor_node', 'route_condition']
