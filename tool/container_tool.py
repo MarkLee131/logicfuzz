@@ -76,6 +76,10 @@ class ProjectContainerTool(BaseTool):
                use_llvm14_builder: bool = False) -> None:
     super().__init__(benchmark, name)
     self.project_name = project_name or benchmark.project
+    # A1: clang-14 is baked into the canonical base-builder (additive), so the
+    # *normal* project image already supports bitcode extraction — no separate
+    # extraction image/tag is needed. use_llvm14_builder only ensures the base is
+    # augmented (idempotent) inside prepare_project_image.
     self.image_name = self._prepare_project_image(
         self.project_name, use_llvm14_builder=use_llvm14_builder)
     self.container_id, self._container_is_shared = (

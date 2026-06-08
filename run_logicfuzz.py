@@ -1828,6 +1828,13 @@ def main():
           logger.warning('Cannot generate drivers for %s: ConditionManager not available', benchmark.project)
           logger.warning('Ensure LLVM extraction is enabled (--disable-llvm-extraction not set)')
     return
+  # A1: bake clang-14 into the canonical base-builder BEFORE building cache images,
+  # so cached project images also support LLVM/SVF extraction (else extraction
+  # degrades to clang-only → function_conditions empty → whole run Z3-off).
+  # Idempotent + additive (no effect on fuzzer builds). Skipped only if extraction
+  # is disabled. See oss_fuzz_checkout.ensure_llvm14_base_builder.
+  if not getattr(args, 'disable_llvm_extraction', False):
+    oss_fuzz_checkout.ensure_llvm14_base_builder()
   if oss_fuzz_checkout.ENABLE_CACHING:
     oss_fuzz_checkout.prepare_cached_images(experiment_targets)
 

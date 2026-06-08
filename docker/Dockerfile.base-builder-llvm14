@@ -47,19 +47,23 @@ RUN ln -sf /usr/lib/llvm-14/lib/libclang.so.1 /usr/lib/x86_64-linux-gnu/libclang
 # Install wllvm for bitcode extraction
 RUN pip3 install wllvm
 
-# Create symlinks so linker can find libc++ in standard paths
-RUN ln -sf /usr/lib/llvm-14/lib/libc++.so /usr/lib/x86_64-linux-gnu/libc++.so && \
-    ln -sf /usr/lib/llvm-14/lib/libc++.so.1 /usr/lib/x86_64-linux-gnu/libc++.so.1 && \
-    ln -sf /usr/lib/llvm-14/lib/libc++.so.1.0 /usr/lib/x86_64-linux-gnu/libc++.so.1.0 && \
-    ln -sf /usr/lib/llvm-14/lib/libc++abi.so /usr/lib/x86_64-linux-gnu/libc++abi.so && \
-    ln -sf /usr/lib/llvm-14/lib/libc++abi.so.1 /usr/lib/x86_64-linux-gnu/libc++abi.so.1 && \
-    ldconfig
+# IMPORTANT: do NOT symlink llvm-14's libc++ into the system path
+# (/usr/lib/x86_64-linux-gnu). Overriding the system libc++ replaces the one the
+# *default* OSS-Fuzz clang links fuzzers against → ABI/version mismatch →
+# fuzz-target link failures ("undefined reference to main" / libc++ errors).
+# This image is ADDITIVE by design: clang-14 lives at /usr/lib/llvm-14 purely for
+# bitcode extraction (the extractor invokes it by explicit path via wllvm); the
+# default fuzzer toolchain and the system libc++ are left UNTOUCHED. That makes
+# this image safe as the canonical base-builder for BOTH fuzzer builds and
+# extraction. clang-14's own -stdlib=libc++ resolves against /usr/lib/llvm-14/lib
+# (its install-relative lib dir), so extraction needs no system symlink either.
 
-# Verify installation
+# Verify installation (clang-14 at its own prefix; system toolchain untouched)
 RUN clang-14 --version && \
     llvm-config-14 --version && \
     which wllvm && \
-    test -f /usr/lib/x86_64-linux-gnu/libc++.so
+    test -x /usr/lib/llvm-14/bin/clang && \
+    test -f /usr/lib/llvm-14/lib/libc++.so
 
 # Set environment variables for LLVM 14
 ENV LLVM_CONFIG=/usr/bin/llvm-config-14

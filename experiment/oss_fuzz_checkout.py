@@ -26,7 +26,13 @@ OSS_FUZZ_DIR: str = os.path.join(
     os.path.dirname(os.path.dirname(os.path.realpath(__file__))), 'oss-fuzz')
 CLEAN_UP_OSS_FUZZ = bool(int(os.getenv('OFG_CLEAN_UP_OSS_FUZZ', '1')))
 
-# Custom base-builder with LLVM 14 for bitcode extraction
+# Canonical OSS-Fuzz base-builder tag. A1 (image-isolation cleanup): we augment
+# THIS tag in place with clang-14 (additive — see ensure_llvm14_base_builder), so
+# every project AND cache image built FROM it supports both fuzzer builds and
+# LLVM/SVF bitcode extraction with no per-image Dockerfile patching.
+BASE_BUILDER = 'gcr.io/oss-fuzz-base/base-builder'
+# Custom base-builder with LLVM 14 for bitcode extraction (built, then retagged
+# onto BASE_BUILDER by ensure_llvm14_base_builder).
 CUSTOM_BASE_BUILDER = 'logicfuzz/base-builder-llvm14'
 # Path to Dockerfile for building the custom base image
 CUSTOM_BASE_DOCKERFILE = os.path.join(
@@ -65,6 +71,45 @@ def ensure_custom_base_image_exists():
     return False
 
   logger.info('Successfully built custom base image %s', CUSTOM_BASE_BUILDER)
+  return True
+
+def _image_has_clang14(tag: str) -> bool:
+  """True iff the image carries clang-14 at the path the extractor probes
+  (/usr/lib/llvm-14/bin/clang). Used to decide if the base is already additive."""
+  probe = sp.run(
+      ['docker', 'run', '--rm', '--entrypoint', '/bin/bash', tag, '-c',
+       'test -x /usr/lib/llvm-14/bin/clang'],
+      stdout=sp.DEVNULL, stderr=sp.DEVNULL)
+  return probe.returncode == 0
+
+def ensure_llvm14_base_builder() -> bool:
+  """A1: make the *canonical* base-builder (BASE_BUILDER) carry clang-14, ADDITIVELY.
+
+  LLVM/SVF condition extraction needs clang-14 + the project source in the build
+  image; fuzzer builds need the standard toolchain (fuzzers don't link on a
+  toolchain-replacing llvm14 base). The custom Dockerfile is additive (clang-14
+  at /usr/lib/llvm-14; default clang + system libc++ untouched), so a SINGLE image
+  serves both. We build it once and retag it onto BASE_BUILDER, so every project
+  AND cache image built FROM base-builder inherits clang-14 — no per-image
+  Dockerfile patching, no separate extraction image. Must run BEFORE
+  prepare_cached_images so cache images are built on the augmented base.
+
+  Idempotent: no-op once BASE_BUILDER already has clang-14. Safe re-tag: the build
+  flow never `docker build --pull`s, so the local override is not clobbered."""
+  if _image_has_clang14(BASE_BUILDER):
+    return True
+  logger.info('Augmenting canonical base-builder %s with clang-14 (additive, '
+              'one-time)…', BASE_BUILDER)
+  if not ensure_custom_base_image_exists():
+    return False
+  retag = sp.run(['docker', 'tag', CUSTOM_BASE_BUILDER, BASE_BUILDER],
+                 stdout=sp.PIPE, stderr=sp.PIPE)
+  if retag.returncode != 0:
+    logger.error('Failed to retag %s as %s: %s', CUSTOM_BASE_BUILDER,
+                 BASE_BUILDER, retag.stderr.decode('utf-8', 'replace'))
+    return False
+  logger.info('Canonical base-builder %s now carries clang-14 (additive)',
+              BASE_BUILDER)
   return True
 
 def _remove_temp_oss_fuzz_repo():
@@ -534,6 +579,18 @@ def prepare_project_image(benchmark: benchmarklib.Benchmark,
   image_name = f'gcr.io/oss-fuzz/{generated_oss_fuzz_project}'
   create_ossfuzz_project(benchmark, generated_oss_fuzz_project)
 
+  # A1: clang-14 lives in the canonical base-builder (additive), so extraction
+  # works on the *normal* project/cache image — no Dockerfile FROM-patching and
+  # no separate extraction image. We just make sure the base is augmented before
+  # building (idempotent; also covers the --extract-only path that skips
+  # prepare_cached_images). The standard cache logic below is now shared by
+  # extraction and trials alike.
+  if use_llvm14_builder and not ensure_llvm14_base_builder():
+    raise RuntimeError(
+        f'Failed to augment {BASE_BUILDER} with clang-14 — LLVM/SVF extraction '
+        f'would degrade to clang-only (Z3 off). Check '
+        f'docker/Dockerfile.base-builder-llvm14.')
+
   if not ENABLE_CACHING:
     logger.warning('Disabled caching when building image for %s', project)
   elif is_image_cached(project, 'address'):
@@ -548,17 +605,6 @@ def prepare_project_image(benchmark: benchmarklib.Benchmark,
                 generated_oss_fuzz_project, image_name)
   else:
     logger.warning('Unable to find cached project image for %s', project)
-
-  # Patch Dockerfile to use custom base-builder with LLVM 14 if requested
-  # NOTE: Must be done AFTER caching logic, because caching rewrites Dockerfile
-  # from original_dockerfile which would undo the patch
-  if use_llvm14_builder:
-    # Ensure the custom base image exists (build if necessary)
-    if not ensure_custom_base_image_exists():
-      raise RuntimeError(
-          f'Custom base image {CUSTOM_BASE_BUILDER} not available. '
-          f'Please check docker/Dockerfile.base-builder-llvm14 exists.')
-    patch_dockerfile_for_llvm14(generated_oss_fuzz_project)
 
   return _build_image(generated_oss_fuzz_project)
 
