@@ -1,8 +1,10 @@
 # LogicFuzz — Contributions & Related-Work Comparison
 
 What problems in fuzz-driver generation LogicFuzz solves, the **three
-innovations** that distinguish it from prior work, and an objective,
-component-level comparison against the two systems it is closest to:
+innovations** that distinguish it from prior work, **why a constraint-based
+synthesis core is the objectively-right paradigm for this problem** (the
+method-fit argument closing §2), and an objective, component-level comparison
+against the two systems it is closest to:
 
 - **PromeFuzz** (`reference/promefuzz`) — the LLM-driven driver generator our
   knowledge layer is derived from. The representative *neural* baseline.
@@ -247,6 +249,72 @@ lower token cost** than re-deriving it per call.
 > **vs prior work:** PromeFuzz's cross-round channel is crash-constraint
 > learning (avoid what crashes); ours is *viability learning* (reinforce what
 > composed correctly) anchored in a learned, library-specific typestate model.
+
+### Why constraint-based synthesis is the objectively-right core — a method-fit argument
+
+All three innovations sit on one engine: the skeleton is produced by
+**constraint-based (SMT-backed) component synthesis** — a goal-directed
+backtracking search over a typed API-component library, with Z3 guiding each
+decision and unsat-core-driven backtracking, init-chain backward-chaining to
+recover producers (`constraint_based/CBFactory.py`, `z3_guided_synthesis.py`;
+adapted from Liberator). This is **classic symbolic program synthesis — no LLM in
+the skeleton at all**; the neural layer enters only afterward (hole-filling, ②).
+That paradigm choice is not incidental: it is the one that objectively fits this
+problem's **four defining traits**, where every classical alternative mismatches
+at least one.
+
+| Scenario trait | What it demands of the synthesizer |
+|---|---|
+| Spec = crisp **relational structure** (type ⊕ provenance ⊕ lifecycle order ⊕ var-availability), *not* behavior | express *global* relational constraints natively |
+| **No I/O examples** of "the driver" | rules out example-driven induction as the engine |
+| Behavioral oracle (build+fuzz) is **expensive + noisy** | per-candidate verification must be *avoided*, not iterated — validity must be a-priori & cheap |
+| Large library, **valid solutions sparse**; we want **many diverse valid** drivers | strong pruning + cheap enumeration of *distinct* valid solutions, not one optimum |
+
+**Objective paradigm fit** for this skeleton-synthesis subproblem:
+
+| Paradigm | Fatal mismatch *here* | Where it would win instead |
+|---|---|---|
+| Enumerative (SyGuS, bottom-up + OE) | valid space sparse in a huge library → blowup; *local* enumeration can't hold *global* lifecycle/provenance invariants (generate-then-filter, wasteful); OE pruning needs a cheap executable oracle we lack | small grammar + cheap test oracle |
+| Stochastic / search (genetic, STOKE) | fitness = coverage = build+run → prohibitive oracle cost; no validity-by-construction → most evaluations wasted on invalid drivers | cheap / fast / differentiable fitness |
+| PBE / inductive (VSA, FlashFill) | no I/O examples of the target driver exist | abundant I/O examples |
+| Deductive / type-directed (Synquid) | needs a *complete* formal spec (refinement types) we cannot write for a C library — only *partial* contracts are recoverable | full formal specs available |
+| Neural / LLM (PromeFuzz) | no guarantee on *hard* structure → plausible-but-broken drivers, repair cost, hallucination | soft/semantic leaf decisions, repair budget |
+| **Constraint-based (ours)** | **only as good as the encoded model; cannot express *semantic-value / input-data* validity** | **crisp relational spec + expensive oracle + sparse-valid large library** ✓ |
+
+**Advantages it buys.** Validity *by construction* (no repair stage; the
+expensive oracle is never spent on a structurally-invalid driver); solver pruning
+(unsat-core + incremental push/pop) makes the sparse-valid large-library search
+tractable; *global* invariants (lifecycle order, provenance) handled natively;
+backward-chaining init-chains directly attack the binding bottleneck (to obtain an
+opaque handle, recursively synthesize its producer); and cheap **diverse** valid
+output (randomized/biased choice among satisfiable candidates) to feed the
+breadth-via-merge strategy — all **decoupled from the expensive build+fuzz
+oracle**.
+
+**Honest disadvantage — and it is exactly our current ceiling.** A constraint
+method is only as good as the constraints it can encode: it expresses crisp
+structure but **cannot express semantic-value / data validity** (SMT can say "this
+arg is typed `cmsHPROFILE`"; it cannot say "these bytes are a *valid* ICC
+profile"). Both top open bottlenecks are this one disadvantage made concrete — the
+**binding layer** (an opaque arg with no recoverable producer → UNSAT → no driver,
+#14) and the **input/seed layer** (`cmsCreateTransform(random bytes)` → NULL →
+`cmsxform.c` 0/799 despite a correctly constructed, compiling chain).
+
+**Objective verdict.** For the *structural* skeleton, constraint-based is the
+clear best fit — its strengths map one-to-one onto the four scenario traits, and
+each alternative fails at least one. The theoretically-closest competitor is
+**deductive / type-directed** synthesis (our init-chain backward-chaining is
+already deductive in spirit), but it presumes specifications we cannot obtain for
+real C libraries; **constraint-based is precisely its realizable relaxation under
+partial contracts.** Crucially, *no single traditional paradigm suffices*: the
+very thing constraints cannot express (semantic values, valid structured input) is
+what the **neural** layer (LLM hole-filling, ②) and the **seed** layer (real
+format-matching corpora) are added for. **The objectively-correct design is
+therefore not "pick one synthesis method" but a layered split — constraint-based
+for the hard structure it provably owns, neural + seed for the soft/data residual
+it provably cannot — which is the root justification for LogicFuzz being
+neuro-symbolic rather than either pure-symbolic (Liberator) or pure-neural
+(PromeFuzz).**
 
 ---
 
