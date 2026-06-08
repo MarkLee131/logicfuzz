@@ -797,6 +797,23 @@ Output your fuzz driver code inside <fuzz_target> tags.
                     f'Generated code via hole-filling: '
                     f'{len(hole_fillings)} holes filled',
                     trial=self.trial)
+                # T12: capture the filled hole values (gated, best-effort) so a
+                # later run can pin the ones that reached deep coverage.
+                import os as _os
+                if _os.environ.get('LOGICFUZZ_VALUE_FEEDBACK'):
+                    try:
+                        from src.state.coverage_memory import (
+                            record_trial_hole_values)
+                        _skels = state.get('context', {}).get(
+                            'skeleton_drivers', [])
+                        _sk = (_skels[(self.trial - 1) % len(_skels)]
+                               if _skels else {})
+                        record_trial_hole_values(
+                            benchmark.get('project', 'unknown'),
+                            self.trial, _sk.get('name'),
+                            _sk.get('api_sequence', []), hole_fillings)
+                    except Exception:
+                        pass
             else:
                 # Fallback: try to extract from fuzz_target tag
                 fuzz_target_code = parse_tag(parsed_result.get('raw_response', ''), 'fuzz_target')
@@ -1402,6 +1419,12 @@ Output your fuzz driver code inside <fuzz_target> tags.
         holes_desc_lines.append("")
         holes_desc_lines.append("Holes to fill:")
 
+        # T12: hole values that reached the deepest coverage on a PRIOR run of
+        # this same skeleton (LOGICFUZZ_VALUE_FEEDBACK; attached upstream by
+        # coverage_memory.attach_proven_holes). Surfaced per-hole as a
+        # reuse-unless-reason hint so the LLM starts from a proven value.
+        proven_holes = skeleton.get('proven_holes') or {}
+
         if holes:
             for i, hole in enumerate(holes, 1):
                 hole_name = hole.get('name', f'HOLE_{i}')
@@ -1414,6 +1437,11 @@ Output your fuzz driver code inside <fuzz_target> tags.
                     f"  {i}. {placeholder}")
                 holes_desc_lines.append(f"     Type: {hole_type}")
                 holes_desc_lines.append(f"     {desc}")
+                _pv = proven_holes.get(placeholder)
+                if _pv:
+                    holes_desc_lines.append(
+                        f"     PROVEN VALUE (reached deep coverage last run — "
+                        f"reuse unless you have a specific reason not to): {_pv}")
 
                 # Add hints for specific hole types
                 if hole_type == 'CALLBACK_IMPL':
@@ -1433,6 +1461,14 @@ Output your fuzz driver code inside <fuzz_target> tags.
             holes_desc_lines.append(
                 "  (No explicit holes - review code and fill any __HOLE_*__ placeholders)"
             )
+
+        # T7: cross-project structurally-similar driver examples (gated;
+        # attached upstream by data_context for resource-thin libraries).
+        # Compressed CALLSPEC-style — the LLM adapts the SHAPE, not literal names.
+        _xproj = skeleton.get('cross_project_hints')
+        if _xproj:
+            holes_desc_lines.append("")
+            holes_desc_lines.append(_xproj)
 
         # G4: per-arg value intent from APISemanticModel (in-range/out-of-range
         # for scalars, structured-input for parser buffers, length pairing,

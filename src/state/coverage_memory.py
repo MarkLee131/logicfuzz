@@ -31,12 +31,13 @@ renaming requires a migration. ``coverage_memory.json`` carries a
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, cast
+from typing import Dict, List, Optional, Sequence, cast
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,18 @@ class TrialOutcome:
     crashes_found: int = 0
     success: bool = True
     """False if build/run failed entirely."""
+
+    # T12 — dynamic value feedback. The concrete leaf values the LLM chose for
+    # this skeleton's holes, captured at hole-fill time (prototyper) into a side
+    # file and attached at snapshot time, so the NEXT run can pin proven values
+    # instead of re-guessing. Matched across runs by ``skeleton_key`` — a hash of
+    # the API SEQUENCE (content), NOT the positional ``cbfactory_skeleton_{i}``
+    # name (which can denote a different sequence next run). ``skeleton_name`` is
+    # kept for human/debug only. All default-empty → forward-compatible with old
+    # JSON (``TrialOutcome(**t)`` supplies the defaults).
+    skeleton_name: Optional[str] = None
+    skeleton_key: Optional[str] = None
+    hole_values: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -338,3 +351,118 @@ def persist_snapshot(
     except Exception as exc:
         logger.warning("CoverageMemory persist failed (non-critical): %s", exc)
     return mem
+
+
+# ===================================================================
+# T12 — dynamic value feedback (the "read" side of Phase C)
+# ===================================================================
+# coverage_memory.json was write-only. These helpers close the loop: capture a
+# trial's filled hole values (side file), then on a LATER run read back the
+# values that reached the highest coverage for a given skeleton and pin them into
+# that skeleton's holes — so the LLM starts from a proven value instead of
+# re-guessing. Cross-RUN (the snapshot is persisted post-merge); gated upstream
+# by LOGICFUZZ_VALUE_FEEDBACK. All best-effort: a failure never breaks a run.
+
+def _hole_values_dir(project: str, state_dir: Optional[Path]) -> Path:
+    if state_dir is None:
+        state_dir = Path('results') / project / 'state'
+    return state_dir / 'hole_values'
+
+
+def sequence_key(api_sequence: Sequence[str]) -> str:
+    """Stable content key for a skeleton = hash of its API sequence.
+
+    Matching proven hole values across runs by the positional name
+    (``cbfactory_skeleton_{i}``) is WRONG — index ``i`` can denote a different
+    sequence next run, mis-pinning values onto an unrelated API chain. Keying by
+    the sequence content makes a pin apply iff the SAME API chain recurs.
+    Returns '' for an empty sequence (never matches).
+    """
+    names = [a for a in (api_sequence or []) if a]
+    if not names:
+        return ''
+    return hashlib.sha1('→'.join(names).encode('utf-8')).hexdigest()[:16]
+
+
+def record_trial_hole_values(
+    project: str,
+    trial_id: int,
+    skeleton_name: Optional[str],
+    api_sequence: Sequence[str],
+    hole_values: Dict[str, str],
+    state_dir: Optional[Path] = None,
+) -> None:
+    """Capture one trial's filled hole values to a side file (last-write-wins).
+
+    Written by the prototyper at hole-fill time so the post-merge snapshot can
+    attach them without threading values through the state→Result→harvest path.
+    Keyed by the API-sequence content hash (``sequence_key``), not the positional
+    name. No-op when there are no hole values; never raises.
+    """
+    if not hole_values:
+        return
+    try:
+        d = _hole_values_dir(project, state_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f'trial_{int(trial_id)}.json').write_text(
+            json.dumps({'skeleton_name': skeleton_name,
+                        'skeleton_key': sequence_key(api_sequence),
+                        'hole_values': dict(hole_values)}),
+            encoding='utf-8')
+    except Exception as exc:  # capture must never break the run
+        logger.debug("record_trial_hole_values skipped: %s", exc)
+
+
+def load_trial_hole_values(
+    project: str, trial_id: int, state_dir: Optional[Path] = None,
+) -> dict:
+    """Read back ``{'skeleton_name', 'skeleton_key', 'hole_values'}``; {} if absent."""
+    try:
+        p = _hole_values_dir(project, state_dir) / f'trial_{int(trial_id)}.json'
+        if not p.exists():
+            return {}
+        return json.loads(p.read_text(encoding='utf-8')) or {}
+    except Exception:
+        return {}
+
+
+def proven_hole_values(memory: CoverageMemory, skeleton_key: str) -> Dict[str, str]:
+    """The hole→value map from the highest-coverage prior trial whose
+    ``skeleton_key`` matches and that recorded hole values. {} if none.
+
+    Selection: among all snapshots' successful trials with the SAME sequence
+    content key and a non-empty ``hole_values``, pick the greatest
+    ``final_coverage_pct`` (None coverage treated as 0). Ties keep the first
+    (earliest) — deterministic.
+    """
+    if not skeleton_key:
+        return {}
+    best_cov = -1.0
+    best: Dict[str, str] = {}
+    for snap in memory.snapshots:
+        for t in snap.trial_results:
+            if (t.success and t.hole_values
+                    and t.skeleton_key == skeleton_key):
+                cov = t.final_coverage_pct or 0.0
+                if cov > best_cov:
+                    best_cov = cov
+                    best = dict(t.hole_values)
+    return best
+
+
+def attach_proven_holes(skeleton_drivers: List[dict],
+                        memory: CoverageMemory) -> int:
+    """For each skeleton, attach ``skeleton['proven_holes']`` = the proven
+    hole→value map from ``memory``, matched by the skeleton's API-sequence
+    content key (``sequence_key(sk['api_sequence'])``). Returns how many
+    skeletons got a non-empty map. The prototyper renders these as
+    'reuse-unless-you-have-a-reason' hints in the hole prompt.
+    """
+    n = 0
+    for sk in skeleton_drivers or []:
+        key = sequence_key(sk.get('api_sequence', []))
+        proven = proven_hole_values(memory, key)
+        if proven:
+            sk['proven_holes'] = proven
+            n += 1
+    return n

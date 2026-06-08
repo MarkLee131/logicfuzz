@@ -823,6 +823,17 @@ def _persist_phase_c_snapshot(
   state_dir = Path('results') / project / 'state'
 
   outcomes = harvest_trial_outcomes(trial_results)
+  # T12: attach the hole values captured by the prototyper (side files) so the
+  # snapshot records which leaf values reached coverage — read back next run via
+  # coverage_memory.attach_proven_holes. Gated; best-effort.
+  if os.environ.get('LOGICFUZZ_VALUE_FEEDBACK'):
+    from src.state.coverage_memory import load_trial_hole_values
+    for _o in outcomes:
+      _hv = load_trial_hole_values(project, _o.trial_id, state_dir=state_dir)
+      if _hv:
+        _o.skeleton_name = _hv.get('skeleton_name')
+        _o.skeleton_key = _hv.get('skeleton_key')
+        _o.hole_values = _hv.get('hole_values') or {}
   baseline = load_baseline_line_counts(project, log=logger)
 
   merged_count = 0

@@ -16,6 +16,7 @@ locate (possibly empty), and the caller falls back to synthetic seeds.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import zipfile
@@ -327,9 +328,6 @@ def seed_corpus_for_driver(
         corpus_dir.mkdir(parents=True, exist_ok=True)
         all_seeds = list(seeds) if seeds is not None \
             else discover_project_seeds(project)
-        if not all_seeds:
-            return 0
-
         driver_source = ""
         if driver_source_path is not None:
             try:
@@ -337,11 +335,14 @@ def seed_corpus_for_driver(
                     errors="replace")
             except OSError:
                 driver_source = ""
-        chosen = (select_seeds_for_driver(driver_source, all_seeds)
-                  if driver_source else list(all_seeds))
-        chosen = chosen[:max_seeds]
 
+        # Route REAL seeds first (preferred). When none exist the loop is a
+        # no-op and the T10 synthesis fallback below fires.
         n = 0
+        chosen: List[Path] = []
+        if all_seeds:
+            chosen = (select_seeds_for_driver(driver_source, all_seeds)
+                      if driver_source else list(all_seeds))[:max_seeds]
         for src in chosen:
             # Stable, collision-free name; preserve the original so triage can
             # tell a routed real seed from a libFuzzer-discovered one.
@@ -354,9 +355,33 @@ def seed_corpus_for_driver(
                 n += 1
             except OSError:
                 continue
+        # T10: no real seed matched → synthesize a minimal front-gate-passing
+        # seed from the driver's inferred format so a parser-entry driver clears
+        # its magic gate (random bytes never would). Gated, best-effort,
+        # additive. Real seeds always win (this only fires when n == 0).
+        if n == 0 and driver_source and os.environ.get("LOGICFUZZ_FORMAT_INFER"):
+            try:
+                from liberator_adapter.analysis.format_inference import (
+                    infer_spec, synthesize_minimal_seed)
+                for fam in sorted(infer_driver_formats(driver_source)):
+                    spec = infer_spec(fam)
+                    if spec is None:
+                        continue
+                    dst = corpus_dir / f"synthseed_{fam}"
+                    if dst.exists():
+                        continue
+                    dst.write_bytes(synthesize_minimal_seed(spec))
+                    n += 1
+                if n:
+                    logger.info(
+                        "Synthesized %d minimal format seed(s) for %s "
+                        "(no real seed matched)", n, project)
+            except Exception as exc:  # synthesis must never break a run
+                logger.debug("synthetic seed gen skipped: %s", exc)
+
         if n:
             logger.info(
-                "Seeded %s corpus dir %s with %d format-matching real seed(s)",
+                "Seeded %s corpus dir %s with %d seed(s)",
                 project, corpus_dir, n)
         return n
     except Exception as exc:  # noqa: BLE001 — seeding must never break a run

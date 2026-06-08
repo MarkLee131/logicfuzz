@@ -50,6 +50,66 @@ _ORDERING_FAULTS = frozenset({
 })
 
 
+# T11 — symbolic error-shape variants (gate LOGICFUZZ_ERROR_VARIANTS). From a
+# happy-path lifecycle sequence we derive a few ERROR-SHAPE variants that
+# exercise the library's error-handling branches (double-free / idempotent-
+# destroy guard, use-after-destroy state check, uninitialised-handle check). The
+# variant changes ONLY the call-sequence shape — the LLM still fills the same
+# leaf holes. Any crash a variant provokes is triaged by the existing crash-frame
+# classifier (driver-bug → pre-ship merge quarantine), so a missing library guard
+# never poisons the fused harness, while a present guard is covered for free.
+_ERROR_VARIANT_SHAPES = ("DOUBLE_DESTROY", "USE_AFTER_DESTROY", "SKIP_INIT")
+
+
+def error_shape_variants(
+    seq: Sequence[str],
+    creator_names: Set[str],
+    destroyer_names: Set[str],
+    *,
+    shapes: Sequence[str] = _ERROR_VARIANT_SHAPES,
+) -> List[Tuple[List[str], str]]:
+    """Derive error-shape variants of a happy-path sequence.
+
+    Returns ``(variant_sequence, shape_label)`` pairs. Pure + deterministic
+    (unit-tested). A variant is produced only when the source sequence has the
+    structural ingredient the shape needs (a destroyer for the destroy-shapes, a
+    creator for SKIP_INIT); otherwise that shape is skipped. DOUBLE_DESTROY /
+    USE_AFTER_DESTROY reuse the SAME bound handle in an illegal order — the shape
+    *itself* is the error, independent of any LLM leaf value. SKIP_INIT drops the
+    creator so the consumer runs on an unbound handle (LLM-dependent, weaker).
+    """
+    seq = [a for a in seq if a]
+    if len(seq) < 2:
+        return []
+    destroyers_in = [a for a in seq if a in destroyer_names]
+    creators_in = [a for a in seq if a in creator_names]
+    out: List[Tuple[List[str], str]] = []
+
+    if "DOUBLE_DESTROY" in shapes and destroyers_in:
+        # …, destroy(h), destroy(h) → double-free / idempotent-destroy guard.
+        d = destroyers_in[-1]
+        out.append((list(seq) + [d], "DOUBLE_DESTROY"))
+
+    if "USE_AFTER_DESTROY" in shapes and destroyers_in and creators_in:
+        # create(h), destroy(h), <rest uses h> → use-after-destroy state check.
+        d = destroyers_in[-1]
+        c = creators_in[0]
+        rest = [a for a in seq if a != c and a != d]
+        if rest:
+            out.append(([c, d] + rest, "USE_AFTER_DESTROY"))
+
+    if "SKIP_INIT" in shapes and creators_in and len(seq) > len(creators_in):
+        # drop the first creator → its consumer runs on an uninitialised handle
+        # (the handle arg becomes a hole the LLM may NULL — LLM-dependent).
+        c = creators_in[0]
+        v = list(seq)
+        v.remove(c)
+        if v:
+            out.append((v, "SKIP_INIT"))
+
+    return out
+
+
 @dataclass
 class ConstructionResult:
     sequences: List[List[str]]
@@ -610,6 +670,45 @@ def construct_sequences(
         except Exception:
             pass  # oracle unavailable → fall back to model-only output
 
+    # T11: error-shape variants (LOGICFUZZ_ERROR_VARIANTS) — appended AFTER the
+    # ordering self-filter so they survive (the shapes are deliberate ordering
+    # faults the filter would otherwise drop). Derived from the surviving
+    # happy-path sequences; bounded by LOGICFUZZ_ERROR_VARIANTS_MAX.
+    n_error_variants = 0
+    if os.environ.get("LOGICFUZZ_ERROR_VARIANTS") and seqs:
+        _creator_names = {s.name for ns in idx.producers.values() for s in ns}
+        _destroyer_names = {s.name for ns in idx.destroyers.values() for s in ns}
+        _vbudget = int(os.environ.get("LOGICFUZZ_ERROR_VARIANTS_MAX", "12"))
+        # Selectivity (1) — shapes: default to the GUARD-testing shapes a robust
+        # library is *designed* to handle (SKIP_INIT = uninitialised-handle check;
+        # DOUBLE_DESTROY = idempotent-destroy / double-free guard) → pure coverage
+        # win when the guard exists. USE_AFTER_DESTROY is genuine UAF (almost
+        # always a crash, rarely a guarded branch), so it is opt-in only.
+        _shapes = ["SKIP_INIT", "DOUBLE_DESTROY"]
+        if os.environ.get("LOGICFUZZ_ERROR_VARIANTS_AGGRESSIVE"):
+            _shapes.append("USE_AFTER_DESTROY")
+        # Selectivity (2) — gap-direction: only vary sequences that touch a
+        # baseline-UNCOVERED (gap) API, so variants add NEW error-branch coverage
+        # instead of re-covering. No gap info → vary all.
+        _gap = set(gap_apis) if gap_apis else set()
+        _src = [s for s in seqs if (not _gap or (_gap & set(s)))]
+        _variants: List[List[str]] = []
+        for s in _src:
+            if len(_variants) >= _vbudget:
+                break
+            for vseq, shape in error_shape_variants(
+                    s, _creator_names, _destroyer_names, shapes=_shapes):
+                key = tuple(vseq)
+                if key in seen:
+                    continue
+                seen.add(key)
+                source_of[key] = f"error_variant:{shape}"
+                _variants.append(vseq)
+                if len(_variants) >= _vbudget:
+                    break
+        seqs.extend(_variants)
+        n_error_variants = len(_variants)
+
     api_cov = {a for s in seqs for a in s}
     handle_cov = set(idx.producers) | set(idx.destroyers)
     gap_hit = (api_cov & gap_apis) if gap_apis else set()
@@ -621,6 +720,7 @@ def construct_sequences(
         "n_densified": n_densified,
         "n_ordering_dropped": n_ordering_dropped,
         "n_orphan_kept": n_orphan_kept,
+        "n_error_variants": n_error_variants,
         "n_before_ordering_filter": n_before_filter,
         "api_coverage": len(api_cov),
         "handle_types": len(handle_cov),
