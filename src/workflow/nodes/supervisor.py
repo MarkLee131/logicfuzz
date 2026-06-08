@@ -39,13 +39,7 @@ OPTIMIZATION PHASE:
        │                      END (true bug)            fixer ────────────┤
        │                                                                  │
        │                                            (resets retry count)  │
-       └─── success ──► coverage_analyzer (×1) ──► improver (×1) ────────┘
-                                                         │
-                                                         ▼
-                                                 (already ran once)
-                                                         │
-                                                         ▼
-                                                       END
+       └─── success ──► END
 """
 from typing import Dict, Any, Optional, cast
 
@@ -61,10 +55,7 @@ MAX_COMPILATION_RETRIES = 2          # Max fixer attempts during compilation
 MAX_CRASH_FIX_RETRIES = 1            # Max fixer attempts after crash (false positive)
 MAX_TOTAL_BUILD_FAILURES = 5         # Global safety limit
 MAX_NODE_VISITS = 6                  # Loop detection threshold
-MAX_COVERAGE_IMPROVE_ITERATIONS = 1  # coverage_analyzer and improver run at most once
 MAX_FIXER_INVOCATIONS = 3            # Hard cap on total fixer invocations per trial
-LINE_COVERAGE_THRESHOLD = 0.1        # 10% real project coverage to consider "good"
-MAX_BASELINE_DIFF_RETRIES = 1        # §10B v2: one diff→re-prototype loop per trial
 
 
 # ==================== Lean Mode (roadmap item 4) ====================
@@ -230,37 +221,6 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
         logger.debug(f'Passing error triage to fixer: primary={triage_result.primary_category}, '
                     f'strategy={triage_result.recommended_strategy}', trial=trial)
 
-    # §10B v2: when we routed Prototyper because the diff-analyzer
-    # just produced a baseline_diff_analysis, increment the retry
-    # counter so the regression-recovery loop is hard-capped at
-    # MAX_BASELINE_DIFF_RETRIES per trial. The counter lives in the
-    # supervisor (not in the prototyper / analyzer) so the routing
-    # layer remains the single source of truth for the budget.
-    if next_action == "prototyper" and state.get("baseline_diff_analysis") \
-            and state.get("baseline_regression_alert"):
-        diff_retries = state.get("baseline_diff_retry_count", 0)
-        if diff_retries < MAX_BASELINE_DIFF_RETRIES:
-            result["baseline_diff_retry_count"] = diff_retries + 1
-            logger.info(
-                '§10B v2: routing to prototyper after diff analysis '
-                f'(retry {diff_retries + 1}/{MAX_BASELINE_DIFF_RETRIES})',
-                trial=trial,
-            )
-
-    # When routing to improver, snapshot the pre-rewrite coverage and
-    # source so execution_node can rollback if the improver degrades
-    # coverage (2026-05-12 improver-rollback fix). c-ares trial 01 saw
-    # iter1 11.17% → iter2 8.07% with no recourse pre-fix.
-    if next_action == "improver":
-        result["improver_baseline_coverage"] = state.get("coverage_percent", 0.0)
-        result["improver_baseline_source"] = state.get("fuzz_target_source", "")
-        logger.debug(
-            f'Snapshotting improver baseline: coverage='
-            f'{result["improver_baseline_coverage"]:.2%}, '
-            f'source_len={len(result["improver_baseline_source"])}',
-            trial=trial,
-        )
-
     # When routing to fixer after crash analysis, pass crash info for context
     if next_action == "fixer" and state.get("context_analysis") is not None:
         crash_fix_retry_count = state.get("crash_fix_retry_count", 0) + 1
@@ -398,7 +358,7 @@ def _handle_optimization_phase(state: FuzzingWorkflowState, trial: int) -> str:
         )
         return "prototyper"
 
-    # Code was modified (by improver/fixer) → need to rebuild
+    # Code was modified (by the fixer) → need to rebuild
     if compile_success is None:
         logger.debug('Code modified, need to rebuild', trial=trial)
         return "build"
@@ -437,14 +397,12 @@ def _handle_optimization_phase(state: FuzzingWorkflowState, trial: int) -> str:
     if not run_success:
         return _handle_execution_failure(state, trial)
 
-    # After a clean build+run, skip the per-driver coverage-optimize loop
-    # (coverage_analyzer → improver) AND the §10B baseline-regression recovery —
-    # breadth comes from many-drivers + merge, so per-driver coverage refinement
-    # is low-value LLM spend. Ship as-is. (This was LEAN MODE, gated by
-    # LOGICFUZZ_LEAN_MODE; now the default — the gate was removed, so the
-    # coverage_analyzer/improver nodes are no longer reached on the success path.)
-    logger.info('Clean build+run → END (per-driver optimize loop skipped)',
-                trial=trial)
+    # A clean build+run ends the trial. Breadth comes from many-drivers + merge +
+    # gap-direction, so there is NO per-driver coverage-optimize loop: the
+    # coverage_analyzer / improver / baseline_diff_analyzer (§10B) subsystem was
+    # removed. Cross-round coverage feedback, if ever needed, is the Phase C
+    # CEGAR loop (built fresh), not per-trial refinement.
+    logger.info('Clean build+run → END', trial=trial)
     return "END"
 
 
@@ -484,107 +442,6 @@ def _handle_execution_failure(state: FuzzingWorkflowState, trial: int) -> str:
     return "fixer"
 
 
-def _handle_coverage_improvement(state: FuzzingWorkflowState, trial: int) -> str:
-    """Handle coverage improvement logic after successful execution."""
-    coverage_diff = state.get("line_coverage_diff", 0.0)
-    coverage_percent = state.get("coverage_percent", 0.0)
-    node_visit_counts = state.get("node_visit_counts", {})
-
-    coverage_analyzer_visits = node_visit_counts.get("coverage_analyzer", 0)
-    improver_visits = node_visit_counts.get("improver", 0)
-
-    logger.debug(f'Coverage: line_diff={coverage_diff:.2%}, PC={coverage_percent:.2%}', trial=trial)
-
-    # Good coverage → done
-    if coverage_diff >= LINE_COVERAGE_THRESHOLD:
-        logger.info(f'Good coverage achieved (line_diff={coverage_diff:.2%})', trial=trial)
-        return "END"
-
-    # §10B v2 baseline-regression recovery (2026-05-12). When the
-    # execution node fired ``baseline_regression_alert``, give the
-    # trial ONE shot at recovery before falling through to
-    # coverage_analyzer / improver: run the BaselineDiffAnalyzer to
-    # extract concrete diff hints, then re-route to Prototyper with
-    # those hints in context. Capped at MAX_BASELINE_DIFF_RETRIES per
-    # trial.
-    #
-    # Order rationale: improver tweaks the existing driver locally;
-    # the diff loop regenerates it from scratch with new context.
-    # The regression alert says the local minimum is bad, so a
-    # global re-prototype is the higher-value first move. If it also
-    # under-performs (alert fires again), we'll be over budget on
-    # the retry and fall through to the local improver path below.
-    alert = state.get("baseline_regression_alert")
-    if alert:
-        context = state.get("context", {}) or {}
-        knowledge = context.get("existing_driver_knowledge", {}) or {}
-        has_baseline = bool(knowledge.get("driver_sources"))
-        diff_retries = state.get("baseline_diff_retry_count", 0)
-        if not has_baseline:
-            # Silent fall-through used to make v2 misses invisible in logs.
-            # Surface them so an operator can see "alert fired but no
-            # baseline corpus available" rather than guessing why v2
-            # routing didn't kick in. The corpus comes from
-            # ``data_prep/extract_all_fuzz_drivers.py``; without it,
-            # Step 12 in data_context returns empty driver_sources.
-            logger.info(
-                '§10B v2 SKIP: alert active but no baseline driver '
-                'corpus available (existing_driver_knowledge.driver_sources '
-                'is empty). Falling through to coverage_analyzer. Run '
-                'data_prep/extract_all_fuzz_drivers.py or set '
-                'LOGICFUZZ_DRIVERS_ROOT to enable v2 recovery.',
-                trial=trial,
-            )
-        if has_baseline and diff_retries < MAX_BASELINE_DIFF_RETRIES:
-            diff_analysis = state.get("baseline_diff_analysis")
-            if not diff_analysis:
-                logger.info(
-                    '§10B v2: baseline-regression alert active, '
-                    f'line_diff={coverage_diff:.2%}; routing to '
-                    'baseline_diff_analyzer for recovery hints',
-                    trial=trial,
-                )
-                return "baseline_diff_analyzer"
-            # Diff already produced this iteration → consume it via a
-            # fresh prototyper pass. ``supervisor_node`` increments
-            # ``baseline_diff_retry_count`` when this routing decision
-            # lands.
-            logger.info(
-                '§10B v2: baseline_diff_analysis available '
-                f'(verdict={diff_analysis.get("verdict", "?")}); '
-                'routing to prototyper for regeneration',
-                trial=trial,
-            )
-            return "prototyper"
-
-    # Try coverage_analyzer (once)
-    coverage_analysis = state.get("coverage_analysis")
-    if not coverage_analysis:
-        if coverage_analyzer_visits < MAX_COVERAGE_IMPROVE_ITERATIONS:
-            logger.info(f'Low coverage (line_diff={coverage_diff:.2%}), routing to coverage_analyzer', trial=trial)
-            return "coverage_analyzer"
-        else:
-            logger.info(f'Coverage analyzer already ran {coverage_analyzer_visits} time(s), skipping', trial=trial)
-
-    # Try improver (once) if coverage_analysis suggests improvement.
-    # Snapshot the pre-improver coverage so execution_node can rollback
-    # the driver source if the rewrite degrades coverage (2026-05-12).
-    # Empirical motivation: c-ares trial 01 iter1 11.17% → iter2 8.07%
-    # (improver rewrote the driver more narrowly and lost 27% relative
-    # coverage with no recourse). The rollback baseline lives in state
-    # so execution_node can compare without re-querying.
-    if coverage_analysis and coverage_analysis.get("improve_required", False):
-        if improver_visits < MAX_COVERAGE_IMPROVE_ITERATIONS:
-            logger.info('Coverage analysis suggests improvement, routing to improver', trial=trial)
-            return "improver"
-        else:
-            logger.info(f'Improver already ran {improver_visits} time(s), skipping', trial=trial)
-
-    # Done - no more improvement possible within limits
-    logger.info(f'Workflow complete: line_diff={coverage_diff:.2%}, PC={coverage_percent:.2%}', trial=trial)
-    return "END"
-
-
 def route_condition(state: FuzzingWorkflowState) -> str:
     """LangGraph conditional routing function.
 
@@ -598,13 +455,10 @@ def route_condition(state: FuzzingWorkflowState) -> str:
     action_to_node = {
         "prototyper": "prototyper",
         "fixer": "fixer",
-        "improver": "improver",
         "build": "build",
         "execution": "execution",
         "crash_analyzer": "crash_analyzer",
-        "coverage_analyzer": "coverage_analyzer",
         "crash_feasibility_analyzer": "crash_feasibility_analyzer",
-        "baseline_diff_analyzer": "baseline_diff_analyzer",
         "END": "__end__",
     }
 

@@ -48,19 +48,9 @@ class FuzzingWorkflowState(TypedDict):
     # about compilation. See 2026-05 workflow refactor.
     is_stub_binary: NotRequired[bool]
 
-    # Improver-rollback machinery (2026-05-12). When supervisor routes
-    # to improver, it snapshots pre-rewrite coverage + source into these
-    # keys. After the next execution, ``execution_node`` compares new
-    # coverage to baseline and either keeps the rewrite or restores the
-    # baseline source (when new < baseline × 0.85). The keys are then
-    # cleared. ``improver_rolled_back`` set by execution_node to surface
-    # the rollback decision in trial summaries.
-    improver_baseline_coverage: NotRequired[float]
-    improver_baseline_source: NotRequired[str]
-    improver_rolled_back: NotRequired[bool]
     # Keep-best (all paths): the highest coverage + its source seen this trial,
-    # so a regressing iteration (improver / fixer / §10B) never ships a worse
-    # driver than the trial already achieved.
+    # so a regressing iteration (fixer re-gen) never ships a worse driver than
+    # the trial already achieved.
     best_coverage: NotRequired[float]
     best_source: NotRequired[str]
 
@@ -71,34 +61,6 @@ class FuzzingWorkflowState(TypedDict):
     # dict when the LLM didn't follow the directive (or single-shot
     # mode). See docs/multihop_reasoning_design_proposal_2026_05.md.
     reasoning_chain_summary: NotRequired[Dict[str, int]]
-
-    # §10B v1 baseline-regression alert (2026-05-12). Set by
-    # execution_node when ``line_coverage_diff`` falls below 0.5% AND
-    # the project ships an OSS-Fuzz baseline driver. Indicates our
-    # generated driver contributed essentially no NEW coverage beyond
-    # what the baseline already covers — strong signal that we
-    # dropped critical context. v1 only emits the alert; v2 wires it
-    # into a BaselineDiffAnalyzer → Prototyper recovery loop (capped
-    # at 1 retry per trial). See
-    # docs/knowledge_layer_design_proposal_2026_05.md §10B.
-    baseline_regression_alert: NotRequired[Dict[str, Any]]
-
-    # §10B v2 BaselineDiffAnalyzer output (2026-05-12). Set by the
-    # BaselineDiffAnalyzer node after a regression alert fires. The
-    # Prototyper consumes this on the next pass and renders it into
-    # a ``<baseline_regression_recovery>`` block. Structure:
-    # ``{status, missing_apis: List[str], missing_patterns: List[str],
-    #    input_encoding_gaps: str, suggested_constraints: List[str],
-    #    verdict: 'recover' | 'baseline_too_narrow' | 'inconclusive'}``.
-    baseline_diff_analysis: NotRequired[Dict[str, Any]]
-
-    # §10B v2 retry counter (2026-05-12). Incremented by the
-    # supervisor when it routes Prototyper following a successful
-    # diff-analyzer turn. Hard-capped at 1 per trial; further
-    # regression alerts fall through to coverage_analyzer / improver
-    # / END as usual. The cap is here, not in the analyzer agent,
-    # so the routing layer remains the single source of truth.
-    baseline_diff_retry_count: NotRequired[int]
 
     # === Execution Results (from ExecutionStage) ===
     run_success: NotRequired[bool]
@@ -123,9 +85,7 @@ class FuzzingWorkflowState(TypedDict):
         int]  # Track consecutive iterations without coverage improvement
 
     # === Analysis Results (from Analyzers) ===
-    analysis_complete: NotRequired[bool]
     crash_analysis: NotRequired[Dict[str, Any]]
-    coverage_analysis: NotRequired[Dict[str, Any]]
 
     # === Workflow Control ===
     next_action: NotRequired[str]  # For supervisor routing

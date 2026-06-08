@@ -130,8 +130,13 @@ COMPILATION:  prototyper → build → [fail] → fixer (×3) → END
                                  → [ok]  → OPTIMIZATION
 
 OPTIMIZATION: execution → [crash] → crash_analyzer → feasibility → END/fixer
-                        → [ok]    → coverage_analyzer → improver → END
+                        → [ok]    → END
 ```
+
+(There is no per-driver coverage-optimize loop: the `coverage_analyzer` →
+`improver` + §10B `baseline_diff_analyzer` subsystem was **removed** — breadth
+comes from many-drivers + merge + gap-direction, not per-driver LLM refinement.
+A clean build+run ends the trial. The *crash* LLM path is unaffected.)
 
 Per-trial caps live as module constants at the top of
 `src/workflow/nodes/supervisor.py` (compilation retries, fixer cap,
@@ -144,12 +149,12 @@ duplicating here just rots.
 |-------|-------|---------|
 | Prototyper | - (context pre-fetched) | Generate initial driver. Reads `library_purpose`, `protocol_templates`, `sequence_invariants`, `skeleton_drivers[(N-1) % K]`, **Phase B idioms** |
 | Fixer | BashExecuteTool | Fix compilation errors with error triage |
-| CoverageAnalyzer | BashExecuteTool | Diagnose low coverage, suggest improvements |
 | CrashAnalyzer | BashExecuteTool, GDBExecuteTool | Determine if crash is driver bug or real bug |
-| Improver | - (context pre-fetched) | Improve coverage based on analyzer suggestions |
 | CrashFeasibilityAnalyzer | - | Determine if crash is feasible/real |
-| BaselineDiffAnalyzer (§10B) | - | Triggered on baseline-regression alert. Granularity under reconsideration — see Failed Attempts / `generation.md` F6 |
 | Comprehender (non-LangGraph stage) | LLM batched | A: per-API usage + library purpose. B: per-sequence semantic verdict |
+
+(The per-driver optimize agents — CoverageAnalyzer / Improver / BaselineDiffAnalyzer
+— were removed; see the state machine note above and Failed Attempts.)
 
 **Tool Consolidation**: All introspector-derived context (signatures,
 cross-refs, type defs, headers, tests, debug types) is pre-fetched
@@ -307,30 +312,21 @@ Step 12  Existing-driver knowledge extraction + Phase B idiom distillation
 Generation (G1–G5) has landed; the live frontier is now **below** it. Start
 new work from `docs/generation.md` (open bottleneck + roadmap):
 
-- **⚠ DECISION NEEDED — orphaned optimize subsystem: keep-redesigned, or remove?**
-  Lean crash-triage + skip-per-driver-optimize is now the **default** (gate
-  removed). So the per-driver coverage-optimize loop is **unreachable**: a clean
-  build+run returns END directly. Dead-but-still-present: graph nodes
-  `coverage_analyzer` → `improver` and `baseline_diff_analyzer` (§10B regression
-  recovery) (`src/workflow/workflow.py`), their agents
-  (`CoverageAnalyzer`/`Improver`/`BaselineDiffAnalyzer`), and
-  `supervisor._handle_coverage_improvement`. (The *crash* LLM nodes are NOT
-  orphaned — they keep the unknown-frame fallback; only the *optimize* path lost
-  its route.) **Two options:**
-  - **Remove** — delete those 3 nodes + agents + `_handle_coverage_improvement` +
-    their graph edges. Cleanest if "breadth from many-drivers + merge + diversity
-    + gap-direction" is the final stance (per-driver LLM refinement is then dead
-    weight).
-  - **Keep, redesigned to FIT the current tool** — the old loop was *per-driver*
-    LLM refinement (N× cost), mismatched with the breadth-via-merge design. A
-    fitted version is **portfolio/union-level + gap-directed + cross-round**, not
-    per-trial: after merge, compute the *union* coverage gap (reuse G5
-    `coverage_gap`), then run ONE targeted optimize/re-gen pass on the
-    under-covered gap APIs — i.e. fold it into the proposed **Phase C CEGAR loop**
-    (`generation.md` F6, prereq WorkingMemory). §10B baseline-diff belongs there
-    too (post-merge, cross-round — see Failed Attempts, "belongs post-merge, not
-    per-trial"). Cost: ~1 pass/round vs N drivers.
-  Until decided the subsystem is **dead code kept in place** — don't rely on it.
+- **✅ RESOLVED — orphaned optimize subsystem REMOVED.** The per-driver
+  coverage-optimize loop (`coverage_analyzer` → `improver`) + §10B
+  `baseline_diff_analyzer` regression recovery — 3 nodes + 3 agents +
+  `supervisor._handle_coverage_improvement` + the execution-node improver-rollback
+  / baseline-regression-alert + their state keys — were **deleted**. Rationale: it
+  was *per-driver* LLM refinement (N× cost), mismatched with the breadth-via-merge
+  design, and addressed **none** of the real bottlenecks (binding / input-seed /
+  breadth-bound). The *crash* LLM path (crash_analyzer → crash_feasibility,
+  unknown-frame fallback) is untouched. If cross-round coverage feedback is ever
+  wanted, build it **fresh** as the **Phase C CEGAR loop** (`generation.md` F6,
+  prereq WorkingMemory): portfolio/union-level + gap-directed (reuse G5
+  `coverage_gap`) + cross-round (~1 pass/round, NOT per-trial) — do **not**
+  resurrect the per-driver nodes; per-trial granularity was the mismatch. There is
+  **no CEGAR loop today** (F6 is proposed-not-built); the only feedback loop that
+  remains is Phase G closed-loop (automaton viability growth, opt-in).
 
 - **Input/seed layer (NEW #1 below binding) — real-seed routing landed (gated).**
   Factory chain made `cmsDoTransform` constructable + compilable (lcms opaque args
@@ -378,6 +374,7 @@ Guardrails — read before re-litigating. Full detail in git history.
   set** (`Z3SequenceValidator._check_lifecycle_position_indexed`, resolved
   2026-05-22). All-pairs name-set quantification made chained-builder APIs
   (cjson `cJSON_Add*`) self-cyclic → all-UNSAT. Don't revert to set-based.
-- **§10B baseline-regression recovery belongs post-merge, not per-trial**
-  (`BaselineDiffAnalyzer`, under reconsideration). Per-trial granularity wastes
-  LLM calls; to be folded into the Phase C CEGAR loop (`generation.md` F6).
+- **§10B baseline-regression recovery belonged post-merge, not per-trial**
+  (`BaselineDiffAnalyzer`, now REMOVED with the optimize subsystem). Per-trial
+  granularity wasted LLM calls; if revived, it belongs in the Phase C CEGAR loop
+  (`generation.md` F6) — post-merge, cross-round, NOT a per-trial node.

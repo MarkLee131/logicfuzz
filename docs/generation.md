@@ -269,7 +269,7 @@ live in `docs/generation_information_audit.md`; the short list:
 | **Binding layer (#14) — construction lifted, tail remains** | factory chain (channel b, `LOGICFUZZ_FACTORY_CHAIN`) recovers opaque `void*`-return producers; **next:** recover the residual non-`Create*`-named / no-in-project-producer tail, + caller-alloc-init args beyond the SVF-INIT channel |
 | **Multi-project coverage-diff validation** | turn the lcms PoC into a claim: reproduce across projects + show we fill more existing-driver gap than PromeFuzz/CKGFuzzer |
 | **24h union real run** | the actual headline vs PromeFuzz Table 2 absolute coverage (cost OK, deferred) |
-| **Verify lean-mode savings** | lean mode is now the default (deterministic `crash_frame.py` triage + skip per-driver optimize; the optimize/improver nodes are orphaned); the ~8.5 → ~3 LLM-calls/driver figure is *projected* — confirm on a real eval run |
+| **Verify lean-mode savings** | lean mode is now the default (deterministic `crash_frame.py` triage + no per-driver optimize; the optimize/improver/§10B nodes were **removed**, not just orphaned); the ~8.5 → ~3 LLM-calls/driver figure is *projected* — confirm on a real eval run |
 | **Extend build-cache** | per-project fork-idempotency (lcms ✓, c-ares ✓); remaining: cjson/zlib/libpng |
 
 Feedback layers (audit, deferred / pending approval): F5 adaptive-shape

@@ -4,13 +4,12 @@ Adapter layer for migrating original agents to LangGraph.
 This module provides the compatibility layer between LangGraph state management
 and the original agent system's Result objects.
 """
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from experiment.workdir import WorkDirs
 from experiment.benchmark import Benchmark
 from results import (Result, BuildResult, RunResult, AnalysisResult,
-                     FunctionAnalysisResult, CrashResult, CrashContextResult,
-                     CoverageResult)
+                     FunctionAnalysisResult, CrashResult, CrashContextResult)
 from src.workflow.state import FuzzingWorkflowState
 
 
@@ -114,14 +113,13 @@ class StateAdapter:
                 state)
             result_history.append(run_result)
 
-        # Add an AnalysisResult whenever a crash verdict (deterministic lean OR
-        # the LLM crash path) or a coverage analysis exists.
+        # Add an AnalysisResult whenever a crash verdict exists (deterministic
+        # lean classifier OR the LLM crash path).
         # NOTE: this was gated on `state.get("analysis_complete")`, a key NOTHING
         # in the repo ever writes — so the crash verdict (true_bug / feasible)
         # never reached the trial result: `found_bug` counted every crash and a
         # real library bug was indistinguishable from a driver false-positive.
-        if (state.get("crash_analysis") or state.get("context_analysis")
-                or state.get("coverage_analysis")):
+        if state.get("crash_analysis") or state.get("context_analysis"):
             # Get the most recent RunResult or create a minimal one
             run_result_for_analysis = None
             for r in reversed(result_history):
@@ -141,9 +139,7 @@ class StateAdapter:
                 crash_result=StateAdapter._extract_crash_result(
                     state, benchmark, trial, work_dirs),
                 crash_context_result=StateAdapter._extract_crash_context_result(
-                    state),
-                coverage_result=StateAdapter._extract_coverage_result(
-                    state, benchmark, trial, work_dirs))
+                    state))
             # Set function_analysis as an attribute (not via __init__)
             analysis_result.function_analysis = StateAdapter._extract_function_analysis(
                 state)
@@ -202,27 +198,6 @@ class StateAdapter:
             analysis=ctx.get("analysis", ""),
             source_code_evidence=ctx.get("source_code_evidence", ""),
             recommendations=ctx.get("recommendations", ""))
-
-    @staticmethod
-    def _extract_coverage_result(
-            state: FuzzingWorkflowState, benchmark: Benchmark, trial: int,
-            work_dirs: WorkDirs) -> Optional[CoverageResult]:
-        """Extract coverage result from state."""
-        cov_data = state.get("coverage_analysis")
-        if not cov_data:
-            return None
-
-        return CoverageResult(
-            benchmark=benchmark,
-            trial=trial,
-            work_dirs=work_dirs,
-            coverage_summary=cov_data.get("coverage_summary", ""),
-            line_coverage_report=cov_data.get("line_coverage_report", ""),
-            function_coverage_report=cov_data.get("function_coverage_report",
-                                                  ""),
-            coverage_rate=cov_data.get("coverage_rate", 0.0),
-            chat_history={})
-
 
 # ``ConfigAdapter`` lived here pre-2026-05 workflow refactor. Its only
 # call site assigned its return value to ``FuzzingWorkflow.config``

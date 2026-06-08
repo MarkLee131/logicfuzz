@@ -188,26 +188,24 @@ class FuzzingWorkflow:
 
     def _create_full_workflow(self) -> StateGraph:
         """Create the full supervisor-based workflow."""
-        from src.workflow.nodes import coverage_analyzer_node
         from src.workflow.nodes import crash_feasibility_analyzer_node
-        from src.workflow.nodes import improver_node
-        from src.workflow.nodes import baseline_diff_analyzer_node
 
         workflow = StateGraph(FuzzingWorkflowState)
 
-        # Add all nodes
+        # Add all nodes. (The per-driver optimize subsystem — coverage_analyzer /
+        # improver / baseline_diff_analyzer — was removed: breadth comes from
+        # many-drivers + merge + gap-direction, so per-driver LLM coverage
+        # refinement was dead weight. A clean run ends after a successful
+        # build+run; cross-round coverage feedback, if ever needed, is the Phase C
+        # CEGAR loop, built fresh.)
         workflow.add_node("supervisor", supervisor_node)
         workflow.add_node("prototyper", prototyper_node)
         workflow.add_node("fixer", fixer_node)
-        workflow.add_node("improver", improver_node)
         workflow.add_node("build", build_node)
         workflow.add_node("execution", execution_node)
         workflow.add_node("crash_analyzer", crash_analyzer_node)
-        workflow.add_node("coverage_analyzer", coverage_analyzer_node)
         workflow.add_node("crash_feasibility_analyzer",
                           crash_feasibility_analyzer_node)
-        workflow.add_node("baseline_diff_analyzer",
-                          baseline_diff_analyzer_node)
 
         # Set entry point
         workflow.set_entry_point("supervisor")
@@ -217,25 +215,19 @@ class FuzzingWorkflow:
             "supervisor", route_condition, {
                 "prototyper": "prototyper",
                 "fixer": "fixer",
-                "improver": "improver",
                 "build": "build",
                 "execution": "execution",
                 "crash_analyzer": "crash_analyzer",
-                "coverage_analyzer": "coverage_analyzer",
                 "crash_feasibility_analyzer": "crash_feasibility_analyzer",
-                "baseline_diff_analyzer": "baseline_diff_analyzer",
                 "__end__": END
             })
 
         # Add edges back to supervisor from all nodes
         workflow.add_edge("prototyper", "supervisor")
         workflow.add_edge("fixer", "supervisor")
-        workflow.add_edge("improver", "supervisor")
         workflow.add_edge("build", "supervisor")
         workflow.add_edge("execution", "supervisor")
         workflow.add_edge("crash_analyzer", "supervisor")
-        workflow.add_edge("coverage_analyzer", "supervisor")
         workflow.add_edge("crash_feasibility_analyzer", "supervisor")
-        workflow.add_edge("baseline_diff_analyzer", "supervisor")
 
         return workflow

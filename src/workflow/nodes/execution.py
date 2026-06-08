@@ -471,7 +471,6 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         logger.info(f'Coverage: {coverage_percent:.2%} ({run_result.cov_pcs}/{run_result.total_pcs})', 
                    trial=trial)
     
-    baseline_available = False
     if run_result.coverage_summary:
         generated_target_name = os.path.basename(benchmark.target_path)
         total_lines = evaluator_lib.compute_total_lines_without_fuzz_targets(
@@ -482,8 +481,6 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         # hand-written OSS-Fuzz driver(s) — the baseline we should be
         # adding on top of.
         existing_textcov = evaluator.load_existing_textcov()
-        baseline_available = (existing_textcov is not None
-                              and existing_textcov.covered_lines > 0)
         run_result.coverage.subtract_covered_lines(existing_textcov)
 
         if total_lines:
@@ -543,96 +540,13 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     # Increment iteration counter (each execution in optimization phase counts as one iteration)
     current_iteration = state.get("current_iteration", 0) + 1
 
-    # §10B v1 baseline-regression alert (2026-05-12). When the project
-    # ships an existing OSS-Fuzz driver (the gold standard hand-written
-    # by library experts) and our generated driver contributes almost
-    # no NEW coverage beyond what the baseline already covers, that's
-    # evidence we DROPPED context (existing driver structure, input
-    # encoding pattern, multi-mode print pathways, ...). v1: detect +
-    # emit structured alert + clear warning log. v2 (auto-re-prototype
-    # with diff feedback) deferred per design proposal §10B.
-    #
-    # Threshold rationale: 0.005 (= 0.5% new coverage). Empirical: cjson
-    # run4/5 line_diff=0%, c-ares run1=2.01%, c-ares run2=0.12%, lcms=0%
-    # — 4 of 5 runs at or below 0.5%. The threshold therefore catches
-    # the dominant failure mode without over-firing on the rare
-    # high-novelty trial.
-    baseline_regression_alert = None
-    _ABS_LINE_DIFF_THRESHOLD = 0.005
-    # LOGICFUZZ_DISABLE_BASELINE_RECOVERY=1 suppresses the §10B regression
-    # alert (and thus the BaselineDiffAnalyzer → re-prototype recovery loop).
-    # On single-purpose targets every driver matches the baseline, so the
-    # per-trial recovery re-prototypes them all and dominates wall-clock for
-    # little gain — set this for evaluation runs where we just want the
-    # generated drivers, then merge.
-    if (not os.environ.get('LOGICFUZZ_DISABLE_BASELINE_RECOVERY')
-            and baseline_available and isinstance(coverage_diff, float)
-            and coverage_diff < _ABS_LINE_DIFF_THRESHOLD):
-        baseline_regression_alert = {
-            "reason": "line_coverage_diff_below_threshold",
-            "line_diff": round(coverage_diff, 6),
-            "threshold": _ABS_LINE_DIFF_THRESHOLD,
-            "coverage_percent": round(coverage_percent, 6),
-            "baseline_compared": True,
-            "trial": trial,
-            "iteration": current_iteration,
-        }
-        logger.warning(
-            '🚨 BASELINE-REGRESSION ALERT (§10B): '
-            'line_diff=%.2f%% < threshold=%.2f%%. '
-            'Our driver covered %.2f%% PC, but added essentially no '
-            'NEW lines beyond the existing OSS-Fuzz baseline driver. '
-            'Likely cause: we dropped structural context from the '
-            'baseline (input encoding, print modes, init/teardown '
-            'pattern). Supervisor will attempt §10B v2 auto-recovery '
-            '(BaselineDiffAnalyzer → re-prototype) when baseline driver '
-            'sources are available; otherwise inspect '
-            '`fuzz_targets/%02d.fuzz_target` vs the existing OSS-Fuzz '
-            'fuzzer source manually.',
-            coverage_diff * 100, _ABS_LINE_DIFF_THRESHOLD * 100,
-            coverage_percent * 100, trial,
-            trial=trial,
-        )
 
-    # Improver-rollback gate (2026-05-12). When the supervisor routed the
-    # previous turn through the improver, it snapshotted the pre-rewrite
-    # coverage and source into state. We now compare and, if the new
-    # coverage dropped >15% relative, restore the previous driver.
-    # c-ares trial 01 motivation: iter1 11.17% → improver → iter2 8.07%
-    # (27% relative drop) was kept silently pre-fix. Threshold 0.85 means
-    # we tolerate noise but reject substantive regressions.
-    #
-    # Rollback action: revert ``fuzz_target_source`` to the baseline
-    # source, restore the baseline coverage in state, and clear the
-    # baseline keys so this branch doesn't double-fire on subsequent
-    # executions. We do NOT re-run build (the binary at $OUT is for the
-    # improved driver; supervisor will route to build on next loop).
+    # final_* hold the source/coverage we will ship; keep-best (below) may
+    # restore an earlier, better iteration over a regressed one (covers fixer
+    # regressions — the per-driver improver that needed a dedicated rollback was
+    # removed with the optimize subsystem).
     final_coverage_percent = coverage_percent
     final_fuzz_target_source = fuzz_target_source
-    rollback_applied = False
-    improver_baseline = state.get("improver_baseline_coverage")
-    improver_baseline_src = state.get("improver_baseline_source")
-    if (improver_baseline is not None and improver_baseline_src
-            and improver_baseline > 0.0):
-        ratio = coverage_percent / improver_baseline if improver_baseline > 0 else 1.0
-        if ratio < 0.85:
-            logger.warning(
-                'Improver-rollback triggered: coverage dropped '
-                f'{improver_baseline:.2%} → {coverage_percent:.2%} '
-                f'(ratio={ratio:.2f} < 0.85). Reverting to '
-                'pre-improver driver.',
-                trial=trial,
-            )
-            final_coverage_percent = improver_baseline
-            final_fuzz_target_source = improver_baseline_src
-            rollback_applied = True
-        else:
-            logger.debug(
-                'Improver-rollback gate passed: coverage '
-                f'{improver_baseline:.2%} → {coverage_percent:.2%} '
-                f'(ratio={ratio:.2f} ≥ 0.85). Keeping rewrite.',
-                trial=trial,
-            )
 
     # Keep-best (general, ALL paths). The improver-rollback above only guards
     # the improver; the fixer and the §10B baseline-diff path also re-generate
@@ -657,7 +571,7 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
     # log/state claim the better one (observed: combo c-ares trial-01 shipped the
     # 3-function regressed file). Re-write the file so disk matches the kept
     # source; the merge rebuilds from it, so the right driver is fused.
-    if (rollback_applied or keep_best_restored) and final_fuzz_target_source:
+    if keep_best_restored and final_fuzz_target_source:
         try:
             with open(fuzz_target_path, 'w') as _ft:
                 _ft.write(final_fuzz_target_source)
@@ -688,30 +602,22 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
         "coverage_report_path": run_result.coverage_report_path if hasattr(run_result, 'coverage_report_path') else "",
         "cov_pcs": run_result.cov_pcs if hasattr(run_result, 'cov_pcs') else 0,
         "total_pcs": run_result.total_pcs if hasattr(run_result, 'total_pcs') else 0,
-        # Clear old analysis results to force re-analysis of new crashes/coverage
-        # This ensures each execution's results are analyzed fresh
+        # Clear the crash verdict each execution so a NEW crash is re-triaged
+        # fresh (deterministic lean classifier, then LLM fallback).
         "crash_analysis": None,
         "context_analysis": None,
-        "coverage_analysis": None,
-        # Clear baseline keys regardless of rollback outcome — we've now
-        # decided, the snapshot has served its purpose.
-        "improver_baseline_coverage": None,
-        "improver_baseline_source": None,
-        # §10B v1 alert (None when no regression). Surfaced in trial summary.
-        "baseline_regression_alert": baseline_regression_alert,
         "messages": [{
             "role": "assistant",
             "content": f"Execution {'successful' if run_result.succeeded else 'failed'}"
         }]
     }
-    if rollback_applied or keep_best_restored:
+    if keep_best_restored:
         state_update["fuzz_target_source"] = final_fuzz_target_source
-        state_update["improver_rolled_back"] = rollback_applied or keep_best_restored
 
     logger.info(f'Execution completed: success={state_update["run_success"]}, '
                f'crashes={state_update["crashes"]}, coverage={final_coverage_percent:.2%}, '
                f'iteration={current_iteration}'
-               + (' [improver rolled back]' if rollback_applied else ''),
+               + (' [keep-best restored]' if keep_best_restored else ''),
                trial=trial)
 
     return state_update
