@@ -49,6 +49,24 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 USE_BEFORE_INIT instead of keeping as a hole).
 #   LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES,
 #                       BASELINE_RECOVERY}=1   A/B kill-switch for that default-on stage.
+# New opt-in (gated, A/B pending — start gated like factory/diversity/lean did,
+# default-on once a coverage A/B proves the gain):
+#   LOGICFUZZ_ERROR_VARIANTS=1    T11: emit error-shape skeleton variants (double-
+#                                 free / use-after-destroy / skip-init) so library
+#                                 error branches become reachable (the LLM still
+#                                 fills only leaf holes). Cap LOGICFUZZ_ERROR_VARIANTS_MAX.
+#   LOGICFUZZ_VALUE_FEEDBACK=1    T12: capture filled hole values → coverage_memory,
+#                                 then pin the deepest-coverage ones into the SAME
+#                                 skeleton's holes on the NEXT run (cross-run).
+#   LOGICFUZZ_FORMAT_INFER=1      T10: when no real seed matches a parser-entry
+#                                 driver, synthesize a minimal front-gate-passing
+#                                 seed from inferred format magic (registry / header
+#                                 #define / seed-sample) into the corpus.
+#   LOGICFUZZ_CROSS_PROJECT=1     T7: for a resource-thin library, retrieve
+#                                 structurally-similar drivers (corpus
+#                                 LOGICFUZZ_XPROJ_CORPUS, default
+#                                 extracted_fuzz_drivers/; same-project first) and
+#                                 inject compressed CALLSPEC-style hints.
 #   LOGICFUZZ_{Z3_MODE,CONSTRUCT_MODE,NO_CACHE,TRIAGE_INCONCLUSIVE,
 #              TRIAGE_PREFIX_LEN,DRIVERS_ROOT,FI_ENDPOINT,BINDING_TELEMETRY}   config values.
 LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 \
@@ -354,12 +372,35 @@ new work from `docs/generation.md` (open bottleneck + roadmap):
   recovers `cmsCreate*`-named opaque producers; remaining: residual
   non-`Create*`-named / no-in-project-producer tail + caller-alloc-init args beyond
   the SVF-INIT channel. See `docs/generation.md` §5/§6.
-- **Feedback layers** — F5 adaptive shape (error-injection skeletons), F6 Phase C
-  CEGAR loop (prereq: WorkingMemory), F7 L2 LLM idioms. See `docs/generation.md`.
+- **Feedback / input layers — T10/T11/T12 landed (gated, coverage A/B pending):**
+  T11 error-shape variant skeletons (was F5; `LOGICFUZZ_ERROR_VARIANTS`), T10
+  generalized format-entry → synthetic seed (`LOGICFUZZ_FORMAT_INFER`), T12 dynamic
+  value feedback (`LOGICFUZZ_VALUE_FEEDBACK` — a *precursor* to F6, NOT the loop;
+  keyed by api-sequence content hash). Still open: **F6 Phase C CEGAR loop** (prereq
+  WorkingMemory), F7 L2 LLM idioms. See `docs/generation.md` §6.
+- **T7 — cross-project driver retrieval — ✅ MVP implemented (gated
+  `LOGICFUZZ_CROSS_PROJECT`, A/B pending).** `liberator_adapter/analysis/cross_project_retrieval.py`
+  + `data_context` attach + prototyper render; 11 tests incl. a real-corpus
+  experiment. Retrieve structurally-similar drivers for a resource-thin library
+  and inject compressed CALLSPEC-style hints. **Design (as built):** structure-
+  signature retrieval (API set / lifecycle-role + entry-type hints / call
+  bigrams); **same-project drivers first**, cross-project only when own is thin
+  (`is_resource_thin`); scope+threshold selection (score ≥ τ), best-1 fallback;
+  trigger lives inline (no separate planner node — decision (a) → folded path).
+  **Embedding fallback (unwired):** OpenAI `text-embedding-3-large` re-rank —
+  build only if structure-sig precision proves insufficient. **Corpus:** MVP = local `extracted_fuzz_drivers/` (3 projects);
+  **scale-up = ALL OSS-Fuzz drivers via the FuzzIntrospector (FI) API** (user
+  direction; offline one-time index — `LOGICFUZZ_XPROJ_CORPUS` points the loader).
+  **Precision finding (empirical):** raw call-extraction also caught comment words
+  / macros — now filtered (strip comments, drop ALL-CAPS macros + `__`-builtins);
+  residual project-local helpers are the precision ceiling that justifies the
+  embedding fallback. **Open before default-on:** coverage A/B; the FI-API corpus
+  scale-up; per-run information-budget scheduling (decision (c), deferred). (Was
+  audit T7 / B1-①.)
 - LLM equivalence oracle production throttling (`enable_llm_oracle=False` in `data_context.py:Step 5e2` until cost-aware pacing lands).
 - libaom path resolution — `src_ossfuzz/libaom/` layout doesn't match the consumer-paths probe.
 - Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
-- TLV-aware seed generation based on format analysis. (Partial: `scripts/seed_discovery.py` now feeds the project's REAL on-disk seeds — `*.icc`/`*.it8`/OSS-Fuzz `*_seed_corpus.zip` — into continuous/extended fuzzing so parser-entry drivers reach deep code; synthetic generation from format analysis is still TODO.)
+- TLV-aware seed generation based on format analysis. (Done in part: `scripts/seed_discovery.py` feeds the project's REAL on-disk seeds — `*.icc`/`*.it8`/OSS-Fuzz `*_seed_corpus.zip` — into fuzzing; **T10** (`LOGICFUZZ_FORMAT_INFER`, gated) now also *synthesizes* a minimal front-gate-passing seed from inferred magic when no real seed ships. Full TLV-aware *structural* generation — a valid deep file, not just the leading gate — is still TODO.)
 - Cross-phase information flow (write-only JSON state, WorkingMemory prereq for F6) — see `generation.md`.
 
 ## Failed Attempts / Lessons

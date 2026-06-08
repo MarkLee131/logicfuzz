@@ -272,10 +272,36 @@ live in `docs/generation_information_audit.md`; the short list:
 | **Verify lean-mode savings** | lean mode is now the default (deterministic `crash_frame.py` triage + no per-driver optimize; the optimize/improver/§10B nodes were **removed**, not just orphaned); the ~8.5 → ~3 LLM-calls/driver figure is *projected* — confirm on a real eval run |
 | **Extend build-cache** | per-project fork-idempotency (lcms ✓, c-ares ✓); remaining: cjson/zlib/libpng |
 
-Feedback layers (audit, deferred / pending approval): F5 adaptive-shape
-(error-injection skeletons, T11), F6 Phase C CEGAR loop (prereq WorkingMemory),
-T7 cross-project driver retrieval, T10 generalized format-entry decoder, T12
-dynamic value-feedback. **Rejected (do not re-litigate):** T9 static CFG
-reachability weighting — measured dependency graphs are too flat (max depth 1–3)
-and planner blind spots are depth-independent, so reranking can't recover them;
-the root cause is the binding layer, not ranking.
+Feedback / input layers — **T10 / T11 / T12 implemented (all gated, coverage A/B
+pending — start gated like factory/diversity/lean did):**
+
+- **T10 — generalized format-entry → synthetic seed** (`LOGICFUZZ_FORMAT_INFER`;
+  `liberator_adapter/analysis/format_inference.py` → `scripts/seed_discovery.py`):
+  when no real seed matches a parser-entry driver, synthesize a minimal
+  front-gate-passing seed from an inferred FormatSpec (sampled-seed prefix >
+  known-magic registry > header `#define` magic). *Scope (honest):* deterministic
+  *constant* inference, NOT full IR symbolic execution — the IR carries no branch
+  predicates, so a synth seed clears the *leading magic gate*, not a complex
+  parser's deep validation. Real seeds (routing) still preferred; synth is the
+  no-seed fallback. 15 unit tests.
+- **T11 — error-shape skeleton variants** (`LOGICFUZZ_ERROR_VARIANTS`;
+  `sequence_constructor.error_shape_variants`): emit guard-testing shapes
+  (SKIP_INIT / DOUBLE_DESTROY by default; USE_AFTER_DESTROY only behind
+  `LOGICFUZZ_ERROR_VARIANTS_AGGRESSIVE`) for **gap-touching** sequences, so library
+  error branches become reachable. The LLM still fills only leaf holes; any crash
+  is triaged by the existing crash-frame classifier (driver-bug → merge
+  quarantine). 13 unit + integration tests (through `construct_sequences`).
+- **T12 — dynamic value feedback** (`LOGICFUZZ_VALUE_FEEDBACK`;
+  `coverage_memory.{record_trial_hole_values,proven_hole_values,attach_proven_holes}`):
+  capture a trial's filled hole values, then pin the deepest-coverage ones into the
+  SAME API-sequence's holes on the NEXT run — matched by **sequence content hash**
+  (`sequence_key`), NOT the positional `cbfactory_skeleton_{i}` name (which would
+  mis-pin onto an unrelated chain). Cross-run; the "read" side of Phase C. 13 unit
+  tests incl. the no-mis-pin regression.
+
+Still open: **F6 Phase C CEGAR loop** (prereq WorkingMemory — T12 is a *precursor*,
+not the principled loop), **T7** cross-project driver retrieval (needs corpus +
+decision). **Rejected (do not re-litigate):** T9 static CFG reachability
+weighting — measured dependency graphs are too flat (max depth 1–3) and planner
+blind spots are depth-independent, so reranking can't recover them; the root cause
+is the binding layer, not ranking.
