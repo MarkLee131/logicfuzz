@@ -13,6 +13,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict, namedtuple
+from pathlib import Path
 from typing import Any, Optional
 
 from google.cloud import storage
@@ -710,10 +711,40 @@ class BuilderRunner:
 
     return build_result, run_result
 
+  def _seed_corpus_dir(self, corpus_dir: str,
+                       benchmark_target_name: str) -> None:
+    """Route the project's REAL, format-matching seeds into a corpus dir.
+
+    Always on (the LOGICFUZZ_SEED_CORPUS gate was removed). ``WorkDirs.corpus``
+    returns an EMPTY dir, so a parser-entry driver (lcms ``cmsOpenProfileFromMem``
+    …) fed only random bytes early-returns at its header/magic check and barely
+    moves coverage — and never traverses an opaque chain that needs a valid
+    profile (``cmsCreateTransform`` → NULL → guard → ``cmsDoTransform`` never
+    runs). Seeding it with real inputs ROUTED to the format the driver consumes
+    drives it into deep parse code. Reuses ``scripts.seed_discovery``; additive
+    and idempotent (never clears the dir, never overwrites), and a no-op when the
+    project has no on-disk seeds. Best-effort — swallows all errors so it can
+    never break a run.
+    """
+    try:
+      from scripts.seed_discovery import seed_corpus_for_driver
+      driver_src = os.path.join(self.work_dirs.fuzz_targets,
+                                benchmark_target_name)
+      n = seed_corpus_for_driver(
+          self.benchmark.project,
+          Path(corpus_dir),
+          Path(driver_src) if os.path.isfile(driver_src) else None,
+      )
+      if n:
+        logger.info('seed-corpus: routed %d real format-matching seed(s) '
+                    'into %s', n, corpus_dir)
+    except Exception as exc:  # noqa: BLE001 — seeding must never break a run
+      logger.debug('LOGICFUZZ_SEED_CORPUS seeding skipped: %s', exc)
+
   def run_target_local(self, generated_project: str, benchmark_target_name: str,
                        log_path: str) -> bool:
     """Runs a target in the fixed target directory.
-    
+
     Returns:
       True if fuzzer ran successfully (returncode == 0), False otherwise.
     """
@@ -721,6 +752,7 @@ class BuilderRunner:
     # in the Dockerfile.
     logger.info('Running %s', generated_project)
     corpus_dir = self.work_dirs.corpus(benchmark_target_name)
+    self._seed_corpus_dir(corpus_dir, benchmark_target_name)
     command = [
         'python3', 'infra/helper.py', 'run_fuzzer', '--corpus-dir', corpus_dir,
         generated_project, self.benchmark.target_name, '--'
@@ -936,6 +968,9 @@ class BuilderRunner:
 
     logger.info('Extracting coverage')
     corpus_dir = self.work_dirs.corpus(benchmark_target_name)
+    # Idempotent (skips files the preceding fuzz run already routed/discovered);
+    # guards the case where coverage is measured without a prior fuzz run.
+    self._seed_corpus_dir(corpus_dir, benchmark_target_name)
     command = [
         'python3',
         'infra/helper.py',
