@@ -552,8 +552,8 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         # T4: CALLSPEC — consolidate the overlapping API/skeleton views into one
         # per-call typed table and suppress the redundant blocks (api_understanding,
         # project_apis, dep_graph, condition, driver_knowledge, synthesis_base,
-        # api_sequences). Promoted to default after A/B (c-ares 1440>804 branches,
-        # lcms 88>0); the LOGICFUZZ_CALLSPEC gate was removed.
+        # api_sequences). Default Prototyper context (promoted after A/B:
+        # c-ares 1440>804 branches, lcms 88>0).
         if active_skeleton is not None:
             try:
                 from liberator_adapter.analysis import render_callspec

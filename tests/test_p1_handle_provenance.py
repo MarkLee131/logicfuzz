@@ -45,7 +45,9 @@ def test_provenance_names_the_producer():
     m = _model()
     notes = _handle_provenance(m.get("use"), "use", set(), _producer_index(m))
     assert len(notes) == 1
-    assert "produced by create" in notes[0]
+    # Hard guard is always on now: the note names the producer in MUST-BUILD
+    # form ("call create(...)") rather than the old soft "produced by create".
+    assert "create" in notes[0] and "BUILD IT" in notes[0]
 
 
 def test_provenance_satisfied_earlier_is_silent():

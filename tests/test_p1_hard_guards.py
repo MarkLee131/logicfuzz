@@ -1,19 +1,10 @@
-"""LOGICFUZZ_HARD_NULLGUARD: escalate advisory NULL/opaque notes to MANDATORY
-guidance (driver-quality / low-FP). Default off = byte-identical advisory text."""
-import os
-import pytest
+"""Hard NULL/opaque guards (always on): the advisory NULL/opaque hole notes are
+escalated to MANDATORY driver-quality / low-FP guidance. (The
+LOGICFUZZ_HARD_NULLGUARD / LOGICFUZZ_DENSE_CONSTRUCT gates were removed — the
+guard is unconditional now.)"""
 from liberator_adapter.analysis.hole_semantics import (
-    _ret_contract_note, _handle_provenance, _hard_nullguard,
+    _ret_contract_note, _handle_provenance,
 )
-
-
-@pytest.fixture(autouse=True)
-def _clear_env():
-    for k in ("LOGICFUZZ_HARD_NULLGUARD", "LOGICFUZZ_DENSE_CONSTRUCT"):
-        os.environ.pop(k, None)
-    yield
-    for k in ("LOGICFUZZ_HARD_NULLGUARD", "LOGICFUZZ_DENSE_CONSTRUCT"):
-        os.environ.pop(k, None)
 
 
 class _Sem:
@@ -21,16 +12,7 @@ class _Sem:
     requires = frozenset({"H*"})
 
 
-def test_default_off_keeps_advisory():
-    assert not _hard_nullguard()
-    rc = {"f": {"may_return_null": True}}
-    assert _ret_contract_note("f", rc).startswith("⚠")
-    note = _handle_provenance(_Sem(), "g", set(), {"H*": ["mk"]})[0]
-    assert "produced by mk" in note and "BUILD IT" not in note
-
-
 def test_hard_ret_contract_is_mandatory():
-    os.environ["LOGICFUZZ_HARD_NULLGUARD"] = "1"
     rc = {"f": {"may_return_null": True}}
     note = _ret_contract_note("f", rc)
     assert note.startswith("MUST-GUARD") and "if (!x) return 0;" in note
@@ -39,23 +21,12 @@ def test_hard_ret_contract_is_mandatory():
 
 
 def test_hard_provenance_is_factory_chain():
-    os.environ["LOGICFUZZ_HARD_NULLGUARD"] = "1"
     note = _handle_provenance(_Sem(), "g", set(), {"H*": ["mk"]})[0]
     assert "BUILD IT" in note and "mk(" in note
     assert "Do NOT pass NULL" in note
 
 
-def test_dense_construct_implies_hard_guard():
-    # Coupling safety fix: density alone is harmful (ablation: lcms density-only
-    # = 0, SEGV), so DENSE_CONSTRUCT must auto-enable the guard.
-    os.environ["LOGICFUZZ_DENSE_CONSTRUCT"] = "1"
-    assert _hard_nullguard()
-    rc = {"f": {"may_return_null": True}}
-    assert _ret_contract_note("f", rc).startswith("MUST-GUARD")
-
-
 def test_orphan_handle_unchanged_in_hard_mode():
     # No producer -> still the construct/NULL note (hard mode can't fabricate one).
-    os.environ["LOGICFUZZ_HARD_NULLGUARD"] = "1"
     note = _handle_provenance(_Sem(), "g", set(), {})[0]
     assert "NO project API produces it" in note

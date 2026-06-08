@@ -47,12 +47,8 @@ def _profile_transform_model():
 
 @pytest.fixture
 def factory_on(monkeypatch):
+    # Factory chain is always on now (gate removed); kept as a no-op anchor.
     monkeypatch.setenv("LOGICFUZZ_FACTORY_CHAIN", "1")
-
-
-@pytest.fixture
-def factory_off(monkeypatch):
-    monkeypatch.delenv("LOGICFUZZ_FACTORY_CHAIN", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -87,15 +83,6 @@ def test_word_boundary_rejects_handler_and_substring():
 # ---------------------------------------------------------------------------
 # Recovery behaviour
 # ---------------------------------------------------------------------------
-
-def test_default_off_is_noop(factory_off):
-    m = _profile_transform_model()
-    idx = _build_index(m)
-    assert idx.recovered_producers == {}
-    pre, opened = _build_prefix(m.apis["libDoTransform"], idx, 6)
-    assert pre == []            # opaque arg stays a NULL hole
-    assert opened == set()
-
 
 def test_transitive_deep_chain(factory_on):
     m = _profile_transform_model()

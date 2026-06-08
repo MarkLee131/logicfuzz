@@ -88,15 +88,8 @@ class _Index:
     recovered_producers: Dict[str, List[APISemantics]] = field(default_factory=dict)
 
 
-def _factory_chain_on() -> bool:
-    # Default off. Robust to a literal "0"/"false" (a bare ``bool(get())`` would
-    # treat "0" as on), so an A/B probe can flip the value rather than unset it.
-    return os.environ.get("LOGICFUZZ_FACTORY_CHAIN", "").strip().lower() \
-        not in ("", "0", "false", "no", "off")
-
-
 # =============================================================================
-# Factory-chain recovery (LOGICFUZZ_FACTORY_CHAIN)
+# Factory-chain recovery (always on)
 # =============================================================================
 #
 # Problem (lcms ``cmsDoTransform``): an opaque handle declared ``typedef void*
@@ -237,9 +230,10 @@ def _build_index(model: APISemanticModel) -> _Index:
         if any(a.role is ArgRole.INPUT_BUFFER for a in sem.args):
             entries.append(sem)
 
-    recovered: Dict[str, List[APISemantics]] = {}
-    if _factory_chain_on():
-        recovered = _recover_opaque_producers(model, producers, creators)
+    # Factory chain (opaque void*-return producer recovery) is always on: it is
+    # monotone — zero effect on libs with no recoverable opaque handles — so the
+    # LOGICFUZZ_FACTORY_CHAIN gate was removed.
+    recovered = _recover_opaque_producers(model, producers, creators)
 
     return _Index(producers, destroyers, mutators, entries, consumers, creators,
                   consumers_by_handle, getters,
@@ -456,7 +450,9 @@ def construct_sequences(
     ``project_apis`` to skip the filter (model-only, e.g. unit tests).
     """
     idx = _build_index(model)
-    _dense = bool(os.environ.get("LOGICFUZZ_DENSE_CONSTRUCT"))
+    # Density is default-on (the LOGICFUZZ_DENSE_CONSTRUCT gate was removed); the
+    # tuning sub-params below stay configurable.
+    _dense = True
     # Default 8 → ~7.7 APIs/seq on lcms (PromeFuzz parity 7.6) once co-occurrence
     # is on; lower it (e.g. =4) for thinner drivers / fewer holes.
     _dense_max_extra = int(os.environ.get("LOGICFUZZ_DENSE_MAX_EXTRA", "8"))

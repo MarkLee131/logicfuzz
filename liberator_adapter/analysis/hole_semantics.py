@@ -15,7 +15,6 @@ Deterministic (no LLM): the intent is a pure function of ``ArgRole`` + type.
 """
 from __future__ import annotations
 
-import os
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -24,14 +23,11 @@ def _hard_nullguard() -> bool:
     """Escalate the advisory NULL/return contracts + opaque-handle provenance
     into MANDATORY guidance (driver-quality / low-FP).
 
-    Enabled by LOGICFUZZ_HARD_NULLGUARD=1, AND **implied by**
-    LOGICFUZZ_DENSE_CONSTRUCT — the ablation (2026-06-07) showed density ALONE is
-    harmful (lcms density-only = 0 branches, drivers SEGV; c-ares trial-01
-    136→14): the denser chain adds crash surface that only the hard guard
-    survives (combo = 206 vs density-only = 0). Density must never run without
-    the guard. Default off so the plain config stays A/B-measurable."""
-    return (os.environ.get("LOGICFUZZ_HARD_NULLGUARD") == "1"
-            or os.environ.get("LOGICFUZZ_DENSE_CONSTRUCT") == "1")
+    Always on: density is default-on, and the ablation (2026-06-07) showed
+    density ALONE is harmful (lcms density-only = 0 branches, drivers SEGV;
+    combo = 206) — density must never run without the guard. The
+    LOGICFUZZ_HARD_NULLGUARD / LOGICFUZZ_DENSE_CONSTRUCT gates were removed."""
+    return True
 
 from liberator_adapter.analysis.api_semantic_model import (
     ArgRole,

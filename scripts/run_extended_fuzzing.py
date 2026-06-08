@@ -230,9 +230,7 @@ class ExtendedFuzzer:
             # profile sub-driver. Fix: tag each raw seed with EVERY sub-driver's
             # TAIL selector (one copy per index) so the format-matching
             # sub-driver gets a clean-body copy. Format-agnostic; N is small.
-            # LOGICFUZZ_DISABLE_SEED_TAGGING=1 forces verbatim (A/B isolation).
-            merged = (None if os.environ.get('LOGICFUZZ_DISABLE_SEED_TAGGING')
-                      else self._parse_merged_dispatch())
+            merged = self._parse_merged_dispatch()
             n_real = 0
             for i, src in enumerate(real_seeds):
                 if merged is not None:

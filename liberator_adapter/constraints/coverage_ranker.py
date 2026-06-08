@@ -15,7 +15,6 @@ Design principles:
 """
 
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import List, Dict, Set, Optional, Any, Tuple
 
@@ -396,47 +395,26 @@ class CoverageRanker:
         covered_apis: Set[str] = set()
         marginal_contributions: List[int] = []
 
-        # The ranking order (acceptance primary, G3) encodes reachability. The
-        # LEGACY loop below walks that order and accepts any sequence adding >=1
-        # new API — but when dense candidates overlap (every sequence drags in
-        # the popular APIs) that yields only ~1 new API/sequence, so the union
-        # grows slowly and the API tail needs many drivers (lcms: ~186/297 at
-        # top_k=150). Despite the old comment this is NOT budgeted-max-coverage:
-        # it never picks by marginal contribution, only filters the fixed order.
-        #
-        # LOGICFUZZ_DIVERSITY_SELECT switches to TRUE budgeted-max-coverage
-        # greedy (Khuller/Moss/Naor 1999, ratio 1-1/e): each step picks the
-        # remaining sequence with the MAX marginal new-API contribution, ties
-        # broken by the acceptance-sorted order (reachability still leads among
-        # equal-coverage picks). Reaches the tail with fewer, more-diverse
-        # drivers and stops once nothing adds new APIs (fewer trials too).
-        if os.getenv('LOGICFUZZ_DIVERSITY_SELECT', '0') == '1':
-            remaining = list(ranked_sequences)
-            while remaining and len(selected) < top_k:
-                best_i = max(
-                    range(len(remaining)),
-                    key=lambda i: len(set(remaining[i].sequence) - covered_apis),
-                )
-                best = remaining.pop(best_i)
-                new_apis = set(best.sequence) - covered_apis
-                if not new_apis and len(selected) >= min(3, top_k):
-                    break  # nothing left contributes new APIs → stop (fewer trials)
-                selected.append(best.sequence)
-                covered_apis.update(best.sequence)
-                marginal_contributions.append(len(new_apis))
-        else:
-            for score in ranked_sequences:
-                if len(selected) >= top_k:
-                    break
-                seq_apis = set(score.sequence)
-                new_apis = seq_apis - covered_apis
-                # Accept any sequence that contributes at least one new API; or
-                # any of the first three picks unconditionally so we never end
-                # up with an empty result on tiny pools.
-                if len(new_apis) > 0 or len(selected) < min(3, top_k):
-                    selected.append(score.sequence)
-                    covered_apis.update(seq_apis)
-                    marginal_contributions.append(len(new_apis))
+        # Budgeted-max-coverage greedy (Khuller/Moss/Naor 1999, ratio 1-1/e),
+        # always on (the LOGICFUZZ_DIVERSITY_SELECT gate was removed): each step
+        # picks the remaining sequence with the MAX marginal new-API
+        # contribution, ties broken by the acceptance-sorted order (reachability
+        # still leads among equal-coverage picks). Reaches the API tail with
+        # fewer, more-diverse drivers than the legacy fixed-order filter and
+        # stops once nothing adds new APIs (fewer trials too).
+        remaining = list(ranked_sequences)
+        while remaining and len(selected) < top_k:
+            best_i = max(
+                range(len(remaining)),
+                key=lambda i: len(set(remaining[i].sequence) - covered_apis),
+            )
+            best = remaining.pop(best_i)
+            new_apis = set(best.sequence) - covered_apis
+            if not new_apis and len(selected) >= min(3, top_k):
+                break  # nothing left contributes new APIs → stop (fewer trials)
+            selected.append(best.sequence)
+            covered_apis.update(best.sequence)
+            marginal_contributions.append(len(new_apis))
 
         stats = {
             'greedy_selection': True,
