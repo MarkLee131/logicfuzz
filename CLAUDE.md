@@ -30,25 +30,28 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml --closed-loop --closed-loop-it
 # A/B: disable G2 model-driven construction, fall back to random-walk grammar
 LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.yaml
 
-# Breadth + low-FP optimization round (2026-06, PromeFuzz-derived; see
-# generation_information_audit.md §6.6 + contributions doc). All gated:
-#   LOGICFUZZ_DENSE_CONSTRUCT=1   densify chains (append USE-of-open-handle
-#                                 extenders); IMPLIES the hard NULL-guard
-#                                 (density-only is harmful — ablation-proven).
-#   LOGICFUZZ_HARD_NULLGUARD=1    MUST-GUARD creator returns + opaque factory
-#                                 hint (low-FP). Auto-on under DENSE_CONSTRUCT.
-#   LOGICFUZZ_STRICT_ORDERING=1   revert B graceful degradation (drop orphan
-#                                 USE_BEFORE_INIT instead of keeping as a hole).
-#   LOGICFUZZ_DENSE_COOCCUR=0     density extends ONLY handle-sharing (drop the
-#                                 automaton-co-occurrence source; default on).
-#   LOGICFUZZ_DENSE_MAX_EXTRA=N   cap extra APIs appended per chain (default 8 →
-#                                 ~7.7 APIs/seq lcms = PromeFuzz parity).
+# Generation features now DEFAULT-ON (gates removed 2026-06 — flag cleanup):
+# factory chain (opaque void*-return producer recovery), density + hard NULL-guard
+# (coupled; density-only is ablation-proven harmful), max-coverage diversity
+# selection, real seed-corpus routing (*.icc/*.it8/… by parser-entry API + magic),
+# deterministic lean crash triage + skip per-driver optimize, typedef-handle
+# recovery. Measured lcms 30s (density+guard, now default): 66→206 br, FP 1→0.
+#
+# Remaining knobs — tuning values + A/B kill-switches (the only LOGICFUZZ_* left):
 #   LOGICFUZZ_TOP_K=N             skeleton/driver count = the UNION-breadth lever
 #                                 (default filter_top_k=10; needs NO_CACHE=1 to
 #                                 regen skeletons). Target ≈ PromeFuzz drivers/2.5.
-# Measured lcms 30s: 66→206 br (+212%), FP 1→0. Couple density+guard always.
-# §6.6/§6.7 of generation_information_audit.md has the full empirical arc + open items.
-LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_DENSE_CONSTRUCT=1 LOGICFUZZ_TOP_K=56 \
+#   LOGICFUZZ_DENSE_MAX_EXTRA=N   cap extra APIs appended per chain (default 8 →
+#                                 ~7.7 APIs/seq lcms = PromeFuzz parity).
+#   LOGICFUZZ_DENSE_COOCCUR=0     density extends ONLY handle-sharing (drop the
+#                                 automaton-co-occurrence source; default on).
+#   LOGICFUZZ_STRICT_ORDERING=1   revert B graceful degradation (drop orphan
+#                                 USE_BEFORE_INIT instead of keeping as a hole).
+#   LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES,
+#                       BASELINE_RECOVERY}=1   A/B kill-switch for that default-on stage.
+#   LOGICFUZZ_{Z3_MODE,CONSTRUCT_MODE,NO_CACHE,TRIAGE_INCONCLUSIVE,
+#              TRIAGE_PREFIX_LEN,DRIVERS_ROOT,FI_ENDPOINT,BINDING_TELEMETRY}   config values.
+LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 \
   python3 run_logicfuzz.py -y comparison/lcms.yaml --merge-drivers
 
 # Synthesize a multi-task harness from successful trials at the eval tail
@@ -167,8 +170,8 @@ into `FuzzingContext` before agent turns. Remaining LangGraph tools:
 | Use-def + typestate | `liberator_adapter/analysis/usedef.py` | `APIEffect` (USE/DEF/KILL), `UseDefGraph`, `Typestate` interpreter; **caller-alloc INIT producer channel** (`annotate_svf_writes` + `extract_produced_handles`) recovers in-place initializers (`deflateInit_(z_stream*)`) as creators, SVF-write-gated via `conditions.json`. Detail: `docs/generation.md` G1. |
 | Project automaton | `liberator_adapter/analysis/project_automaton.py` | `AutomatonArtifact` |
 | **APISemanticModel** (G1) | `liberator_adapter/analysis/api_semantic_model.py` | `reconcile()` → per-API role+arg semantics+evidence; role authority (demotes ConditionManager); 0 LLM; Step 5g. Detail: `docs/generation.md`. |
-| **Sequence Constructor** (G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences()` builds lifecycle-complete chains, **merged with** the grammar floor at Step 5h. A/B: `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1`. **Breadth round (2026-06):** B graceful degradation keeps orphan-handle sequences (kill-switch `LOGICFUZZ_STRICT_ORDERING`); `_densify()` thickens chains under `LOGICFUZZ_DENSE_CONSTRUCT`. |
-| **Hole Semantics** (G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons()` attaches per-arg value intents at Step 10b (rendered into the hole prompt). **low-FP round:** `_hard_nullguard()` (on under `LOGICFUZZ_HARD_NULLGUARD` **or** `LOGICFUZZ_DENSE_CONSTRUCT`) escalates ret-contract to `MUST-GUARD` + opaque factory-chain hint. |
+| **Sequence Constructor** (G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences()` builds lifecycle-complete chains, **merged with** the grammar floor at Step 5h. A/B: `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1`. B graceful degradation keeps orphan-handle sequences (kill-switch `LOGICFUZZ_STRICT_ORDERING`); `_densify()` thickens chains (**default-on**; tune via `LOGICFUZZ_DENSE_MAX_EXTRA`/`_COOCCUR`); factory-chain opaque-producer recovery (**default-on**). |
+| **Hole Semantics** (G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons()` attaches per-arg value intents at Step 10b (rendered into the hole prompt). `_hard_nullguard()` (**default-on**) escalates ret-contract to `MUST-GUARD` + opaque factory-chain hint. |
 | **Crash-frame classifier** | `tools/merge_drivers/crash_frame.py` | `classify_crash_frame(asan_log, driver_basename)` → driver/library/unknown (deterministic ASan frame attribution; driver-bug FP vs real library bug). |
 | **Pre-ship quarantine** | `run_single_fuzz.py:_is_immediate_crash_fp` + `_maybe_merge_drivers` | drops immediate-crash 0-coverage FP drivers from the merge (poison the fused harness); binary-free, uses the trial's own verdict. + dead-filter bugfix (`dead_on_empty`). |
 | **Keep-best + file-restore** | `src/workflow/nodes/execution.py:_keep_best` | never ship a driver worse than the trial's peak (all paths); restores the kept source **to disk** on rollback (else merge ships the regressed file). |
@@ -304,10 +307,57 @@ Step 12  Existing-driver knowledge extraction + Phase B idiom distillation
 Generation (G1–G5) has landed; the live frontier is now **below** it. Start
 new work from `docs/generation.md` (open bottleneck + roadmap):
 
-- **Binding layer (highest leverage).** CBFactory's `RunningContext` can't
-  synthesize argument values for `void*`/opaque-struct non-handle params, so
-  deep gap APIs (lcms `cmsDoTransform`, …) never become skeletons regardless of
-  ranking. Make them synthesizable.
+- **⚠ DECISION NEEDED — orphaned optimize subsystem: keep-redesigned, or remove?**
+  Lean crash-triage + skip-per-driver-optimize is now the **default** (gate
+  removed). So the per-driver coverage-optimize loop is **unreachable**: a clean
+  build+run returns END directly. Dead-but-still-present: graph nodes
+  `coverage_analyzer` → `improver` and `baseline_diff_analyzer` (§10B regression
+  recovery) (`src/workflow/workflow.py`), their agents
+  (`CoverageAnalyzer`/`Improver`/`BaselineDiffAnalyzer`), and
+  `supervisor._handle_coverage_improvement`. (The *crash* LLM nodes are NOT
+  orphaned — they keep the unknown-frame fallback; only the *optimize* path lost
+  its route.) **Two options:**
+  - **Remove** — delete those 3 nodes + agents + `_handle_coverage_improvement` +
+    their graph edges. Cleanest if "breadth from many-drivers + merge + diversity
+    + gap-direction" is the final stance (per-driver LLM refinement is then dead
+    weight).
+  - **Keep, redesigned to FIT the current tool** — the old loop was *per-driver*
+    LLM refinement (N× cost), mismatched with the breadth-via-merge design. A
+    fitted version is **portfolio/union-level + gap-directed + cross-round**, not
+    per-trial: after merge, compute the *union* coverage gap (reuse G5
+    `coverage_gap`), then run ONE targeted optimize/re-gen pass on the
+    under-covered gap APIs — i.e. fold it into the proposed **Phase C CEGAR loop**
+    (`generation.md` F6, prereq WorkingMemory). §10B baseline-diff belongs there
+    too (post-merge, cross-round — see Failed Attempts, "belongs post-merge, not
+    per-trial"). Cost: ~1 pass/round vs N drivers.
+  Until decided the subsystem is **dead code kept in place** — don't rely on it.
+
+- **Input/seed layer (NEW #1 below binding) — real-seed routing landed (gated).**
+  Factory chain made `cmsDoTransform` constructable + compilable (lcms opaque args
+  0→77/128), but a degraded-30s probe covered **0/799 of `cmsxform.c`**: random
+  bytes never form a valid ICC profile → `cmsCreateTransform` NULL → guard →
+  `cmsDoTransform` never runs. Real-seed routing (**default-on**, gate removed)
+  routes the project's REAL format-matching seeds (`*.icc`/`*.it8`/…, by
+  parser-entry API + file magic) into each driver's generation-phase corpus +
+  the merged harness (`scripts/seed_discovery.py` `seed_corpus_for_driver` →
+  `builder_runner._seed_corpus_dir`). Remaining: **measure** the cmsxform.c gain
+  end-to-end, and synthetic seed generation from format analysis (still TODO).
+  See `docs/generation.md` §6.
+- **build-cache × llvm14 — RESOLVED by A1 (additive canonical base).** Cached runs
+  used to silently degrade to Z3-OFF (reused non-clang-14 image → clang-only →
+  empty `function_conditions`). Fix: `ensure_llvm14_base_builder()` builds the
+  *additive* llvm14 image (clang-14 at /usr/lib/llvm-14; default `/usr/local` clang
+  + libc++ untouched → fuzzers still link) and retags it onto
+  `gcr.io/oss-fuzz-base/base-builder`, so every project + cache image inherits
+  clang-14 — one image serves extraction + trials (no patch, no isolation, no
+  bypass). Called before `prepare_cached_images`. **One-time deploy step:** OFG
+  cache images are registry-hosted (pull-first) — rebuild + re-push the
+  `*-ofg-cached-*` images on the additive base (or `OFG_USE_CACHING=0`) so cached
+  eval is Z3-on. Memory `project_buildcache_llvm14_conflict`; `docs/generation.md` §4.
+- **Binding layer (#14) — construction lifted, tail remains.** Factory chain
+  recovers `cmsCreate*`-named opaque producers; remaining: residual
+  non-`Create*`-named / no-in-project-producer tail + caller-alloc-init args beyond
+  the SVF-INIT channel. See `docs/generation.md` §5/§6.
 - **Feedback layers** — F5 adaptive shape (error-injection skeletons), F6 Phase C
   CEGAR loop (prereq: WorkingMemory), F7 L2 LLM idioms. See `docs/generation.md`.
 - LLM equivalence oracle production throttling (`enable_llm_oracle=False` in `data_context.py:Step 5e2` until cost-aware pacing lands).

@@ -39,7 +39,8 @@ make opaque-handle and caller-alloc-init libraries constructable:
 | Pass | Restores | File | Anchor |
 |---|---|---|---|
 | Handle **identity** | re-types IR-collapsed `void*`/`i8*` back to `cmsHPROFILE`/`cmsHTRANSFORM` from headers | `liberator_adapter/analysis/handle_typedef_recovery.py` | dep-graph connected where Liberator's is empty, specific where naive void\* over-connects |
-| Handle **production** | SVF-write-gated INIT channel: `deflateInit_(z_stream*)` (single-ptr in-place init) recovered as a *creator* | `liberator_adapter/analysis/usedef.py` (`annotate_svf_writes` / `extract_produced_handles`) | zlib deflate/inflate family **0 → 34/36 constructable**; one driver covers `deflate.c` 570 + `inflate.c` 551 + `trees.c` 387 = 1874/3397 lines (55%), all 0 before the fix (measured via per-driver `run_extended_fuzzing` cov build) |
+| Handle **production (a)** | SVF-write-gated INIT channel: `deflateInit_(z_stream*)` (single-ptr in-place init) recovered as a *creator* | `liberator_adapter/analysis/usedef.py` (`annotate_svf_writes` / `extract_produced_handles`) | zlib deflate/inflate family **0 → 34/36 constructable**; one driver covers `deflate.c` 570 + `inflate.c` 551 + `trees.c` 387 = 1874/3397 lines (55%), all 0 before the fix (measured via per-driver `run_extended_fuzzing` cov build) |
+| Handle **production (b)** — factory chain | naming-based opaque-return producer recovery: a required non-pointer opaque handle whose creator's return the IR desugared to `void*` (`cmsHTRANSFORM`) is mapped to its `cmsCreate*Transform` factory and fed to the recursive prefix resolver (non-pointer test + camelCase word-boundary + deep-factory preference) | `liberator_adapter/analysis/sequence_constructor.py` (gate `LOGICFUZZ_FACTORY_CHAIN`) | **first dent in the binding-layer ceiling (#14).** lcms (probe + live run): recovered handle types 0→2, deep opaque args 0→**77/128**, avg prefix 0.15→0.89, `cmsDoTransform` constructs full chain **and compiles in**; 8 handle-struct libs byte-identical (no regress). *But deep coverage NOT won:* degraded-30s probe = **cmsxform.c 0/799** (valid-ICC-profile input blocks the chain → next bottleneck is the **input/seed layer**, not construction). Clean Z3-on confirm blocked by build-cache×llvm14 (§4) |
 
 Closed-loop (Phase G) grows the automaton from Z3-viable sequences each round
 (`src/closed_loop.py`, Step 11, opt-in `--closed-loop`).
@@ -50,6 +51,12 @@ Closed-loop (Phase G) grows the automaton from Z3-viable sequences each round
 |---|---|
 | `LOGICFUZZ_DISABLE_G2_CONSTRUCT=1` | drop G2 model-driven construction → random-walk grammar floor only |
 | `LOGICFUZZ_DISABLE_DRIVER_TRACES=1` | T8: don't feed the project's own driver `.c` corpus into the automaton's consumer paths |
+
+**Now default-on (gates removed 2026-06):** factory chain (opaque void\*-return
+producer recovery), density + hard NULL-guard, max-coverage diversity selection,
+real seed-corpus routing, lean crash triage + skip per-driver optimize,
+typedef-handle recovery. Lean's deterministic crash triage falls back to the LLM
+crash path on an `unknown` ASan frame.
 
 ---
 
@@ -93,14 +100,14 @@ neuro-symbolic split is preserved: density only appends calls whose handle
 dependencies are *already symbolically satisfied*; guards are IR-derived; the LLM
 still owns only leaf values.
 
-### Levers (all gated, all kill-switchable)
+### Levers (now default-on; only tuning knobs + kill-switches remain as flags)
 
 | Lever | Flag (default) | File | What it does | Measured |
 |---|---|---|---|---|
 | **B graceful degradation** | `LOGICFUZZ_STRICT_ORDERING` **off** = on | `sequence_constructor.py:433` | keep orphan-handle `USE_BEFORE_INIT` sequences → island/opaque APIs enter candidates; unchecked-render leaves the un-bindable arg as a hole | ≈302/452 previously-dropped gap APIs now enter the pool |
-| **density** | `LOGICFUZZ_DENSE_CONSTRUCT` | `sequence_constructor.py:297` | append extenders that USE an already-open handle (`requires ⊆ opened`: mutator\*→consumer\*→getter\*) → thicken thin chains | thin chain 2.5 → 4.3 calls/seq |
+| **density** | **default-on** (tune `_DENSE_MAX_EXTRA`/`_DENSE_COOCCUR`) | `sequence_constructor.py:_densify` | append extenders that USE an already-open handle (`requires ⊆ opened`: mutator\*→consumer\*→getter\*) → thicken thin chains | thin chain 2.5 → 4.3 calls/seq |
 | **density co-occurrence** | `LOGICFUZZ_DENSE_COOCCUR` (default 1), `LOGICFUZZ_DENSE_MAX_EXTRA` (default 8) | `sequence_constructor.py:308` | second `_densify` source: thicken along automaton accepting-path *real co-occurrence* (= PromeFuzz call-scope grouping) | lcms candidate 6.6 → **7.7 APIs/seq, median 7 = PromeFuzz 7.6** |
-| **hard NULL-guard + opaque factory hint** | **implied by density** (`LOGICFUZZ_HARD_NULLGUARD` OR `DENSE_CONSTRUCT`) | `hole_semantics.py:33` | `ret_contract` advisory → `MUST-GUARD: if(!x)return0;` + "build the opaque handle via its producer" hint; **density requires it** (ablation: density-only SEGVs) | lcms combo FP 1→0 |
+| **hard NULL-guard + opaque factory hint** | **default-on** | `hole_semantics.py:_hard_nullguard` | `ret_contract` advisory → `MUST-GUARD: if(!x)return0;` + "build the opaque handle via its producer" hint; coupled with density (ablation: density-only SEGVs) | lcms combo FP 1→0 |
 | **top_k breadth lever** | `LOGICFUZZ_TOP_K` (default 10; needs `LOGICFUZZ_NO_CACHE=1` to regen) | `data_context.py:316` | raise the greedy max-coverage selection cap → more skeletons → more distinct APIs in the merged union | offline greedy: top_k=100 → **c-ares 118 ≥ 113, zlib 95 ≥ 89** (matches PromeFuzz #API); lcms 100→136, 150→186 |
 | **keep-best + file restore** | default | trial loop / merge | never ship a driver worse than the trial's peak; write the restored source **back to disk** (else merge ships the degraded driver) | bugfix `cbf09411` |
 | **pre-ship quarantine + dead-filter** | default | `tools/merge_drivers/` | drop immediate-crash 0-coverage FP drivers before the merge (poison the fused harness otherwise); preflight dead-code bugfix (`3de80550`) | — |
@@ -166,6 +173,32 @@ per-project fork-idempotency task, not a quick config drop — open roadmap.
 NB a subagent earlier reimplemented a whole build-cache *layer*, branched from
 `main` (broke pub-llm) → reverted (see memory `feedback_efficiency_and_simplicity`).
 
+> **⚠ Build-cache silently disabled Z3 — RESOLVED by A1 (additive canonical base).**
+> *The problem:* with the cache on, the reused `gcr.io/oss-fuzz/<proj>` image had
+> **no clang-14** → LLVM/SVF extraction fell back to clang-only → `function_conditions`
+> empty → **CBFactory degraded, Z3 OFF for the whole run** (skeletons via the
+> no-Z3-gate model path). So every cached lcms eval before this ran Z3-off — the
+> "Z3-validated skeleton" claim held only for non-cached runs. Tell-tale in old
+> logs: `Reused existing image … (no rebuild)` + `clang-14 not found` + `CBFactory
+> degraded mode`.
+>
+> *The fix (`ensure_llvm14_base_builder`):* build the llvm14 image **additively**
+> (clang-14 at /usr/lib/llvm-14 for `wllvm`; the default `/usr/local` OSS-Fuzz clang
+> + its libc++ are untouched, so fuzzers still link — the earlier "fuzzers don't
+> link on llvm14" was a **misdiagnosis**; the real 0-drivers cause was a
+> cache-rewrite that dropped the source) and **retag it onto the canonical
+> `gcr.io/oss-fuzz-base/base-builder`**. Every project AND cache image built FROM it
+> then carries clang-14 — one image serves both fuzzer builds and extraction; no
+> Dockerfile patch, no separate extraction image, no cache bypass. Wired before
+> `prepare_cached_images`. Validated: extract-only on the additive base → fresh
+> 651KB `conditions.json`, no degraded/clang-only.
+>
+> *One-time deploy step:* OFG cache images are registry-hosted (`_prepare_image_cache`
+> pulls before building), so a cache image pulled from the registry was built on the
+> OLD base — rebuild + re-push the `*-ofg-cached-*` images on the additive base (or
+> run `OFG_USE_CACHING=0`) to make cached eval Z3-on. Full diagnosis + recipes:
+> memory `project_buildcache_llvm14_conflict`.
+
 ---
 
 ## 5. Honest verdicts (do not oversell)
@@ -191,12 +224,28 @@ them.
   and **(b)** evidence we fill *more* existing-driver gap than PromeFuzz/CKGFuzzer.
   Both untested.
 
-- **The opaque / no-producer tail is the binding-layer ceiling (#14).** top_k
-  reaches PromeFuzz parity on c-ares/zlib but **not** lcms's 358 APIs (100→136,
-  150→186, never 358): roughly half of lcms's APIs are opaque or have no in-project
-  producer, so CBFactory's `RunningContext.try_to_get_var` can't synthesize their
-  args and they never become skeletons regardless of ranking. This is the **#1 open
-  bottleneck**, not a tuning problem.
+- **The opaque / no-producer tail is the binding-layer ceiling (#14) — now
+  *partially* lifted.** top_k reaches PromeFuzz parity on c-ares/zlib but **not**
+  lcms's 358 APIs (100→136, 150→186, never 358): roughly half of lcms's APIs are
+  opaque or have no in-project producer, so CBFactory's
+  `RunningContext.try_to_get_var` can't synthesize their args and they never become
+  skeletons regardless of ranking. The **factory chain** (`LOGICFUZZ_FACTORY_CHAIN`,
+  handle-production channel b) is the first dent: opaque handles whose creator the
+  IR hid behind a `void*` return (`cmsHTRANSFORM` ← `cmsCreate*Transform`) are
+  recovered by naming and chained — lcms deep opaque args satisfied 0→77/128,
+  `cmsDoTransform` constructable **and compilable** (confirmed in a live run: the
+  emitted skeletons include a wired `cmsCreate_sRGBProfile → cmsCreateTransform →
+  cmsDoTransform → cmsDeleteTransform`, `n_factory_recovered=2`). **But three
+  caveats:** **(i)** *deep coverage is not won* — a degraded-30s probe covered
+  **0/799 of `cmsxform.c`** despite compiling it in: the opaque chain needs a
+  *valid ICC profile* (`cmsOpenProfileFromMem`) that random bytes never form →
+  `cmsCreateTransform` NULL → guard → `cmsDoTransform` never runs. **The next
+  bottleneck is the input/seed layer, below the binding layer — not construction,
+  not Z3.** **(ii)** the residual no-producer / non-`Create*`-named tail still
+  drops to NULL holes. **(iii)** a clean Z3-on confirmation is blocked by a
+  build-cache×llvm14 image-isolation bug (§4). So #14 is **demoted from "#1
+  untouched" to "construction-lifted; input layer is the new ceiling"** — still
+  top leverage, not a closed problem.
 
 - **Coverage is breadth-bound, not time-bound (at this scale).** The lcms56 merged
   harness plateaus at **~1424 branches in ~30 min**. More fuzz time does not close
@@ -215,11 +264,13 @@ live in `docs/generation_information_audit.md`; the short list:
 
 | Item | Why it's the lever |
 |---|---|
-| **Binding layer (#14, highest leverage)** | make opaque/`void*`/caller-alloc-init args synthesizable instead of dropping the API → unlocks the lcms 358 tail and deep gap APIs (`cmsDoTransform`, …) top_k can't reach |
+| **Input/seed layer (NEW #1 below binding) — real-seed routing landed (default-on), gain unmeasured** | factory chain made `cmsDoTransform` constructable+compilable, but it covers **0/799 of `cmsxform.c`** because random bytes never form a valid ICC profile to traverse the opaque chain. Real-seed routing (now default-on) copies the project's REAL format-matching seeds (`*.icc`/`*.it8`/…, classified by parser-entry API + file magic) into each driver's generation corpus + the merged harness (`scripts/seed_discovery.py:seed_corpus_for_driver` → `builder_runner._seed_corpus_dir`; additive, no-op when no seeds). **Next:** measure the cmsxform.c gain end-to-end; synthetic seed generation from format analysis still TODO |
+| **build-cache × llvm14 — RESOLVED by A1 (additive canonical base)** | was: extraction (clang-14) and trials shared one `gcr.io/oss-fuzz/<proj>` tag → cached eval silently Z3-off. Fix (`ensure_llvm14_base_builder`): build the *additive* llvm14 image (clang-14 added; default `/usr/local` clang + libc++ untouched → fuzzers link — the "fuzzers don't link on llvm14" worry was a misdiagnosis) and retag it onto `gcr.io/oss-fuzz-base/base-builder`, so every project + cache image inherits clang-14. **One-time deploy:** rebuild + re-push the registry-hosted `*-ofg-cached-*` images on the additive base (or `OFG_USE_CACHING=0`). See memory `project_buildcache_llvm14_conflict` |
+| **Binding layer (#14) — construction lifted, tail remains** | factory chain (channel b, `LOGICFUZZ_FACTORY_CHAIN`) recovers opaque `void*`-return producers; **next:** recover the residual non-`Create*`-named / no-in-project-producer tail, + caller-alloc-init args beyond the SVF-INIT channel |
 | **Multi-project coverage-diff validation** | turn the lcms PoC into a claim: reproduce across projects + show we fill more existing-driver gap than PromeFuzz/CKGFuzzer |
 | **24h union real run** | the actual headline vs PromeFuzz Table 2 absolute coverage (cost OK, deferred) |
-| **Lean mode** | deterministic crash triage (`crash_frame.py`) replacing the LLM crash analyzer + skip per-driver optimize → ~8.5 → ~3 LLM calls/driver |
-| **Extend build-cache** | one `fuzzer_build_script/<project>` each for cjson/zlib/c-ares/libpng |
+| **Verify lean-mode savings** | lean mode is now the default (deterministic `crash_frame.py` triage + skip per-driver optimize; the optimize/improver nodes are orphaned); the ~8.5 → ~3 LLM-calls/driver figure is *projected* — confirm on a real eval run |
+| **Extend build-cache** | per-project fork-idempotency (lcms ✓, c-ares ✓); remaining: cjson/zlib/libpng |
 
 Feedback layers (audit, deferred / pending approval): F5 adaptive-shape
 (error-injection skeletons, T11), F6 Phase C CEGAR loop (prereq WorkingMemory),

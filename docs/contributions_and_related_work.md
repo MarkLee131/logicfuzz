@@ -54,8 +54,9 @@ before any sequence is proposed:
 - **usage composition** — accepting paths from the project automaton.
 
 This model is the **role authority** (demoting the heuristic
-`ConditionManager`), and it is recovered to be *correct* by **two orthogonal
-recovery passes** that restore handle relations the raw IR view drops:
+`ConditionManager`), and it is recovered to be *correct* along **two orthogonal
+recovery axes** that restore handle relations the raw IR view drops — handle
+*identity* and handle *production* (the latter via two channels):
 
 1. **Handle *identity*** — a typedef-handle recovery pass
    (`analysis/handle_typedef_recovery.py`) restores the opaque-handle identity
@@ -63,17 +64,38 @@ recovery passes** that restore handle relations the raw IR view drops:
    `cmsHPROFILE` / `cmsHTRANSFORM` from the public headers), so the dependency
    graph is *connected where Liberator's is empty* and *specific where a naive
    void*-graph would over-connect* (`cmsHPROFILE` ≠ `cmsHTRANSFORM`).
-2. **Handle *production*** — a caller-allocated, in-place-initialized struct
-   (`z_stream` ← `deflateInit_(z_stream*)`) is restored as a *producer* via an
-   **SVF-write-gated INIT channel** (`analysis/usedef.py`): an init-named
-   single-pointer struct counts as creating that struct unless SVF's value-flow
-   positively observed the parameter read-only — which correctly rejects
-   same-arity *consumers* like `pthread_create(attr*)` (reads the attr) while
-   accepting true initializers. Without it the deflate/inflate family has no
-   creator and never forms a chain; with it the lifecycle prefix
-   (`deflateInit_` → `deflate` → `deflateEnd`) constructs.
+2. **Handle *production*** — a required handle whose creator the raw IR drops is
+   restored as a *producer*, via **two deterministic channels** that both feed
+   the (already recursive) prefix resolver so the recovered creator chains
+   transitively to the byte leaf:
+   - **(a) SVF-write-gated caller-alloc INIT** (`analysis/usedef.py`): a
+     caller-allocated, in-place-initialized struct (`z_stream` ←
+     `deflateInit_(z_stream*)`) is restored as a producer — an init-named
+     single-pointer struct counts as creating that struct unless SVF's value-flow
+     positively observed the parameter read-only, which correctly rejects
+     same-arity *consumers* like `pthread_create(attr*)` (reads the attr) while
+     accepting true initializers. Without it the deflate/inflate family has no
+     creator and never forms a chain; with it `deflateInit_ → deflate →
+     deflateEnd` constructs.
+   - **(b) Naming-based opaque-return producer recovery**
+     (`analysis/sequence_constructor.py`, gated `LOGICFUZZ_FACTORY_CHAIN`): when an
+     opaque handle is *required* by an arg but its producer's **return type was
+     desugared to `void*`** by the IR (`typedef void* cmsHTRANSFORM` — the param
+     keeps the typedef so `requires` is right, but the return is collapsed, so
+     `extract_produced_handles` misses it → the producer index has no entry → the
+     prefix resolves empty → a NULL hole), the required *non-pointer* opaque type
+     is mapped to its creator by handle naming convention (`cmsHTRANSFORM` → strip
+     lib prefix `cms` + handle marker `h` → `transform` → match
+     `cmsCreate*Transform*`). Three correctness levers keep it sound: the
+     **non-pointer test** (a `*`-typed param is a caller-alloc leaf, not a factory
+     target; a `void*` typedef handle has no `*`), a **camelCase word-boundary
+     match** (rejects `handle ⊄ ErrorHandler`), and **producer preference** for a
+     factory that itself requires another recoverable opaque handle (the true-deep
+     one that chains to the byte opener). Without it 29/52 lcms creators have an
+     empty `produces` set and every `cmsDoTransform`-class API resolves to a NULL
+     hole.
 
-Both passes are deterministic — zero LLM, zero token cost.
+All of these passes are deterministic — zero LLM, zero token cost.
 
 > **Empirical anchor (zlib, validated 2026-06):** with the production-recovery
 > channel the deflate/inflate family goes from **0 → 34 of 36 constructable**,
@@ -84,6 +106,35 @@ Both passes are deterministic — zero LLM, zero token cost.
 > the per-driver `run_extended_fuzzing` build; the project's *eval* coverage
 > build is degenerate for zlib — it re-measures the baseline `checksum_fuzzer`,
 > so cov-diff over it understates every zlib driver.)
+
+> **Empirical anchor (lcms, channel 2b / factory chain, 2026-06):** the
+> opaque-handle dependency comes back — recovered handle types **0 → 2**, deep
+> opaque args satisfied **0 → 77 of 128**, average resolved prefix length
+> **0.15 → 0.89**, and `cmsDoTransform` — previously an all-NULL-arg dead end —
+> constructs the full chain `cmsOpenProfileFromMem → cmsCreateProofingTransform →
+> cmsDoTransform → cmsDeleteTransform`. Monotone: eight handle-struct libraries
+> (c-ares / zlib / libpng / sqlite3 / nghttp2 / cjson / liblouis / libucl)
+> recover nothing and are byte-identical (no misbinding, no regression). **This
+> is the first dent in the binding-layer ceiling (#14) — the previously-#1 open
+> bottleneck.** *Evidence level (2026-06-08):* **construction proven** — offline
+> probe (`scripts/factory_chain_probe.py`) *and* a live run: the emitted skeleton
+> set contains a wired `cmsDoTransform` chain
+> (`cmsCreate_sRGBProfile → cmsCreateTransform → … → cmsDoTransform →
+> cmsDeleteTransform`, `n_factory_recovered=2`), and the driver **compiles** the
+> transform TUs in. **Deep coverage is NOT yet won, and the blocker is below the
+> binding layer:** a degraded-mode 30 s probe covered **0/799 lines of
+> `cmsxform.c`** despite compiling it in — because the opaque chain needs a
+> *valid ICC profile* (`cmsOpenProfileFromMem → cmsCreateTransform`) that random
+> fuzzer bytes essentially never form, so `cmsCreateTransform` returns NULL, the
+> NULL-guard fires, and `cmsDoTransform` never executes. So factory chain lifts
+> the **construction** ceiling but exposes the **input/seed layer** (valid
+> structured input to traverse a multi-hop opaque chain) as the next bottleneck —
+> not construction, not Z3. The enabling fixes have since landed — the
+> build-cache×llvm14 conflict is resolved (A1 additive canonical base → cached
+> eval is Z3-on) and `LOGICFUZZ_SEED_CORPUS` routes real format-matching seeds
+> (`*.icc`) into the opaque-chain driver's corpus — so the **end-to-end coverage
+> measurement** (does the seeded `cmsDoTransform` driver now cover `cmsxform.c`?)
+> is the one remaining step, not a missing capability (see `docs/generation.md` §4/§6).
 
 > **vs prior work:** PromeFuzz has no dependency substrate at all (the LLM
 > infers relationships); Liberator has a type substrate that both
@@ -242,9 +293,14 @@ LogicFuzz fixes structure symbolically and lets the LLM decide leaf values.*
 - **PromeFuzz:** no SMT/Z3, no typestate automaton, no sequence pre-validation,
   no skeleton/holes, no symbolic dependency resolution.
 - **LogicFuzz:** no crash-constraint memory banning APIs across rounds (crash
-  handling is per-trial); no RAG vector store (uses doxygen/README priors); no
-  fully-wired CEGAR loop (Phase C data only); happy-path driver shape only
-  (variety deferred — `docs/generation.md` F5).
+  handling is per-trial; the lean-mode path triages it *deterministically* via
+  `crash_frame.py` instead of two LLM calls — see below); no RAG vector store
+  (uses doxygen/README priors); no fully-wired CEGAR loop (Phase C data only);
+  happy-path driver shape only (variety deferred — `docs/generation.md` F5). The
+  opaque / no-in-project-producer **binding-layer tail** is only *partially*
+  recovered — the factory chain (①·2b) reaches `cmsCreate*`-named opaque
+  producers, but the remaining no-producer APIs still drop to NULL holes
+  (`docs/generation.md` #14).
 
 ### Harness merge — four optimisations beyond PromeFuzz
 
@@ -317,7 +373,7 @@ upstream divergences, so future upstream ports don't reintroduce them.)
 | Var-len buffers | static `len_depends_on` only; decoupled when analysis misses it | falls back to `DriverEnhancer.get_buffer_size_constraint` (`VarLenAnalyzer` name/type heuristics) |
 | Dependency graph | inverts the dep-graph, **drops the original direction** (no "who produces type T?") | keeps both directions + `_build_type_producer_map` (return-type → APIs), loose pointer-suffix matching |
 | Handle identity | collapsed to `void*`/`i8*` by IR (see Innovation ①) | recovered from headers/exported-functions (`handle_typedef_recovery.py`) |
-| Handle production channels | return-value + out-pointer (`T**`) creators only; a caller-allocated struct initialized in place (`z_stream` ← `deflateInit_(z_stream*)`, single pointer) has no producer → the stateful family is unconstructable | **+ SVF-write-gated caller-alloc INIT channel** (`usedef.py:annotate_svf_writes` / `extract_produced_handles`): an init-named single-pointer struct is recovered as a creator when SVF value-flow shows it *writing* the param (not read-only), with naming anti-stems + demotion when a real return/out-ptr creator already exists |
+| Handle production channels | return-value + out-pointer (`T**`) creators only; a caller-allocated struct initialized in place (`z_stream` ← `deflateInit_(z_stream*)`, single pointer) has no producer, **and an opaque creator whose return type the IR desugared to `void*`** (`cmsCreate*Transform`) is invisible to the producer index → both stateful families are unconstructable | **+ two recovered channels**: (a) **SVF-write-gated caller-alloc INIT** (`usedef.py:annotate_svf_writes` / `extract_produced_handles`) recovers `deflateInit_`-style in-place initializers when SVF shows the param *written* (anti-stems + demotion when a real return/out-ptr creator exists); (b) **naming-based opaque-return producer recovery** (`sequence_constructor.py`, `LOGICFUZZ_FACTORY_CHAIN`) maps a required non-pointer opaque handle to its `cmsCreate*`-style factory by handle naming, feeding the recursive prefix resolver (non-pointer test + camelCase word-boundary + deep-factory preference keep it sound) |
 
 ### Robustness hardening (upstream latent bugs the adapter fixed)
 
@@ -344,7 +400,7 @@ backend/IR refactors.
 |---|---|---|---|
 | Driver creation | LLM free-form | symbolic full render | Z3 skeleton + LLM hole-fill |
 | Structure decided by | LLM | symbolic | symbolic (Z3 + automaton) |
-| Dependency substrate | none (LLM) | type-only, handles collapsed | reconciled IR⊕doc⊕usage, handles recovered (void\*-identity + caller-alloc init) |
+| Dependency substrate | none (LLM) | type-only, handles collapsed | reconciled IR⊕doc⊕usage, handles recovered (void\*-identity + caller-alloc init + opaque-return factory chain) |
 | Feasibility check | none (relevance) | Python-symbolic | SMT (Z3) + typestate |
 | Usage knowledge | RAG + LLM relevance | none | learned project automaton |
 | Coverage targeting | weighted score | none | gap-directed (baseline-uncovered) |
