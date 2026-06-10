@@ -110,6 +110,69 @@ def error_shape_variants(
     return out
 
 
+def _scoped_guards() -> bool:
+    """B+D gate (LOGICFUZZ_SCOPED_GUARDS, default-OFF).
+
+    When ON: ``construct_sequences`` reorders a constructed ``core`` so its
+    dependency components are contiguous (D), and ``skeleton_generator`` renders
+    component-scoped NULL guards (B) — an INDEPENDENT param-rich producer no
+    longer sits behind a failing input-parser's whole-driver NULL bail. Gate-OFF
+    ⇒ byte-identical to the legacy path (the existing regression suite pins
+    this)."""
+    return os.environ.get("LOGICFUZZ_SCOPED_GUARDS") == "1"
+
+
+def _dependency_components(
+    api_sequence: Sequence[str],
+    model: Any,
+) -> List[List[str]]:
+    """Partition ``api_sequence`` into ordered dependency COMPONENTS.
+
+    A *component* is a maximal contiguous run that shares a data dependency: an
+    API stays in the current component iff its ``requires`` intersects the
+    handle types PRODUCED EARLIER within that same component; an API that
+    consumes none of the current component's handles is INDEPENDENT of the prior
+    work and STARTS A NEW component.
+
+    ``model`` only needs a ``.apis`` mapping ``name -> obj`` where ``obj`` has
+    ``produces`` / ``requires`` (frozenset-like) attributes — so both an
+    ``APISemanticModel`` and the skeleton generator's lightweight signature-
+    derived model satisfy it. Names absent from the model contribute no handle
+    edges (they're treated as scalar-only → independent), so the partition is
+    robust to a partial model.
+
+    Returns ``List[List[str]]`` (components in order; each a contiguous slice of
+    the input names, preserving order; the concatenation equals the input — no
+    API is dropped or reordered across the slice boundary).
+    """
+    apis = getattr(model, "apis", {}) or {}
+
+    def _produces(name: str) -> Set[str]:
+        sem = apis.get(name)
+        return set(getattr(sem, "produces", ()) or ()) if sem is not None else set()
+
+    def _requires(name: str) -> Set[str]:
+        sem = apis.get(name)
+        return set(getattr(sem, "requires", ()) or ()) if sem is not None else set()
+
+    components: List[List[str]] = []
+    cur: List[str] = []
+    cur_produced: Set[str] = set()
+    for name in api_sequence:
+        if not name:
+            continue
+        if cur and not (_requires(name) & cur_produced):
+            # Consumes nothing the current component opened → new component.
+            components.append(cur)
+            cur = []
+            cur_produced = set()
+        cur.append(name)
+        cur_produced |= _produces(name)
+    if cur:
+        components.append(cur)
+    return components
+
+
 @dataclass
 class ConstructionResult:
     sequences: List[List[str]]
@@ -607,6 +670,14 @@ def construct_sequences(
                                 _dense_repeat, _cooccur)
                 if len(core) > len(prefix) + 1:
                     n_densified += 1
+            if _scoped_guards():
+                # D — reorder ``core`` so its dependency components are
+                # CONTIGUOUS (parser+consumers block first, independent producer
+                # blocks after). This is a pure REORDERING (every API kept), so
+                # the skeleton's per-component scoped-guard rendering (B) is
+                # clean. Gate-OFF leaves ``core`` untouched (byte-identical).
+                core = [a for comp in _dependency_components(core, model)
+                        for a in comp]
             seq = core + _closing_destroyers(opened, idx)
             _add(seq)
 

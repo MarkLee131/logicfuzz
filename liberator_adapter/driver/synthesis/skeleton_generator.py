@@ -18,6 +18,9 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from liberator_adapter.common.api import Api, Arg
+from liberator_adapter.analysis.sequence_constructor import (
+    _dependency_components, _scoped_guards,
+)
 from liberator_adapter.driver.synthesis.hole import (
     Hole, HoleSet, HolePriority,
     ArrayLengthHole, InitValueHole,
@@ -26,6 +29,49 @@ from liberator_adapter.driver.synthesis.hole import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Signature-derived model for component partition (B+D, LOGICFUZZ_SCOPED_GUARDS)
+# =============================================================================
+# ``_dependency_components`` (in sequence_constructor) needs a ``.apis`` mapping
+# name → object with ``produces`` / ``requires`` handle-type sets. The skeleton
+# renderer only has ``Api`` objects, so we derive that mapping the SAME way the
+# wiring layer does (``CBFactory._signature_handle_bindings``): a single-pointer
+# RETURN produces that normalized handle type; a single-pointer ARG requires it.
+# Pure signature inference, deterministic, no extra inputs.
+
+@dataclass(frozen=True)
+class _SigSem:
+    produces: frozenset
+    requires: frozenset
+
+
+@dataclass(frozen=True)
+class _SigModel:
+    apis: Dict[str, _SigSem]
+
+
+def _build_signature_model(api_sequence: List[Api]) -> _SigModel:
+    from liberator_adapter.analysis.usedef import normalize_handle_type
+    apis: Dict[str, _SigSem] = {}
+    for api in api_sequence:
+        produces: Set[str] = set()
+        requires: Set[str] = set()
+        ri = getattr(api, 'return_info', None)
+        rt = getattr(ri, 'type', '') if ri else ''
+        if rt and rt not in ('void', '') and rt.count('*') == 1:
+            key = normalize_handle_type(rt)
+            if key:
+                produces.add(key)
+        for arg in getattr(api, 'arguments_info', []) or []:
+            t = getattr(arg, 'type', '') or ''
+            if t.count('*') == 1:
+                key = normalize_handle_type(t)
+                if key:
+                    requires.add(key)
+        apis[api.function_name] = _SigSem(frozenset(produces), frozenset(requires))
+    return _SigModel(apis)
 
 
 # =============================================================================
@@ -308,13 +354,26 @@ class SkeletonGenerator:
             if applied:
                 skeleton.metadata['wired_args'] = applied
 
-        # 4. Generate API call sequence
-        self._generate_api_calls(
-            skeleton, api_sequence,
-            varlen_relations or {},
-            loop_patterns or {},
-            callback_infos or {}
-        )
+        # 4. Generate API call sequence. Under LOGICFUZZ_SCOPED_GUARDS (B),
+        # group calls into dependency components and emit component-scoped
+        # NULL guards (a producer's failure only skips ITS dependents, not the
+        # whole driver) so an INDEPENDENT param-rich producer runs regardless of
+        # a sibling parser's failure. Gate-OFF keeps the legacy whole-driver
+        # ``return 0`` guard (byte-identical).
+        if _scoped_guards():
+            self._generate_api_calls_scoped(
+                skeleton, api_sequence,
+                varlen_relations or {},
+                loop_patterns or {},
+                callback_infos or {}
+            )
+        else:
+            self._generate_api_calls(
+                skeleton, api_sequence,
+                varlen_relations or {},
+                loop_patterns or {},
+                callback_infos or {}
+            )
 
         # 5. Generate cleanup code
         self._generate_cleanup(skeleton)
@@ -772,8 +831,94 @@ class SkeletonGenerator:
             else:
                 self._generate_single_call(skeleton, api)
 
-    def _generate_single_call(self, skeleton: DriverSkeleton, api: Api) -> None:
-        """Generate single API call"""
+    def _generate_api_calls_scoped(
+        self,
+        skeleton: DriverSkeleton,
+        apis: List[Api],
+        varlen_relations: Dict[str, List[Tuple[int, int, str]]],
+        loop_patterns: Dict[str, Dict],
+        callback_infos: Dict[str, List[Dict]]
+    ) -> None:
+        """Component-scoped call generation (B, LOGICFUZZ_SCOPED_GUARDS).
+
+        Partition the sequence into dependency components (a parser + the calls
+        that consume its handle = one component; an INDEPENDENT producer = a new
+        component). For each component whose head producer may return NULL, wrap
+        ONLY that component's dependent calls in ``if (head_handle != NULL) {
+        ... }`` (B1 nested-if). The NEXT (independent) component renders OUTSIDE
+        that ``if`` → it runs regardless of the parser's failure. No
+        ``return 0`` whole-driver bail is ever emitted for a producer failure.
+
+        Variable declarations stay function-scoped (emitted earlier), so the
+        end-of-function destroyers run for every opened handle regardless of the
+        ``if``-nesting, and C decl-before-use is preserved.
+        """
+        by_name = {api.function_name: api for api in apis}
+        model = _build_signature_model(apis)
+        components = _dependency_components(
+            [api.function_name for api in apis], model)
+
+        def _emit(api: Api, indent: int) -> None:
+            loop_info = loop_patterns.get(api.function_name, {})
+            if loop_info.get('needs_loop'):
+                self._generate_loop_call(skeleton, api, loop_info,
+                                         indent=indent, emit_null_guard=False)
+            else:
+                self._generate_single_call(skeleton, api, indent=indent,
+                                           emit_null_guard=False)
+
+        for comp in components:
+            comp_apis = [by_name[n] for n in comp if n in by_name]
+            if not comp_apis:
+                continue
+            head = comp_apis[0]
+            dependents = comp_apis[1:]
+            head_returns_ptr = bool(
+                head.return_info and '*' in (head.return_info.type or ''))
+
+            # Head call always runs (no guard, no whole-driver bail).
+            _emit(head, indent=1)
+
+            if dependents and head_returns_ptr:
+                # B1 nested-if: scope the head producer's consumers to its
+                # success. The independent NEXT component is a separate `comp`,
+                # so it renders OUTSIDE this `if`.
+                ret_name = f"ret_{head.function_name}"
+                skeleton.add_statement(SkeletonStatement(
+                    kind=StatementKind.IF_CHECK,
+                    code=f"if ({ret_name} != NULL) {{",
+                    variables=[ret_name],
+                    indent=1,
+                ))
+                for dep in dependents:
+                    _emit(dep, indent=2)
+                skeleton.add_statement(SkeletonStatement(
+                    kind=StatementKind.IF_CHECK,
+                    code="}",
+                    indent=1,
+                ))
+            else:
+                # Head doesn't gate (void/scalar return) — its dependents run
+                # at function scope (still no whole-driver bail).
+                for dep in dependents:
+                    _emit(dep, indent=1)
+
+    def _generate_single_call(
+        self,
+        skeleton: DriverSkeleton,
+        api: Api,
+        indent: int = 1,
+        emit_null_guard: bool = True,
+    ) -> None:
+        """Generate single API call.
+
+        ``indent`` controls the statement's nesting level (1 = function body;
+        the scoped-guard path uses 2 for calls inside a component's
+        ``if (producer != NULL) { ... }`` block). ``emit_null_guard`` toggles the
+        legacy whole-driver ``if (ret == NULL) return 0;`` error check — the
+        scoped-guard path disables it (component-scoped guards replace it) so an
+        independent producer's failure never bails the whole driver.
+        """
 
         # Build argument list
         args = []
@@ -809,18 +954,21 @@ class SkeletonGenerator:
             kind=StatementKind.API_CALL,
             code=call_code,
             api=api,
-            variables=args
+            variables=args,
+            indent=indent,
         )
         skeleton.add_statement(stmt)
 
-        # Add error check (if returns pointer)
-        if api.return_info and '*' in api.return_info.type:
+        # Add error check (if returns pointer). Whole-driver bail; the
+        # scoped-guard path (B) suppresses this and wraps dependents instead.
+        if emit_null_guard and api.return_info and '*' in api.return_info.type:
             ret_name = f"ret_{api.function_name}"
             check_code = f"if ({ret_name} == NULL) return 0;"
             check_stmt = SkeletonStatement(
                 kind=StatementKind.IF_CHECK,
                 code=check_code,
-                variables=[ret_name]
+                variables=[ret_name],
+                indent=indent,
             )
             skeleton.add_statement(check_stmt)
 
@@ -828,14 +976,17 @@ class SkeletonGenerator:
         self,
         skeleton: DriverSkeleton,
         api: Api,
-        loop_info: Dict
+        loop_info: Dict,
+        indent: int = 1,
+        emit_null_guard: bool = True,
     ) -> None:
         """Generate loop API call.
 
         LOOP_BOUND is filled deterministically with ``loop_info[max_iterations]``
         (or 100 default) so the LLM doesn't have to guess. LOOP_CONDITION is
         still LLM-only — it requires API-return semantics the rule layer can't
-        infer (cf. data study 2026-05).
+        infer (cf. data study 2026-05). ``indent`` / ``emit_null_guard`` flow
+        through to the inner call for the scoped-guard path (B).
         """
 
         loop_type = loop_info.get('loop_type', 'iterator')
@@ -859,16 +1010,19 @@ class SkeletonGenerator:
                   f"while ({cond_hole.get_placeholder()} "
                   f"&& __iter_count++ < {bound_value}) {{"),
             holes=[cond_hole.name],
+            indent=indent,
         )
         skeleton.add_statement(loop_start)
 
         # API call in loop body
-        self._generate_single_call(skeleton, api)
+        self._generate_single_call(skeleton, api, indent=indent + 1,
+                                   emit_null_guard=emit_null_guard)
 
         # Loop end
         loop_end = SkeletonStatement(
             kind=StatementKind.LOOP_END,
-            code="}"
+            code="}",
+            indent=indent,
         )
         skeleton.add_statement(loop_end)
 
