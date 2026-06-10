@@ -17,26 +17,28 @@ from liberator_adapter.extractors.base_extractor import BaseAPIExtractor
 
 logger = logging.getLogger(__name__)
 
-# SVF analysis on some libraries (libucl) doesn't converge — cap wall-time
-# and let the caller fall back to clang-only mode rather than thrash swap.
-# But on LARGE bitcode (libtiff/libvpx/libaom) the pointer analysis is
-# legitimately super-linear and needs well over the old 600s — which hard-killed
-# them into clang-only (no conditions.json) even though they built fine. The
-# extraction is one-time + disk-cached on success, so a generous cap is cheap
-# (only libs that genuinely need it pay it, once). Raised 600→1800s.
-# Override with LIBERATOR_SVF_TIMEOUT_SECS env var (e.g. 3600 for the biggest).
+# SVF analysis cost splits two ways; the timeout here and the RLIMIT_AS cap
+# below target each. TIME-bound libs (libtiff/libvpx) have large bitcode whose
+# pointer analysis is super-linear: MEASURED 2026-06 both timed out at 7200s
+# with TINY memory (libtiff 4.5GB, libvpx 7.7GB) — they need more WALL-TIME, not
+# RAM. The old 600s hard-killed them into clang-only (no conditions.json) even
+# though they built fine; raised default 600→1800s. For these set a long cap,
+# e.g. LIBERATOR_SVF_TIMEOUT_SECS=14400 (4h) — extraction is one-time + disk-
+# cached on success, so only libs that need it pay it, once. (MEMORY-bound libs
+# like libucl don't converge — that's the RLIMIT_AS cap below, not this.)
 _SVF_TIMEOUT_SECS = int(os.environ.get('LIBERATOR_SVF_TIMEOUT_SECS', '1800'))
 
-# Memory cap (RLIMIT_AS, in GB) for the SVF extractor child. SVF pointer
-# analysis on large / non-converging bitcode (libucl was observed at 29 GB and
-# still climbing) can thrash the whole — SHARED — host. Capping the child's
-# virtual address space makes a runaway fail its own malloc (→ extractor aborts
-# → caught → clang-only fallback) instead of triggering the host OOM-killer.
+# Memory cap (RLIMIT_AS, in GB) for the SVF extractor child. SVF on a non-
+# converging bitcode can thrash the whole — SHARED — host. Capping the child's
+# virtual address space makes a runaway fail its OWN malloc (→ std::bad_alloc →
+# extractor aborts → caught → clang-only fallback) instead of triggering the
+# host OOM-killer. VALIDATED 2026-06 on libucl: under a 48GB cap it aborted with
+# std::bad_alloc deep in ucl_parse_csexp at ~37GB RSS (virtual > 48GB) —
+# graceful clang-only, no host OOM. (libtiff/libvpx are NOT memory-bound —
+# 4.5/7.7GB — so the cap never bites them; their wall is the timeout above.)
 # 0 = no cap (default; preserves prior behaviour). Set e.g.
-# LIBERATOR_SVF_MEM_GB=64 for the memory-heavy libs (libtiff/libvpx/libucl) —
-# generous enough for a converging big-lib analysis, bounded so one extraction
-# can't eat a multi-user box. The timeout (above) bounds WALL-TIME; this bounds
-# MEMORY — a non-converging analysis can hit the memory wall before the clock.
+# LIBERATOR_SVF_MEM_GB=48 on a shared box so one extraction's virtual footprint
+# can't eat a multi-user host. Timeout bounds WALL-TIME; this bounds MEMORY.
 _SVF_MEM_GB = int(os.environ.get('LIBERATOR_SVF_MEM_GB', '0'))
 
 

@@ -107,9 +107,17 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 (default-on, fail-open): the merge ships only drivers
 #                                 that compile under the real coverage-build flags
 #                                 (`tools/merge_drivers/compile_validate.py`).
-#   LIBERATOR_SVF_TIMEOUT_SECS=N  SVF pointer-analysis cap (default 1800s; raised from
-#                                 600 for large-bitcode libs — libtiff/libvpx/libucl;
-#                                 super-linear, one-time + disk-cached).
+#   LIBERATOR_SVF_TIMEOUT_SECS=N  SVF pointer-analysis WALL-TIME cap (default 1800s;
+#                                 raised from 600). Measured 2026-06: libtiff/libvpx
+#                                 are TIME-bound (timed out at 7200s, only 4.5/7.7GB
+#                                 RAM) — set =14400 (4h) for those; one-time + disk-
+#                                 cached on success.
+#   LIBERATOR_SVF_MEM_GB=N        SVF MEMORY cap (RLIMIT_AS, GB; default 0=off) via
+#                                 preexec_fn. A non-converging analysis fails its OWN
+#                                 malloc → std::bad_alloc → clang-only fallback,
+#                                 instead of OOM-ing a shared host. Validated on libucl
+#                                 (=48 → bad_alloc at ~37GB RSS/virtual>48GB, graceful;
+#                                 libucl is the pathological non-converging case).
 #   LOGICFUZZ_{Z3_MODE,CONSTRUCT_MODE,NO_CACHE,TRIAGE_INCONCLUSIVE,
 #              TRIAGE_PREFIX_LEN,DRIVERS_ROOT,FI_ENDPOINT,BINDING_TELEMETRY}   config values.
 LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 \
@@ -433,7 +441,14 @@ new work from `docs/generation.md` (open bottleneck + roadmap):
 - Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
 - TLV-aware seed generation based on format analysis. (Done in part: `scripts/seed_discovery.py` feeds the project's REAL on-disk seeds — `*.icc`/`*.it8`/OSS-Fuzz `*_seed_corpus.zip` — into fuzzing; **T10** (`LOGICFUZZ_FORMAT_INFER`, gated) now also *synthesizes* a minimal front-gate-passing seed from inferred magic when no real seed ships. Full TLV-aware *structural* generation — a valid deep file, not just the leading gate — is still TODO.)
 - Cross-phase information flow (write-only JSON state, WorkingMemory prereq for F6) — see `generation.md`.
-- SVF big-lib cap pending — `LIBERATOR_SVF_TIMEOUT_SECS` raised to 1800s for large-bitcode libs (libtiff/libvpx); libucl is a known non-converging/memory-heavy pathological case that may still exceed it.
+- SVF big-lib cap — **LANDED + measured (2026-06).** Both knobs in place:
+  `LIBERATOR_SVF_TIMEOUT_SECS` (wall-time) + `LIBERATOR_SVF_MEM_GB` (RLIMIT_AS,
+  graceful clang-only on OOM). Measured peak RSS / failure mode: **libtiff 4.5GB
+  + libvpx 7.7GB are TIME-bound** (both timed out at 7200s — need ≥4h timeout, NOT
+  more RAM); **libucl is MEMORY-pathological** (std::bad_alloc in `ucl_parse_csexp`
+  at ~37GB RSS / virtual>48GB under a 48GB cap — non-converging, practical outcome
+  is clang-only). Open: a longer-timeout (≥4h) re-run of libtiff/libvpx would
+  actually land their conditions.json (memory is a non-issue for them).
 - Skeleton-rendering validity fix (void-array / opaque-type / internal-header) — **LANDED** (`skeleton_generator.py`, commit `777cef0c`): the renderer emits valid C/C++ *by construction* — void/`void*` array element → `uint8_t` byte buffer; opaque/non-scalar types → pointers (never value arrays of an incomplete type); struct values `{0}`-init (not `=0`/NULL-compared); internal opaque typenames (`_cmsContext_struct*`) → `void*`; `*_internal.h` filtered; cleanup only destroys declared `ret_<api>` handles. lcms re-render: void-arrays 6→0, opaque value-arrays 8→0, internal typenames 6→0, undeclared `ret_*` 8→0; previously-broken skeletons now compile (gcc c11 + g++ c++14). Complements the compile-validation gate — fewer invalid drivers to exclude → thicker merged portfolio.
 
 ## Failed Attempts / Lessons
