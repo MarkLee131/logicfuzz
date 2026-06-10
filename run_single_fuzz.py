@@ -733,6 +733,41 @@ def _compile_validate_candidates(sources, benchmark, work_dirs):
   return valid
 
 
+def _edges_weights_for(sources, work_dirs):
+  """Per-driver dispatch weights from preflight's edges_15s.
+
+  Liberator's "a driver that produces seeds (interacts with the library) is
+  high-value" signal — our preflight already smoke-fuzzes each driver 15s and
+  records ``edges_seen`` (written to ``merged/preflight.json``). We feed that as
+  CDF dispatch weights so the merged fuzzer spends MORE of its per-input budget
+  on high-interaction sub-drivers (instead of UNIFORM ``selector % N``). Returns
+  ``None`` when there's no edge data (→ uniform dispatch, prior behaviour), or
+  when all weights tie. Drivers without data get the MEDIAN weight (neutral, not
+  penalised). Weights are aligned to the merge's name-sorted driver order
+  (``SynthesizedDriver.from_paths`` sorts by ``path.name``)."""
+  import json
+  from pathlib import Path
+  try:
+    payload = json.loads(
+        (Path(work_dirs.base) / 'merged' / 'preflight.json').read_text())
+    results = payload.get('results') or []
+  except (OSError, ValueError):
+    return None
+  edges_by_name = {Path(r['driver_path']).name: float(r.get('edges_seen') or 0)
+                   for r in results if r.get('driver_path')}
+  known = sorted(edges_by_name[Path(s).name] for s in sources
+                 if Path(s).name in edges_by_name)
+  if not known:
+    return None
+  median = known[len(known) // 2]
+  default = median if median > 0 else 1.0
+  ordered = sorted(sources, key=lambda p: Path(p).name)  # match from_paths
+  weights = [max(edges_by_name.get(Path(s).name, default), 1.0) for s in ordered]
+  if len(set(weights)) <= 1:
+    return None
+  return weights
+
+
 def _maybe_merge_drivers(benchmark: Benchmark,
                          work_dirs: WorkDirs,
                          trial_results: List) -> Optional[str]:
@@ -857,11 +892,16 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     return None
 
   try:
+    # Edge-weighted CDF dispatch: give high-interaction sub-drivers (more
+    # edges_15s in preflight — Liberator's seed-producing = high-value signal) a
+    # larger share of the fuzzer's per-input dispatch budget. Falls back to
+    # UNIFORM when no preflight edge data exists (prior behaviour).
+    _w = _edges_weights_for(successful_sources, work_dirs)
     drv = SynthesizedDriver.from_paths(
         successful_sources,
-        mode=DispatchMode.UNIFORM,
+        mode=DispatchMode.CDF if _w else DispatchMode.UNIFORM,
         position=SelectorPosition.TAIL,
-        weights=None,
+        weights=_w,
     )
     out_dir = Path(work_dirs.base) / 'merged'
     out_dir.mkdir(parents=True, exist_ok=True)
