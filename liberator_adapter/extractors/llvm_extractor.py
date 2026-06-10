@@ -27,6 +27,31 @@ logger = logging.getLogger(__name__)
 # Override with LIBERATOR_SVF_TIMEOUT_SECS env var (e.g. 3600 for the biggest).
 _SVF_TIMEOUT_SECS = int(os.environ.get('LIBERATOR_SVF_TIMEOUT_SECS', '1800'))
 
+# Memory cap (RLIMIT_AS, in GB) for the SVF extractor child. SVF pointer
+# analysis on large / non-converging bitcode (libucl was observed at 29 GB and
+# still climbing) can thrash the whole — SHARED — host. Capping the child's
+# virtual address space makes a runaway fail its own malloc (→ extractor aborts
+# → caught → clang-only fallback) instead of triggering the host OOM-killer.
+# 0 = no cap (default; preserves prior behaviour). Set e.g.
+# LIBERATOR_SVF_MEM_GB=64 for the memory-heavy libs (libtiff/libvpx/libucl) —
+# generous enough for a converging big-lib analysis, bounded so one extraction
+# can't eat a multi-user box. The timeout (above) bounds WALL-TIME; this bounds
+# MEMORY — a non-converging analysis can hit the memory wall before the clock.
+_SVF_MEM_GB = int(os.environ.get('LIBERATOR_SVF_MEM_GB', '0'))
+
+
+def _svf_preexec():
+    """preexec_fn for the extractor subprocess: apply RLIMIT_AS (Unix). No-op
+    when uncapped or `resource` is unavailable; best-effort (never raises)."""
+    if _SVF_MEM_GB <= 0:
+        return
+    try:
+        import resource
+        nbytes = _SVF_MEM_GB * 1024 ** 3
+        resource.setrlimit(resource.RLIMIT_AS, (nbytes, nbytes))
+    except Exception:
+        pass
+
 # Disk cache for SVF outputs keyed by bitcode hash. SVF is deterministic
 # given a fixed binary version + same .bc input, so re-extraction is
 # wasted CPU. Override path with LIBERATOR_SVF_CACHE_DIR.
@@ -318,6 +343,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
                     result = subprocess.run(
                         cmd, env=env, capture_output=True, text=True,
                         timeout=_SVF_TIMEOUT_SECS,
+                        preexec_fn=_svf_preexec if _SVF_MEM_GB > 0 else None,
                     )
                 except subprocess.TimeoutExpired:
                     logger.error(
