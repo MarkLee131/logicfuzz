@@ -666,6 +666,73 @@ def _preflight_filter_candidates(sources, work_dirs):
   return [s for s in sources if str(s) not in rejected]
 
 
+def _compile_validate_candidates(sources, benchmark, work_dirs):
+  """Drop merge candidates that don't COMPILE under the OSS-Fuzz build flags.
+
+  Compiles each candidate TU inside the project's real OSS-Fuzz container with
+  ``$CC $CFLAGS -fsyntax-only`` (plus the coverage-build flags — the stricter
+  measurement build), in ONE container, once. A TU that fails is EXCLUDED from
+  the merge instead of being silently ``|| continue``-skipped + weak-stubbed
+  into a no-op slot (which loses the driver and reads 0 coverage on it).
+
+  Fails OPEN: on any infra problem (docker unavailable, no project image,
+  container hiccup) it returns the sources unchanged and logs the gap — it must
+  never BLOCK a merge, only PRUNE known-bad TUs (the weak-stub net still backs
+  it up). A run can opt out via ``LOGICFUZZ_SKIP_COMPILE_VALIDATE=1``.
+  """
+  from pathlib import Path
+  if os.environ.get('LOGICFUZZ_SKIP_COMPILE_VALIDATE'):
+    logger.info('merge_drivers: compile-validation skipped '
+                '(LOGICFUZZ_SKIP_COMPILE_VALIDATE set)', trial=0)
+    return sources
+  project = getattr(benchmark, 'project', None)
+  if not project:
+    logger.warning('merge_drivers: no benchmark.project; skipping '
+                   'compile-validation (merging unvetted)', trial=0)
+    return sources
+  try:
+    from tools.merge_drivers.compile_validate import validate_compilable
+  except ImportError as exc:
+    logger.warning(f'merge_drivers: compile-validation unavailable ({exc}); '
+                   f'merging unvetted', trial=0)
+    return sources
+
+  valid, excluded = validate_compilable([Path(s) for s in sources], project)
+  if excluded:
+    # Visible, not silent: log every excluded driver + the first error line so
+    # the loss is auditable (and confirm it drops the known-invalid ones).
+    for src, reason in excluded:
+      first = (reason or '').strip().splitlines()
+      head = first[0] if first else 'compile error'
+      logger.info(
+          f'merge_drivers: EXCLUDED non-compiling driver {Path(src).name} '
+          f'— {head}', trial=0)
+    logger.info(
+        f'merge_drivers: compile-validation dropped {len(excluded)} of '
+        f'{len(sources)} candidate(s) that fail to build under the OSS-Fuzz '
+        f'coverage flags (would have been weak-stubbed no-ops): '
+        f'{sorted(Path(s).name for s, _ in excluded)}', trial=0)
+    # Persist a machine-readable record alongside the merged output.
+    try:
+      import json
+      rep = {'project': project,
+             'valid': sorted(Path(s).name for s in valid),
+             'excluded': [{'driver': Path(s).name,
+                           'reason': (r or '').strip()[:1000]}
+                          for s, r in excluded]}
+      rep_dir = Path(work_dirs.base) / 'merged'
+      rep_dir.mkdir(parents=True, exist_ok=True)
+      (rep_dir / 'compile_validation.json').write_text(
+          json.dumps(rep, indent=2))
+    except Exception:  # noqa: BLE001 — reporting is best-effort
+      pass
+  else:
+    logger.info(
+        f'merge_drivers: compile-validation — all {len(sources)} candidate(s) '
+        f'compile under the OSS-Fuzz flags', trial=0)
+  return valid
+
+
 def _maybe_merge_drivers(benchmark: Benchmark,
                          work_dirs: WorkDirs,
                          trial_results: List) -> Optional[str]:
@@ -754,6 +821,27 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     logger.info(
         f'merge_drivers: skipping (only {len(successful_sources)} '
         f'candidate(s) survived preflight; need ≥2 to merge)', trial=0)
+    return None
+
+  # === Compile-validation: keep the MERGED harness VALID ===
+  # First principle: the merge must ship only sub-drivers that COMPILE under the
+  # real OSS-Fuzz build flags. Preflight (above) only drops crash/no-progress —
+  # and only for drivers that HAD a host-runnable binary; a COMPILE-INVALID
+  # driver never built one, so "couldn't vet" kept it. Those invalid TUs then
+  # get ``|| continue``-skipped in the merged build and weak-stubbed into silent
+  # no-op slots — the portfolio loses them and coverage replay reads 0 on them
+  # (the address-build vs coverage-build divergence). We compile each candidate
+  # in the project's OSS-Fuzz container under the COVERAGE-build flags
+  # (-fsyntax-only, one container) and EXCLUDE every TU that fails, so both the
+  # address build and the coverage build compile the identical valid set. The
+  # ``|| continue`` + weak stub stay as a now-rarely-firing SAFETY NET.
+  successful_sources = _compile_validate_candidates(
+      successful_sources, benchmark, work_dirs)
+  if len(successful_sources) < 2:
+    logger.info(
+        f'merge_drivers: skipping (only {len(successful_sources)} '
+        f'candidate(s) survived compile-validation; need ≥2 to merge)',
+        trial=0)
     return None
 
   try:
