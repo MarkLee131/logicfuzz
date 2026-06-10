@@ -602,9 +602,46 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
 
         Builds project ``<gen>-cov`` so the profile-instrumented binary lands in
         build/out/<gen>-cov and does NOT clobber the sancov/libFuzzer binary in
-        build/out/<gen> that the fuzzer runs. The cov project shares the address
-        build's docker image (via ``docker tag``) so we skip a second
-        build_image; only ``build_fuzzers --sanitizer coverage`` re-runs.
+        build/out/<gen> that the fuzzer runs.
+
+        CRITICAL — the LIBRARY itself must be (re)compiled with ``-sanitizer
+        coverage``, not just the harness. We must NOT reuse the address build's
+        image (``docker tag``), because:
+
+          * The address image (and any OSS-Fuzz build-cache image it derives
+            from) carries the library PRE-BUILT with ``-sanitizer address``
+            objects sitting in the in-source tree (e.g. lcms builds in-source
+            under ``/src/lcms``: ``./configure && make`` leaves ``*.o`` +
+            ``src/.libs/liblcms2.a`` in the git working tree, which is part of
+            the image layers).
+          * On the cov ``build_fuzzers`` run, build.sh re-runs but ``make`` sees
+            those up-to-date objects and is a no-op — so the library keeps its
+            NON-coverage objects and ONLY the harness gets coverage mapping.
+          * ``--clean`` does NOT help: it only wipes ``/out`` and ``/work``, not
+            the in-source ``/src/<lib>`` build tree.
+
+        Result was an instrumented harness linked against a non-coverage library
+        → ``llvm-cov`` reported ONLY the harness in those cells (~1 file) while
+        other cells happened to get the full library (~22 files) → the per-cell
+        denominator swung wildly and A/B cells were not comparable.
+
+        Fix (option A — don't reuse the address-built library):
+          1. Build the cov project image FRESH from its own Dockerfile (the cov
+             project dir is a full mirror set up in ``_setup_oss_fuzz_project``)
+             instead of tagging the address image.
+          2. SCRUB the in-source build artifacts inside that image and commit the
+             clean source tree back to ``gcr.io/oss-fuzz/<cov>`` — ``git clean
+             -dxf`` + ``git checkout -- .`` in every git working tree under
+             ``/src`` (handles multi-clone projects like c-ares+googletest), plus
+             a defensive sweep of stray ``*.o``/``*.a``/``*.lo``/``*.la`` for
+             non-git in-source builds. ``build_fuzzers`` spins up its OWN fresh
+             container from the image, so the scrub MUST be committed into the
+             image to persist into that build.
+          3. Run ``build_fuzzers --sanitizer coverage --clean`` so build.sh's
+             ``configure && make`` recompiles the LIBRARY with coverage CFLAGS.
+
+        Accepts the slowdown (a full library rebuild per cov build, several
+        minutes) — correctness over speed.
         """
         assert self.coverage_project_name, "coverage_project_name unset (setup not run)"
         logger.info(f"Building coverage image for {self.coverage_project_name}...")
@@ -612,32 +649,44 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
         try:
             oss_fuzz_dir = self._get_oss_fuzz_dir()
             helper_py = oss_fuzz_dir / "infra" / "helper.py"
+            cov_image = f"gcr.io/oss-fuzz/{self.coverage_project_name}"
 
-            # Reuse the already-built project image under the cov project name.
-            tag_cmd = [
-                "docker", "tag",
-                f"gcr.io/oss-fuzz/{self.generated_project_name}",
-                f"gcr.io/oss-fuzz/{self.coverage_project_name}",
-            ]
-            tag_res = subprocess.run(tag_cmd, capture_output=True, text=True)
-            if tag_res.returncode != 0:
+            # (1) Build the cov image FRESH from its own Dockerfile. Do NOT
+            # `docker tag` the address image — that would inherit the
+            # address-instrumented (or build-cache) library objects in-source.
+            logger.info("Building fresh cov project image (no address reuse)...")
+            img_res = subprocess.run(
+                ["python3", str(helper_py), "build_image", "--no-pull",
+                 self.coverage_project_name],
+                capture_output=True, text=True, timeout=1800)
+            if img_res.returncode != 0:
+                _tail = ((img_res.stdout or "") + (img_res.stderr or ""))[-3000:]
+                logger.warning("Failed to build cov image (tail):\n%s", _tail)
+                return False
+
+            # (2) Scrub the in-source build tree inside the image and commit the
+            # clean source back, so the upcoming `build_fuzzers` recompiles the
+            # library from clean sources (with coverage CFLAGS) rather than
+            # reusing pre-built non-coverage objects.
+            if not self._scrub_insource_artifacts(cov_image):
                 logger.warning(
-                    "docker tag for cov image failed (%s); falling back to "
-                    "build_image", tag_res.stderr[:300])
-                subprocess.run(
-                    ["python3", str(helper_py), "build_image", "--no-pull",
-                     self.coverage_project_name],
-                    capture_output=True, text=True, timeout=1800)
+                    "In-source artifact scrub failed; coverage build may reuse "
+                    "non-coverage library objects (report would miss lib files)")
 
+            # (3) Build coverage fuzzers from the clean source. `--clean` wipes
+            # /out + /work; the scrub above handles the in-source tree that
+            # --clean cannot reach.
             build_fuzzers_cmd = [
                 "python3", str(helper_py),
-                "build_fuzzers", "--sanitizer", "coverage",
+                "build_fuzzers", "--sanitizer", "coverage", "--clean",
                 self.coverage_project_name
             ]
-            # Increase timeout for coverage build (20 minutes)
+            # Full library rebuild — give it the same headroom as the address
+            # build (20 minutes).
             result = subprocess.run(build_fuzzers_cmd, capture_output=True, text=True, timeout=1200)
             if result.returncode != 0:
-                logger.warning(f"Failed to build coverage image: {result.stderr[:500]}")
+                _tail = ((result.stdout or "") + (result.stderr or ""))[-3000:]
+                logger.warning("Failed to build coverage fuzzers (tail):\n%s", _tail)
                 return False
 
             return True
@@ -647,6 +696,67 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
         except Exception as e:
             logger.warning(f"Coverage build failed: {e}")
             return False
+
+    def _scrub_insource_artifacts(self, cov_image: str) -> bool:
+        """Remove in-source build artifacts from ``cov_image`` and commit back.
+
+        Many OSS-Fuzz projects build IN-SOURCE (WORKDIR is the cloned repo;
+        ``configure && make`` leaves ``*.o`` / ``*.a`` / ``.libs/`` inside the
+        git working tree). Those artifacts live in the image's layers, so a
+        re-run of build.sh under ``--sanitizer coverage`` would skip recompiling
+        the library (``make`` no-op). We wipe them here and commit the cleaned
+        source back into the image so the subsequent ``build_fuzzers`` rebuilds
+        the library from scratch with coverage instrumentation.
+
+        Returns True on success (image re-committed), False otherwise.
+        """
+        tmp_container = f"lf-covscrub-{self.coverage_project_name}"
+        # Best-effort remove any stale container from a prior run.
+        subprocess.run(["docker", "rm", "-f", tmp_container],
+                       capture_output=True, text=True)
+
+        # In every git repo under /src: drop all untracked/ignored build output
+        # (-x covers .gitignore'd artifacts like *.o / .libs) and restore any
+        # tracked files the build modified in place. Then a defensive sweep for
+        # in-source builds that are NOT git repos. ``|| true`` keeps the script
+        # from aborting on a repo with no changes / a detached state.
+        scrub_sh = (
+            "set -u; "
+            "for d in $(find /src -maxdepth 3 -type d -name .git 2>/dev/null); do "
+            "  r=$(dirname \"$d\"); "
+            "  echo \"scrubbing git repo: $r\"; "
+            "  git -C \"$r\" clean -dxf >/dev/null 2>&1 || true; "
+            "  git -C \"$r\" checkout -- . >/dev/null 2>&1 || true; "
+            "done; "
+            "find /src -type f \\( -name '*.o' -o -name '*.a' -o -name '*.lo' "
+            "  -o -name '*.la' \\) -delete 2>/dev/null || true; "
+            "echo scrub-done"
+        )
+        run_res = subprocess.run(
+            ["docker", "run", "--name", tmp_container, cov_image,
+             "/bin/bash", "-c", scrub_sh],
+            capture_output=True, text=True, timeout=600)
+        if run_res.returncode != 0:
+            logger.warning("Artifact-scrub container failed: %s",
+                           ((run_res.stdout or "") + (run_res.stderr or ""))[-500:])
+            subprocess.run(["docker", "rm", "-f", tmp_container],
+                           capture_output=True, text=True)
+            return False
+        logger.info("In-source scrub output: %s",
+                    (run_res.stdout or "").strip()[-300:])
+
+        # Commit the cleaned source tree back into the cov image so the next
+        # `build_fuzzers` (a fresh container from this image) sees clean sources.
+        commit_res = subprocess.run(
+            ["docker", "commit", tmp_container, cov_image],
+            capture_output=True, text=True, timeout=300)
+        subprocess.run(["docker", "rm", "-f", tmp_container],
+                       capture_output=True, text=True)
+        if commit_res.returncode != 0:
+            logger.warning("Failed to commit scrubbed cov image: %s",
+                           (commit_res.stderr or "")[:300])
+            return False
+        return True
 
     def _run_fuzzer(self) -> subprocess.Popen:
         """Start fuzzer process."""

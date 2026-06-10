@@ -19,8 +19,13 @@ logger = logging.getLogger(__name__)
 
 # SVF analysis on some libraries (libucl) doesn't converge — cap wall-time
 # and let the caller fall back to clang-only mode rather than thrash swap.
-# Override with LIBERATOR_SVF_TIMEOUT_SECS env var.
-_SVF_TIMEOUT_SECS = int(os.environ.get('LIBERATOR_SVF_TIMEOUT_SECS', '600'))
+# But on LARGE bitcode (libtiff/libvpx/libaom) the pointer analysis is
+# legitimately super-linear and needs well over the old 600s — which hard-killed
+# them into clang-only (no conditions.json) even though they built fine. The
+# extraction is one-time + disk-cached on success, so a generous cap is cheap
+# (only libs that genuinely need it pay it, once). Raised 600→1800s.
+# Override with LIBERATOR_SVF_TIMEOUT_SECS env var (e.g. 3600 for the biggest).
+_SVF_TIMEOUT_SECS = int(os.environ.get('LIBERATOR_SVF_TIMEOUT_SECS', '1800'))
 
 # Disk cache for SVF outputs keyed by bitcode hash. SVF is deterministic
 # given a fixed binary version + same .bc input, so re-extraction is

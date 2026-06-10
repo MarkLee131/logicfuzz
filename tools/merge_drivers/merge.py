@@ -403,9 +403,15 @@ class SynthesizedDriver:
     def emit_entry(self) -> str:
         n = self.driver_count
         decl_prefix = 'extern "C" ' if self.is_cpp else ""
+        # Emit a __weak DEFAULT DEFINITION (not a forward decl) per sub-driver:
+        # when the driver's TU compiles, its STRONG definition overrides this
+        # stub; when the TU was skipped (non-compiling → no object, see
+        # emit_oss_fuzz_build_snippet), the weak stub provides the symbol so the
+        # link still succeeds and that slot is a harmless no-op.
         declarations = "\n".join(
-            f'{decl_prefix}int {d.renamed_function}'
-            f'(const uint8_t *Data, size_t Size);'
+            f'{decl_prefix}__attribute__((weak)) int {d.renamed_function}'
+            f'(const uint8_t *Data, size_t Size) '
+            f'{{ (void)Data; (void)Size; return 0; }}'
             for d in self.drivers
         )
         body_var = "remainData" if self.mode == DispatchMode.UNIFORM else "bodyData"
@@ -482,11 +488,17 @@ class SynthesizedDriver:
         ``extra_libs`` and ``extra_includes`` are passed verbatim — caller
         is responsible for matching the project's existing link line.
         """
+        # A non-compiling sub-driver must NOT kill the whole merged build:
+        # skip it (produce no .o, continue the loop). Its symbol is still
+        # provided by the weak stub in entry.{c,cpp}, so the link succeeds
+        # and the slot becomes a harmless no-op.
         c_compile = (
-            f'  $CC $CFLAGS {extra_includes} -c "$src" -o "$obj"\n'
+            f'  $CC $CFLAGS {extra_includes} -c "$src" -o "$obj" '
+            f'|| {{ echo "merged: skip non-compiling $src"; continue; }}\n'
         )
         cpp_compile = (
-            f'  $CXX $CXXFLAGS {extra_includes} -c "$src" -o "$obj"\n'
+            f'  $CXX $CXXFLAGS {extra_includes} -c "$src" -o "$obj" '
+            f'|| {{ echo "merged: skip non-compiling $src"; continue; }}\n'
         )
         per_file = (
             f'for src in {synth_dir_var}/*.c {synth_dir_var}/*.cpp '
