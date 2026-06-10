@@ -119,7 +119,7 @@ All of these passes are deterministic — zero LLM, zero token cost.
 > recover nothing and are byte-identical (no misbinding, no regression). **This
 > is the first dent in the binding-layer ceiling (#14) — the previously-#1 open
 > bottleneck.** *Evidence level (2026-06-08):* **construction proven** — offline
-> probe (`scripts/factory_chain_probe.py`) *and* a live run: the emitted skeleton
+> probe (since removed) *and* a live run: the emitted skeleton
 > set contains a wired `cmsDoTransform` chain
 > (`cmsCreate_sRGBProfile → cmsCreateTransform → … → cmsDoTransform →
 > cmsDeleteTransform`, `n_factory_recovered=2`), and the driver **compiles** the
