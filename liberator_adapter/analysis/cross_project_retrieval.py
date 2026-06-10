@@ -22,10 +22,15 @@ This module is the deterministic structure-signature core — pure & unit-tested
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Set, Tuple
+
+# Repo root (this file = <root>/liberator_adapter/analysis/cross_project_retrieval.py).
+_ROOT = Path(__file__).resolve().parents[2]
+_DEDUP_KEEP = _ROOT / "results" / "xproj_index" / "dedup_keep.json"
 
 # Lifecycle / entry role hints by name token (deterministic, language-agnostic).
 _ENTRY_TOK = ("parse", "open", "load", "decode", "read", "begin", "scan",
@@ -188,17 +193,43 @@ def render_hints(hits: Sequence[DriverSignature], *, max_apis: int = 12) -> str:
     return "\n".join(lines)
 
 
+def _load_dedup_keep() -> Optional[Set[Tuple[str, str]]]:
+    """Deduped corpus keep-list as a set of ``(project, filename)`` pairs.
+
+    Built by ``scripts/dedup_xproj_index.py`` (drops vendored near-copies via
+    source-embedding cosine + libFuzzer-selftest noise — 4757→2217). Returns
+    None when the file is absent → no filtering (use the whole corpus, the
+    pre-dedup behaviour). Matching by (project, filename) is robust to how
+    ``root`` is passed (relative vs absolute)."""
+    try:
+        data = json.loads(_DEDUP_KEEP.read_text())
+    except (OSError, ValueError):
+        return None
+    keep = {(Path(p).parent.name, Path(p).name) for p in (data.get("keep_paths") or [])}
+    return keep or None
+
+
 def load_corpus(root: Path,
-                exts: Sequence[str] = (".c", ".cc", ".cpp")) -> List[DriverSignature]:
-    """Build signatures for every driver under ``root/<project>/*.{c,cc,cpp}``.
-    Best-effort: unreadable files skipped. Returns [] if root absent."""
+                exts: Sequence[str] = (".c", ".cc", ".cpp", ".cxx", ".c++")
+                ) -> List[DriverSignature]:
+    """Build signatures for every driver under ``root/<project>/*.{c,cc,cpp,cxx,c++}``.
+    (Bucket ``human_written_targets`` extension histogram: .cpp 1840 / .cc 1496 /
+    .c 1363 / .cxx 56 / .c++ 2 — the default set must cover .cxx/.c++ or 58 C++
+    harnesses silently drop. ``.suffix.lower()`` folds ``.C`` onto ``.c``.)
+    Best-effort: unreadable files skipped. Returns [] if root absent.
+    When ``results/xproj_index/dedup_keep.json`` exists, the corpus is restricted
+    to the deduped keep-list (vendored near-copies + libFuzzer-selftest noise
+    removed, 4757→2217); absent → the whole corpus (pre-dedup behaviour)."""
     out: List[DriverSignature] = []
     root = Path(root)
     if not root.is_dir():
         return out
+    keep = _load_dedup_keep()
     for proj_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         for f in sorted(proj_dir.iterdir()):
             if f.suffix.lower() not in exts or not f.is_file():
+                continue
+            if keep is not None and (proj_dir.name, f.name) not in keep:
                 continue
             try:
                 src = f.read_text(errors="replace")

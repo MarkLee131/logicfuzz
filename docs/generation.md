@@ -300,8 +300,74 @@ pending — start gated like factory/diversity/lean did):**
   tests incl. the no-mis-pin regression.
 
 Still open: **F6 Phase C CEGAR loop** (prereq WorkingMemory — T12 is a *precursor*,
-not the principled loop), **T7** cross-project driver retrieval (needs corpus +
-decision). **Rejected (do not re-litigate):** T9 static CFG reachability
+not the principled loop), **T7** cross-project driver retrieval (corpus + embedding
+index now BUILT — see below; re-rank wiring into `cross_project_retrieval` + the
+coverage A/B remain). **Rejected (do not re-litigate):** T9 static CFG reachability
 weighting — measured dependency graphs are too flat (max depth 1–3) and planner
 blind spots are depth-independent, so reranking can't recover them; the root cause
 is the binding layer, not ranking.
+
+### T7 cross-project corpus + embedding index (built 2026-06-09)
+
+Dataset facts for the paper's data-section / threats-to-validity.
+
+**Corpus source (design correction).** The original plan said "all OSS-Fuzz drivers
+via the FuzzIntrospector (FI) API," but FI only serves harness *paths/metadata*
+(`/harness-source-and-executable`); `/source-code` and any all-projects listing
+endpoint return 404. Built instead from the OSS-Fuzz-gen GCS bucket
+`oss-fuzz-llm-public/human_written_targets/` (`data_prep/extract_all_fuzz_drivers.py`,
+anonymous, $0): **484 projects / 4757 C/C++ harnesses** (pure driver source — no
+`.h` in the bucket; the loader ext set must cover `.cxx`/`.c++` or 58 C++ harnesses
+silently drop).
+
+**Embedding index** (`results/xproj_index/`, `scripts/build_xproj_embeddings.py`,
+5 parallel shards → merge): OpenAI `text-embedding-3-large` (3072-dim). Input is
+comment-stripped first (reusing the structure-sig `_COMMENT_RE` — every driver's
+identical license header would otherwise inflate pairwise cosine and dilute the
+API-usage signal) then truncated by *actual* tokens (tiktoken cl100k_base, cap
+8000). One-time cost **$0.315** (2,421,735 tok × $0.13/1M — far under a ~1k/file
+estimate because drivers are small).
+
+**Token distribution (post-strip):** median **239**, mean 573, p90 1000, p99 6571,
+max 32946.
+
+**Truncation reaches 0.95% (45/4757); the genuinely-affected share is 0.29%:**
+
+| bucket | content | n | retrieval meaning |
+|---|---|---|---|
+| A | libFuzzer engine self-tests (`FuzzerUnittest.cpp`, `MultipleConstraintsOnSmallInputTest.cpp`) | 11 | noise, not a library driver → name-blacklist |
+| B | vendored framework dispatchers (`entry.cpp` ×9 cryptofuzz, `ssl_ctx_api.cc` ×11 boringssl) | 20 | cross-project near-duplicates |
+| C | genuine large single-library drivers (sqlite3 `fuzzcheck.c`, libxml2 `api.c`, njs `njs_shell.c`, nodejs `wasm-compile.cc`, msquic `spinquic.cpp`, …) | 14 | **the only real truncation loss = 0.29%**, most keep 60–97% (worst 24%) |
+
+**Two buffers (why 0.29% truncation is tolerable):** the embedding is a *re-rank
+fallback* over structure-sig, and structure-sig uses the FULL untruncated API-call
+list (`extract_api_calls` over the whole file) — so a truncated driver keeps a
+complete structural signature; only its embedding vector is partial.
+
+**Corpus hygiene — DONE (`scripts/dedup_xproj_index.py`, wired into `load_corpus`).**
+The corpus was **53% redundant**: of 4757 drivers, **2508 were vendored near-copies**
+(same harness copied across projects — `fuzzer`/`onefile` ×11, `dtls_server`/`client`/
+`driver`/`spki`/`dtls_client` ×10, …) + **32 libFuzzer-selftest/runner-stub noise**,
+leaving **2217 unique**. Detection = SOURCE-embedding cosine > 0.97 (≈identical text)
+— SOURCE, not template, embedding, so genuine "same-construction, different-library"
+analogs are NOT collapsed. `load_corpus` auto-restricts to `dedup_keep.json` when
+present (absent → whole corpus). This is why a query for a heavily-vendored library
+(libpng) used to return its own driver's 9 copies — dedup collapses them to 1.
+
+**Reference-value retrieval axis (the construction-template re-rank).** Raw-source
+embedding ranks by DOMAIN (vocabulary), but reference value = transferable
+CONSTRUCTION shape. So each driver is also distilled (gpt-4o-mini, one-time, grounded
+on its actual extracted calls + regex-detected `entry_type`) into a library-agnostic
+construction template (input-wiring idiom + role sequence `create→…→destroy` +
+resource shape), and the TEMPLATE is embedded → `templates_embeddings.npy`. Leave-one-out
+(`scripts/xproj_construction_probe.py`): template-embedding beats source-embedding on
+**cross-domain-transferable@5 = 35.5% vs 14%** (same construction, different domain —
+the high-value references domain-clustering misses), and on construction@5 (43% vs 26%);
+source-embedding wins domain@5 (the two are orthogonal axes). **Rejected (don't
+re-litigate): RRF fusion** of embedding+role+api-set rankings LOST to embedding-alone
+(domain@5 rrf 40% < emb 46.5%) — equal-weight fusion drags the strong signal toward the
+weak literal ones; relevance is a semantic judgment for the LLM, not a hand-weighted sum.
+**Caveat:** libpng was an unrepresentative worst case (9 self-copies); most libs have 0–3
+(libtiff/tinygltf/sqlite3/lcms = 0), and for them retrieval surfaces genuine cross-project
+analogs (re2→boost_regex, tinygltf→readstat parsers). The decisive test remains the
+end-to-end hint A/B; same-domain/construction@K are proxies.
