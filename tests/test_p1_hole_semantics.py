@@ -24,6 +24,38 @@ def _api(name, args=None, ret="void"):
             "return_type": ret, "is_vararg": False, "namespace": []}
 
 
+def test_tier1_fuzzable_holes_gated():
+    """Tier 1 (LOGICFUZZ_FUZZABLE_HOLES): tunable CONFIG scalars/enums get a
+    FUZZ_DERIVE 'derive from the fuzz input' directive so the fuzzer sweeps
+    them; validity-required args (handles) stay FIXED; gate-off is unchanged."""
+    from types import SimpleNamespace
+    from liberator_adapter.analysis.api_semantic_model import ArgRole
+    from liberator_adapter.analysis import hole_semantics as H
+
+    cfg = SimpleNamespace(role=ArgRole.CONFIG, type_str="double", index=1, pairs_with=None)
+    handle = SimpleNamespace(role=ArgRole.HANDLE_IN, type_str="void *", index=0, pairs_with=None)
+    saved = os.environ.pop("LOGICFUZZ_FUZZABLE_HOLES", None)
+    try:
+        # gate OFF: the float CONFIG has no FUZZ_DERIVE (the gap that lets the
+        # LLM hardcode a constant — gamma=1.0 — so the fuzzer never varies it).
+        assert "FUZZ_DERIVE" not in (H._arg_intent(cfg, "set_gamma") or "")
+        # gate ON: tunable scalar → FUZZ_DERIVE; a handle stays FIXED (never fuzzed).
+        os.environ["LOGICFUZZ_FUZZABLE_HOLES"] = "1"
+        on = H._arg_intent(cfg, "set_gamma") or ""
+        assert on.startswith("FUZZ_DERIVE"), on
+        assert "FUZZ_DERIVE" not in (H._arg_intent(handle, "use") or "")
+        # the rendered block announces FuzzedDataProvider mode only when gated.
+        block = render_value_intents([{"api": "set_gamma", "role": "MUTATOR",
+                                       "args": [{"index": 1, "role": "CONFIG",
+                                                 "type": "double", "intent": on}]}])
+        assert "FuzzedDataProvider" in block
+    finally:
+        if saved is None:
+            os.environ.pop("LOGICFUZZ_FUZZABLE_HOLES", None)
+        else:
+            os.environ["LOGICFUZZ_FUZZABLE_HOLES"] = saved
+
+
 def _arg(t, const=False, name=""):
     return {"type": t, "is_const": [bool(const)], "name": name}
 

@@ -15,6 +15,7 @@ Deterministic (no LLM): the intent is a pure function of ``ArgRole`` + type.
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -47,6 +48,32 @@ def _is_scalar_int(type_str: str) -> bool:
     if "*" in low or "[" in low:
         return False
     return any(t in low for t in _INT_TYPES)
+
+
+_FLOAT_TYPES = ("float", "double", "real")
+
+
+def _is_scalar_float(type_str: str) -> bool:
+    low = (type_str or "").lower()
+    if "*" in low or "[" in low:
+        return False
+    return any(t in low for t in _FLOAT_TYPES)
+
+
+def _fuzzable_holes() -> bool:
+    """Tier 1 (opt-in `LOGICFUZZ_FUZZABLE_HOLES`): render fuzzable scalar/enum/
+    flag CONFIG holes as 'DERIVE from the fuzz input' directives instead of
+    'pick a constant'.
+
+    The depth gap vs PromeFuzz is that we FREEZE the API's tunable parameters
+    (gamma=1.0, curve type=1) — a constant arg means the fuzzer's bytes never
+    vary that field, so its branches stay unreached. Confirmed: deriving
+    cmsBuildParametricToneCurve's type+params from the input took cmsgamma.c
+    84→121 branches (+44%) at equal budget. The symbolic layer knows precisely
+    which args are tunable DOFs (CONFIG enum/scalar) vs validity-required
+    (handles, magic, length) — so it exposes ONLY the DOFs, avoiding the
+    fuzz-everything failure (NULL handles / broken magic) a blind LLM hits."""
+    return bool(os.environ.get("LOGICFUZZ_FUZZABLE_HOLES"))
 
 
 def _format_for_api(api_name: str):
@@ -120,6 +147,42 @@ def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
         # (Enum/signature typedefs like cmsColorSpaceSignature are not scalar
         # ints by spelling, so this is gated on vocab membership, not type name.)
         members = enum_members_for_type(vocab, arg.type_str) if vocab else []
+        if _fuzzable_holes() and (members or _is_scalar_int(arg.type_str)
+                                  or _is_scalar_float(arg.type_str)):
+            # Tier 1: a tunable degree-of-freedom, not a validity-fixed value →
+            # DERIVE from the fuzz input so the fuzzer sweeps it (not one const).
+            # Language-AGNOSTIC: state WHAT (derive, don't hardcode) + the domain;
+            # the HOW (C: index data[N]; C++: FuzzedDataProvider) is the harness
+            # language's job, supplied by the language-split user prompt — never
+            # name FuzzedDataProvider here (it's C++-only; a C driver can't use it).
+            if members:
+                shown = ", ".join(members[:12])
+                more = "" if len(members) <= 12 else f" (+{len(members)-12} in <library_constants>)"
+                return (f"FUZZ_DERIVE: do NOT hardcode one value — pick from the "
+                        f"LEGAL set {{{shown}}}{more} by indexing a fuzz-input byte "
+                        f"into it, so the fuzzer sweeps ALL enum values and reaches "
+                        f"each branch.")
+            kind = "float" if _is_scalar_float(arg.type_str) else "integral"
+            nm = (getattr(arg, "name", "") or "").strip()
+            named = f" (parameter '{nm}')" if nm else ""
+            # Tier-1 value-domain judgement (the PromeFuzz-style lever): a leaf
+            # "derive from data[N]" with NO domain makes the LLM pick arbitrary
+            # ranges (chromaticity got data%65536 — out of [0,1] → API rejects →
+            # shallow). Invoke the LLM's OWN semantic knowledge of the param's
+            # MEANING to choose the VALID range first, THEN derive within it. Same
+            # mechanism the enum branch above already proves (give the domain →
+            # filled correctly); for scalars the domain is the LLM's knowledge.
+            return (f"FUZZ_DERIVE: do NOT hardcode a constant, and do NOT slap an "
+                    f"arbitrary modulus on a byte (e.g. `data[i] % 65536`). FIRST "
+                    f"decide the range that is SEMANTICALLY VALID for this {kind} "
+                    f"parameter{named} of `{api_name}` — reason from what you know "
+                    f"about this library and the API's meaning (e.g. a chromaticity "
+                    f"/ probability ≈ 0.0..1.0; a gamma ≈ 0.1..5.0; a temperature ≈ "
+                    f"1000..25000; a count / index is small; a size is bounded by "
+                    f"the input length). THEN derive a value WITHIN that valid range "
+                    f"from the fuzz input, so the fuzzer sweeps real + boundary "
+                    f"values the API ACCEPTS — not mostly-rejected garbage that "
+                    f"bounces off the entry check before reaching deep code.")
         if members:
             shown = ", ".join(members[:12])
             more = "" if len(members) <= 12 else f" (+{len(members)-12} more in <library_constants>)"
@@ -259,11 +322,23 @@ def value_intents_for_sequence(
     return out
 
 
+_FUZZABLE_HEADER = (
+    "FUZZABLE-HOLE MODE: DERIVE every arg tagged [FUZZ] / FUZZ_DERIVE below from "
+    "the fuzz input — never hardcode those — using the harness's input-access "
+    "mechanism (C harness: index data[N]; C++ harness: FuzzedDataProvider). Keep "
+    "constants ONLY for validity-required values (handles must be real produced "
+    "handles; magic/length bytes must stay valid). This is NOT 'fancy input "
+    "generation' — it is one byte wired to a tunable parameter so the fuzzer can "
+    "reach that parameter's branches; keep calling many APIs as usual.")
+
+
 def render_value_intents(intents: Sequence[Dict[str, Any]]) -> str:
     """Render value intents as a compact prompt block for the Prototyper."""
     if not intents:
         return ""
     lines = ["Value intent for hole filling (derive values to match these):"]
+    if _fuzzable_holes():
+        lines.append(_FUZZABLE_HEADER)
     for rec in intents:
         lines.append(f"- {rec['api']} [{rec['role']}]:")
         for a in rec["args"]:
@@ -301,7 +376,10 @@ def _kind_tag(arg_rec: Dict[str, Any]) -> str:
     a scannable tag; the detail stays in the intent payload)."""
     role = arg_rec.get("role", "")
     if role == "CONFIG":
-        return "ENUM" if (arg_rec.get("intent") or "").startswith("ENUM") else "RANGE"
+        it = arg_rec.get("intent") or ""
+        if it.startswith("FUZZ_DERIVE"):
+            return "FUZZ"          # Tier 1: derive from input, don't hardcode
+        return "ENUM" if it.startswith("ENUM") else "RANGE"
     return _KIND_BY_ROLE.get(role, role or "?")
 
 
@@ -327,6 +405,8 @@ def render_callspec(intents: Sequence[Dict[str, Any]],
         return ""
     signatures = signatures or {}
     lines = ["CALLSPEC — fill each hole so these hold (calls run in this order):"]
+    if _fuzzable_holes():
+        lines.append(_FUZZABLE_HEADER)
     for i, rec in enumerate(intents, 1):
         api = rec["api"]
         head = f"#{i} {api} [{rec['role']}]"

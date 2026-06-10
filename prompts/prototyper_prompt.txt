@@ -24,6 +24,17 @@ Coverage comes from exercising library code, not from your helper functions.
 Every line of helper code is a line NOT calling library APIs.
 </critical_rule>
 
+<fuzzable_params>
+NOT a contradiction of the rule above — this is depth, not "fancy input":
+for any hole tagged [FUZZ] in the CALLSPEC / value-intent, fill it with a value
+DERIVED FROM the FuzzedDataProvider (an enum index
+`legal[fdp.ConsumeIntegralInRange<size_t>(0, N-1)]`, or a scalar via
+`fdp.ConsumeIntegralInRange<...>(lo, hi)` / `ConsumeFloatingPointInRange<...>`),
+NEVER a hardcoded constant. A hardcoded scalar/enum parameter means the fuzzer
+can never vary it, so that parameter's branches stay unreached. Each costs ONE
+line; keep calling many APIs as before, sharing the one `fdp` source.
+</fuzzable_params>
+
 <bad_example>
 DO NOT DO THIS - too much helper code, only 1 API call:
 

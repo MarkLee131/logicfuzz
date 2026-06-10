@@ -67,6 +67,23 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 LOGICFUZZ_XPROJ_CORPUS, default
 #                                 extracted_fuzz_drivers/; same-project first) and
 #                                 inject compressed CALLSPEC-style hints.
+#   LOGICFUZZ_FUZZABLE_HOLES=1    Tier 1: render tunable CONFIG holes (enum/scalar/
+#                                 float) as FUZZ_DERIVE 'derive from the fuzz input
+#                                 via FuzzedDataProvider' directives instead of a
+#                                 hardcoded constant — so the fuzzer SWEEPS the
+#                                 parameter, not one fixed value. The symbolic layer
+#                                 exposes ONLY tunable DOFs (handles/magic/length stay
+#                                 FIXED). Addresses the branch-DEPTH gap vs PromeFuzz
+#                                 (confirmed: cmsBuildParametricToneCurve type+params
+#                                 fuzz-derived → cmsgamma.c 84→121 br, +44%, same
+#                                 budget). Mechanism is C/C++-aware: intent is
+#                                 language-agnostic; C driver → index data[N] (NOT
+#                                 FuzzedDataProvider, C++-only), C++ → FuzzedDataProvider
+#                                 (prompt-side, prototyper_prompt{,_c}.txt + _system).
+#                                 GATE IS TEMPORARY (for the A/B): once the coverage
+#                                 A/B confirms the gain, REMOVE the gate → default-on
+#                                 (`_fuzzable_holes()`→True, like _hard_nullguard),
+#                                 same as factory/diversity/lean. `hole_semantics._arg_intent`.
 #   LOGICFUZZ_{Z3_MODE,CONSTRUCT_MODE,NO_CACHE,TRIAGE_INCONCLUSIVE,
 #              TRIAGE_PREFIX_LEN,DRIVERS_ROOT,FI_ENDPOINT,BINDING_TELEMETRY}   config values.
 LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 \
