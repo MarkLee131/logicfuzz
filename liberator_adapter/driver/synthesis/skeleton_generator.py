@@ -32,6 +32,134 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Type rendering rules — VALID C BY CONSTRUCTION
+# =============================================================================
+# The renderer must never emit code that fails to compile. Six classes of
+# invalid-C were observed on real lcms skeletons; the helpers below own the
+# type/decl decisions that prevent each one at the root (not by name-matching
+# the offending API). See the unit tests in tests/test_p1_skeleton_valid_c.py.
+#
+#   1. ``void name[N]``  — a VOID array (illegal). A ``void``/``void*`` element
+#      becomes a ``uint8_t`` byte buffer (passable wherever ``void*`` is).
+#   2. opaque/incomplete struct used as a VALUE ARRAY (can't size an incomplete
+#      type, e.g. ``cmsToneCurve name[N]``). Only *recognized scalar* element
+#      types are rendered as value arrays; everything else stays a pointer.
+#   3. struct-by-value initialized with ``0`` / NULL-compared. A non-pointer
+#      non-scalar value type is zero-initialized with ``{0}``, never ``= 0``.
+#   4. internal opaque struct names (``_cmsContext_struct *``) that aren't
+#      visible through the public header → rendered as ``void *`` (the var is
+#      only ever NULL-held / passed opaquely here).
+#   5. internal (``*_internal.h`` / ``_private`` / ``_impl``) headers are never
+#      emitted (``_generate_includes`` filters them).
+
+# Scalar / numeric primitive bare names whose value arrays are guaranteed
+# complete (sizeable). Anything outside this set is treated as a (possibly
+# incomplete) aggregate and rendered through a pointer instead of a value array.
+_SCALAR_VALUE_TYPES: Set[str] = {
+    "char", "signed char", "unsigned char",
+    "short", "unsigned short", "short int", "unsigned short int",
+    "int", "unsigned int", "unsigned",
+    "long", "unsigned long", "long int", "unsigned long int",
+    "long long", "unsigned long long", "long long int",
+    "size_t", "ssize_t", "ptrdiff_t", "intptr_t", "uintptr_t",
+    "float", "double", "long double",
+    "bool", "_Bool", "wchar_t",
+    "int8_t", "int16_t", "int32_t", "int64_t",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+    "intmax_t", "uintmax_t",
+}
+
+# Substrings that mark a type name as project-internal / forward-declared
+# opaque (not visible through the public header). Such single-pointer types
+# are rendered as ``void *`` so the driver compiles against the public API.
+_INTERNAL_TYPE_MARKERS = ("_struct", "_impl", "_internal", "_private")
+
+# Header basename substrings that are never public — must not be #included.
+_INTERNAL_HEADER_MARKERS = (
+    "_internal.", "_private.", "_impl.", "_detail.", "_p.h", "internal/")
+
+
+def _strip_one_pointer(c_type: str) -> str:
+    """Remove exactly ONE trailing ``*`` (and surrounding space). Used to get
+    an array/element type — ``cmsToneCurve **`` → ``cmsToneCurve *`` (still a
+    pointer, safe as an array element) rather than the all-stars-removed
+    ``cmsToneCurve`` (an incomplete value type)."""
+    t = c_type.rstrip()
+    if t.endswith('*'):
+        return t[:-1].rstrip()
+    return t
+
+
+def _bare_name(c_type: str) -> str:
+    """Lowercase-comparable bare type name: drop qualifiers / struct-union-enum
+    keywords / all pointer stars."""
+    t = (c_type.replace('const', ' ')
+               .replace('volatile', ' ')
+               .replace('struct ', ' ')
+               .replace('union ', ' ')
+               .replace('enum ', ' ')
+               .replace('*', ' '))
+    return ' '.join(t.split()).strip()
+
+
+def _is_scalar_value_type(c_type: str) -> bool:
+    """True when a VALUE (non-pointer) declaration of ``c_type`` is a complete,
+    sizeable scalar — safe to declare as a value array or zero-init with ``0``."""
+    bare = _bare_name(c_type)
+    return bool(bare) and bare in _SCALAR_VALUE_TYPES
+
+
+def _is_aggregate_value_type(c_type: str) -> bool:
+    """True when a NON-pointer ``c_type`` names a struct/union AGGREGATE that
+    must be brace-zero-initialized (``{0}``) — a plain ``= 0`` is illegal for an
+    aggregate (bug class 3). Enums / scalar typedefs are NOT aggregates: they
+    must keep ``= 0`` (``{0}`` is rejected for a scoped enum under C++)."""
+    if '*' in c_type:
+        return False
+    norm = ' ' + c_type.replace('*', ' ') + ' '
+    return (' struct ' in norm) or (' union ' in norm) \
+        or norm.lstrip().startswith('struct ') \
+        or norm.lstrip().startswith('union ')
+
+
+def _scalar_init_value(c_type: str, type_init_map: Dict[str, str]) -> str:
+    """Choose a VALID zero-initializer for a non-pointer ``c_type``:
+    ``{0}`` for a struct/union aggregate, else ``0`` (covers enums, scalar
+    typedefs, and known primitives — all legal with ``= 0``)."""
+    if _is_aggregate_value_type(c_type):
+        return "{0}"
+    base_type = c_type.replace('const', '').strip()
+    return type_init_map.get(base_type, "0")
+
+
+def _is_internal_opaque_type(c_type: str) -> bool:
+    """True when the type name is a project-internal / forward-declared opaque
+    type (e.g. ``_cmsContext_struct``) not visible through the public header."""
+    bare = _bare_name(c_type)
+    if not bare:
+        return False
+    # A leading-underscore identifier or a known internal marker substring.
+    if bare.startswith('_'):
+        return True
+    return any(m in bare for m in _INTERNAL_TYPE_MARKERS)
+
+
+def _public_pointer_type(c_type: str) -> str:
+    """Render a single-pointer type for declaration, mapping internal opaque
+    struct pointers to ``void *`` (the public typedef is unknown here and the
+    var is only held opaquely / NULL-initialized)."""
+    if c_type.count('*') == 1 and _is_internal_opaque_type(c_type):
+        return "void *"
+    return c_type
+
+
+def _is_internal_header(header: str) -> bool:
+    """True for a non-public (internal/private/impl) header basename."""
+    h = header.lower()
+    return any(m in h for m in _INTERNAL_HEADER_MARKERS)
+
+
+# =============================================================================
 # Signature-derived model for component partition (B+D, LOGICFUZZ_SCOPED_GUARDS)
 # =============================================================================
 # ``_dependency_components`` (in sequence_constructor) needs a ``.apis`` mapping
@@ -429,7 +557,14 @@ class SkeletonGenerator:
                     continue
 
                 var.init_value = wired_text
-                var.source_api = wired_text
+                # NOTE: do NOT set ``var.source_api = wired_text`` here.
+                # ``source_api`` drives _generate_cleanup's destroyer pairing
+                # and must be a PRODUCING API NAME, not a wired variable name
+                # (``ret_cmsOpenProfileFromMem``); the latter made cleanup emit
+                # undeclared calls like ``ret_cmsClose(...)`` (bug class 2).
+                # Producer-return handles are tagged in
+                # _generate_variable_declarations instead. This var is a
+                # CONSUMER arg — it owns no resource and needs no cleanup.
                 applied += 1
         return applied
 
@@ -550,6 +685,16 @@ class SkeletonGenerator:
         # actual usage — if a future renderer emits FDP usage, add the header next
         # to that emission, gated on real use (and on the project being C++).
 
+        # Defense-in-depth (bug class 5): the renderer must only ever emit
+        # PUBLIC headers. The deterministic body emits no project header here,
+        # but if any internal/private/impl header is ever routed in, drop it —
+        # pulling ``*_internal.h`` into the driver fails the build (the header
+        # isn't on the public include path / declares non-exported symbols).
+        includes = [
+            inc for inc in includes
+            if not _is_internal_header(inc)
+        ]
+
         return includes
 
     def _analyze_variable_requirements(
@@ -665,6 +810,15 @@ class SkeletonGenerator:
                     var = self._create_variable_for_type(
                         ret_name, req['return']['type']
                     )
+                    # Tag a POINTER return with its PRODUCING API NAME so
+                    # _generate_cleanup can pair a destroyer to the handle it
+                    # actually declared. (Scalar/void returns are not heap
+                    # handles and stay untagged → no spurious cleanup.) The
+                    # producing api_name — never a wired variable name — is the
+                    # only correct value here (bug class 2: a wired-text
+                    # source_api produced calls like ``ret_cmsClose(...)``).
+                    if var.is_pointer:
+                        var.source_api = api_name
                     skeleton.add_variable(var)
                     declared_vars.add(ret_name)
 
@@ -681,21 +835,37 @@ class SkeletonGenerator:
                         declared_vars.add(var_name)
 
     def _create_variable_for_type(self, name: str, c_type: str) -> SkeletonVariable:
-        """Create variable for type"""
+        """Create variable for type (e.g. a ``ret_<api>`` return holder).
+
+        Renders VALID C by construction:
+          * an internal/forward-declared opaque struct pointer
+            (``_cmsContext_struct *``) is emitted as ``void *`` — its name is
+            not visible through the public header, and the var is only held
+            opaquely / NULL-initialized here (bug class 6).
+          * a non-pointer non-scalar VALUE type (a by-value struct/union) is
+            zero-initialized with ``{0}`` rather than ``= 0`` (illegal for an
+            aggregate) and is never NULL-compared (bug class 3).
+        """
         is_pointer = '*' in c_type
 
-        # Determine initial value
         if is_pointer:
-            init_value = "NULL"
-        else:
-            base_type = c_type.replace('const', '').strip()
-            init_value = self.type_init_map.get(base_type, "0")
+            render_type = _public_pointer_type(c_type)
+            return SkeletonVariable(
+                name=name,
+                c_type=render_type,
+                is_pointer=True,
+                init_value="NULL",
+            )
+
+        # A struct/union value gets ``{0}`` (``= 0`` is illegal for an
+        # aggregate); enums / scalar typedefs / primitives keep ``= 0``.
+        init_value = _scalar_init_value(c_type, self.type_init_map)
 
         return SkeletonVariable(
             name=name,
             c_type=c_type,
-            is_pointer=is_pointer,
-            init_value=init_value
+            is_pointer=False,
+            init_value=init_value,
         )
 
     def _create_variable_for_param(
@@ -756,7 +926,7 @@ class SkeletonGenerator:
                 skeleton.add_hole(hole)
             return SkeletonVariable(
                 name=name,
-                c_type=c_type,
+                c_type=_public_pointer_type(c_type),
                 allocation=AllocationType.FUZZ_INPUT,
                 is_pointer=True,
                 init_value="(void*)data",
@@ -776,41 +946,82 @@ class SkeletonGenerator:
                 skeleton.add_hole(hole)
                 return SkeletonVariable(
                     name=name,
-                    c_type=c_type,
+                    c_type=_public_pointer_type(c_type),
                     allocation=AllocationType.FUZZ_INPUT,
                     is_pointer=True,
                     init_value="(void*)data"  # Default to use fuzz data
                 )
 
-        # Output parameter - need to allocate buffer
+        # Output parameter - need a backing buffer for the API to write into.
+        # The element type MUST be complete & sizeable, or the declaration is
+        # illegal C. Pick the rendering by what's safe by construction:
+        #   * void* / void element  → ``uint8_t name[N]`` byte buffer (a void
+        #     array is illegal; uint8_t* converts to void* implicitly). [bug 1]
+        #   * ``Type **`` (≥2 stars) → array of pointers ``Type *name[N]`` —
+        #     the element (a pointer) is always complete; ``name`` decays to
+        #     ``Type **`` matching the param. [bug 4: cmsToneCurve ** ]
+        #   * recognized scalar element → value array ``Type name[N]``.
+        #   * anything else (a possibly-incomplete aggregate / opaque struct
+        #     value) → a single typed pointer ``Type *name = NULL`` (valid,
+        #     passable, degraded — the binding/LLM layer fills the real value).
         if arg_info['is_output'] and is_pointer:
-            # Create array length Hole
-            hole = ArrayLengthHole(
-                name=f"arrlen_{self._next_hole_id()}",
-                priority=HolePriority.HIGH,
-                element_type=c_type.replace('*', '').strip()
-            )
-            skeleton.add_hole(hole)
+            star_count = c_type.count('*')
+            element = _strip_one_pointer(c_type)  # one level only
+            element_bare = _bare_name(element)
+
+            if star_count == 1 and element_bare == 'void':
+                buf_element = 'uint8_t'
+                value_array = True
+            elif star_count >= 2:
+                # Array of pointers: element is itself a pointer (complete).
+                buf_element = element
+                value_array = True
+            elif _is_scalar_value_type(element):
+                buf_element = element
+                value_array = True
+            else:
+                value_array = False
+
+            if value_array:
+                hole = ArrayLengthHole(
+                    name=f"arrlen_{self._next_hole_id()}",
+                    priority=HolePriority.HIGH,
+                    element_type=buf_element,
+                )
+                skeleton.add_hole(hole)
+                return SkeletonVariable(
+                    name=name,
+                    c_type=buf_element,
+                    is_array=True,
+                    array_size=hole.get_placeholder(),
+                    allocation=AllocationType.STACK,
+                )
+            # Degrade an opaque/incomplete out-param to a single typed pointer.
             return SkeletonVariable(
                 name=name,
-                c_type=c_type.replace('*', '').strip(),
-                is_array=True,
-                array_size=hole.get_placeholder(),
-                allocation=AllocationType.STACK
+                c_type=_public_pointer_type(c_type),
+                is_pointer=True,
+                init_value="NULL",
             )
 
         # Regular parameter
         if is_pointer:
-            init_value = "NULL"
-        else:
-            base_type = c_type.replace('const', '').strip()
-            init_value = self.type_init_map.get(base_type, "0")
+            return SkeletonVariable(
+                name=name,
+                c_type=_public_pointer_type(c_type),
+                is_pointer=True,
+                init_value="NULL",
+            )
+
+        # A struct/union value gets ``{0}`` (``= 0`` is illegal for an
+        # aggregate); enums / scalar typedefs / primitives keep ``= 0``.
+        init_value = _scalar_init_value(c_type, self.type_init_map)
 
         return SkeletonVariable(
             name=name,
             c_type=c_type,
-            is_pointer=is_pointer,
-            init_value=init_value
+            is_pointer=False,
+            init_value=init_value,
         )
 
     def _generate_api_calls(
