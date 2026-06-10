@@ -360,7 +360,7 @@ CONSTRUCTION shape. So each driver is also distilled (gpt-4o-mini, one-time, gro
 on its actual extracted calls + regex-detected `entry_type`) into a library-agnostic
 construction template (input-wiring idiom + role sequence `create→…→destroy` +
 resource shape), and the TEMPLATE is embedded → `templates_embeddings.npy`. Leave-one-out
-(`scripts/xproj_construction_probe.py`): template-embedding beats source-embedding on
+(offline probe, since removed): template-embedding beats source-embedding on
 **cross-domain-transferable@5 = 35.5% vs 14%** (same construction, different domain —
 the high-value references domain-clustering misses), and on construction@5 (43% vs 26%);
 source-embedding wins domain@5 (the two are orthogonal axes). **Rejected (don't
