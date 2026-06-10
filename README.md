@@ -16,7 +16,7 @@ LogicFuzz automatically generates high-quality fuzz drivers (harnesses) for C/C+
 
 ## Key Features
 
-- **Multi-Agent Workflow** - Specialized agents for prototyping, fixing, coverage analysis, crash analysis, and improvement
+- **Multi-Agent Workflow** - Specialized agents for prototyping, compile-error fixing, and crash analysis (LangGraph)
 - **Z3-Guided Synthesis** - Constraint-based driver generation with type matching, provenance tracking, and resource lifecycle management
 - **Progressive Filter Pipeline** - layered filtering (L0–L4) from thousands of APIs down to high-value sequences
 - **Automatic Error Recovery** - Intelligent error triage and iterative fixing with up to 3 retry attempts
@@ -37,15 +37,25 @@ LogicFuzz automatically generates high-quality fuzz drivers (harnesses) for C/C+
     │  (Liberator)     │         │  Synthesis      │         │  (LangGraph)    │
     └─────────────────┘         └─────────────────┘         └─────────────────┘
               │                           │                           │
-              │ Extract APIs              │ Generate                  │ Prototype
-              │ Build dep graph           │ sequences                 │ Fix errors
-              │ Analyze types             │ with Z3                   │ Analyze coverage
+              │ Extract APIs              │ Construct                 │ Fill holes
+              │ Build dep graph           │ lifecycle-                │ Fix errors
+              │ Analyze types             │ complete seqs             │ Analyze crashes
               ▼                           ▼                           ▼
     ┌─────────────────────────────────────────────────────────────────────────┐
     │                          Fuzz Driver Output                             │
     │                     (Ready for libFuzzer/AFL++)                         │
     └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Documentation
+
+| Doc | What it covers |
+|-----|----------------|
+| `README.md` (this file) | User entry: what it is, install, quick-start, commands, supported projects, output. |
+| `CLAUDE.md` | Agent operational guide: flag/gate reference, file/component map, design principles, implementation-flow steps, open TODOs, lessons, architecture map. |
+| `docs/generation.md` | Driver-generation pipeline (G1–G5), handle-recovery, sequence construction, hole semantics, merge + coverage, build-cache, honest verdicts, roadmap. |
+| `docs/knowledge_layer.md` | Comprehender + project-adaptive automaton mechanics. |
+| `docs/contributions_and_related_work.md` | Innovations pitch + baseline comparison (PromeFuzz / Liberator) + per-LLM-call-site rationale. |
 
 ## Installation
 
@@ -140,30 +150,13 @@ LogicFuzz has been tested on these OSS-Fuzz projects:
 
 ## Architecture
 
-### Agent System
-
-| Agent | Purpose |
-|-------|---------|
-| **Prototyper** | Generate initial fuzz driver from API sequence |
-| **Fixer** | Fix compilation errors with error triage |
-| **CoverageAnalyzer** | Diagnose low coverage, suggest improvements |
-| **CrashAnalyzer** | Determine if crash is driver bug or real bug |
-| **Improver** | Improve coverage based on analyzer suggestions |
-
-### Filter Pipeline
-
-```
-All APIs → L0 Type → L1 Entry → L2 Lifecycle → L3 StateMachine → L4 Ranking → Top-K
- (1000+)   (~100)     (~50)       (~30)           (~15)           (K=12)
-```
-
-| Layer | Constraint |
-|-------|------------|
-| **L0** | Type compatibility (`API_A.return_type == API_B.param_type`) |
-| **L1** | Entry point detection (`uint8_t* data, size_t size`) |
-| **L2** | Lifecycle pairing (`init` ↔ `destroy`) |
-| **L3** | State machine validation (no use-after-destroy) |
-| **L4** | Reachability ranking (acceptance-score-first greedy selection) |
+LogicFuzz is **reconcile-then-construct**: static analysis builds an
+`APISemanticModel` (IR ⊕ doc ⊕ usage), a sequence constructor builds
+lifecycle-complete API chains from it, Z3 confirms the structure, and LLM agents
+(Prototyper / Fixer / CrashAnalyzer, via LangGraph) fill only the typed holes.
+A progressive filter (L0 type → L1 entry → L2 lifecycle → L3 state-machine → L4
+reachability ranking → Top-K) supplies the grammar floor. See **`CLAUDE.md`** for
+the component/architecture map and **`docs/generation.md`** for the full pipeline.
 
 ## Output
 

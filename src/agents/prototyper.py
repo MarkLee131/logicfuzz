@@ -1542,7 +1542,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
     # The earlier ``_validate_skeleton_adherence`` and
     # ``_get_generation_mode`` methods were removed in the 2026-05 Agent
     # review — both were defined but never called from anywhere in the
-    # codebase. ``llm_vs_traditional_choices.md`` §A historically
+    # codebase. ``contributions_and_related_work.md`` §6.A historically
     # described a "validator re-checks LLM output against the skeleton"
     # gate; that contract is now enforced at synthesis time via the
     # skeleton-template prompt mode (see ``_format_skeleton_as_template``)

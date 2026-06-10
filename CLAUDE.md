@@ -143,12 +143,17 @@ python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz
 
 ## Docs
 
-| Doc | Subsystem |
-|-----|-----------|
-| `docs/generation.md` | **SoT for driver generation.** The built G1–G5 pipeline (APISemanticModel → construct → gap-direct → rank → semantic holes), the three load-bearing lessons, the open binding-layer bottleneck, and surrounding-phase status + roadmap (B/C/D landed, E/F5–F7 open). Start generation work here. |
-| `docs/knowledge_layer.md` | PromeFuzz-derived comprehender (two-stage, deterministic-first, ~70× cheaper). Automaton mechanics live in the `Project-Adaptive Automaton` section below. |
-| `docs/contributions_and_related_work.md` | **Contributions pitch (3 innovations vs prior work) + objective comparison vs PromeFuzz (neural baseline) and Liberator (symbolic baseline).** |
-| `docs/llm_vs_traditional_choices.md` | Per-LLM-call-site rationale: symbolic alternative considered, why LLM won, falsifiable measurement to revisit. |
+**Documentation map** — 5 docs, each the single source of truth (SSOT) for its
+topic; everything else cross-references. Every other doc points here for these
+topics, never re-explains them.
+
+| Doc | SSOT for (owns) |
+|-----|-----------------|
+| `README.md` | User entry: what it is, install, quick-start, commands, supported projects, output. |
+| `CLAUDE.md` (this file) | Agent operational guide: the `LOGICFUZZ_*`/`LIBERATOR_*` **flag/gate reference**, the **file/component map**, **design principles**, the **Implementation-Flow Step list**, **Open TODOs**, **Failed Attempts/Lessons**, and the high-level **architecture map**. |
+| `docs/generation.md` | **Driver-generation pipeline.** G1–G5, the two handle-recovery passes, sequence construction, hole semantics, merge + coverage measurement (compile-validation gate, edge-weighted dispatch, cov-build fix), build-cache, honest verdicts, roadmap + open decisions. Start generation work here. |
+| `docs/knowledge_layer.md` | **Comprehender + project-adaptive automaton.** Two-stage deterministic-first knowledge layer (~70× cheaper); automaton mechanics (state vector, EDSM merge, `AutomatonArtifact` surface, persistence, Phase G closed loop); preflight-as-Liberator-seed-oracle. |
+| `docs/contributions_and_related_work.md` | **Innovations pitch + baseline comparison.** 3 innovations vs prior work, objective comparison vs PromeFuzz (neural) and Liberator (symbolic), attribute matrix, and the per-LLM-call-site rationale (where we use LLM, what we considered, why). |
 
 Historical proposals and refactor logs live in git history (`git log --grep`).
 
@@ -298,36 +303,16 @@ L2/L3 build a per-analysis `UseDefGraph` from their domain model (lifecycle pair
 | API lifecycle | `LLMLifecycleValidator` in `sequence_filter.py` |
 | Type classification | `ConditionManager.py` (SOURCE/SINK/INIT/SETBY). **Demoted by G1** to one IR-evidence source feeding `APISemanticModel.reconcile`; no longer the role authority. |
 
-## Project-Adaptive Automaton
+## Project-Adaptive Automaton + Closed-Loop
 
-Per-project typestate automaton learned from the library's own tests/examples. The comprehender that consumes it: `docs/knowledge_layer.md`.
-
-Pipeline (all in `liberator_adapter/analysis/`):
-`extract_project_traces` → `extract_api_effects` → `build_pta` →
-`edsm.merge` → `learn_project_automaton() → AutomatonArtifact`.
-State vector = `frozenset[(handle_type, lifecycle_state)]`. EDSM merging is
-*constructive*: every input trace stays accepted after every merge; an
-oracle-vetoed merge is skipped, never weakened. Selection over the
-automaton-augmented pool is budgeted max-coverage ((1−1/e) greedy).
-
-`AutomatonArtifact` surface (consumers in parens):
-- `acceptance_score(seq)` — L4 **primary** sort axis (G3; diversity demoted to tiebreak when an automaton is present), Comprehender-B positive-only prefilter, Phase H guard
-- `sample_accepting_paths(n)` — L4 pool augmentation, Prototyper `<protocol_templates>`
-- `graft_creator_prefix(seq)` — L4 candidate variants (Phase A repair, its other consumer, was deleted in G2)
-- `post_parse_extensions(seq)` — extends `parse → get_object` prefixes via `extend_post_def`
-- `update_with_traces(traces)` — Phase G incremental EDSM merge
-
-Persistence: `results/{project}/automaton/`. Comprehender output: `results/{project}/comprehension/`. Phase A/B/C/D state: `results/{project}/state/`.
-
-## Closed-Loop Synthesis (Phase G, existing)
-
-Distinct from the proposed Phase C CEGAR loop (which is for cross-iteration coverage feedback; see `generation.md` F6).
-
-Phase G grows the automaton each round using current viable Z3 skeletons' API sequences as evidence (incremental EDSM merge). Skeletons drive the LLM; closed-loop's value is the in-place mutation of `automaton_artifact` preserved through `persist_dir`.
-
-Entry: `src/closed_loop.py:run_closed_loop`. Wired into `data_context.py` Step 11.
-
-CLI: `--closed-loop`, `--closed-loop-iters N`, `--closed-loop-early-stop K`.
+Per-project typestate automaton learned from the library's own tests/examples
+(`liberator_adapter/analysis/project_automaton.py`); the Phase G closed loop
+(`src/closed_loop.py`, Step 11, `--closed-loop`/`--closed-loop-iters N`/
+`--closed-loop-early-stop K`) grows it from Z3-viable sequences each round.
+Mechanics — pipeline, state vector, EDSM merge, `AutomatonArtifact` surface,
+persistence — are SSOT in `docs/knowledge_layer.md` (Project-Adaptive Automaton
+section); not duplicated here. Persistence dirs: `results/{project}/automaton/`,
+`.../comprehension/`, `.../state/` (Phase A/B/C/D).
 
 ## Design Principles
 
@@ -337,7 +322,7 @@ CLI: `--closed-loop`, `--closed-loop-iters N`, `--closed-loop-early-stop K`.
 - **Token Efficiency**: Context prefetching, 8KB output truncation. Comprehender uses deterministic-first layering and automaton acceptance prefilter.
 - **Signal vs Filter**: The automaton produces *signals* (acceptance, sampled paths, grafting) that augment the candidate pool and bias ranking; the greedy max-coverage selection is unchanged.
 - **Reuse upstream Liberator over reimplementation**: When fixing a synthesis-layer problem, first check whether `reference/liberator` already solves it. Adapt at the boundary; don't fork.
-- **Coverage measurement (A≡B / valid-harness)**: the OSS-Fuzz model — fuzz on the address binary, replay the corpus on a *separate* coverage binary — is sound and standard (PromeFuzz uses it too); it requires only that the two builds be the SAME harness (A≡B). The merged harness used to violate this via the `||continue`-skip + weak-stub no-op (the two builds skipped DIFFERENT non-compiling TU sets → a corpus input hit a real sub-driver in one and a stub in the other → 0 coverage). The compile-validation gate restores A≡B by shipping only the identical compile-valid set to both builds.
+- **Coverage measurement (A≡B / valid-harness)**: the address build and the coverage build must compile the IDENTICAL harness (A≡B), else replayed coverage is spurious. Mechanism + the compile-validation gate that enforces it: `docs/generation.md` §6.
 
 ## Validation Pipeline
 

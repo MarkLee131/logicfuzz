@@ -13,10 +13,12 @@ are preserved as written — do not read them as headline claims.
 
 | Companion doc | Scope |
 |---|---|
-| `docs/contributions_and_related_work.md` | the 3-innovation pitch + PromeFuzz/Liberator/PromptFuzz/CKGFuzzer comparison |
-| `docs/generation_information_audit.md` | **open** decision items + future roadmap only (this round's *changelog* moved here) |
+| `docs/contributions_and_related_work.md` | the 3-innovation pitch + PromeFuzz/Liberator/PromptFuzz/CKGFuzzer comparison + per-LLM-call-site rationale |
 | `docs/knowledge_layer.md` | comprehender / automaton mechanics |
 | `CLAUDE.md` | flags table, Step 5x implementation flow, file map |
+
+Open decision items + the future roadmap are folded into §6 below (this doc is
+their SSOT).
 
 ---
 
@@ -90,7 +92,7 @@ docstring lets the comprehender skip that API's LLM call).
 
 ## 3. Breadth + low-FP optimization round (2026-06)
 
-**Motivation** (audit §6, contributions §3): the gap vs PromeFuzz/PromptFuzz/
+**Motivation** (§6 roadmap, contributions §3): the gap vs PromeFuzz/PromptFuzz/
 CKGFuzzer is **API breadth × driver density**, not novelty — correct-by-
 construction dropped every API the symbolic layer couldn't connect (≈302/452 gap
 APIs never entered a candidate). The fix is **graceful degradation** — the
@@ -259,8 +261,9 @@ them.
 
 ## 6. Open frontier
 
-The live frontier is **below** the G1–G5 pipeline. Decision items + full rationale
-live in `docs/generation_information_audit.md`; the short list:
+The live frontier is **below** the G1–G5 pipeline. This section is the SSOT for
+open items, decision items, and the roadmap (the audit doc was folded in here).
+The short list:
 
 | Item | Why it's the lever |
 |---|---|
@@ -396,3 +399,75 @@ weak literal ones; relevance is a semantic judgment for the LLM, not a hand-weig
 (libtiff/tinygltf/sqlite3/lcms = 0), and for them retrieval surfaces genuine cross-project
 analogs (re2→boost_regex, tinygltf→readstat parsers). The decisive test remains the
 end-to-end hint A/B; same-domain/construction@K are proxies.
+
+### Roadmap & open decisions (folded from the generation-information audit)
+
+**Scope of the audit:** only the *driver-generation* stage. **Question it
+answered:** are we feeding the LLM the *right* information or the *most*? **Core
+judgment (still holds):** the division of labor is right at the large scale — Z3
+⊕ use-def ⊕ typestate own program *structure* (lifecycle, handle wiring, call
+order); the LLM owns the *soft* decisions (values, semantics, hole-filling).
+This round plugged most of the "information leaks at every boundary"
+(schema-feeding the LLM, deterministic extraction of constants/contracts/
+producers). The remaining open items fall in two classes: (1) cross-project
+knowledge + new techniques (needs a decision); (2) the binding layer + the
+multi-project validation roadmap.
+
+**The unified abandonment-point fix.** Wherever the symbolic layer "can't give a
+certain answer and gives up," it can still hand the LLM the *known half* as a
+structured `value_intent` slot in the schema, so the LLM completes from evidence
+rather than guessing blind. The three symbolic abandonment points already
+addressed this way:
+
+| # | Where symbolic gives up | Information lost | What the LLM is forced to guess | Landed as |
+|---|---|---|---|---|
+| 2 | how to construct parser-entry bytes | entry **magic / length / version checks** (only ICC/IT8 hardcoded) | how to assemble bytes that pass the front-gate into deep code | **T10** (`LOGICFUZZ_FORMAT_INFER`) |
+| 4 | only happy-path skeletons generated | (error shapes never told to the LLM) | — (error branches were unreachable by construction) | **T11** (`LOGICFUZZ_ERROR_VARIANTS`) |
+| 5 | the working runtime values are discarded | the value that **actually reached a deep branch** in a trial (`coverage_memory.json` was write-only) | re-guesses from scratch next round | **T12** (`LOGICFUZZ_VALUE_FEEDBACK`) |
+
+**Open experimental validation (each gated feature needs a docker coverage A/B
+before default-on):**
+
+- **Multi-project end-to-end A/B of the typed-context (CALLSPEC) schema.**
+  CALLSPEC is now default + the redundant prompt blocks were cut (§2). But a
+  prompt-schema refactor changes LLM behavior in ways unit tests can't catch — to
+  confirm it raises coverage without regression needs a larger-sample,
+  **multi-project** end-to-end A/B (old vs new prompt on cjson/zlib/lcms; compare
+  coverage + tokens). What ran so far is smoke-level (c-ares best 1440 > 804;
+  lcms 88 > 0); the full live-`prepare()` multi-project comparison is still owed.
+- Multi-project coverage-diff validation, the 24h union real run, and per-gated-
+  feature coverage A/Bs (T7/T10/T11/T12, scoped-guards, fuzzable-holes) — see the
+  short-list table above.
+
+**B2 static-analysis residue (still open):** (i) there is **no true CFG
+reachability** — L4's "reachability" is automaton protocol-acceptance, not "how
+many uncovered blocks does this API gate." **T9 (static CFG reachability weighting)
+was measured and rejected** (dependency graphs are too flat, max depth 1–3; planner
+blind spots are depth-independent → reranking can't recover them; root cause is the
+binding layer, #14 above). (ii) `set_by` write-mask / `len_depends_on` overlap with
+the existing LENGTH/OUTPUT intent — deferred (empirical-before-parametric: split
+only when downstream genuinely needs it).
+
+**Deferred methodology fixes (not yet walked; recorded for later):**
+
+- **Funnel fault-tolerance** — recover compile failures via the LangGraph fixer,
+  loss-tolerant like PromeFuzz (deferred).
+- **Per-subsystem multi-driver generation** — cluster drivers by subsystem
+  (lcms postscript / tag / optimizer) so each deep subsystem gets dedicated
+  drivers (deferred).
+- **Relax correctness to let the LLM attempt hard APIs** — this is *in tension*
+  with the correct-by-construction, no-repair mainline; graceful degradation
+  already buys breadth without sacrificing the mainline, so this is a **needs-a-
+  decision** item (lean: symbolic guarantees the connectable core, gives island
+  APIs the maximum hint for LLM best-effort, fails to the fixer — graceful
+  degradation, not a hard drop).
+
+**TLR (FSE'26) — reference value (bounded).** Its formalism differs in domain
+(memory-error typestate vs our API-protocol typestate) and stage (post-hoc replay
+of known traces vs our forward synthesis with no traces). The one solid principle
+— ablation shows *typestate-selective context feeding > dumping everything* — is
+exactly the direction our ②′ typed-context schema already takes (see
+`contributions_and_related_work.md` §②′), so it stays a related-work citation +
+design sanity-check. The only reusable engineering trick: its "snapshot only at
+typestate transition points" idea could keep T12's runtime traces lean if/when
+T12 grows a richer trace.

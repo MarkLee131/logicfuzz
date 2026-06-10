@@ -1,17 +1,20 @@
-# Knowledge Layer — Comprehender
+# Knowledge Layer — Comprehender + Project-Adaptive Automaton
 
 > **Status**: shipped. Two-stage, deterministic-first; last A/B comprehension
 > run hit `LLM_calls=0`. Cached at `results/{project}/comprehension/`.
 
+SSOT for **(1)** the per-project comprehender and **(2)** the project-adaptive
+automaton it consumes. (Pitch vs PromeFuzz lives in
+`docs/contributions_and_related_work.md`; pipeline integration in
+`docs/generation.md`; the flag list in `CLAUDE.md`.)
+
 The comprehender is LogicFuzz's per-project knowledge extraction. It is
 adapted from PromeFuzz (CCS'25) but reformulated on top of our static-analysis
 pipeline so LLM cost drops ~70×. It is tightly coupled to the **project-
-adaptive automaton**, whose mechanics (PTA + EDSM pipeline, `AutomatonArtifact`
-surface, persistence) live in the **`Project-Adaptive Automaton`** section of
-`CLAUDE.md`; the one fact the comprehender depends on is that the automaton
-supplies `acceptance_score(seq)`, used here as a positive-only LLM-skip
-prefilter. (The EDSM LLM oracle is wired but throttled off — evidence-only
-merging is what ships.)
+adaptive automaton** (mechanics in the section below); the one fact the
+comprehender depends on is that the automaton supplies `acceptance_score(seq)`,
+used here as a positive-only LLM-skip prefilter. (The EDSM LLM oracle is wired
+but throttled off — evidence-only merging is what ships.)
 
 ---
 
@@ -77,6 +80,40 @@ CDF dispatch** (`run_single_fuzz._edges_weights_for` →
 sub-drivers earn a larger share of the fuzzer's per-input budget (was uniform
 `selector % N`). It is a single-run signal; the full cross-round "driver history"
 Liberator builds needs cross-round state and is not yet done.
+
+## Project-Adaptive Automaton (mechanics)
+
+Per-project typestate automaton learned from the library's own tests/examples
+— the domain knowledge that *bottom-up type-walking cannot infer* and *generic
+LLM priors do not carry*.
+
+Pipeline (all in `liberator_adapter/analysis/`):
+`extract_project_traces` → `extract_api_effects` → `build_pta` →
+`edsm.merge` → `learn_project_automaton() → AutomatonArtifact`.
+State vector = `frozenset[(handle_type, lifecycle_state)]`. EDSM merging is
+*constructive*: every input trace stays accepted after every merge; an
+oracle-vetoed merge is skipped, never weakened. Selection over the
+automaton-augmented pool is budgeted max-coverage ((1−1/e) greedy).
+
+`AutomatonArtifact` surface (consumers in parens):
+- `acceptance_score(seq)` — L4 **primary** sort axis (G3; diversity demoted to tiebreak when an automaton is present), Comprehender-B positive-only prefilter, Phase H guard
+- `sample_accepting_paths(n)` — L4 pool augmentation, Prototyper `<protocol_templates>`
+- `graft_creator_prefix(seq)` — L4 candidate variants (Phase A repair, its other consumer, was deleted in G2)
+- `post_parse_extensions(seq)` — extends `parse → get_object` prefixes via `extend_post_def`
+- `update_with_traces(traces)` — Phase G incremental EDSM merge
+
+Persistence: `results/{project}/automaton/`. Comprehender output:
+`results/{project}/comprehension/`. Phase A/B/C/D state: `results/{project}/state/`.
+
+### Closed-loop synthesis (Phase G)
+
+Distinct from the proposed Phase C CEGAR loop (cross-iteration coverage
+feedback; `generation.md` §6 F6). Phase G grows the automaton each round using
+the current viable Z3 skeletons' API sequences as evidence (incremental EDSM
+merge). Skeletons drive the LLM; closed-loop's value is the in-place mutation of
+`automaton_artifact` preserved through `persist_dir`. Entry:
+`src/closed_loop.py:run_closed_loop`, wired into `data_context.py` Step 11. CLI:
+`--closed-loop`, `--closed-loop-iters N`, `--closed-loop-early-stop K`.
 
 ## What we do NOT port from PromeFuzz
 

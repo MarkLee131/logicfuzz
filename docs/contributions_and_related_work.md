@@ -12,10 +12,11 @@ against the two systems it is closest to:
   synthesizer our backend is adapted from. The representative *symbolic*
   baseline.
 
-This doc is the single source for the "what's new vs prior work" pitch and the
-descriptive baselines behind it. For the generation pipeline see
-`docs/generation.md`; for the comprehender/knowledge layer see
-`docs/knowledge_layer.md` (automaton mechanics: `CLAUDE.md`).
+This doc is the SSOT for the "what's new vs prior work" pitch, the descriptive
+baselines behind it, and the **per-LLM-call-site rationale** (§6 — where we use
+the LLM, the symbolic alternative considered, and why the LLM won). For the
+generation pipeline see `docs/generation.md`; for the comprehender + automaton
+mechanics see `docs/knowledge_layer.md`.
 
 ---
 
@@ -215,10 +216,10 @@ The schema is instantiated at the **two** generation-stage LLM decision points.
 intermediate representation) whose fields *are* the key aspects of driver
 correctness. It is **not a DSL** in the formal sense — no grammar, no
 composition operators, no parser/evaluator; the rendered hints are
-natural-language constraints *derived from* the schema. The planned **CALLSPEC**
-(one typed per-call row consolidating these slots — `docs/generation_information_audit.md` T4)
-is the move toward a single compact *notation*, but it stays a schema-rendering,
-not a language.
+natural-language constraints *derived from* the schema. **CALLSPEC** (one typed
+per-call row consolidating these slots — now the default Prototyper context, see
+`docs/generation.md` §2) is the move toward a single compact *notation*, but it
+stays a schema-rendering, not a language.
 
 **Why it's a contribution, not prompt-engineering.** The schema operationalizes
 the neuro-symbolic split *at the prompt boundary*: the same analyses that gate
@@ -235,7 +236,7 @@ context and the LLM is invoked only on the slots that remain genuinely soft.
 
 LogicFuzz learns a **typestate automaton from the library's own tests and
 examples** (PTA + EDSM, `analysis/project_automaton.py`; mechanics in
-`CLAUDE.md`) and uses it as a first-class signal — `acceptance_score`
+`docs/knowledge_layer.md`) and uses it as a first-class signal — `acceptance_score`
 for L4 ranking, accepting-path samples for construction/prompting, and a
 hard-pruning acceptance gate (Phase H). It then **grows the automaton from the
 sequences that proved Z3-viable** (Phase G closed loop, incremental EDSM merge),
@@ -413,7 +414,7 @@ uniform).
 
 ### Breadth + low-FP: borrow PromeFuzz's reach, keep our precision (2026-06)
 
-The honest gap analysis (`generation_information_audit.md` §6) found PromeFuzz's
+The honest gap analysis (`docs/generation.md` §6) found PromeFuzz's
 edge is **API breadth × driver density**, not novelty — our correct-by-
 construction stance dropped every API the symbolic layer couldn't connect
 (≈302/452 gap APIs never entered a candidate). The fix is *graceful degradation*,
@@ -498,6 +499,214 @@ backend/IR refactors.
 | Post-LLM validity | sanitizer loop | n/a (no LLM) | LangGraph build/fix |
 | Cross-round learning | crash → constraint | none | automaton viability growth |
 | Bad-seq handling | LLM fix on crash | fatal trap (upstream) | valid-by-construction |
+
+---
+
+## 6. Per-LLM-call-site rationale — where we use LLM, what we considered, why
+
+This is the method-fit argument at the call-site granularity: every place
+LogicFuzz invokes an LLM, the symbolic alternative considered first, and why the
+LLM won — so the design is defensible (every LLM call points to a specific
+limitation of the deterministic alternative, not "LLM seemed easier"). Each item
+ends with a **falsifiable measurement** — the experiment that would prove the LLM
+choice wrong; observe that result, revisit the decision. (Mechanism detail for
+each component lives in `docs/generation.md`; this section keeps only the
+*why-LLM* argument.)
+
+### A. Prototyper — initial driver synthesis from the skeleton
+
+**File:** `src/agents/prototyper.py` · once per trial, after CBFactory emits a
+Z3-validated skeleton with `__HOLE_*__` placeholders.
+
+**LLM job:** fill holes (callback bodies, buffer-size expressions, loop
+conditions, error handling) and any "glue" the symbolic skeleton can't
+prescribe (e.g. `cJSON_PrintBuffered(json, 1, formatted)` where `1` is a
+corner-case prebuffer the rule layer would have written as `1024`).
+
+**Symbolic alternative:** pure-symbolic rendering (upstream Liberator's
+`LFBackendDriver`) — generic `return 0;` callback stubs, var-len-derived buffer
+sizes, ConditionManager-paired init/destroy, no loops.
+
+**Why LLM:** three deficits observed across the 17-benchmark suite —
+1. **Loop conditions are LLM-only.** `while (sf_readf_float(sndfile, buf, 1))`
+   terminates on an API return; deciding "use this API's return as the loop
+   condition" needs API semantics. Corpus study: 19 LOOP_CONDITION positions
+   across 70 fuzzers, 0% rule-fillable.
+2. **Non-generic callback bodies.** A `qsort` comparator is generic-stubbable;
+   a `libsndfile` VIO `get_filelen` tracking the fuzz buffer position is
+   library-specific glue. DriverEnhancer covers ~8 common shapes; novel shapes
+   need LLM.
+3. **Bug-finding "tricks."** `data[0]`-as-buffer-size (zlib), `prebuffer=1`
+   (cjson), magic-byte patterns (c-ares). ~15% of "rule-equivalent" holes had
+   expert tricks the rule would miss.
+
+**Cost of reverting:** loop-driven targets (libsndfile, libpcap, chunked
+libxml) run zero loops → coverage collapses to first-frame; lose the ~15%
+expert-tricks uplift.
+
+**Falsifiable:** A/B compile rate + 24h coverage of the full pipeline vs
+symbolic-only rendering (no prototyper). If symbolic reaches ≥95% on every
+project, the LLM is overkill.
+
+### B. Fixer — compile-error recovery
+
+**File:** `src/agents/fixer.py` · on compile failure, ≤3 retries/trial.
+
+**LLM job:** map a free-text compiler error to a code change (missing header,
+wrong link target, `extern "C"` wrapping, version-renamed API).
+
+**Symbolic alternative:** the rule-based triager
+(`src/utils/compilation_error_triage.py`, which runs *before* the Fixer)
+buckets errors into link / header / type / language / api_hallucination and
+emits a per-bucket fix template.
+
+**Why LLM:** triage handles ~70% cleanly; the rest need cross-error reasoning —
+1. **Multi-error interactions.** One missing header → 6 "undeclared identifier"
+   errors; the LLM recognises the single root fix instead of 7 separate ones.
+2. **Project-specific naming.** mbedtls renamed `mbedtls_ssl_init` →
+   `_setup`; the LLM picks the right replacement by reading arg signatures.
+3. **Type-ambiguous fixes.** "expected X, got Y" is fixable by cast / decl
+   change / different API; the triager defaults to cast, the LLM picks right.
+
+**Cost of reverting:** each multi-error case becomes 6+ fix attempts, blowing
+the 3-attempt cap. Pure-triager mode took ~2.5× more compile attempts per
+successful driver in early development.
+
+**Falsifiable:** per-trial compile-attempts-to-success, triager-only vs
+default. If the gap is < 1.5×, the LLM fixer is over-engineered.
+
+### C. CrashAnalyzer & CrashFeasibilityAnalyzer
+
+**File:** `src/agents/crash_analyzer.py`,
+`src/agents/crash_feasibility_analyzer.py` · on a libfuzzer crash, before
+reporting upstream. (In lean mode the deterministic `crash_frame.py` triages the
+common driver-vs-library frame attribution; the LLM path is the
+`unknown`-frame fallback — see §3 "What each does not do".)
+
+**LLM job:** decide *driver bug* (our setup) vs *real library bug*; for real
+bugs, classify feasible (reachable from end-user input) vs infeasible (only via
+contract-violating values the driver passed).
+
+**Symbolic alternative:** static rule — faulting frame inside
+`LLVMFuzzerTestOneInput` → driver bug, else real; fuzz-derived arg → feasible,
+synthesised field → infeasible.
+
+**Why LLM:**
+1. **Inlining fools the stack-frame heuristic.** Optimised OSS-Fuzz builds
+   inline the driver call site into the library; the faulting frame "looks
+   like" a library frame even for our bug. The LLM reads both sides (~90%).
+2. **Feasibility is a contract question.** "Can this crash happen in
+   production?" depends on documented preconditions living in prose docs.
+3. **Volume.** A pure-rule classifier flags ~3× more "real bug" false
+   positives — each costs maintainer trust.
+
+**Cost of reverting:** ~3× more spurious reports. Early rule-only versions drew
+several "you're calling our API wrong" rejections from maintainers.
+
+**Falsifiable:** maintainer accept rate (merged vs rejected) under rule-only vs
+LLM-classified. Within 10% → LLM is wasted.
+
+### D. (REMOVED) CoverageAnalyzer & Improver — per-driver optimize
+
+The per-driver coverage-optimize subsystem (`coverage_analyzer.py` +
+`improver.py` + the §10B `baseline_diff_analyzer` regression recovery) was
+**removed** — it was *per-driver* LLM refinement (N× cost), mismatched with the
+breadth-via-merge design, and addressed none of the real bottlenecks (binding /
+input-seed / breadth-bound). See `CLAUDE.md` Failed Attempts.
+
+The one load-bearing job it did — *coverage-gap targeting* ("which API branches
+stayed uncovered, and why") — was **re-homed to deterministic mechanism, not
+deleted**: sequence selection now targets uncovered code via **reachability-first
+ranking (G3) + G5 gap targeting** (`coverage_gap.py`), and the residual
+soft "why didn't this arg reach this branch?" reasoning (magic bytes, structure
+match — e.g. libpng's `89 50 4E 47…` PNG signature, cjson's `{` switch) is what
+the Prototyper's hole-fill (§A) and the value-feedback / fuzzable-holes intents
+(`docs/generation.md` §6 T12 / fuzzable-holes) now carry. If cross-round coverage
+feedback is ever wanted, it belongs in the Phase C CEGAR loop
+(`docs/generation.md` §6 F6) — portfolio-level, cross-round, NOT a per-trial node.
+
+### E. Comprehender (knowledge layer A + B)
+
+**File:** `src/knowledge/comprehender.py` · once per project (Step 6b).
+
+**LLM job:** Stage A — per-API usage notes (signature + comments + a few usage
+sites → one sentence). Stage B — per-sequence semantic verdict ("meaningful
+protocol? object used or wasted? missing init?").
+
+**Symbolic alternative:** PromeFuzz's ConstraintLearner (mines invariants from
+the test suite via symbolic execution + invariant inference) — ported as
+design-only, not shipped (`docs/knowledge_layer.md`).
+
+**Why LLM:**
+1. **The signal is in prose.** Header comments / README / man pages encode
+   protocol semantics in English; symbolic execution gives statistical
+   patterns, the LLM gives *intent*.
+2. **Stage B compares intent to implementation** — a teleological question
+   ("what is this sequence trying to do?") pure analysis can't answer.
+3. **Cost is bounded** — per-project, not per-trial; cached to
+   `results/{project}/comprehension/`.
+
+**Cost of reverting:** Stage A degrades to signature-only (what the prototyper
+already sees); Stage B disappears, so sequences rank by L4 coverage with no
+semantic filter — empirically ~30% nonsense ("compiles but does nothing")
+sequences.
+
+**Falsifiable:** 24h coverage with Stage B disabled. Within 5% → overkill.
+
+### F. ProjectAnalyzer (pre-prototyper)
+
+**File:** `src/agents/project_analyzer.py` · once per benchmark, derives
+`project_understanding` before the prototyper.
+
+**LLM job:** read README + a representative source file → a paragraph the
+prototyper sees as `<library_purpose>` (e.g. "streaming parser; consumers must
+`_init`/`_finalize` around all `_update` calls").
+
+**Symbolic alternative:** hand-curated `purpose` field in the benchmark YAML.
+
+**Why LLM:** hand-curation doesn't scale past the 17-suite — adding a project
+would mean writing the paragraph, defeating "drop in any OSS-Fuzz project".
+
+**Cost of reverting:** new-project onboarding goes from one YAML line to a
+hand-written paragraph; blocks scaling.
+
+**Falsifiable:** prototyper output quality on a project with a manual
+`library_purpose` vs the analyzer's. If manual is consistently better, the
+analyzer is too generic.
+
+### G. Where we deliberately did **not** use LLM
+
+Places where LLM was tempting but the deterministic alternative was clearly
+enough — all share one property: the deterministic result is *verifiable* (you
+can audit the pairing and see why), whereas the LLM-required cases need prose /
+open-ended inference / project-specific docs.
+
+- **Skeleton wiring (producer→consumer)** — Liberator's
+  `RunningContext.try_to_get_var` + Z3 `add_resource_*`, 100% deterministic
+  from the dependency graph. LLM would be non-reproducible across trials.
+- **CLEANUP pre-fill (paired destroy)** — `_infer_paired_destroy`; corpus study
+  showed 100% rule-equivalence with experts.
+- **Type compatibility (L0)** — type-string matching + `Factory.normalize_type`.
+- **Lifecycle pairs (L2)** — name/type/semantic patterns find ~95%; the exotic
+  5% wouldn't reliably improve under LLM.
+- **State-machine constraints (L3)** — `ConditionManager` pre/postconditions.
+- **EDSM / PTA learning** — pure algorithm over observed traces; LLM oracle
+  wired as an optional extension, default off.
+
+### H. Decision rule going forward
+
+Add an LLM call **only** when both hold:
+
+1. **A symbolic alternative exists and was tried** — in the codebase already,
+   or the tradeoff was empirically measured.
+2. **The signal needed is in prose / non-mechanical inference** — magic bytes
+   from docs, semantic intent, multi-error reasoning. If the answer is in code
+   that constant-folds / pattern-matches / typestate-checks, the symbolic layer
+   owns it.
+
+When evaluating a new "let's use LLM here" proposal, write the A–F template
+above BEFORE implementing. If the "cost of reverting" line is empty or
+hand-wavy, the LLM call probably isn't justified.
 
 ---
 
