@@ -266,6 +266,7 @@ live in `docs/generation_information_audit.md`; the short list:
 |---|---|
 | **Input/seed layer (NEW #1 below binding) — real-seed routing landed (default-on), gain unmeasured** | factory chain made `cmsDoTransform` constructable+compilable, but it covers **0/799 of `cmsxform.c`** because random bytes never form a valid ICC profile to traverse the opaque chain. Real-seed routing (now default-on) copies the project's REAL format-matching seeds (`*.icc`/`*.it8`/…, classified by parser-entry API + file magic) into each driver's generation corpus + the merged harness (`scripts/seed_discovery.py:seed_corpus_for_driver` → `builder_runner._seed_corpus_dir`; additive, no-op when no seeds). **Next:** measure the cmsxform.c gain end-to-end; synthetic seed generation from format analysis still TODO |
 | **build-cache × llvm14 — RESOLVED by A1 (additive canonical base)** | was: extraction (clang-14) and trials shared one `gcr.io/oss-fuzz/<proj>` tag → cached eval silently Z3-off. Fix (`ensure_llvm14_base_builder`): build the *additive* llvm14 image (clang-14 added; default `/usr/local` clang + libc++ untouched → fuzzers link — the "fuzzers don't link on llvm14" worry was a misdiagnosis) and retag it onto `gcr.io/oss-fuzz-base/base-builder`, so every project + cache image inherits clang-14. **One-time deploy:** rebuild + re-push the registry-hosted `*-ofg-cached-*` images on the additive base (or `OFG_USE_CACHING=0`). See memory `project_buildcache_llvm14_conflict` |
+| **merged-harness coverage validity — RESOLVED (compile-validation gate + cov-build fix)** | the merged harness used to read spurious 0 coverage: a compile-INVALID driver was KEPT (preflight only vets RUN — "couldn't vet ⇒ keep"), then silently shadowed by `merge.py`'s `\|\|continue` skip + weak-stub no-op, so the address build and coverage build compiled DIFFERENT TU sets (A≢B) → a corpus input hit a real sub-driver in one and a stub in the other → 0 coverage. **Fix:** the **compile-validation merge gate** (`tools/merge_drivers/compile_validate.py:validate_compilable` + `run_single_fuzz._compile_validate_candidates`) includes ONLY drivers that compile under the real OSS-Fuzz coverage-build flags (per-TU C/C++; `-Werror=implicit-function-declaration` re-promoted to catch the link-class failures `-fsyntax-only` misses), so both builds compile the IDENTICAL valid set. Fail-open (no docker ⇒ keep all); opt-out `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1`; writes `merged/compile_validation.json`. lcms: excluded 9/11 invalid drivers → llvm-cov 551/9590 br (no longer 0). Separately, `run_extended_fuzzing._build_coverage_image` now scrubs in-source artifacts (`git clean -dxf` per /src repo) + `build_fuzzers --sanitizer coverage --clean`, forcing the LIBRARY to rebuild WITH coverage instrumentation rather than reusing the ASan build — fixes the prior inconsistent denominators (22 vs 18797 instrumented lines). **Also landed (`skeleton_generator.py`, commit `777cef0c`):** the skeleton-rendering validity fix — the renderer now emits valid C/C++ *by construction* (void/`void*` array element → `uint8_t` buffer; opaque types → pointers not value-arrays-of-incomplete-type; struct values `{0}`-init; internal opaque typenames → `void*`; `*_internal.h` filtered; cleanup only on declared `ret_<api>`), so far fewer drivers reach the gate invalid (lcms: void-arrays 6→0, opaque value-arrays 8→0, internal typenames 6→0, undeclared `ret_*` 8→0; previously-broken skeletons now compile). The gate and the renderer are complementary — valid-by-construction up front + a fail-open safety gate at merge |
 | **Binding layer (#14) — construction lifted, tail remains** | factory chain (channel b, `LOGICFUZZ_FACTORY_CHAIN`) recovers opaque `void*`-return producers; **next:** recover the residual non-`Create*`-named / no-in-project-producer tail, + caller-alloc-init args beyond the SVF-INIT channel |
 | **Multi-project coverage-diff validation** | turn the lcms PoC into a claim: reproduce across projects + show we fill more existing-driver gap than PromeFuzz/CKGFuzzer |
 | **24h union real run** | the actual headline vs PromeFuzz Table 2 absolute coverage (cost OK, deferred) |
@@ -298,10 +299,34 @@ pending — start gated like factory/diversity/lean did):**
   (`sequence_key`), NOT the positional `cbfactory_skeleton_{i}` name (which would
   mis-pin onto an unrelated chain). Cross-run; the "read" side of Phase C. 13 unit
   tests incl. the no-mis-pin regression.
+- **B+D scoped NULL-guards** (`LOGICFUZZ_SCOPED_GUARDS`, default-OFF, coverage A/B
+  pending; `sequence_constructor._dependency_components` + `skeleton_generator`):
+  partition a sequence into dependency components and render the creator NULL-guard
+  **per component** (B1 nested-if) instead of the legacy whole-driver
+  `if(!parser)return0`. A producer's guard then wraps only its handle-consumers, so
+  an INDEPENDENT API (one that doesn't consume the parser's handle) renders OUTSIDE
+  the guard and runs even when the parser returns NULL on random fuzz input.
+  Measured (controlled single-file): **+523 br (12.6×)** when the parser fails; ≈0
+  when valid seeds let it succeed — the gain is conditional on parser-failure, the
+  common fuzz case. PromeFuzz has no dependency model / no parser-vs-independent
+  distinction → differentiator.
+- **Tier-1 fuzzable-holes value-domain** (`LOGICFUZZ_FUZZABLE_HOLES`, coverage A/B
+  pending; `hole_semantics._arg_intent`): scalar/float CONFIG holes emit a
+  FUZZ_DERIVE intent that invokes the LLM's own value-domain judgement (choose a
+  SEMANTICALLY VALID range — chromaticity≈0..1, gamma≈0.1..5, temp≈1000..25000 —
+  then derive from the fuzz input; *not* an arbitrary `data[i]%65536` modulus); enum
+  holes index a fuzz byte into the legal constant set. Language-agnostic intent;
+  the mechanism is supplied by the language-split user prompt (C → index `data[N]`;
+  C++ → `FuzzedDataProvider`). This is PromeFuzz's *automatic* depth mechanism (the
+  LLM's trained knowledge) made explicit — NOT hand-written per-lib `api_hints`
+  (PromeFuzz's manual cheat). Confirmed: cmsBuildParametricToneCurve type+params
+  fuzz-derived → cmsgamma.c 84→121 br (+44%, same budget).
 
 Still open: **F6 Phase C CEGAR loop** (prereq WorkingMemory — T12 is a *precursor*,
 not the principled loop), **T7** cross-project driver retrieval (corpus + embedding
-index now BUILT — see below; re-rank wiring into `cross_project_retrieval` + the
+index now BUILT — see below; **dedup now wired** — `load_corpus` filters by
+`results/xproj_index/dedup_keep.json`, corpus 4757→2217; embedding/distill scripts
+added — re-rank wiring of the template embedding into `cross_project_retrieval` + the
 coverage A/B remain). **Rejected (do not re-litigate):** T9 static CFG reachability
 weighting — measured dependency graphs are too flat (max depth 1–3) and planner
 blind spots are depth-independent, so reranking can't recover them; the root cause

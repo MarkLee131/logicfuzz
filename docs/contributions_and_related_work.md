@@ -370,7 +370,7 @@ LogicFuzz fixes structure symbolically and lets the LLM decide leaf values.*
   producers, but the remaining no-producer APIs still drop to NULL holes
   (`docs/generation.md` #14).
 
-### Harness merge — four optimisations beyond PromeFuzz
+### Harness merge — optimisations beyond PromeFuzz
 
 After per-driver generation, `tools/merge_drivers/` fuses N drivers into one
 multi-task OSS-Fuzz binary (the O1 preflight → O2 select → O3 merge → O4 corpus
@@ -379,18 +379,37 @@ per-driver runs fragment the exec budget and share nothing across drivers;
 folding them into one binary that dispatches on a discriminator word lets the
 fuzzer's mutator implicitly schedule across sub-harnesses — an interesting input
 for harness A transfers to B with a single-byte mutation. We adopt PromeFuzz's
-multi-TU + entry-dispatcher structure, then add four optimisations:
+multi-TU + entry-dispatcher structure, then add these optimisations:
 
 | # | LogicFuzz | PromeFuzz baseline | Why |
 |---|---|---|---|
 | 1 | Multi-TU, only the public symbol renamed (`…_<id>`) | single-file flatten | flattening link-fails on duplicate `static` symbols / macro clashes |
 | 2 | Selector at input **tail** | selector at offset 0 | mutators are prefix-biased; a head selector churns sub-harness routing on every front-byte flip — tail keeps the body locally stable for deep exploration |
 | 3 | **Coverage-aware** O2 pre-prune (max-coverage greedy on reached-functions) | include all drivers | drops drivers whose coverage is subsumed |
-| 4 | **CDF** weighted dispatch (bucket width ∝ marginal coverage) | uniform `selector % N` | high-overlap drivers don't waste equal budget |
+| 4 | **Compile-validation** gate (`compile_validate.py`) — merge only TUs that compile under the real coverage-build flags | silently stub non-compilers | a non-compiling sub-driver is lost from the portfolio AND breaks coverage replay (see below) |
+| 5 | **Edge-weighted CDF** dispatch (bucket width ∝ preflight `edges_15s`, Liberator's seed-producing signal) | uniform `selector % N` | high-interaction sub-drivers earn a larger per-input budget; low-interaction ones don't waste equal budget |
 
-(CDF-vs-uniform on real 24h campaigns is empirically untested; both modes are
-exposed — `--mode cdf` / `uniform` — so the complexity can be A/B'd before being
-kept. Implementation lives in `tools/merge_drivers/{preflight,select,merge,corpus}.py`.)
+(Implementation lives in `tools/merge_drivers/{preflight,select,merge,corpus,compile_validate}.py`;
+dispatch modes `--mode cdf` / `uniform` are both exposed. The full cross-round
+"driver history" — Liberator's whole idea — is NOT done; #5 uses only the
+single-run preflight signal, which needs cross-round state to extend.)
+
+**Coverage-measurement soundness (the A≡B principle).** The OSS-Fuzz model —
+fuzz on the address binary, replay the corpus on a *separate* coverage binary —
+is sound and standard (PromeFuzz uses it too); it requires only that the two
+builds be the SAME harness (A≡B). Our merged harness used to violate that: a
+compile-INVALID driver was KEPT (preflight only vets RUN, and "couldn't vet ⇒
+keep"), then silently shadowed by the merge's `||continue` skip + a weak-stub
+no-op, so the address build and the coverage build skipped DIFFERENT non-compiling
+TU sets → a corpus input hit a real sub-driver in one and a no-op stub in the
+other → A≢B → spurious 0 coverage. **Compile-validation restores A≡B** — both
+builds compile the identical valid set (lcms: excluded 9/11 invalid drivers →
+merged-harness llvm-cov 551/9590 br, no longer 0). We therefore **exceed
+PromeFuzz's merge on three axes:** (a) compile-validation = a valid-by-construction
+merge (PromeFuzz silently stubs non-compilers, losing them *and* their coverage);
+(b) tail selector (PromeFuzz's head-offset selector corrupts every sub-driver's
+format-magic seed on a front-byte flip); (c) edge-weighted CDF dispatch (PromeFuzz
+uniform).
 
 ### Breadth + low-FP: borrow PromeFuzz's reach, keep our precision (2026-06)
 
@@ -406,18 +425,20 @@ a driver bug?).
 | lever (all gated) | borrowed-from-PromeFuzz / ours | what it does |
 |---|---|---|
 | **B graceful degradation** | ours (symbolic) | keep orphan-handle `USE_BEFORE_INIT` sequences → island/opaque APIs enter candidates; the unchecked render path leaves the un-bindable arg as a hole |
+| **B+D scoped NULL-guards** (`LOGICFUZZ_SCOPED_GUARDS`) | ours (differentiator) | render the creator NULL-guard PER dependency component (`_dependency_components`), so an INDEPENDENT API runs even when the parser returns NULL on random bytes — instead of the legacy whole-driver `if(!parser)return0` that gated *everything* after it. **PromeFuzz has no dependency model / no parser-vs-independent distinction.** Measured (controlled single-file): +523 br (12.6×) when the parser fails; ≈0 when valid seeds let it succeed |
+| **Tier-1 fuzzable-holes value-domain** (`LOGICFUZZ_FUZZABLE_HOLES`) | ours (automatic depth) | scalar/float CONFIG holes emit a FUZZ_DERIVE intent invoking the LLM's OWN value-domain judgement (a semantically-valid range — chromaticity≈0..1, gamma≈0.1..5 — then derive from the fuzz input; enum holes index a byte into the legal set). This is PromeFuzz's *automatic* depth mechanism (the LLM's trained knowledge) **made explicit — NOT hand-written per-lib `api_hints`** (PromeFuzz's manual cheat). Confirmed: cmsBuildParametricToneCurve fuzz-derived → cmsgamma.c 84→121 br (+44%) |
 | **density** (`_densify`) | PromeFuzz reach | append extenders that USE an already-open handle (`requires ⊆ opened`) → thin `create→use→destroy` chains thicken toward PromeFuzz's 5.6–7.6 calls/driver |
 | **hard NULL-guard + opaque factory hint** | ours (low-FP) | `MUST-GUARD` creator returns + "build the opaque handle via its producer"; density *requires* it (ablation: density-only SEGVs) |
 | **pre-ship quarantine + keep-best** | ours (low-FP) | drop immediate-crash 0-coverage FP drivers from the merge; never ship a driver worse than the trial's peak |
 
 **Neuro-symbolic split is preserved**: density only appends calls whose handle
 dependencies are *already symbolically satisfied*; the guard wording is driven by
-IR-derived `ret_contract` + the use-def producer index; the LLM still owns only
-the leaf values. **Measured (30s A/B, single best driver — not yet the 24h union):**
-lcms **66→206 br (+212%)**, FP 1→0; zlib +6%; c-ares neutral. Density and the
-guard are *synergistic* (neither alone helps — density-only = 0). The 24h
-`--merge` union vs PromeFuzz Table 2 (lcms ~13k, c-ares 6,106) is the pending
-headline test.
+IR-derived `ret_contract` + the use-def producer index; the scoped guard is
+partitioned by the dependency graph; the LLM still owns only the leaf values.
+**Measured (30s A/B, single best driver — not yet the 24h union):** lcms
+**66→206 br (+212%)**, FP 1→0; zlib +6%; c-ares neutral. Density and the guard
+are *synergistic* (neither alone helps — density-only = 0). The 24h `--merge`
+union vs PromeFuzz Table 2 (lcms ~13k, c-ares 6,106) is the pending headline test.
 
 ---
 

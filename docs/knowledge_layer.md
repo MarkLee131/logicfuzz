@@ -65,6 +65,19 @@ signal only**. Generation is valid-by-construction (see `docs/generation.md`),
 so the verdict feeds selection and the prototyper prompt — it does **not** drive
 a repair pass (the old Phase A / F1–F4 repair stage was deleted).
 
+## Preflight smoke-fuzz as a Liberator seed oracle
+
+A second deterministic knowledge signal lives in the merge path, not the
+comprehender. Preflight smoke-fuzzes each generated driver for 15s and records
+`edges_15s` — a driver that *produces seeds* in 15s is interacting with the
+library, which is precisely Liberator's (FSE-2025) "positive" driver signal
+(0-edge drivers are already dropped). That signal now **weights the merged-harness
+CDF dispatch** (`run_single_fuzz._edges_weights_for` →
+`SynthesizedDriver.from_paths(mode=CDF, weights=…)`) so high-interaction
+sub-drivers earn a larger share of the fuzzer's per-input budget (was uniform
+`selector % N`). It is a single-run signal; the full cross-round "driver history"
+Liberator builds needs cross-round state and is not yet done.
+
 ## What we do NOT port from PromeFuzz
 
 - `ValuableExcerptsPrompter` ("is this RAG excerpt relevant") → replaced by a

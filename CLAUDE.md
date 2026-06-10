@@ -67,13 +67,32 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 LOGICFUZZ_XPROJ_CORPUS, default
 #                                 extracted_fuzz_drivers/; same-project first) and
 #                                 inject compressed CALLSPEC-style hints.
+#   LOGICFUZZ_SCOPED_GUARDS=1     B+D: render the creator NULL-guard PER dependency
+#                                 COMPONENT (nested-if) instead of one whole-driver
+#                                 `if(!parser)return0`. `sequence_constructor.
+#                                 _dependency_components` partitions a sequence;
+#                                 a producer's guard wraps ONLY its handle-consumers,
+#                                 so an INDEPENDENT API (doesn't consume the parser's
+#                                 handle) renders OUTSIDE the guard and runs even when
+#                                 the parser returns NULL on random fuzz input.
+#                                 Measured (controlled single-file): +523 br (12.6×)
+#                                 when the parser fails; ≈0 when valid seeds let it
+#                                 succeed (gain is conditional on parser-failure, the
+#                                 common fuzz case). PromeFuzz has no dependency model.
 #   LOGICFUZZ_FUZZABLE_HOLES=1    Tier 1: render tunable CONFIG holes (enum/scalar/
-#                                 float) as FUZZ_DERIVE 'derive from the fuzz input
-#                                 via FuzzedDataProvider' directives instead of a
-#                                 hardcoded constant — so the fuzzer SWEEPS the
-#                                 parameter, not one fixed value. The symbolic layer
-#                                 exposes ONLY tunable DOFs (handles/magic/length stay
-#                                 FIXED). Addresses the branch-DEPTH gap vs PromeFuzz
+#                                 float) as FUZZ_DERIVE 'derive from the fuzz input'
+#                                 directives instead of a hardcoded constant — so the
+#                                 fuzzer SWEEPS the parameter, not one fixed value. The
+#                                 symbolic layer exposes ONLY tunable DOFs (handles/
+#                                 magic/length stay FIXED). Scalar/float holes invoke
+#                                 the LLM's OWN value-domain judgement (choose a
+#                                 SEMANTICALLY VALID range — chromaticity≈0..1,
+#                                 gamma≈0.1..5, temp≈1000..25000 — then derive; do NOT
+#                                 slap an arbitrary modulus); enum holes index a fuzz
+#                                 byte into the legal constant set. This is PromeFuzz's
+#                                 *automatic* depth mechanism (the LLM's trained
+#                                 knowledge) made explicit — NOT hand-written per-lib
+#                                 api_hints. Addresses the branch-DEPTH gap vs PromeFuzz
 #                                 (confirmed: cmsBuildParametricToneCurve type+params
 #                                 fuzz-derived → cmsgamma.c 84→121 br, +44%, same
 #                                 budget). Mechanism is C/C++-aware: intent is
@@ -84,6 +103,13 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 A/B confirms the gain, REMOVE the gate → default-on
 #                                 (`_fuzzable_holes()`→True, like _hard_nullguard),
 #                                 same as factory/diversity/lean. `hole_semantics._arg_intent`.
+#   LOGICFUZZ_SKIP_COMPILE_VALIDATE=1   opt OUT of the merge compile-validation gate
+#                                 (default-on, fail-open): the merge ships only drivers
+#                                 that compile under the real coverage-build flags
+#                                 (`tools/merge_drivers/compile_validate.py`).
+#   LIBERATOR_SVF_TIMEOUT_SECS=N  SVF pointer-analysis cap (default 1800s; raised from
+#                                 600 for large-bitcode libs — libtiff/libvpx/libucl;
+#                                 super-linear, one-time + disk-cached).
 #   LOGICFUZZ_{Z3_MODE,CONSTRUCT_MODE,NO_CACHE,TRIAGE_INCONCLUSIVE,
 #              TRIAGE_PREFIX_LEN,DRIVERS_ROOT,FI_ENDPOINT,BINDING_TELEMETRY}   config values.
 LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 \
@@ -214,6 +240,8 @@ into `FuzzingContext` before agent turns. Remaining LangGraph tools:
 | **Hole Semantics** (G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons()` attaches per-arg value intents at Step 10b (rendered into the hole prompt). `_hard_nullguard()` (**default-on**) escalates ret-contract to `MUST-GUARD` + opaque factory-chain hint. |
 | **Crash-frame classifier** | `tools/merge_drivers/crash_frame.py` | `classify_crash_frame(asan_log, driver_basename)` → driver/library/unknown (deterministic ASan frame attribution; driver-bug FP vs real library bug). |
 | **Pre-ship quarantine** | `run_single_fuzz.py:_is_immediate_crash_fp` + `_maybe_merge_drivers` | drops immediate-crash 0-coverage FP drivers from the merge (poison the fused harness); binary-free, uses the trial's own verdict. + dead-filter bugfix (`dead_on_empty`). |
+| **Compile-validation merge gate** | `tools/merge_drivers/compile_validate.py:validate_compilable` + `run_single_fuzz.py:_compile_validate_candidates` | the merge includes ONLY drivers that COMPILE under the project's real OSS-Fuzz coverage-build flags (per-TU C/C++ language; `-Werror=implicit-function-declaration` re-promoted to catch the link-class failures `-fsyntax-only` misses), excluding the rest up front so the address build and the coverage build compile the IDENTICAL valid set (A≡B). Fail-open (no docker/image ⇒ keep all); opt-out `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1`; writes `merged/compile_validation.json`. The `\|\|continue`+weak-stub in `merge.py` stay as a now-rarely-firing safety net. lcms: excluded 9/11 invalid drivers → merged harness llvm-cov 551/9590 br (no longer spurious 0). |
+| **Edge-weighted CDF dispatch** | `run_single_fuzz.py:_edges_weights_for` + `SynthesizedDriver.from_paths(mode=CDF, weights=…)` | preflight already smoke-fuzzes each driver 15s and records `edges_15s` (a driver producing seeds = interacting with the library = Liberator "positive"); that signal weights the merged-harness CDF dispatch so high-interaction sub-drivers get a larger per-input share (was UNIFORM `selector % N`). Weights align to the merge's name-sorted order; missing ⇒ median, none ⇒ UNIFORM fallback. (Cross-round driver-history is NOT done — needs cross-round state.) |
 | **Keep-best + file-restore** | `src/workflow/nodes/execution.py:_keep_best` | never ship a driver worse than the trial's peak (all paths); restores the kept source **to disk** on rollback (else merge ships the regressed file). |
 | **Coverage Gap** (G5) | `liberator_adapter/analysis/coverage_gap.py` | `compute_gap_apis()` → baseline-uncovered APIs; directs Step 5h construction+ranking toward the gap. |
 | Comprehender | `src/knowledge/comprehender.py` | Two-stage knowledge extraction. Detail: `docs/knowledge_layer.md`. |
@@ -309,6 +337,7 @@ CLI: `--closed-loop`, `--closed-loop-iters N`, `--closed-loop-early-stop K`.
 - **Token Efficiency**: Context prefetching, 8KB output truncation. Comprehender uses deterministic-first layering and automaton acceptance prefilter.
 - **Signal vs Filter**: The automaton produces *signals* (acceptance, sampled paths, grafting) that augment the candidate pool and bias ranking; the greedy max-coverage selection is unchanged.
 - **Reuse upstream Liberator over reimplementation**: When fixing a synthesis-layer problem, first check whether `reference/liberator` already solves it. Adapt at the boundary; don't fork.
+- **Coverage measurement (A≡B / valid-harness)**: the OSS-Fuzz model — fuzz on the address binary, replay the corpus on a *separate* coverage binary — is sound and standard (PromeFuzz uses it too); it requires only that the two builds be the SAME harness (A≡B). The merged harness used to violate this via the `||continue`-skip + weak-stub no-op (the two builds skipped DIFFERENT non-compiling TU sets → a corpus input hit a real sub-driver in one and a stub in the other → 0 coverage). The compile-validation gate restores A≡B by shipping only the identical compile-valid set to both builds.
 
 ## Validation Pipeline
 
@@ -419,6 +448,8 @@ new work from `docs/generation.md` (open bottleneck + roadmap):
 - Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` output into PromeFuzz Table 2 format.
 - TLV-aware seed generation based on format analysis. (Done in part: `scripts/seed_discovery.py` feeds the project's REAL on-disk seeds — `*.icc`/`*.it8`/OSS-Fuzz `*_seed_corpus.zip` — into fuzzing; **T10** (`LOGICFUZZ_FORMAT_INFER`, gated) now also *synthesizes* a minimal front-gate-passing seed from inferred magic when no real seed ships. Full TLV-aware *structural* generation — a valid deep file, not just the leading gate — is still TODO.)
 - Cross-phase information flow (write-only JSON state, WorkingMemory prereq for F6) — see `generation.md`.
+- SVF big-lib cap pending — `LIBERATOR_SVF_TIMEOUT_SECS` raised to 1800s for large-bitcode libs (libtiff/libvpx); libucl is a known non-converging/memory-heavy pathological case that may still exceed it.
+- Skeleton-rendering validity fix (void-array / opaque-type / internal-header) — **LANDED** (`skeleton_generator.py`, commit `777cef0c`): the renderer emits valid C/C++ *by construction* — void/`void*` array element → `uint8_t` byte buffer; opaque/non-scalar types → pointers (never value arrays of an incomplete type); struct values `{0}`-init (not `=0`/NULL-compared); internal opaque typenames (`_cmsContext_struct*`) → `void*`; `*_internal.h` filtered; cleanup only destroys declared `ret_<api>` handles. lcms re-render: void-arrays 6→0, opaque value-arrays 8→0, internal typenames 6→0, undeclared `ret_*` 8→0; previously-broken skeletons now compile (gcc c11 + g++ c++14). Complements the compile-validation gate — fewer invalid drivers to exclude → thicker merged portfolio.
 
 ## Failed Attempts / Lessons
 
