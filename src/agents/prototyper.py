@@ -840,7 +840,8 @@ Output your fuzz driver code inside <fuzz_target> tags.
             fuzz_target_code = self._ensure_extern_c_wrapper(fuzz_target_code)
 
         validation_warnings = self._validate_api_usage(
-            fuzz_target_code, benchmark.get('project', 'unknown'))
+            fuzz_target_code, benchmark.get('project', 'unknown'),
+            known_apis=project_apis)
 
         state_update = {
             "fuzz_target_source": fuzz_target_code,
@@ -1709,8 +1710,10 @@ Output your fuzz driver code inside <fuzz_target> tags.
 
         return "\n".join(lines)
 
-    def _validate_api_usage(self, code: str, project_name: str) -> str:
-        """Validate generated code for internal/private API usage.
+    def _validate_api_usage(self, code: str, project_name: str,
+                            known_apis: Optional[List[Dict[str, Any]]] = None) -> str:
+        """Validate generated code for internal/private API usage + smuggled
+        hallucinated calls.
 
         Previously swallowed validator exceptions and returned ``""`` (the
         signal for "validation passed"). The 2026-05 Agent review caught
@@ -1718,7 +1721,17 @@ Output your fuzz driver code inside <fuzz_target> tags.
         principle, a validator crash should not be reported as a clean
         pass. Now we tag the validation_warnings string so the Fixer
         sees the failure mode and can react.
+
+        2026-06 (Phase 1.2): also runs a PRE-COMPILE hole-fill hallucination
+        scan — the construct-then-fill skeleton is valid-by-construction, but
+        the LLM-authored hole bodies are the one remaining hallucination surface
+        (e.g. a fabricated ``cmsGetNumberOfToneCurveSegments``). Flagging a
+        library-prefixed call absent from the project whitelist as a directed
+        'unknown symbol X; did you mean Y?' warning lets the Fixer correct it on
+        the FIRST round instead of after a wasted compile. Advisory only —
+        never terminates (hole fills are recoverable, unlike a fake skeleton).
         """
+        warnings = ""
         try:
             from src.utils.unified_validator import UnifiedCodeValidator, format_validation_report
 
@@ -1728,14 +1741,64 @@ Output your fuzz driver code inside <fuzz_target> tags.
             if not result.success:
                 logger.warning('Generated code contains internal API usage',
                                trial=self.trial)
-                return format_validation_report(result)
-            logger.info('Generated code passed API validation',
-                        trial=self.trial)
-            return ""
+                warnings = format_validation_report(result)
+            else:
+                logger.info('Generated code passed API validation',
+                            trial=self.trial)
         except Exception as e:
             logger.warning(f'API validation crashed with {type(e).__name__}: {e}',
                            trial=self.trial)
             return f"validator_error: {type(e).__name__}: {e}"
+
+        try:
+            htxt = self._scan_hole_hallucinations(code, known_apis)
+            if htxt:
+                logger.warning('Hole-fill introduced unknown library symbol(s)',
+                               trial=self.trial)
+                warnings = (warnings + "\n" + htxt) if warnings else htxt
+        except Exception:
+            pass  # advisory scan must never break generation
+        return warnings
+
+    def _scan_hole_hallucinations(self, code: str,
+                                  known_apis: Optional[List[Dict[str, Any]]]) -> str:
+        """Pre-compile scan: library-prefixed calls in ``code`` NOT in the
+        project API whitelist → likely LLM-hallucinated (the 10.c class).
+
+        Library-prefix-gated (reuse ``_detect_lib_prefix``) so libc / local
+        helper calls are never flagged; difflib supplies the 'did you mean'.
+        Returns a Fixer directive string, or "" when nothing suspicious."""
+        if not known_apis:
+            return ""
+        import re as _re
+        import difflib as _dl
+        known = {a.get('function_name', '') for a in known_apis
+                 if a.get('function_name')}
+        if not known:
+            return ""
+        try:
+            from liberator_adapter.analysis.sequence_constructor import (
+                _detect_lib_prefix)
+            prefix = _detect_lib_prefix(list(known))
+        except Exception:
+            prefix = ""
+        if not prefix:
+            return ""  # no clear library prefix → cannot safely tell lib vs local
+        called = set(_re.findall(r'\b([A-Za-z_]\w*)\s*\(', code))
+        suspects = sorted(
+            n for n in called
+            if n.lower().startswith(prefix) and n not in known
+            and n != "LLVMFuzzerTestOneInput")
+        if not suspects:
+            return ""
+        lines = []
+        for n in suspects[:8]:
+            sug = _dl.get_close_matches(n, list(known), n=1, cutoff=0.6)
+            hint = f"; did you mean {sug[0]}?" if sug else " (not a public API)"
+            lines.append(f"  - unknown symbol {n}{hint}")
+        return ("hole-fill introduced library-prefixed call(s) NOT in the "
+                "project API set — likely hallucinated; replace or remove:\n"
+                + "\n".join(lines))
 
     def _format_analysis_summary(self, function_analysis: dict) -> str:
         """Format analysis summary for the Prototyper prompt."""

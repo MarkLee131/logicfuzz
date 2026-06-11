@@ -627,9 +627,26 @@ def _reconcile_args(
     # pre-fill" hole intent). Veto OUTPUT → IR type-pattern fallback. Strict
     # ``is False`` gate: args without SVF data (None) and genuinely-written
     # out-pointers (True) are untouched.
+    # Symmetric SVF role-precision pass (2026-06, Phase 1.5):
+    #   * VETO    OUTPUT→fallback when SVF saw read-only access (is False).
+    #   * PROMOTE a non-const pointer CONFIG→OUTPUT when SVF PROVED writes
+    #     (is True) — the under-labelled caller-alloc / output-array case, the
+    #     mirror of the veto. Gated to CONFIG only (NOT HANDLE_IN, which is
+    #     commonly in-out) + non-const pointer, so a mutated handle isn't
+    #     misclassified as a pure output.
+    #   * RECORD a non-winning Evidence when SVF is ABSENT (None) on a pointer
+    #     arg whose role SVF could have decided — so the audit chain honestly
+    #     shows the verdict rests on type-pattern/LLM, not the strongest
+    #     analysis (the "auditable Evidence" claim was silent on SVF-absent).
+    # Strict identity gates: only ``is True`` / ``is False`` ever change a role.
     for i in range(len(args)):
-        if resolved.get(i) is ArgRole.OUTPUT and isinstance(args[i], dict) \
-                and args[i].get("_svf_writes") is False:
+        if not isinstance(args[i], dict):
+            continue
+        svf = args[i].get("_svf_writes")
+        atype_i = (args[i].get("type", args[i].get("type_clang", "")) or "")
+        is_ptr = "*" in atype_i
+        role_i = resolved.get(i, ArgRole.UNKNOWN)
+        if role_i is ArgRole.OUTPUT and svf is False:
             fallback = ir_arg.get(i, ArgRole.UNKNOWN)
             if fallback is ArgRole.OUTPUT:
                 fallback = ArgRole.UNKNOWN
@@ -637,6 +654,17 @@ def _reconcile_args(
             log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
                                 fallback.value, 0.7, won=True,
                                 note="OUTPUT vetoed: SVF saw read-only access"))
+        elif role_i is ArgRole.CONFIG and svf is True and is_ptr \
+                and "const" not in atype_i:
+            resolved[i] = ArgRole.OUTPUT
+            log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
+                                ArgRole.OUTPUT.value, 0.75, won=True,
+                                note="OUTPUT confirmed: SVF saw writes"))
+        elif svf is None and is_ptr and role_i in (
+                ArgRole.OUTPUT, ArgRole.CONFIG, ArgRole.HANDLE_IN):
+            log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
+                                role_i.value, 0.0, won=False,
+                                note="SVF unavailable: role from type-pattern only"))
 
     # Pair each LENGTH with the nearest preceding INPUT_BUFFER.
     out_args: List[ArgSemantics] = []

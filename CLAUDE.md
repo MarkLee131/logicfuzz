@@ -58,18 +58,24 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                       typedef recovery is now unconditionally always-on
 #                       (`data_context.py` Step 5g region), no kill-switch.)
 # New opt-in (gated, A/B pending — start gated like factory/diversity/lean did,
-# default-on once a coverage A/B proves the gain):
+# default-on once a coverage A/B proves the gain). FUZZABLE_HOLES + VALUE_FEEDBACK
+# GRADUATED to default-on (Phase 1, 2026-06 — see their notes below):
 #   LOGICFUZZ_ERROR_VARIANTS=1    T11: emit error-shape skeleton variants (double-
 #                                 free / use-after-destroy / skip-init) so library
 #                                 error branches become reachable (the LLM still
 #                                 fills only leaf holes). Cap LOGICFUZZ_ERROR_VARIANTS_MAX.
-#   LOGICFUZZ_VALUE_FEEDBACK=1    T12: capture filled hole values → coverage_memory,
+#   LOGICFUZZ_VALUE_FEEDBACK       T12: capture filled hole values → coverage_memory,
 #                                 then pin the deepest-coverage ones into the SAME
-#                                 skeleton's holes on the NEXT run (cross-run).
-#   LOGICFUZZ_FORMAT_INFER=1      T10: when no real seed matches a parser-entry
-#                                 driver, synthesize a minimal front-gate-passing
-#                                 seed from inferred format magic (registry / header
-#                                 #define / seed-sample) into the corpus.
+#                                 skeleton's holes on the NEXT run (cross-run). NOW
+#                                 DEFAULT-ON (Phase 1; opt-out =0) — advisory, a
+#                                 fresh project with no coverage_memory is a no-op.
+#   LOGICFUZZ_FORMAT_INFER=1      T10 (opt-in; Phase 4.1 will default-on): when no
+#                                 real seed matches a parser-entry driver, synthesize
+#                                 front-gate-passing seed(s) from inferred magic.
+#                                 Phase 1 wired seed-sample + project header #define
+#                                 magics into infer_spec (generalises past the
+#                                 5-format registry) + emits a DIVERSE corpus (k≥3
+#                                 varied bodies), not one zero-body seed.
 #   LOGICFUZZ_CROSS_PROJECT=1     T7: for a resource-thin library, retrieve
 #                                 structurally-similar drivers (corpus
 #                                 LOGICFUZZ_XPROJ_CORPUS, default
@@ -107,10 +113,11 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 language-agnostic; C driver → index data[N] (NOT
 #                                 FuzzedDataProvider, C++-only), C++ → FuzzedDataProvider
 #                                 (prompt-side, prototyper_prompt{,_c}.txt + _system).
-#                                 GATE IS TEMPORARY (for the A/B): once the coverage
-#                                 A/B confirms the gain, REMOVE the gate → default-on
-#                                 (`_fuzzable_holes()`→True, like _hard_nullguard),
-#                                 same as factory/diversity/lean. `hole_semantics._arg_intent`.
+#                                 NOW DEFAULT-ON (Phase 1, 2026-06; opt-out
+#                                 LOGICFUZZ_FUZZABLE_HOLES=0) — `_fuzzable_holes()`
+#                                 default True, like factory/diversity/density. The
+#                                 +44% is shipped; the coverage A/B uses =0 as the
+#                                 control. `hole_semantics._arg_intent`.
 #   LOGICFUZZ_SKIP_COMPILE_VALIDATE=1   opt OUT of the merge compile-validation gate
 #                                 (default-on, fail-open): the merge ships only drivers
 #                                 that compile under the real coverage-build flags
