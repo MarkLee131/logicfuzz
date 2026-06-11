@@ -41,6 +41,31 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #   LOGICFUZZ_TOP_K=N             skeleton/driver count = the UNION-breadth lever
 #                                 (default filter_top_k=10; needs NO_CACHE=1 to
 #                                 regen skeletons). Target ≈ PromeFuzz drivers/2.5.
+#                                 NOTE: under PORTFOLIO=complete (default) the fixed
+#                                 top_k cap is SUPERSEDED by coverage-complete
+#                                 selection — top_k only bounds the legacy
+#                                 PORTFOLIO=off path.
+#   LOGICFUZZ_PORTFOLIO=complete  Coverage-COMPLETE portfolio selection (DEFAULT-ON)
+#                                 — the fundamental fix to the parser-entry-bias
+#                                 root cause (lcms: global-rank→top_k let
+#                                 parser-entry chains crowd out object-construction
+#                                 subsystems; 93 creators → 17 anchored → 8 drivers,
+#                                 Pipeline/MLU/NamedColor/ToneCurve 0-driver).
+#                                 `subsystem_clusters` partitions the API surface by
+#                                 primary handle type; Step-10 selection guarantees
+#                                 >=1 lifecycle-valid driver PER subsystem cluster
+#                                 (Phase 1 cover) + a bounded depth pass (Phase 2),
+#                                 and Step-5h lets the full constructed pool through
+#                                 (skeleton gen is Z3+render, no LLM → cheap; LLM
+#                                 cost scales with KEPT drivers only). Offline sim
+#                                 (real lcms model): 8 → ~48 drivers, every
+#                                 object-construction subsystem covered. Modes:
+#                                 complete (cover+depth) | minimal (cover only) |
+#                                 off (legacy fixed top_k round-robin = A/B control).
+#                                 `subsystem_clusters.py` + `coverage_ranker.
+#                                 _coverage_complete_select` + data_context Step 5h/10.
+#   LOGICFUZZ_PORTFOLIO_DEPTH=F   depth multiplier for PORTFOLIO Phase 2 (default
+#                                 0.5 → depth drivers ≈ 0.5 × cover drivers).
 #   LOGICFUZZ_DENSE_MAX_EXTRA=N   cap extra APIs appended per chain (default 8 →
 #                                 ~7.7 APIs/seq lcms = PromeFuzz parity).
 #   LOGICFUZZ_DENSE_COOCCUR=0     density extends ONLY handle-sharing (drop the
@@ -343,7 +368,7 @@ section); not duplicated here. Persistence dirs: `results/{project}/automaton/`,
 - **SSOT**: `FuzzingContext` prepared once, immutable. No fallbacks — explicit failures.
 - **Symbolic vs Neural**: Z3 handles hard constraints, LLM handles soft constraints.
 - **Error Triage**: Categorize build errors (link/header/type) for targeted fixing.
-- **Token Efficiency**: Context prefetching, 8KB output truncation. Comprehender uses deterministic-first layering and automaton acceptance prefilter.
+- **Token Efficiency**: Context prefetching, 8KB output truncation. Comprehender uses deterministic-first layering and automaton acceptance prefilter. Per-run LLM token cost is metered (`src/utils/token_meter.py`, fed by `state.update_token_usage` + `Comprehender._invoke`) and dumped to `results/<project>/token_summary.json` (+ a one-line total log) by `run_logicfuzz.run_experiments` — the empirical vs-PromeFuzz cost check.
 - **Signal vs Filter**: The automaton produces *signals* (acceptance, sampled paths, grafting) that augment the candidate pool and bias ranking; the greedy max-coverage selection is unchanged.
 - **Reuse upstream Liberator over reimplementation**: When fixing a synthesis-layer problem, first check whether `reference/liberator` already solves it. Adapt at the boundary; don't fork.
 - **Coverage measurement (A≡B / valid-harness)**: the address build and the coverage build must compile the IDENTICAL harness (A≡B), else replayed coverage is spurious. Mechanism + the compile-validation gate that enforces it: `docs/generation.md` §6.
