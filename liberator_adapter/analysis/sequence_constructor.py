@@ -432,6 +432,15 @@ def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
             sem = idx.by_name.get(name)
             if sem is None:
                 continue
+            # Never pull a DESTROYER or CREATOR in as a co-occurrence extender:
+            # a co-occurring DESTROYER + the closing destroyer appended at the
+            # call site = DOUBLE_DESTROY → the Typestate self-filter SILENTLY
+            # drops the WHOLE sequence (lost candidate); a CREATOR opens a handle
+            # nothing here closes (UNCLOSED_RESOURCE) and is the prefix's job, not
+            # density's. Source (a) can't pull either (it draws from mutators /
+            # consumers_by_handle only). 2026-06 (Phase 2.2 review).
+            if sem.role is APIRole.DESTROYER or sem.role is APIRole.CREATOR:
+                continue
             req = set(getattr(sem, "requires", ()) or ())
             if req <= opened or all(not idx.producers.get(h) for h in req):
                 cands[name] = sem
