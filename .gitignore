@@ -13,6 +13,8 @@ logicfuzz.env
 # Background A/B validation logs (per-run, not for git history)
 logs/ab_*/
 
+.serena/
+
 # Downloaded OSS-Fuzz baseline drivers (data, not source)
 extracted_fuzz_drivers/
 .claude/
