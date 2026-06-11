@@ -715,7 +715,8 @@ class BuilderRunner:
                        benchmark_target_name: str) -> None:
     """Route the project's REAL, format-matching seeds into a corpus dir.
 
-    Always on (the LOGICFUZZ_SEED_CORPUS gate was removed). ``WorkDirs.corpus``
+    Always on; not gated by any flag (the old ``LOGICFUZZ_SEED_CORPUS`` gate was
+    removed and no longer exists). ``WorkDirs.corpus``
     returns an EMPTY dir, so a parser-entry driver (lcms ``cmsOpenProfileFromMem``
     …) fed only random bytes early-returns at its header/magic check and barely
     moves coverage — and never traverses an opaque chain that needs a valid
@@ -739,7 +740,7 @@ class BuilderRunner:
         logger.info('seed-corpus: routed %d real format-matching seed(s) '
                     'into %s', n, corpus_dir)
     except Exception as exc:  # noqa: BLE001 — seeding must never break a run
-      logger.debug('LOGICFUZZ_SEED_CORPUS seeding skipped: %s', exc)
+      logger.debug('seed-corpus routing skipped: %s', exc)
 
   def run_target_local(self, generated_project: str, benchmark_target_name: str,
                        log_path: str) -> bool:

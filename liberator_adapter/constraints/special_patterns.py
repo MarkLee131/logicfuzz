@@ -1167,10 +1167,6 @@ class SpecialPatternAnalyzer:
 
         return result
 
-    def analyze_batch(self, apis: List[Api], **kwargs) -> List[APIPatternAnalysisResult]:
-        """Batch analysis"""
-        return [self.analyze(api, **kwargs) for api in apis]
-
     def clear_cache(self):
         """Clear all caches"""
         self.varlen_analyzer.clear_cache()

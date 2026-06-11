@@ -1,5 +1,5 @@
 from typing import List, Set, Dict
-import random, hashlib
+import random, hashlib, traceback
 
 from .ir import Type, PointerType, Variable, BuffDecl, BuffInit, Function
 from .ir import Statement, Value, NullConstant, Buffer, AllocType, TypeTag
@@ -39,9 +39,6 @@ class Context:
 
         # TODO: map buffer and input
         # self.buffer_map = {}
-
-    def is_void_pointer(self, arg):
-        return isinstance(arg, PointerType) and arg.get_pointee_type() == self.stub_void
 
     def get_null_constant(self):
         return NullConstant(self.stub_void)
@@ -146,13 +143,6 @@ class Context:
 
         return False
 
-    def has_buffer_type(self, type: Type):
-        for b in self.buffs_alive:
-            if b.get_type() == type:
-                return True
-
-        return False
-
     def get_random_buffer(self, type: Type) -> Buffer:
         return random.choice([b for b in self.buffs_alive if b.get_type() == type])
     
@@ -244,9 +234,16 @@ class Context:
                 # print(f"=> {t} not in context, new one")
                 try:
                     v = self.create_new_var(type, is_ret)
-                except:
-                    print("within 'not self.has_vars_type(type):'")
-                    from IPython import embed; embed(); exit()
+                except Exception:
+                    # No satisfying variable for this arg — signal unsatisfiable
+                    # so the caller (CBFactory) rejects this binding path instead
+                    # of crashing. (Was an interactive IPython embed + exit(),
+                    # which aborted non-interactive synthesis runs.) Mirrors the
+                    # RunningContext.try_to_get_var ConditionUnsat handler.
+                    # Lazy import: liberator_adapter.constraints imports this
+                    # module, so a top-level import would be circular.
+                    from liberator_adapter.constraints import ConditionUnsat
+                    raise ConditionUnsat(traceback.format_stack())
             else:
                 # I might get an existing one
                 if random.getrandbits(1) == 1:

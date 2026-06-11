@@ -198,14 +198,8 @@ class APIPatternCache:
     callback_infos: Dict[str, List[CallbackInfo]] = field(default_factory=dict)
     tlv_results: Dict[str, TLVAnalysisResult] = field(default_factory=dict)
 
-    def has_varlen(self, api_name: str) -> bool:
-        return api_name in self.varlen_relations and len(self.varlen_relations[api_name]) > 0
-
     def needs_loop(self, api_name: str) -> bool:
         return api_name in self.loop_patterns and self.loop_patterns[api_name].needs_loop
-
-    def has_callbacks(self, api_name: str) -> bool:
-        return api_name in self.callback_infos and len(self.callback_infos[api_name]) > 0
 
     def is_structured_parser(self, api_name: str) -> bool:
         return api_name in self.tlv_results and self.tlv_results[api_name].is_structured
@@ -268,17 +262,9 @@ class DriverEnhancer:
         """Get API's var-len relationships"""
         return self.cache.varlen_relations.get(api_name, [])
 
-    def get_loop_pattern(self, api_name: str) -> Optional[LoopPatternInfo]:
-        """Get API's loop pattern information"""
-        return self.cache.loop_patterns.get(api_name)
-
     def needs_loop(self, api_name: str) -> bool:
         """Check if API needs loop calls"""
         return self.cache.needs_loop(api_name)
-
-    def get_callback_infos(self, api_name: str) -> List[CallbackInfo]:
-        """Get API's callback information"""
-        return self.cache.callback_infos.get(api_name, [])
 
     def is_structured_parser(self, api_name: str) -> bool:
         """Check if API is a structured data parser"""

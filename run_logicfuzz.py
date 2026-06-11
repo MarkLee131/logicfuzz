@@ -29,7 +29,6 @@ from experiment import evaluator, oss_fuzz_checkout, textcov
 from experiment.workdir import WorkDirs
 from src.llm import models
 from dataclasses import dataclass
-from pathlib import Path
 import subprocess
 from typing import Optional, List
 
@@ -100,70 +99,6 @@ def prepare_experiment_targets(
     experiment_configs.extend(benchmarklib.Benchmark.from_yaml(benchmark_file))
 
   return experiment_configs
-
-
-#
-# Lightweight local shim to reuse the existing Clang extractor without Docker.
-# This preserves extractor expectations (execute/compile/write_to_file/terminate).
-#
-@dataclass
-class LocalProjectTool:
-  benchmark: benchmarklib.Benchmark
-  project_dir: str
-
-  def __post_init__(self):
-    self.container_id = 'local'
-    self.project_dir = os.path.abspath(self.project_dir)
-
-  def execute(self, command: str) -> subprocess.CompletedProcess:
-    """Run |command| locally in the project directory."""
-    proc = subprocess.run(command, shell=True, cwd=self.project_dir,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    return proc
-
-  def compile(self) -> subprocess.CompletedProcess:
-    """Run the project's build.sh if present."""
-    build_sh = os.path.join(self.project_dir, 'build.sh')
-    if os.path.isfile(build_sh) and os.access(build_sh, os.X_OK):
-      return self.execute(f'{build_sh}')
-    elif os.path.isfile(build_sh):
-      return self.execute(f'bash {build_sh}')
-    return subprocess.CompletedProcess(args='compile', returncode=0, stdout='no build.sh', stderr='')
-
-  def write_to_file(self, content: str, file_path: str) -> None:
-    path = file_path if os.path.isabs(file_path) else os.path.join(self.project_dir, file_path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-      f.write(content)
-
-  def terminate(self) -> None:
-    return
-
-
-def guess_language_from_tree(project_dir: str) -> str:
-  """Heuristic: count .c vs .cpp/.cc files to infer language."""
-  c_count = 0
-  cpp_count = 0
-  for root, _, files in os.walk(project_dir):
-    for f in files:
-      if f.endswith('.c'):
-        c_count += 1
-      if f.endswith(('.cpp', '.cc', '.cxx', '.c++', '.hpp', '.h')):
-        cpp_count += 1
-  return 'c' if c_count > cpp_count else 'c++'
-
-
-def clone_repo(repo: str, outdir: str, commit: Optional[str] = None) -> str:
-  outdir = os.path.abspath(outdir)
-  if os.path.exists(outdir):
-    logger.info('Using existing directory %s', outdir)
-  else:
-    logger.info('Cloning %s -> %s', repo, outdir)
-    subprocess.run(['git', 'clone', repo, outdir], check=True)
-  if commit:
-    subprocess.run(['git', 'fetch'], cwd=outdir, check=True)
-    subprocess.run(['git', 'checkout', commit], cwd=outdir, check=True)
-  return outdir
 
 
 def _infer_flag_from_type(type_str: str, is_return: bool = False) -> str:
@@ -1388,7 +1323,6 @@ def parse_args() -> argparse.Namespace:
   # Evaluation profile shortcut. Bundles the flags that are individually
   # opt-in but should ALL be on when reporting "total coverage vs baseline"
   # numbers (PromeFuzz Table 2 etc.):
-  #   --no-coverage-filter  (don't suppress already-covered code)
   #   --closed-loop         (Phase G feedback, designed to grow coverage)
   #   --merge-drivers       (synthesize a single multi-task harness from
   #                          successful trials at the eval tail)
@@ -1402,9 +1336,8 @@ def parse_args() -> argparse.Namespace:
                       action='store_true',
                       default=False,
                       dest='eval_profile',
-                      help='Evaluation profile: implies --no-coverage-filter, '
-                           '--closed-loop, --merge-drivers. Overridden by '
-                           'explicit flags.')
+                      help='Evaluation profile: implies --closed-loop, '
+                           '--merge-drivers. Overridden by explicit flags.')
 
   # Multi-task harness merger. Folds successful trials' .fuzz_target source
   # files into a single dispatcher driver via tools.merge_drivers.merge.

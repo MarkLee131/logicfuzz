@@ -147,7 +147,6 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
         is_crash_fix = bool(crash_fix_info and not build_errors)
         state_update = {
             "fuzz_target_source": fuzz_target_code or current_code,
-            "previous_fuzz_target_source": current_code,
             "compile_success": None,  # fixed driver must rebuild (both paths)
             "build_errors": [],
             "session_memory": session_memory,

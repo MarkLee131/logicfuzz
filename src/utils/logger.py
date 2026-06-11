@@ -217,42 +217,6 @@ class LangGraphLogger:
             if agent_name in self._json_buffers:
                 self._json_buffers[agent_name] = []
 
-    def log_workflow_event(self,
-                           event_type: str,
-                           message: str,
-                           metadata: Optional[Dict[str, Any]] = None) -> None:
-        """Log workflow-level events (state transitions, errors, etc.)"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        workflow_log = self.log_dir / "workflow.log"
-
-        try:
-            with open(workflow_log, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] {event_type}: {message}\n")
-                if metadata:
-                    f.write(f"  Metadata: {metadata}\n")
-                f.write("\n")
-        except Exception as e:
-            logger.warning(f'Failed to log workflow event: {e}',
-                           trial=self.trial)
-
-    def get_token_stats(self,
-                        agent_name: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get token usage statistics.
-        
-        Args:
-            agent_name: If provided, return stats for specific agent. 
-                       Otherwise return all stats.
-        
-        Returns:
-            Dictionary of token statistics
-        """
-        with self._buffer_lock:
-            if agent_name:
-                return self._token_stats.get(agent_name, {})
-            return self._token_stats.copy()
-
     def finalize(self) -> None:
         """Flush all remaining logs, write summary stats, and clean up."""
         import time
@@ -323,9 +287,6 @@ class NullLogger:
     """
 
     def log_interaction(self, *args, **kwargs) -> None:
-        pass
-
-    def log_token_usage(self, *args, **kwargs) -> None:
         pass
 
     def flush_agent_logs(self, *args, **kwargs) -> None:

@@ -191,9 +191,8 @@ def _keep_best(cur_cov, cur_src, best_cov, best_src, threshold: float = 0.85):
     Returns ``(final_cov, final_src, best_cov, best_src, restored)``. When this
     iteration matches or beats the best, it becomes the new best. When it
     regresses below ``threshold`` of the best (and a best exists), the best
-    driver is restored so a regressing improver / fixer / §10B pass never ships
-    a worse driver than the trial already achieved. The threshold tolerates
-    measurement noise (same 0.85 as the improver-rollback gate).
+    driver is restored so a regressing fixer pass never ships a worse driver
+    than the trial already achieved. The threshold tolerates measurement noise.
     """
     best_cov = best_cov or 0.0
     best_src = best_src or ""
@@ -543,17 +542,15 @@ def execution_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict[
 
     # final_* hold the source/coverage we will ship; keep-best (below) may
     # restore an earlier, better iteration over a regressed one (covers fixer
-    # regressions — the per-driver improver that needed a dedicated rollback was
-    # removed with the optimize subsystem).
+    # regressions).
     final_coverage_percent = coverage_percent
     final_fuzz_target_source = fuzz_target_source
 
-    # Keep-best (general, ALL paths). The improver-rollback above only guards
-    # the improver; the fixer and the §10B baseline-diff path also re-generate
-    # the driver and can regress coverage with no guard — that is how c-ares
-    # trial 02 shipped 804 branches after peaking at 1419. Track the best
-    # (coverage, source) this trial has reached and restore it when an iteration
-    # regresses substantively, so we ship the best driver, not the last.
+    # Keep-best (general, ALL paths). The fixer re-generates the driver and can
+    # regress coverage with no guard — that is how c-ares trial 02 shipped 804
+    # branches after peaking at 1419. Track the best (coverage, source) this
+    # trial has reached and restore it when an iteration regresses
+    # substantively, so we ship the best driver, not the last.
     (final_coverage_percent, final_fuzz_target_source,
      best_cov, best_src, keep_best_restored) = _keep_best(
         final_coverage_percent, final_fuzz_target_source,

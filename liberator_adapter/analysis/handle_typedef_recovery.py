@@ -26,8 +26,8 @@ already-specific type, and never touch a byte buffer — the header declares tho
 as ``const void *`` and they stay ``void *`` (their recovered bare token is
 ``void``, which fails the upgrade gate). Functions absent from the recovered
 signature map are left untouched, and a library with no void*-typedef handles
-sees zero changes. Disable at the call site via
-``LOGICFUZZ_DISABLE_TYPEDEF_RECOVERY=1``.
+sees zero changes. Typedef-handle recovery is now unconditionally always-on
+(the former ``LOGICFUZZ_DISABLE_TYPEDEF_RECOVERY`` gate was removed).
 """
 
 from __future__ import annotations

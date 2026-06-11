@@ -239,10 +239,6 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
     raise
 
 
-# Removed: _extract_existing_fuzzer_headers_helper
-# Now handled inside FuzzingContext.prepare()
-
-
 def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
                       args: argparse.Namespace, work_dirs: WorkDirs,
                       trial: int, shared_data: dict = None) -> TrialResult:
@@ -259,10 +255,6 @@ def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
   # Note: signal-based timeout is disabled because signal.signal() only works in main thread
   # ThreadPool workers run in separate threads, so signal.SIGALRM cannot be used here
   # If timeout protection is needed, consider using multiprocessing.Pool instead of ThreadPool
-  TRIAL_TIMEOUT = getattr(args, 'trial_timeout', 7200)  # 2 hours default
-  trial_logger.info(f'⏰ Trial timeout configured: {TRIAL_TIMEOUT} seconds ({TRIAL_TIMEOUT/3600:.1f} hours)')
-  trial_logger.info('⏰ Note: signal-based timeout disabled (running in ThreadPool, not main thread)')
-  
   try:
     # Use the LangGraph-based agent system
     trial_logger.info('Using LangGraph-based agent workflow')
@@ -421,17 +413,7 @@ def _fuzzing_pipeline(benchmark: Benchmark, model_name: str,
 
     trial_logger.info('✅ _fuzzing_pipeline completed, returning trial_result')
     return trial_result
-    
-  except TimeoutError as e:
-    trial_logger.error(f'⏰ Trial timed out: {e}')
-    trial_logger.error('⏰ Returning empty result due to timeout')
-    # Return a minimal failed result
-    return TrialResult(
-        benchmark=benchmark,
-        trial=trial,
-        work_dirs=work_dirs,
-        result_history=[]
-    )
+
   finally:
     # Note: signal.alarm(0) removed because we disabled signal-based timeout
     trial_logger.info('⏰ Trial cleanup complete')

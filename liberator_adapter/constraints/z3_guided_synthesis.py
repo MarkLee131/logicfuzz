@@ -70,10 +70,6 @@ class SatisfiabilityResult:
     def is_sat(self) -> bool:
         return self.status == SatisfiabilityStatus.SAT
 
-    @property
-    def is_unsat(self) -> bool:
-        return self.status == SatisfiabilityStatus.UNSAT
-
 
 @dataclass
 class CandidateResult:

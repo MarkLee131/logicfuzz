@@ -128,7 +128,6 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
             logger.error('No crash_analysis in state', trial=self.trial)
             return {"errors": [{"message": "No crash analysis found"}]}
 
-        # Store benchmark for FI tool initialization
         self.benchmark = benchmark
         self.project_name = benchmark.project
 

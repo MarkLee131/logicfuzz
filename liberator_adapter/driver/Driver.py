@@ -34,17 +34,6 @@ class Driver:
     def get_counter_size(self) -> List[int]:
         return self.counter_size
     
-    def get_apis_multiset(self) -> Dict[Api, int]:
-
-        api_multiset = {}
-        for s in self.statements:
-            if isinstance(s, ApiCall):
-                api = s.original_api
-                freq = api_multiset.get(api, 0) + 1
-                api_multiset[api] = freq
-
-        return api_multiset
-    
     def add_stub_functions(self, stub_functions: List[Function]):
         self.stub_functions = stub_functions
         return self

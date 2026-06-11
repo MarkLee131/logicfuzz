@@ -80,7 +80,7 @@ def _crash_asan_log(state: FuzzingWorkflowState) -> str:
 
 def _lean_crash_triage(state: FuzzingWorkflowState,
                        trial: int) -> Optional[Dict[str, Any]]:
-    """Deterministic crash triage for LEAN MODE.
+    """Lean deterministic crash triage (runs unconditionally; no env gate).
 
     Returns synthetic ``crash_analysis`` + ``context_analysis`` verdicts that
     the EXISTING router + caps + fixer plumbing consume exactly as if the LLM
@@ -163,13 +163,13 @@ def supervisor_node(state: FuzzingWorkflowState, config: RunnableConfig) -> Dict
         logger.warning(f'Too many errors ({len(errors)}), terminating workflow', trial=trial)
         return _end_workflow("too_many_errors", f"Workflow terminated due to {len(errors)} errors")
 
-    # LEAN MODE (roadmap item 4): replace the 2-call LLM crash triage with a
-    # deterministic crash-frame verdict. We synthesize the crash_analysis +
-    # context_analysis the LLMs would have produced and merge them into the
-    # routing state, so the existing router / caps / fixer plumbing handle
-    # them unchanged. 'unknown' attribution → no injection → the LLM path runs
-    # as a fallback. No-op (None) when LOGICFUZZ_LEAN_MODE is unset, leaving
-    # the off-path byte-identical.
+    # Lean deterministic crash triage (runs UNCONDITIONALLY — there is no env
+    # gate): replace the 2-call LLM crash triage with a deterministic crash-frame
+    # verdict. We synthesize the crash_analysis + context_analysis the LLMs would
+    # have produced and merge them into the routing state, so the existing
+    # router / caps / fixer plumbing handle them unchanged. An 'unknown' ASan
+    # frame attribution → no injection (None) → the LLM crash path runs as a
+    # fallback.
     lean_crash_verdict = _lean_crash_triage(state, trial)
     if lean_crash_verdict:
         state = cast(FuzzingWorkflowState, {**state, **lean_crash_verdict})

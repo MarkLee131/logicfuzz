@@ -259,7 +259,6 @@ class CompilationErrorTriage:
             TriageResult with categorized errors and recommendations
         """
         triaged_errors = []
-        error_text = '\n'.join(build_errors) if isinstance(build_errors, list) else str(build_errors)
 
         # Process each error line
         for error in build_errors:

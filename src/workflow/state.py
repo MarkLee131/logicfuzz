@@ -99,8 +99,6 @@ class FuzzingWorkflowState(TypedDict):
         int]  # Total build failures across all phases (prevents infinite loops)
     prototyper_regenerate_count: NotRequired[
         int]  # Counter for prototyper regenerations
-    previous_fuzz_target_source: NotRequired[
-        str]  # Store previous version for diff generation
 
     # === Error Handling ===
     errors: NotRequired[List[Dict[str, Any]]]
@@ -187,7 +185,6 @@ def create_initial_state(
         compilation_retry_count=0,  # Track compilation retries separately
         build_attempts=[],  # Append-only telemetry for retry-budget calibration
         prototyper_regenerate_count=0,  # Track prototyper regenerations
-        previous_fuzz_target_source="",  # For diff generation
         # Store additional configuration
         pipeline=pipeline or [],
         use_context=use_context,
@@ -211,7 +208,6 @@ def create_initial_state(
             "known_fixes": [],  # Known error fixes
             "decisions": [],  # Key decision records
             "coverage_strategies": [],  # Coverage optimization strategies
-            "coverage_attempts": []  # History of coverage improvement attempts
         },
         # Session memory toggle
         use_session_memory=use_session_memory,
@@ -365,7 +361,6 @@ def add_known_fix(state: FuzzingWorkflowState,
             "known_fixes": [],
             "decisions": [],
             "coverage_strategies": [],
-            "coverage_attempts": []
         }
 
     known_fixes = state["session_memory"].get("known_fixes", [])
@@ -417,7 +412,6 @@ def add_decision(state: FuzzingWorkflowState,
             "known_fixes": [],
             "decisions": [],
             "coverage_strategies": [],
-            "coverage_attempts": []
         }
 
     decisions = state["session_memory"].get("decisions", [])
@@ -462,7 +456,6 @@ def add_coverage_strategy(state: FuzzingWorkflowState,
             "known_fixes": [],
             "decisions": [],
             "coverage_strategies": [],
-            "coverage_attempts": []
         }
 
     strategies = state["session_memory"].get("coverage_strategies", [])
@@ -486,69 +479,6 @@ def add_coverage_strategy(state: FuzzingWorkflowState,
 
     # Limit strategies to keep only the most recent 10
     state["session_memory"]["coverage_strategies"] = strategies[-10:]
-
-
-def add_coverage_attempt(state: FuzzingWorkflowState,
-                         attempt_type: str,
-                         outcome: str,
-                         coverage_percent: float,
-                         line_coverage_diff: float,
-                         no_improvement_count: int,
-                         iteration: int = None,
-                         notes: str = "") -> None:
-    """
-    Add a coverage improvement attempt record to session_memory.
-    
-    This is used to let downstream agents (coverage_analyzer, improver, etc.)
-    see how many times we've already tried to improve coverage and with what
-    results, so they can decide when to stop.
-    
-    Args:
-        state: Workflow state
-        attempt_type: Type of attempt (e.g., "coverage_analysis", "improver")
-        outcome: Short outcome label (e.g., "improve_required", "no_improvement_needed")
-        coverage_percent: Current PC coverage percent (0.0-1.0)
-        line_coverage_diff: Current real project line coverage diff (0.0-1.0)
-        no_improvement_count: Consecutive iterations without significant improvement
-        iteration: Logical workflow iteration when this attempt happened
-        notes: Optional short note for human-readable context
-    """
-    if "session_memory" not in state:
-        state["session_memory"] = {
-            "api_constraints": [],
-            "archetype": None,
-            "known_fixes": [],
-            "decisions": [],
-            "coverage_strategies": [],
-            "coverage_attempts": []
-        }
-
-    attempts = state["session_memory"].get("coverage_attempts", [])
-
-    attempt_record = {
-        "attempt_type":
-        attempt_type,
-        "outcome":
-        outcome,
-        "coverage_percent":
-        float(coverage_percent or 0.0),
-        "line_coverage_diff":
-        float(line_coverage_diff or 0.0),
-        "no_improvement_count":
-        int(no_improvement_count or 0),
-        "iteration":
-        iteration if iteration is not None else state.get(
-            "current_iteration", 0),
-        "index":
-        len(attempts) + 1,
-        "notes":
-        notes,
-    }
-
-    attempts.append(attempt_record)
-
-    # Keep only the most recent 20 attempts to avoid unbounded growth
-    state["session_memory"]["coverage_attempts"] = attempts[-20:]
 
 
 def format_session_memory_for_prompt(state: FuzzingWorkflowState,
@@ -637,23 +567,6 @@ def format_session_memory_for_prompt(state: FuzzingWorkflowState,
                 # Compact format: one line per strategy
                 parts.append(f"- {s['strategy']}")
 
-    # 6. Format coverage attempts history (top N most recent)
-    if attempts := session_memory.get("coverage_attempts", []):
-        total_attempts = len(attempts)
-        recent_attempts = attempts[-max_items_per_category:]
-        parts.append("\n## Coverage Attempts History")
-        parts.append(f"- Total attempts so far: {total_attempts}")
-        for a in recent_attempts:
-            iter_no = a.get("iteration", 0)
-            attempt_type = a.get("attempt_type", "unknown")
-            outcome = a.get("outcome", "unknown")
-            cov = a.get("coverage_percent", 0.0)
-            diff = a.get("line_coverage_diff", 0.0)
-            no_imp = a.get("no_improvement_count", 0)
-            parts.append(f"- Iteration {iter_no} | Type={attempt_type} | "
-                         f"PC_coverage={cov:.2%} | line_diff={diff:.2%} | "
-                         f"no_improve_count={no_imp} | outcome={outcome}")
-
     if not parts:
         return "*No consensus constraints for this task yet*"
 
@@ -681,7 +594,6 @@ def consolidate_session_memory(state: FuzzingWorkflowState) -> Dict[str, Any]:
             "known_fixes": [],
             "decisions": [],
             "coverage_strategies": [],
-            "coverage_attempts": []
         }
 
     # 1. Deduplicate API constraints
@@ -718,10 +630,5 @@ def consolidate_session_memory(state: FuzzingWorkflowState) -> Dict[str, Any]:
             unique_strategies[key] = s
         session_memory["coverage_strategies"] = list(
             unique_strategies.values())[-10:]
-
-    # 5. Limit coverage_attempts length (keep chronological order)
-    if attempts := session_memory.get("coverage_attempts", []):
-        # No deduplication here – history is meaningful. Just trim to last 20.
-        session_memory["coverage_attempts"] = attempts[-20:]
 
     return session_memory

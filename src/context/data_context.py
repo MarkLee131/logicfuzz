@@ -267,12 +267,12 @@ class FuzzingContext:
                 llm_client: Any = None,
                 closed_loop_iters: int = 0,
                 closed_loop_early_stop: int = 0,
-                # Doc priors are ON by default and not exposed as a CLI opt-out
-                # (B1-③): doxygen priors are token-NEGATIVE — a substantive
-                # docstring lets the comprehender SKIP that API's LLM call — and
-                # @param/@return carry ownership/NULL contracts the generated
-                # driver needs. Kept as params (not hardcoded) only so tests can
-                # A/B them programmatically.
+                # Doc priors are always-on and not switchable (no CLI opt-out):
+                # doxygen priors are token-NEGATIVE — a substantive docstring lets
+                # the comprehender SKIP that API's LLM call — and @param/@return
+                # carry ownership/NULL contracts the generated driver needs. These
+                # stay as params (not hardcoded constants) because the body branches
+                # on them below.
                 use_doxygen_priors: bool = True,
                 use_readme_purpose: bool = True) -> 'FuzzingContext':
         """
@@ -1090,9 +1090,9 @@ class FuzzingContext:
             _asm_path = Path(f"./results/{project_name}/state/api_semantic_model.json")
             api_semantic_model.save(_asm_path)
 
-            # Telemetry: how many IR roles doc/naming overrode — this count is
-            # the band-aid (Phase A / F1) that the redesign deletes; it should
-            # trend down as the model gets the role right up front.
+            # Telemetry: doc/naming-vs-IR role-override count — how many IR roles
+            # the doc/naming evidence overrode. It should trend down as the model
+            # gets the role right up front.
             _ir_overrides = sum(
                 1 for _s in api_semantic_model.apis.values()
                 for _e in _s.evidence

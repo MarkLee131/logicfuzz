@@ -240,10 +240,6 @@ class HoleSet:
         """Get hole"""
         return self.holes.get(name)
 
-    def get_unfilled(self) -> List[Hole]:
-        """Get unfilled holes"""
-        return [h for h in self.holes.values() if not h.is_filled]
-
     def fill(self, name: str, value: Any, reason: str = "") -> bool:
         """Fill hole"""
         hole = self.holes.get(name)

@@ -92,8 +92,6 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                          trial=trial,
                          args=args,
                          system_message=system_message)
-        self.project_name = None
-        self.benchmark = None
 
     # =========================================================================
     # ToolCallingMixin Implementation
@@ -415,7 +413,6 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
             merge_session_memory_updates)
 
         benchmark = state["benchmark"]
-        self.benchmark = benchmark  # Store for FI tool initialization
         function_analysis = state.get("function_analysis", {})
         context = state.get('context', {})
 
@@ -532,10 +529,6 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         driver_knowledge_text = self._format_driver_knowledge(
             existing_driver_knowledge)
 
-        # §10B baseline-diff recovery was removed with the optimize subsystem;
-        # this slot stays empty (kept so the prompt template renders uniformly).
-        baseline_recovery_text = ""
-
         # The Z3-validated skeleton rendered as "base for refinement". The
         # LLM is told to refine THIS specific driver (preserve API order,
         # fix compilation, improve coverage). Mutually consistent with
@@ -636,7 +629,6 @@ Before writing any code, think about:
 </step1_understand_project>
 
 <reference_information>
-{baseline_recovery_text}
 <include_paths>
 {include_path_context}
 </include_paths>
