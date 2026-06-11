@@ -1293,9 +1293,20 @@ class FuzzingContext:
                         key=lambda s: (0 if 4 <= len(s) <= 12 else 1,
                                        -_gap_hits(s)))
                     _grammar_candidates = list(api_sequences)
-                    _budget = max(filter_top_k * 4, 40) if filter_top_k else (
-                        len(_constructed) + len(_grammar_candidates))
-                    _k = filter_top_k or 12
+                    from liberator_adapter.constraints.coverage_ranker import (
+                        _portfolio_config as _pfc)
+                    if _pfc()[0] != 'off':
+                        # Coverage-complete: let the FULL constructed pool through
+                        # (per-creator sequences cover every subsystem); the
+                        # cluster-cover cut at Step 10 picks the portfolio. Skeleton
+                        # gen here is Z3+render (no LLM) so a larger pool is cheap —
+                        # LLM cost scales only with the KEPT drivers.
+                        _budget = len(_constructed) + len(_grammar_candidates)
+                        _k = max(filter_top_k or 12, 24)
+                    else:
+                        _budget = max(filter_top_k * 4, 40) if filter_top_k else (
+                            len(_constructed) + len(_grammar_candidates))
+                        _k = filter_top_k or 12
                     # Strand order = priority: parser entries first (deepest
                     # coverage per call), then the protected workflow backbone,
                     # then gap-novelty, automaton-feasible, and the grammar
@@ -1866,36 +1877,93 @@ class FuzzingContext:
                     for _b in (_bA, _bB, _bC):
                         _b.sort(key=lambda d: _focus(d.get('api_sequence') or []))
 
-                    _cap = filter_top_k or len(skeleton_drivers)
+                    from liberator_adapter.analysis.subsystem_clusters import (
+                        subsystem_clusters)
+                    from liberator_adapter.constraints.coverage_ranker import (
+                        _portfolio_config)
+                    _pf_mode, _pf_depth = _portfolio_config()
+                    _clusters = (subsystem_clusters(api_semantic_model)
+                                 if _pf_mode != 'off' else {})
                     _buckets = [_bA, _bB, _bC]
-                    _used = [[False] * len(_b) for _b in _buckets]
                     _portfolio: List[Dict[str, Any]] = []
 
-                    # Round-robin across buckets (parser / workflow / novel) up to
-                    # the cap — even spread instead of piling onto one bucket.
-                    def _pick_from(_b, _u):
-                        for _i, _d in enumerate(_b):
-                            if not _u[_i]:
-                                return _i
-                        return -1
-
-                    while len(_portfolio) < _cap:
-                        _moved = False
-                        for _j, _b in enumerate(_buckets):
-                            _i = _pick_from(_b, _used[_j])
-                            if _i >= 0:
-                                _portfolio.append(_b[_i])
-                                _used[_j][_i] = True
-                                _moved = True
-                                if len(_portfolio) >= _cap:
+                    if _clusters:
+                        # Coverage-COMPLETE portfolio: guarantee >=1 driver per
+                        # SUBSYSTEM cluster (object-construction subsystems no
+                        # longer crowded out by parser entries), then a bounded
+                        # depth pass. Replaces the fixed filter_top_k cap — the
+                        # measured lcms root cause (8 drivers / 17 of 93 creators).
+                        def _dcl(_d):
+                            seq = _d.get('api_sequence') or []
+                            cs = [_clusters[a] for a in seq if a in _clusters]
+                            return cs[0] if cs else ('N:' + (seq[0] if seq else '?'))
+                        _covered: set = set()
+                        _sel_ids: set = set()
+                        # Phase 1 — cover: one driver per cluster, bucket-priority
+                        # (parser/workflow/novel), focused-first within a bucket.
+                        for _b in _buckets:
+                            for _d in _b:
+                                _cl = _dcl(_d)
+                                if _cl not in _covered:
+                                    _portfolio.append(_d)
+                                    _covered.add(_cl)
+                                    _sel_ids.add(id(_d))
+                        _n_cover = len(_portfolio)
+                        # Phase 2 — depth (skipped when minimal): round-robin the
+                        # remaining drivers up to depth_mult x cover.
+                        if _pf_mode != 'minimal':
+                            _depth_budget = int(round(_pf_depth * _n_cover))
+                            _used = [[(id(_d) in _sel_ids) for _d in _b]
+                                     for _b in _buckets]
+                            _added = 0
+                            while _added < _depth_budget:
+                                _moved = False
+                                for _j, _b in enumerate(_buckets):
+                                    for _i, _d in enumerate(_b):
+                                        if not _used[_j][_i]:
+                                            _portfolio.append(_d)
+                                            _used[_j][_i] = True
+                                            _added += 1
+                                            _moved = True
+                                            break
+                                    if _added >= _depth_budget:
+                                        break
+                                if not _moved:
                                     break
-                        if not _moved:
-                            break
-                    log.info(
-                        '   🎯 portfolio (round-robin): %d parser + %d workflow '
-                        '+ %d novel available → kept %d of %d',
-                        len(_bA), len(_bB), len(_bC), len(_portfolio),
-                        len(skeleton_drivers))
+                        log.info(
+                            '   🎯 portfolio (coverage-complete %s): %d clusters '
+                            'covered → %d cover + %d depth = %d of %d drivers',
+                            _pf_mode, len(_covered), _n_cover,
+                            len(_portfolio) - _n_cover, len(_portfolio),
+                            len(skeleton_drivers))
+                    else:
+                        # Legacy: fixed filter_top_k round-robin (PORTFOLIO=off).
+                        _cap = filter_top_k or len(skeleton_drivers)
+                        _used = [[False] * len(_b) for _b in _buckets]
+
+                        def _pick_from(_b, _u):
+                            for _i, _d in enumerate(_b):
+                                if not _u[_i]:
+                                    return _i
+                            return -1
+
+                        while len(_portfolio) < _cap:
+                            _moved = False
+                            for _j, _b in enumerate(_buckets):
+                                _i = _pick_from(_b, _used[_j])
+                                if _i >= 0:
+                                    _portfolio.append(_b[_i])
+                                    _used[_j][_i] = True
+                                    _moved = True
+                                    if len(_portfolio) >= _cap:
+                                        break
+                            if not _moved:
+                                break
+                        log.info(
+                            '   🎯 portfolio (round-robin): %d parser + %d workflow '
+                            '+ %d novel available → kept %d of %d',
+                            len(_bA), len(_bB), len(_bC), len(_portfolio),
+                            len(skeleton_drivers))
                     skeleton_drivers = _portfolio
                 elif filter_top_k and len(skeleton_drivers) > filter_top_k:
                     # No semantic model → fall back to a plain top-K cap.
