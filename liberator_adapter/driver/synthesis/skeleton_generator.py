@@ -260,6 +260,11 @@ class SkeletonVariable:
     array_size: Optional[str] = None  # May be a Hole placeholder
     init_value: Optional[str] = None  # May be a Hole placeholder
     source_api: Optional[str] = None  # API that produces this variable (if any)
+    # Consumer-arg wiring: when set, the API call passes THIS expression (e.g.
+    # ``ret_cmsOpenProfileFromMem``) directly as the argument. The variable's
+    # decl-time init snapshots NULL (declarations precede the producer call), so
+    # the snapshot must NOT be used as the live argument. 2026-06 review.
+    bound_expr: Optional[str] = None
 
     def get_declaration(self) -> str:
         """Generate declaration code"""
@@ -557,7 +562,14 @@ class SkeletonGenerator:
                 if var.init_value and var.init_value.startswith('__'):
                     continue
 
-                var.init_value = wired_text
+                # Wire as a call-site expression, NOT the decl init: setting
+                # ``init_value`` rendered ``Type consumer = ret_producer;`` in the
+                # DECLARATION block, which runs BEFORE the producer call → the
+                # consumer captured NULL (every "wired" arg was NULL at call
+                # time). ``bound_expr`` is consumed directly in the API-call arg
+                # list (`_generate_single_api_call`) so the LIVE producer return
+                # is passed. 2026-06 review.
+                var.bound_expr = wired_text
                 # NOTE: do NOT set ``var.source_api = wired_text`` here.
                 # ``source_api`` drives _generate_cleanup's destroyer pairing
                 # and must be a PRODUCING API NAME, not a wired variable name
@@ -1138,11 +1150,13 @@ class SkeletonGenerator:
             var_name = f"{arg.name or f'arg{idx}'}_{api.function_name}"
             if var_name in skeleton.variables:
                 var = skeleton.variables[var_name]
-                if var.is_array:
-                    args.append(var.name)  # Array name is address
-                elif var.is_pointer:
-                    args.append(var.name)
+                if var.bound_expr:
+                    # Pass the producer's LIVE return directly — var.name's decl
+                    # init snapshots NULL (declarations precede the producer
+                    # call). 2026-06 review.
+                    args.append(var.bound_expr)
                 else:
+                    # is_array / is_pointer / scalar all pass the var name.
                     args.append(var.name)
             else:
                 # Variable not declared, use placeholder
@@ -1264,12 +1278,23 @@ class SkeletonGenerator:
 
         # Walk variables that came from heap-allocated API returns
         # (source_api set ⇒ producer-tracked).
+        # Sequence is lifecycle-complete by construction: if its OWN destroyer
+        # for a handle is ALREADY a call in the sequence, emitting the paired
+        # destroy here too is a DOUBLE-FREE. (Was masked by the NULL-snapshot
+        # binding bug — the in-sequence destroyer received NULL; fixing that
+        # binding activates this.) Skip any handle whose inferred destroyer is
+        # already in the sequence. 2026-06 review.
+        seq_api_names = {a.function_name
+                         for a in (skeleton.target_apis or [])}
         for var_name, var in skeleton.variables.items():
             if not var.source_api:
                 continue
             destroy_call = _infer_paired_destroy(var.source_api, var_name)
             if destroy_call is None:
                 continue
+            destroyer_name = destroy_call.split("(", 1)[0].strip()
+            if destroyer_name in seq_api_names:
+                continue  # sequence already destroys this handle — no double-free
             cleanup_lines.append(f"if ({var_name}) {{ {destroy_call}; }}")
 
         if not cleanup_lines:

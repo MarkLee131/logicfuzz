@@ -64,9 +64,15 @@ def _make_api(name: str, ret_type: str, args):
 # arg_bindings consumption — positive cases
 # ============================================================
 
-def test_arg_binding_overrides_default_null_init():
-    """When arg_bindings provides a wiring for (api, idx), the consumer
-    var's init_value must be set to that text instead of NULL."""
+def test_arg_binding_wires_live_producer_return_into_call():
+    """When arg_bindings provides a wiring for (api, idx), the consumer arg must
+    receive the producer's LIVE return at the CALL SITE — not via the decl init.
+
+    Regression for the 2026-06 NULL-snapshot bug: the wiring used to be applied
+    as ``var.init_value`` → the declaration ``cJSON* item = ret_cJSON_Parse;``
+    rendered in the decl block BEFORE the producer call ran, so ``item`` captured
+    NULL. The fix stores it on ``var.bound_expr`` and passes it directly as the
+    call argument."""
     from liberator_adapter.driver.synthesis.skeleton_generator import (
         SkeletonGenerator,
     )
@@ -93,9 +99,16 @@ def test_arg_binding_overrides_default_null_init():
 
     item_var = sk.variables.get("item_cJSON_Print")
     assert item_var is not None
-    assert item_var.init_value == "ret_cJSON_Parse", (
-        f"expected wired init_value=ret_cJSON_Parse, "
-        f"got {item_var.init_value!r}"
+    # Wiring lives on bound_expr (the call-site expression), NOT init_value (the
+    # decl snapshot that would capture NULL).
+    assert item_var.bound_expr == "ret_cJSON_Parse", (
+        f"expected wired bound_expr=ret_cJSON_Parse, got {item_var.bound_expr!r}"
+    )
+    # And the rendered consumer call must pass the LIVE producer return.
+    rendered = sk.to_dict().get('code', '')
+    assert "cJSON_Print(ret_cJSON_Parse)" in rendered, (
+        f"consumer call must pass the live producer return, not a NULL "
+        f"snapshot; rendered:\n{rendered}"
     )
     assert sk.metadata.get('wired_args', 0) == 1
 
