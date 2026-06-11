@@ -126,26 +126,39 @@ def _dependency_components(
     api_sequence: Sequence[str],
     model: Any,
 ) -> List[List[str]]:
-    """Partition ``api_sequence`` into ordered dependency COMPONENTS.
+    """Partition ``api_sequence`` into TRUE data-dependency components.
 
-    A *component* is a maximal contiguous run that shares a data dependency: an
-    API stays in the current component iff its ``requires`` intersects the
-    handle types PRODUCED EARLIER within that same component; an API that
-    consumes none of the current component's handles is INDEPENDENT of the prior
-    work and STARTS A NEW component.
+    Two APIs share a component iff a data dependency connects them transitively:
+    a consumer is unioned with the MOST-RECENT PRECEDING producer of each handle
+    type it requires (the "last created handle wins" binding the skeleton
+    renderer uses). This is deliberately NOT a type-wide union — a second
+    INDEPENDENT producer of the same handle type that nothing downstream consumes
+    stays in its own component (so an independent ``cmsCreate*`` does not get
+    swept into the parser's NULL-guard).
 
-    ``model`` only needs a ``.apis`` mapping ``name -> obj`` where ``obj`` has
-    ``produces`` / ``requires`` (frozenset-like) attributes — so both an
-    ``APISemanticModel`` and the skeleton generator's lightweight signature-
-    derived model satisfy it. Names absent from the model contribute no handle
-    edges (they're treated as scalar-only → independent), so the partition is
-    robust to a partial model.
+    Fixes the prior greedy single-pass partition, which only saw handles produced
+    earlier in the CURRENT contiguous run: a consumer appearing AFTER an
+    interleaved independent producer started its own component and (in
+    scoped-guard rendering) ran OUTSIDE its real producer's NULL guard
+    (use-before-check).
 
-    Returns ``List[List[str]]`` (components in order; each a contiguous slice of
-    the input names, preserving order; the concatenation equals the input — no
-    API is dropped or reordered across the slice boundary).
+    ``model`` only needs a ``.apis`` mapping ``name -> obj`` with ``produces`` /
+    ``requires`` (frozenset-like) — both an ``APISemanticModel`` and the skeleton
+    generator's signature-derived model satisfy it. Names absent contribute no
+    edges (scalar-only → independent), so the partition is robust to a partial
+    model.
+
+    Returns components ordered by their earliest member's position, each
+    component's members in their ORIGINAL relative order (so the
+    creator→…→destroyer lifecycle order within a component is preserved).
+    Concatenating the components REORDERS the sequence so each component is
+    contiguous — the intended D-reorder (the old greedy made it a no-op).
     """
     apis = getattr(model, "apis", {}) or {}
+    names = [n for n in api_sequence if n]
+    n = len(names)
+    if n <= 1:
+        return [list(names)] if names else []
 
     def _produces(name: str) -> Set[str]:
         sem = apis.get(name)
@@ -155,22 +168,35 @@ def _dependency_components(
         sem = apis.get(name)
         return set(getattr(sem, "requires", ()) or ()) if sem is not None else set()
 
-    components: List[List[str]] = []
-    cur: List[str] = []
-    cur_produced: Set[str] = set()
-    for name in api_sequence:
-        if not name:
-            continue
-        if cur and not (_requires(name) & cur_produced):
-            # Consumes nothing the current component opened → new component.
-            components.append(cur)
-            cur = []
-            cur_produced = set()
-        cur.append(name)
-        cur_produced |= _produces(name)
-    if cur:
-        components.append(cur)
-    return components
+    parent = list(range(n))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)  # keep earliest position as root
+
+    last_producer = {}
+    for i, nm in enumerate(names):
+        # requires BEFORE produces: a mutator binds to the PRIOR handle of a
+        # type, then becomes that type's most-recent producer.
+        for h in _requires(nm):
+            p = last_producer.get(h)
+            if p is not None:
+                _union(p, i)
+        for h in _produces(nm):
+            last_producer[h] = i
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(_find(i), []).append(i)
+    ordered = sorted(groups.values(), key=lambda ps: ps[0])
+    return [[names[i] for i in ps] for ps in ordered]
 
 
 @dataclass

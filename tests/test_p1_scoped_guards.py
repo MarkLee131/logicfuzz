@@ -100,6 +100,42 @@ def test_dependency_components_single_chain_is_one_component():
     assert comps == [["thing_create", "thing_use", "thing_free"]]
 
 
+def test_dependency_components_non_adjacent_consumer_joins_producer():
+    """Regression (the greedy-contiguous bug): a consumer that appears AFTER an
+    INDEPENDENT producer must still join its OWN producer's component
+    (transitive connected-components / most-recent-producer binding), NOT start a
+    spurious new component. Under the greedy partition it started its own
+    component → in scoped-guard rendering it ran OUTSIDE its producer's NULL
+    guard (use-before-check). The fix groups it with its producer (reordering
+    the interleaved independent out)."""
+    model = _StubModel({
+        "make_a": _StubSem(["A"], []),     # produces handle A
+        "make_b": _StubSem(["B"], []),     # INDEPENDENT producer, interleaved
+        "use_a": _StubSem([], ["A"]),      # consumes A — appears AFTER make_b
+    })
+    comps = _dependency_components(["make_a", "make_b", "use_a"], model)
+    a_comp = next(c for c in comps if "make_a" in c)
+    assert "use_a" in a_comp, f"use_a must join make_a's component; got {comps}"
+    assert ["make_b"] in comps           # the independent producer stays separate
+    # Components are grouped contiguously: make_b reorders out of make_a's block.
+    assert comps == [["make_a", "use_a"], ["make_b"]]
+
+
+def test_dependency_components_same_type_independent_producer_not_merged():
+    """A second producer of the SAME handle TYPE that nothing downstream consumes
+    must NOT be merged into the consumer's component (most-recent-producer rule,
+    not type-wide union) — else an independent same-type cmsCreate* would render
+    inside the parser's guard."""
+    model = _StubModel({
+        "open_profile": _StubSem(["hprofile"], []),       # parser
+        "use_profile": _StubSem([], ["hprofile"]),        # consumes parser's handle
+        "create_profile": _StubSem(["hprofile"], []),     # INDEPENDENT, same type
+    })
+    comps = _dependency_components(
+        ["open_profile", "use_profile", "create_profile"], model)
+    assert comps == [["open_profile", "use_profile"], ["create_profile"]]
+
+
 def test_dependency_components_handles_unknown_and_empty():
     """Names absent from the model contribute no handle edges (scalar-only →
     independent); empties are skipped; partition stays robust."""
