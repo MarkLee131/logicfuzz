@@ -307,6 +307,17 @@ class FuzzingContext:
 
         log = logger_instance or logger
 
+        # Reproducibility: the symbolic synthesis layer (CBFactory, grammar
+        # random-walk, RunningContext var binding) draws from the GLOBAL `random`
+        # module, which was unseeded — two runs with identical config produced
+        # DIFFERENT skeleton sets. Seed it deterministically so the symbolic
+        # layer is actually reproducible (the paper's "deterministic symbolic
+        # layer" claim). Override via LOGICFUZZ_SEED. 2026-06 review.
+        import random as _random
+        _rng_seed = int(os.environ.get("LOGICFUZZ_SEED", "0"))
+        _random.seed(_rng_seed)
+        log.info("Symbolic-layer RNG seeded with %d (LOGICFUZZ_SEED)", _rng_seed)
+
         # Breadth lever (2026-06): the skeleton/driver count caps API breadth.
         # filter_top_k=10 → greedy max-coverage keeps only 10 sequences → ~45 of
         # 297 lcms APIs reach drivers (vs PromeFuzz's 293 over 141 drivers).

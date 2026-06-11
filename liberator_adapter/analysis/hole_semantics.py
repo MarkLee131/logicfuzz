@@ -73,7 +73,11 @@ def _fuzzable_holes() -> bool:
     which args are tunable DOFs (CONFIG enum/scalar) vs validity-required
     (handles, magic, length) — so it exposes ONLY the DOFs, avoiding the
     fuzz-everything failure (NULL handles / broken magic) a blind LLM hits."""
-    return bool(os.environ.get("LOGICFUZZ_FUZZABLE_HOLES"))
+    # NB: explicit truthy parse — `bool(os.environ.get(...))` treats "0"/"false"
+    # as True (any non-empty string), so FUZZABLE_HOLES=0 would ENABLE the
+    # feature. 2026-06 review.
+    return os.environ.get("LOGICFUZZ_FUZZABLE_HOLES", "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 def _format_for_api(api_name: str):

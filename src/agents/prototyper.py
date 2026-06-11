@@ -847,7 +847,12 @@ Output your fuzz driver code inside <fuzz_target> tags.
             "compile_success": None,
             "build_errors": [],
             "session_memory": updated_session_memory,
-            "api_validation_warnings": validation_warnings
+            "api_validation_warnings": validation_warnings,
+            # Clear the stub flag on (re)generation — else a once-flagged stub
+            # loops supervisor↔prototyper forever (it's checked before
+            # compile_success), burning LLM calls until the node-visit cap kills
+            # the trial without ever building the regenerated driver. 2026-06.
+            "is_stub_binary": False,
         }
 
         # Multi-hop reasoning chain (opt-in via --multihop-prototyper).

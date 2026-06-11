@@ -37,7 +37,19 @@ def classify_crash_frame(asan_log: str, driver_basename: str) -> Literal["driver
     # source is ``NN.fuzz_target.cpp``. Match the frame basename against it.
     drv_base = os.path.basename(driver_basename)
     for m in _FRAME.finditer(asan_log):
-        base = os.path.basename(m.group("path"))
+        path = m.group("path")
+        base = os.path.basename(path)
+        # ASan/UBSan/LSan/MSan runtime + interceptor frames carry compiler-rt
+        # SOURCE locations (e.g. .../compiler-rt/lib/asan/asan_malloc_linux.cpp)
+        # that END IN .cpp. Without this skip the FIRST such frame — the top of
+        # a DRIVER double-free / invalid-free — is misread as a LIBRARY frame
+        # (i.e. a real bug) when it is the driver's own fault, inflating bug
+        # counts and corrupting the low-FP claim (systematic under error-shape
+        # variants). Skip sanitizer-runtime frames before the source check.
+        if any(mark in path for mark in (
+                "compiler-rt/", "/sanitizer_common/", "/interception/",
+                "/lib/asan/", "/lib/ubsan/", "/lib/lsan/", "/lib/msan/")):
+            continue
         if not base.lower().endswith(_SRC_EXTS):
             continue  # non-source (libc / asan runtime) — keep walking
         if (base == drv_base or os.path.splitext(base)[0] == drv_base

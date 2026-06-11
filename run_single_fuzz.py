@@ -663,7 +663,10 @@ def _compile_validate_candidates(sources, benchmark, work_dirs):
   it up). A run can opt out via ``LOGICFUZZ_SKIP_COMPILE_VALIDATE=1``.
   """
   from pathlib import Path
-  if os.environ.get('LOGICFUZZ_SKIP_COMPILE_VALIDATE'):
+  # Explicit truthy parse — a bare `if os.environ.get(...)` treats "0"/"false"
+  # as set, so SKIP_COMPILE_VALIDATE=0 would SKIP the A≡B gate. 2026-06 review.
+  if os.environ.get('LOGICFUZZ_SKIP_COMPILE_VALIDATE', '').strip().lower() in (
+          '1', 'true', 'yes', 'on'):
     logger.info('merge_drivers: compile-validation skipped '
                 '(LOGICFUZZ_SKIP_COMPILE_VALIDATE set)', trial=0)
     return sources

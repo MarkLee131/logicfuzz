@@ -984,7 +984,11 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
                 coverage_cmd,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                # 300s was far too small for a 24h-corpus llvm-cov replay +
+                # profdata merge: on timeout this returns None and the snapshot
+                # silently CARRIES FORWARD a stale (hours-old, smaller-corpus)
+                # measurement as the FINAL headline number. 2026-06 review.
+                timeout=1800,
                 cwd=str(oss_fuzz_dir)
             )
 

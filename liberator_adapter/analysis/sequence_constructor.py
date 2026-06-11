@@ -579,7 +579,9 @@ def construct_sequences(
     # Default 8 → ~7.7 APIs/seq on lcms (PromeFuzz parity 7.6) once co-occurrence
     # is on; lower it (e.g. =4) for thinner drivers / fewer holes.
     _dense_max_extra = int(os.environ.get("LOGICFUZZ_DENSE_MAX_EXTRA", "8"))
-    _dense_repeat = bool(os.environ.get("LOGICFUZZ_DENSE_REPEAT_CONSUMER"))
+    _dense_repeat = os.environ.get(
+        "LOGICFUZZ_DENSE_REPEAT_CONSUMER", "").strip().lower() in (
+            "1", "true", "yes", "on")  # explicit: "0" must mean off
     n_densified = 0
     # Co-occurrence map for density source (b): which APIs are used TOGETHER in
     # the library's REAL usage paths (automaton accepting-paths + idioms) — the
@@ -719,7 +721,9 @@ def construct_sequences(
             # have called it), or any other ordering fault, stays fatal.
             # Kill-switch: LOGICFUZZ_STRICT_ORDERING=1 restores the old behavior.
             import os as _os
-            _strict = bool(_os.environ.get("LOGICFUZZ_STRICT_ORDERING"))
+            _strict = _os.environ.get(
+                "LOGICFUZZ_STRICT_ORDERING", "").strip().lower() in (
+                    "1", "true", "yes", "on")  # explicit: "0" must mean off
             kept: List[List[str]] = []
             for s in seqs:
                 viols = _ts.check(s)

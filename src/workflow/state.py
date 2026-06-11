@@ -87,6 +87,15 @@ class FuzzingWorkflowState(TypedDict):
     # === Analysis Results (from Analyzers) ===
     crash_analysis: NotRequired[Dict[str, Any]]
 
+    # === Crash-fix retry tracking (supervisor → fixer, crash-FP path) ===
+    # MUST be declared: LangGraph silently DROPS writes to undeclared state
+    # keys, which disabled the crash-fix retry cap (the reader always saw 0)
+    # and starved the fixer of crash context (it "fixed" a crash with an EMPTY
+    # error prompt, and the crash fix corrupted the compile-retry budget).
+    # 2026-06 semantic review.
+    crash_fix_retry_count: NotRequired[int]
+    crash_fix_info: NotRequired[Dict[str, Any]]
+
     # === Workflow Control ===
     next_action: NotRequired[str]  # For supervisor routing
     node_visit_counts: NotRequired[Dict[
@@ -139,6 +148,11 @@ class FuzzingWorkflowState(TypedDict):
     # Set by build_node after successful compilation
     # Contains: success, actual_called_apis, missing_apis, coverage_ratio, validation_method, report
     target_api_validation: NotRequired[Dict[str, Any]]
+
+    # Pre-build hallucination / fake-definition warnings from
+    # UnifiedCodeValidator, surfaced to the fixer. Declared so the write
+    # persists (LangGraph was silently dropping it — 2026-06 review).
+    api_validation_warnings: NotRequired[List[str]]
 
     # === Build attempt telemetry ===
     # Append-only list, one record per build_node invocation. Used to derive
