@@ -28,8 +28,6 @@ from experiment import benchmark as benchmarklib
 from experiment import evaluator, oss_fuzz_checkout, textcov
 from experiment.workdir import WorkDirs
 from src.llm import models
-from dataclasses import dataclass
-import subprocess
 from typing import Optional, List
 
 # Liberator-related helpers (used to perform local Clang extraction)

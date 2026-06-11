@@ -738,8 +738,17 @@ def construct_sequences(
                 else:
                     kept.append(s)
             seqs = kept
-        except Exception:
-            pass  # oracle unavailable → fall back to model-only output
+        except Exception as _e:
+            # First-party analysis (Typestate/UseDefGraph are always importable),
+            # so a raise here is a real bug, NOT "oracle unavailable". Keep
+            # fail-soft (don't abort construction) but make it VISIBLE — silently
+            # swallowing ships ordering-faulty (use-after-destroy / double-destroy)
+            # sequences unfiltered, the exact FP-poisoning this filter prevents.
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Typestate self-filter raised (%s); shipping %d sequences "
+                "UNFILTERED — investigate (not 'oracle unavailable')",
+                _e, len(seqs))
 
     # T11: error-shape variants (LOGICFUZZ_ERROR_VARIANTS) — appended AFTER the
     # ordering self-filter so they survive (the shapes are deliberate ordering

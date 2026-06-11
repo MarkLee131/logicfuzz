@@ -266,5 +266,10 @@ def retrieve_hints_for_apis(
         hits = retrieve(tgt, use, tau=tau, budget=budget,
                         prefer_project=project)
         return render_hints(hits)
-    except Exception:
+    except Exception as _e:
+        # Gated opt-in feature → fail-soft is fine, but log so a malformed
+        # corpus / signature bug is debuggable instead of silently empty.
+        import logging as _logging
+        _logging.getLogger(__name__).debug(
+            "cross-project hint retrieval failed: %s", _e)
         return ""

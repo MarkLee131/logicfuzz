@@ -804,8 +804,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
                             benchmark.get('project', 'unknown'),
                             self.trial, _sk.get('name'),
                             _sk.get('api_sequence', []), hole_fillings)
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        logger.debug(f'T12 hole-value capture skipped: {_e}',
+                                     trial=self.trial)
             else:
                 # Fallback: try to extract from fuzz_target tag
                 fuzz_target_code = parse_tag(parsed_result.get('raw_response', ''), 'fuzz_target')
@@ -1479,8 +1480,9 @@ Output your fuzz driver code inside <fuzz_target> tags.
                     holes_desc_lines.append("</library_constants>")
                 # The per-arg intents now live in the CALLSPEC table (T4) — don't
                 # render them twice here (library_constants above is kept).
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.debug(f'library_constants render skipped: {_e}',
+                             trial=self.trial)
 
         return code, "\n".join(holes_desc_lines), True
 

@@ -270,7 +270,9 @@ def harvest_trial_outcomes(trial_results: List) -> List[TrialOutcome]:
                 if getattr(run, 'crashes', False):
                     crashes = 1
                 success = bool(getattr(run, 'compiles', False))
-        except Exception:
+        except Exception as _e:
+            logger.debug('trial %s outcome extraction failed (%s); not-success',
+                         trial_id, _e)
             success = False
 
         outcomes.append(TrialOutcome(
@@ -422,7 +424,8 @@ def load_trial_hole_values(
         if not p.exists():
             return {}
         return json.loads(p.read_text(encoding='utf-8')) or {}
-    except Exception:
+    except Exception as _e:
+        logger.debug('hole-values read failed (trial %s): %s', trial_id, _e)
         return {}
 
 

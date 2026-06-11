@@ -469,7 +469,8 @@ class FuzzingContext:
             log.info('   ✅ Data layout built')
         except Exception as e:
             log.warning(
-                f"Failed to build data layout: {e} (ConditionManager may have reduced precision)"
+                f"Failed to build data layout: {e} — grammar generation (Step 4) "
+                f"depends on it and will likely fail; ConditionManager precision reduced"
             )
 
         # === Step 4: Generate grammar (API sequences) ===
@@ -513,7 +514,8 @@ class FuzzingContext:
             log.info('   ✅ Condition manager built')
         except Exception as e:
             log.warning(
-                f"Failed to build condition manager: {e} (non-critical)")
+                f"Failed to build condition manager: {e} — CBFactory enters "
+                f"DEGRADED mode (Z3 lifecycle validation OFF)")
             condition_manager = None
 
         # Condition summary for prompt/LLM
@@ -1120,7 +1122,8 @@ class FuzzingContext:
                 },
             }
         except Exception as _ae:
-            log.warning('APISemanticModel build failed (non-critical): %s', _ae)
+            log.warning('APISemanticModel build failed: %s — G1 role authority '
+                        'lost, falling back to the grammar floor', _ae)
             api_semantic_model = None
 
         # === Step 5h: Construct sequences from the model (redesign G2) ===

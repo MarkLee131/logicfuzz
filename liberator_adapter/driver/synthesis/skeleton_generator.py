@@ -338,7 +338,8 @@ class DriverSkeleton:
         try:
             renderer = SkeletonRenderer()
             code = renderer.render_with_holes_marked(self)
-        except Exception:
+        except Exception as _e:
+            logger.warning('skeleton render failed (%s); emitting empty code', _e)
             code = ""
 
         # Serialize holes
