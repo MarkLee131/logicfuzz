@@ -1802,6 +1802,7 @@ class FuzzingContext:
                 benchmark=benchmark,
                 log=log,
                 automaton_artifact=automaton_artifact,
+                api_semantic_model=api_semantic_model,
             )
             if skeleton_drivers:
                 log.info(
@@ -3052,6 +3053,7 @@ def _synthesize_skeletons_per_sequence(
     log: logging.Logger,
     automaton_artifact: Optional[Any] = None,
     automaton_threshold: float = 0.6,
+    api_semantic_model: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
     """
     For each viable sequence, produce ONE Z3-validated skeleton with holes
@@ -3207,13 +3209,15 @@ def _synthesize_skeletons_per_sequence(
             skeleton = None
             z3_passed = False
             if _z3_mode in ('gate', 'soft', 'selective'):
-                skeleton = factory.create_skeleton_for_sequence(target_seq)
+                skeleton = factory.create_skeleton_for_sequence(
+                    target_seq, dep_model=api_semantic_model)
                 z3_passed = skeleton is not None
             if skeleton is None and _z3_mode != 'gate':
                 # Render without the prove-or-reject gate: wire handle args to
                 # prior producers (symbolic), leave scalars/buffers/void* as
                 # holes for the LLM. Recovers candidates Z3 falsely rejects.
-                skeleton = factory.create_skeleton_unchecked(target_seq)
+                skeleton = factory.create_skeleton_unchecked(
+                    target_seq, dep_model=api_semantic_model)
                 if skeleton is not None:
                     unchecked_emitted += 1
             if skeleton is None:

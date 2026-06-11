@@ -100,7 +100,7 @@ def test_calls_create_skeleton_from_sequence_when_z3_accepts():
 
     assert result is sentinel_skeleton
     m_val.assert_called_once_with(seq)
-    m_create.assert_called_once_with(seq)
+    m_create.assert_called_once_with(seq, dep_model=None)
     # Critically: the caller's sequence is what flows into the skeleton
     # generator, not a freshly-randomized one. This is the whole point
     # of the new method (vs create_random_driver_skeleton).
@@ -145,7 +145,7 @@ def test_z3_validation_disabled_falls_through_as_valid():
         result = cb.create_skeleton_for_sequence(seq)
 
     assert result is sentinel
-    m_create.assert_called_once_with(seq)
+    m_create.assert_called_once_with(seq, dep_model=None)
 
 
 # ============================================================

@@ -244,6 +244,48 @@ def test_gate_off_keeps_legacy_whole_driver_bail():
     assert "if (ret_cmsOpenProfileFromMem != NULL) {" not in code
 
 
+def test_scoped_render_uses_threaded_dep_model_over_signature_heuristic():
+    """Phase 3.1B: when the reconcile model is threaded into generate(dep_model=),
+    render-B partitions with IT — not the pointer-count _build_signature_model
+    heuristic. A consumer taking the handle as a DOUBLE pointer (``Handle**``,
+    which the heuristic's ``count('*')==1`` test MISSES) must still be grouped
+    into — and NULL-guarded under — its producer's component via the threaded
+    model. Without the model the heuristic splits it → it renders UNGUARDED."""
+    from liberator_adapter.driver.synthesis.skeleton_generator import (
+        SkeletonGenerator, SkeletonRenderer)
+    parser = _make_api("p_open", "Handle*", [_make_arg("m", "const void*", True)])
+    consumer = _make_api("p_use", "int", [_make_arg("h", "Handle**")])  # double ptr
+    dep = _StubModel({"p_open": _StubSem(["handle"], []),
+                      "p_use": _StubSem([], ["handle"])})
+
+    def _render_dm(dm):
+        os.environ["LOGICFUZZ_SCOPED_GUARDS"] = "1"
+        try:
+            sk = SkeletonGenerator().generate(
+                api_sequence=[parser, consumer], driver_name="t",
+                is_cpp=False, dep_model=dm)
+            return SkeletonRenderer().render(sk)
+        finally:
+            os.environ.pop("LOGICFUZZ_SCOPED_GUARDS", None)
+
+    def _consumer_inside_guard(code: str) -> bool:
+        lines = code.splitlines()
+        gi = next((i for i, l in enumerate(lines)
+                   if "if (ret_p_open != NULL) {" in l), None)
+        if gi is None:
+            return False
+        close = next((i for i in range(gi + 1, len(lines))
+                      if lines[i].strip() == "}"), len(lines))
+        ci = next((i for i, l in enumerate(lines)
+                   if "p_use(" in l and l.strip().startswith("ret_")), None)
+        return ci is not None and gi < ci < close
+
+    assert _consumer_inside_guard(_render_dm(dep)), \
+        "threaded reconcile model must group + guard the double-ptr consumer"
+    assert not _consumer_inside_guard(_render_dm(None)), \
+        "the signature heuristic misses the double-ptr edge (the divergence)"
+
+
 # --------------------------------------------------------------------------- D: construct reorder
 
 def test_construct_reorders_components_gate_on():

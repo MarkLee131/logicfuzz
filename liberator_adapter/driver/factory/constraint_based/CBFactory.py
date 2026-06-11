@@ -1286,7 +1286,7 @@ class CBFactory(Factory):
         return api_sequence
 
     def create_skeleton_for_sequence(
-        self, target_seq: List[Api]
+        self, target_seq: List[Api], dep_model=None
     ) -> Optional['DriverSkeleton']:
         """
         Generate a Z3-validated DriverSkeleton (with holes) for a SPECIFIC
@@ -1337,10 +1337,10 @@ class CBFactory(Factory):
                 violations[:3],
             )
             return None
-        return self._create_skeleton_from_sequence(target_seq)
+        return self._create_skeleton_from_sequence(target_seq, dep_model=dep_model)
 
     def create_skeleton_unchecked(
-        self, target_seq: List[Api]
+        self, target_seq: List[Api], dep_model=None
     ) -> Optional['DriverSkeleton']:
         """Render a skeleton for a sequence WITHOUT the Z3 / RunningContext
         provenance gate (redesign G5 follow-through).
@@ -1374,6 +1374,7 @@ class CBFactory(Factory):
             varlen_relations=varlen_relations,
             driver_name="model_skeleton",
             arg_bindings=bindings,
+            dep_model=dep_model,
         )
         skeleton.metadata['synthesis_method'] = 'model_unchecked'
         skeleton.metadata['api_count'] = len(target_seq)
@@ -1403,7 +1404,7 @@ class CBFactory(Factory):
                 produced[normalize_handle_type(rt)] = f"ret_{api.function_name}"
         return bindings
 
-    def _create_skeleton_from_sequence(self, api_sequence: List[Api]) -> Optional['DriverSkeleton']:
+    def _create_skeleton_from_sequence(self, api_sequence: List[Api], dep_model=None) -> Optional['DriverSkeleton']:
         """
         Convert an API sequence to a skeleton with holes.
 
@@ -1447,6 +1448,7 @@ class CBFactory(Factory):
             varlen_relations=varlen_relations,
             driver_name="cbfactory_skeleton",
             arg_bindings=bindings,
+            dep_model=dep_model,
         )
 
         skeleton.metadata['synthesis_method'] = 'CBFactory'

@@ -430,6 +430,7 @@ class SkeletonGenerator:
                  driver_name: str = "fuzz_driver",
                  is_cpp: bool = True,
                  arg_bindings: Optional[Dict[Tuple[str, int], str]] = None,
+                 dep_model=None,
                  ) -> DriverSkeleton:
         """
         Generate driver skeleton.
@@ -499,7 +500,8 @@ class SkeletonGenerator:
                 skeleton, api_sequence,
                 varlen_relations or {},
                 loop_patterns or {},
-                callback_infos or {}
+                callback_infos or {},
+                dep_model=dep_model,
             )
         else:
             self._generate_api_calls(
@@ -1061,7 +1063,8 @@ class SkeletonGenerator:
         apis: List[Api],
         varlen_relations: Dict[str, List[Tuple[int, int, str]]],
         loop_patterns: Dict[str, Dict],
-        callback_infos: Dict[str, List[Dict]]
+        callback_infos: Dict[str, List[Dict]],
+        dep_model=None,
     ) -> None:
         """Component-scoped call generation (B, LOGICFUZZ_SCOPED_GUARDS).
 
@@ -1078,7 +1081,13 @@ class SkeletonGenerator:
         ``if``-nesting, and C decl-before-use is preserved.
         """
         by_name = {api.function_name: api for api in apis}
-        model = _build_signature_model(apis)
+        # Prefer the reconcile model (the SAME produces/requires the
+        # construct-time D-reorder used) when threaded in — eliminates the
+        # divergence with the pointer-count _build_signature_model heuristic,
+        # which misses value / multi-level / recovered handle types and could
+        # split a component → render a consumer OUTSIDE its producer's guard.
+        # Falls back to the signature heuristic on the direct-generate path.
+        model = dep_model if dep_model is not None else _build_signature_model(apis)
         components = _dependency_components(
             [api.function_name for api in apis], model)
 
