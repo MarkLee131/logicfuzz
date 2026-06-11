@@ -286,15 +286,29 @@ class ExtendedFuzzer:
         Matches the ACTUAL tools/merge_drivers/merge.py UNIFORM/TAIL dispatcher:
             memcpy(&driverIndex, Data + Size - <k>, <k>);
             switch (driverIndex % <n>) {
-        Single-driver harnesses (and HEAD/CDF variants) return None → seeds are
-        copied verbatim (safe). Only UNIFORM/TAIL — what run_single_fuzz emits —
-        is selector-tagged.
+        Works for BOTH single-file (--fuzz-target) AND merged-dir
+        (--fuzz-target-dir → entry.{c,cpp}) harnesses. CDF dispatch (selector
+        thresholds, not tail-modulo) cannot be tail-tagged this way → returns
+        None with a WARNING so the caller copies seeds verbatim and the operator
+        knows the merged run won't route real seeds to the format-matching
+        sub-driver. 2026-06 review.
         """
         try:
-            if not self.fuzz_target_path:
-                return None
-            src = Path(self.fuzz_target_path)
-            if not src.is_file():
+            # The bug this fixes: merged runs use --fuzz-target-dir, where
+            # fuzz_target_path is None → the old `if not self.fuzz_target_path:
+            # return None` meant real seeds were NEVER selector-tagged for the
+            # ONLY mode that HAS a dispatcher (every merged long run). Read the
+            # dispatcher entry TU in dir mode.
+            src = None
+            if self.fuzz_target_path and Path(self.fuzz_target_path).is_file():
+                src = Path(self.fuzz_target_path)
+            elif self.fuzz_target_dir:
+                for _name in ("entry.c", "entry.cpp", "entry.cc", "entry.cxx"):
+                    _p = Path(self.fuzz_target_dir) / _name
+                    if _p.is_file():
+                        src = _p
+                        break
+            if src is None:
                 return None
             text = src.read_text(errors="replace")
             import re as _re
@@ -304,8 +318,17 @@ class ExtendedFuzzer:
                 text)
             if m_n and m_tail:
                 return int(m_tail.group(2)), int(m_n.group(1))
-        except Exception:
-            pass
+            # CDF dispatch (run_single_fuzz emits this when edge weights exist):
+            # `memcpy(&selector, …, 2)` + threshold buckets — not tail-modulo,
+            # so seeds can't be tagged by this routine. Be loud, not silent.
+            if _re.search(r"memcpy\(\s*&\s*selector", text):
+                logger.warning(
+                    "Merged harness uses CDF dispatch → real seeds are NOT "
+                    "selector-tagged (they route ~1/N at random; the "
+                    "format-matching sub-driver is rarely reached). Merged-run "
+                    "coverage under-represents deep parser paths.")
+        except Exception as _e:
+            logger.debug("merged-dispatch detection failed: %s", _e)
         return None
 
     def _read_fuzz_target(self) -> str:
