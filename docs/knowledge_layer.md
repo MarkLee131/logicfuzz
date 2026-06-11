@@ -28,27 +28,53 @@ already have for free, on the *compressed* API set, not the raw one.
 
 ## Two-stage, deterministic-first
 
-**Stage A** — per-API usage notes. **Stage B** — per-sequence semantic verdict:
-the job L0–L3 structurally *can't* do ("is this combination meaningful?").
+**Stage A** — library purpose + per-API usage notes (`LibraryComprehension`;
+`comprehend_purpose` + `comprehend_apis`). A sibling LLM call, `classify_roles`,
+produces the role+arg-role classification the `APISemanticModel` folds in (the
+role authority; see `docs/generation.md` G1). **Stage B** — per-sequence
+semantic verdict: the job L0–L3 structurally *can't* do ("is this combination
+meaningful?").
 E.g. `ucl_parser_new → ucl_parser_get_object` is type- and lifecycle-OK but
 returns NULL without an intervening `add_chunk`; `cJSON_Parse(s) →
 cJSON_GetArrayItem(obj,0)` is type-OK but UB if `obj` isn't an array.
 
-Both stages short-circuit through free deterministic sources **before** any
-LLM call, per API, in order:
+The per-API usage step (`Comprehender.comprehend_apis`) short-circuits through
+free deterministic sources **before** any LLM call, per API, in this 4-layer
+order (`src/knowledge/comprehender.py:599-657`):
 
-1. API appears in `existing_driver_knowledge` (real OSS-Fuzz harness code) →
-   extract ±5 lines around the call site + surrounding comments.
-2. libclang has a doxygen / `///` comment on the API's header → use it.
-3. API has a `ConditionManager` role tag → templated synthesis from L2/L3
-   facts (`"[INIT] constructor; pairs with {destroy}; preconditions: …"`).
+1. **Layer 1 — cache hit.** API already in the on-disk `api_usage.json` →
+   reuse (`KnowledgeCache.load_api_usages`).
+2. **Layer 2 — deterministic synthesis from static IR facts**
+   (`_deterministic_usage`): role + lifecycle pairing. The role authority is
+   the reconciled `APISemanticModel` verdict (`api_roles`, CREATOR / MUTATOR /
+   CONSUMER / DESTROYER → `_MODEL_ROLE_USAGE` text); `ConditionManager`'s
+   IR-only SOURCE/SINK/INIT (`_condition_role`) is the demoted fallback when the
+   model is unavailable. Appends the verified init↔destroy partner from L2
+   lifecycle pairs (`_lifecycle_pair`).
+3. **Layer 3 — doxygen-derived usage** (`_doc_derived_usage`, opt-in T1 prior
+   via `--use-doxygen-priors`): a substantive libclang docstring
+   (`src.knowledge.project_docs.extract_doxygen_comments`, ≥`_DOXYGEN_MIN_USEFUL_CHARS`
+   = 40 chars) composed with the signature; short / vacuous docs fall through.
+4. **Layer 4 — batched LLM fallback** (`_llm_fill_api_usages`) for the residual,
+   signature + static-facts only, `API_BATCH_SIZE`=10 per call.
 
-These cover 60–80% of the APIs that actually enter selected sequences. The
+There is **no `existing_driver_knowledge` short-circuit and no ±5-line
+call-site windowing** in the comprehender — the per-API method does not
+reference `existing_driver_knowledge` at all. (Whole-harness driver sources are
+built separately by `data_context._extract_existing_driver_knowledge` as full
+`driver_sources` text and consumed by the **Prototyper / Fixer / idiom
+distiller**, not by the comprehender.)
+
+These layers cover most of the APIs that actually enter selected sequences. The
 comprehension also runs on the **compressed** set — L0→L4 reduce ~500 APIs to
-the ~60 unique APIs across the Top-K sequences, so we comprehend ~60, not 500.
-The automaton prefilter then skips the LLM entirely for `acc=1.0` sequences
-(~⅓ of Stage-B calls); the residual is one *batched* call; the result is
-cached (`(project, api, sha256(source_slice))` key) → free re-runs.
+the ~60 unique APIs across the Top-K sequences (`unique_apis_in_sequences`), so
+we comprehend ~60, not 500. For Stage B, the automaton prefilter then skips the
+LLM entirely for `acc≥0.999` sequences (when the automaton is strong); the
+residual is one LLM call per remaining sequence. Results are cached: per-API
+usage keyed by **API name** (`api_usage.json`); per-sequence verdicts keyed by
+`sha256("seq" + "|".join(seq))` (`KnowledgeCache.sequence_key`, in
+`sequences.json`). Project scoping is via the cache directory
+(`results/{project}/comprehension/`), not part of the key → free re-runs.
 
 Combined: ~500 API → ~60 → ~7 per actual driver ≈ 70× reduction.
 

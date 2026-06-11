@@ -45,10 +45,18 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 ~7.7 APIs/seq lcms = PromeFuzz parity).
 #   LOGICFUZZ_DENSE_COOCCUR=0     density extends ONLY handle-sharing (drop the
 #                                 automaton-co-occurrence source; default on).
+#   LOGICFUZZ_DENSE_REPEAT_CONSUMER=1   density also repeats a handle's CONSUMER
+#                                 (default off) — thickens chains by re-invoking
+#                                 consumers, not just appending new APIs.
 #   LOGICFUZZ_STRICT_ORDERING=1   revert B graceful degradation (drop orphan
 #                                 USE_BEFORE_INIT instead of keeping as a hole).
-#   LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES,
-#                       BASELINE_RECOVERY}=1   A/B kill-switch for that default-on stage.
+#   LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES}=1
+#                       A/B kill-switch for that default-on stage. (BASELINE_RECOVERY
+#                       was removed with the §10B optimize subsystem —
+#                       `prototyper.baseline_recovery_text` is now a permanently-empty
+#                       slot, no env gate. TYPEDEF_RECOVERY's gate was also removed:
+#                       typedef recovery is now unconditionally always-on
+#                       (`data_context.py` Step 5g region), no kill-switch.)
 # New opt-in (gated, A/B pending — start gated like factory/diversity/lean did,
 # default-on once a coverage A/B proves the gain):
 #   LOGICFUZZ_ERROR_VARIANTS=1    T11: emit error-shape skeleton variants (double-
@@ -132,15 +140,16 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml --eval
 # Multi-hop reasoning Mode A (Prototyper); opt-in
 python3 run_logicfuzz.py -y comparison/cjson.yaml --multihop-prototyper
 
-# Knowledge-layer priors (Phase B / T1)
-python3 run_logicfuzz.py -y comparison/cjson.yaml --use-doxygen-priors --use-readme-purpose
+# Knowledge-layer priors (Phase B / T1) are now DEFAULT-ON — the former opt-in
+# flags --use-doxygen-priors / --use-readme-purpose were REMOVED (behavior lives
+# in FuzzingContext.prepare() defaults: use_doxygen_priors / use_readme_purpose).
 
 # Control parallelism
 LLM_NUM_EXP=5 python3 run_logicfuzz.py -y comparison/cjson.yaml
 
 # Code quality
 pylint src/ && pyright src/
-pytest tests/   # 121 P0/P1 regression tests as of 2026-05-23
+pytest tests/   # 375 collected regression tests as of 2026-06-11
 
 # Extended fuzzing evaluation (24h)
 python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz_targets/02.fuzz_target -d 86400
@@ -291,12 +300,12 @@ Failed Attempts.)
 L1 (handle classification) and L2/L3 (per-sequence validation) both delegate here.
 L2/L3 build a per-analysis `UseDefGraph` from their domain model (lifecycle pairs / state constraints) and call `Typestate.check`. Domain-specific *discovery* still lives in each Lx file; the *walker* is shared.
 
-### Z3-Guided Synthesis (`liberator_adapter/driver/factory/constraint_based/`)
+### Z3-Guided Synthesis (`liberator_adapter/constraints/`)
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| IncrementalZ3Solver | `z3_solver.py` | push/pop for decision guidance |
-| Z3-guided controller | `z3_guided_synthesis.py` | TYPE_MATCH, PROVENANCE, RESOURCE_LIFECYCLE, VARIABLE_AVAILABILITY |
+| `IncrementalZ3Solver` | `z3_guided_synthesis.py` | push/pop for decision guidance |
+| `Z3GuidedSynthesisController` | `z3_guided_synthesis.py` | TYPE_MATCH, PROVENANCE, RESOURCE_LIFECYCLE, VARIABLE_AVAILABILITY |
 | `AutomatonAcceptanceGuard` | `z3_guided_synthesis.py` | Phase H hard-pruning gate (currently positive-only) |
 | `Z3SequenceValidator` | `z3_solver.py` | **Position-indexed** lifecycle validation (#4 fix, 2026-05-22) + LLVM-IR byte-buffer exemption (#73) |
 | UnsatCoreDiagnoser | `z3_guided_synthesis.py` | Failure diagnosis |
@@ -308,7 +317,7 @@ L2/L3 build a per-analysis `UseDefGraph` from their domain model (lifecycle pair
 | Type over-connection | `ProvenanceChecker` + LLM filter |
 | Var-len params | `VarLenAnalyzer` in `special_patterns.py` |
 | Callbacks | `CallbackAnalyzer` + stub templates |
-| API lifecycle | `LLMLifecycleValidator` in `sequence_filter.py` |
+| API lifecycle | L2 `lifecycle_analyzer.py` + shared `usedef.py` `Typestate` walker (the former `sequence_filter.py` / `LLMLifecycleValidator` was removed in the L2/L3 refactor — see `constraints/__init__.py`) |
 | Type classification | `ConditionManager.py` (SOURCE/SINK/INIT/SETBY). **Demoted by G1** to one IR-evidence source feeding `APISemanticModel.reconcile`; no longer the role authority. |
 
 ## Project-Adaptive Automaton + Closed-Loop
@@ -343,8 +352,8 @@ section); not duplicated here. Persistence dirs: `results/{project}/automaton/`,
 Step 1   ProjectDriverGenerator init
 Step 2   Extract APIs
 Step 3   Build dependency graph                  # L0: type compatibility
+Step 3.5 Build data layout                        # moved up: must precede grammar gen
 Step 4   Generate sequences (grammar)
-Step 5   Build data layout
 Step 5b  Build ConditionManager
 Step 5c  L1 Entry-point filter
 Step 5d  L2 Lifecycle filter

@@ -81,7 +81,9 @@ recovery axes** that restore handle relations the raw IR view drops — handle
      creator and never forms a chain; with it `deflateInit_ → deflate →
      deflateEnd` constructs.
    - **(b) Naming-based opaque-return producer recovery**
-     (`analysis/sequence_constructor.py`, gated `LOGICFUZZ_FACTORY_CHAIN`): when an
+     (`analysis/sequence_constructor.py`, `_recover_opaque_producers`; always-on —
+     the `LOGICFUZZ_FACTORY_CHAIN` gate was removed since the pass is monotone, zero
+     effect on libs with no recoverable opaque handles): when an
      opaque handle is *required* by an arg but its producer's **return type was
      desugared to `void*`** by the IR (`typedef void* cmsHTRANSFORM` — the param
      keeps the typedef so `requires` is right, but the return is collapsed, so
@@ -134,7 +136,9 @@ All of these passes are deterministic — zero LLM, zero token cost.
 > structured input to traverse a multi-hop opaque chain) as the next bottleneck —
 > not construction, not Z3. The enabling fixes have since landed — the
 > build-cache×llvm14 conflict is resolved (A1 additive canonical base → cached
-> eval is Z3-on) and `LOGICFUZZ_SEED_CORPUS` routes real format-matching seeds
+> eval is Z3-on) and real-seed routing (always-on — the `LOGICFUZZ_SEED_CORPUS`
+> gate was removed; `scripts/seed_discovery.py:seed_corpus_for_driver` +
+> `experiment/builder_runner.py`) routes real format-matching seeds
 > (`*.icc`) into the opaque-chain driver's corpus — so the **end-to-end coverage
 > measurement** (does the seeded `cmsDoTransform` driver now cover `cmsxform.c`?)
 > is the one remaining step, not a missing capability (see `docs/generation.md` §4/§6).
@@ -463,7 +467,7 @@ upstream divergences, so future upstream ports don't reintroduce them.)
 | Var-len buffers | static `len_depends_on` only; decoupled when analysis misses it | falls back to `DriverEnhancer.get_buffer_size_constraint` (`VarLenAnalyzer` name/type heuristics) |
 | Dependency graph | inverts the dep-graph, **drops the original direction** (no "who produces type T?") | keeps both directions + `_build_type_producer_map` (return-type → APIs), loose pointer-suffix matching |
 | Handle identity | collapsed to `void*`/`i8*` by IR (see Innovation ①) | recovered from headers/exported-functions (`handle_typedef_recovery.py`) |
-| Handle production channels | return-value + out-pointer (`T**`) creators only; a caller-allocated struct initialized in place (`z_stream` ← `deflateInit_(z_stream*)`, single pointer) has no producer, **and an opaque creator whose return type the IR desugared to `void*`** (`cmsCreate*Transform`) is invisible to the producer index → both stateful families are unconstructable | **+ two recovered channels**: (a) **SVF-write-gated caller-alloc INIT** (`usedef.py:annotate_svf_writes` / `extract_produced_handles`) recovers `deflateInit_`-style in-place initializers when SVF shows the param *written* (anti-stems + demotion when a real return/out-ptr creator exists); (b) **naming-based opaque-return producer recovery** (`sequence_constructor.py`, `LOGICFUZZ_FACTORY_CHAIN`) maps a required non-pointer opaque handle to its `cmsCreate*`-style factory by handle naming, feeding the recursive prefix resolver (non-pointer test + camelCase word-boundary + deep-factory preference keep it sound) |
+| Handle production channels | return-value + out-pointer (`T**`) creators only; a caller-allocated struct initialized in place (`z_stream` ← `deflateInit_(z_stream*)`, single pointer) has no producer, **and an opaque creator whose return type the IR desugared to `void*`** (`cmsCreate*Transform`) is invisible to the producer index → both stateful families are unconstructable | **+ two recovered channels**: (a) **SVF-write-gated caller-alloc INIT** (`usedef.py:annotate_svf_writes` / `extract_produced_handles`) recovers `deflateInit_`-style in-place initializers when SVF shows the param *written* (anti-stems + demotion when a real return/out-ptr creator exists); (b) **naming-based opaque-return producer recovery** (`sequence_constructor.py:_recover_opaque_producers`, always-on; the `LOGICFUZZ_FACTORY_CHAIN` gate was removed — monotone, no effect on libs with no recoverable opaque handles) maps a required non-pointer opaque handle to its `cmsCreate*`-style factory by handle naming, feeding the recursive prefix resolver (non-pointer test + camelCase word-boundary + deep-factory preference keep it sound) |
 
 ### Robustness hardening (upstream latent bugs the adapter fixed)
 
@@ -653,26 +657,34 @@ sequences.
 
 **Falsifiable:** 24h coverage with Stage B disabled. Within 5% → overkill.
 
-### F. ProjectAnalyzer (pre-prototyper)
+### F. (NO SEPARATE AGENT) Library-purpose derivation — folded into the Comprehender
 
-**File:** `src/agents/project_analyzer.py` · once per benchmark, derives
-`project_understanding` before the prototyper.
+There is **no standalone ProjectAnalyzer agent** (`src/agents/` ships only
+Prototyper / Fixer / CrashAnalyzer / CrashFeasibilityAnalyzer; the Comprehender
+is a non-LangGraph stage). The library-purpose paragraph the prototyper renders
+as `<library_purpose>` is produced by the **Comprehender's Stage A**
+(`src/knowledge/comprehender.py:comprehend_purpose` — read README + a
+representative source file → a paragraph; `comprehension['purpose']`, consumed at
+`src/agents/prototyper.py:480`), so its why-LLM rationale is already covered by
+§E (Comprehender). It is kept here only as a slot of the §E call, not a
+distinct call-site.
 
-**LLM job:** read README + a representative source file → a paragraph the
-prototyper sees as `<library_purpose>` (e.g. "streaming parser; consumers must
-`_init`/`_finalize` around all `_update` calls").
+**LLM job (folded into §E):** read README + a representative source file → a
+paragraph (e.g. "streaming parser; consumers must `_init`/`_finalize` around all
+`_update` calls").
 
 **Symbolic alternative:** hand-curated `purpose` field in the benchmark YAML.
 
-**Why LLM:** hand-curation doesn't scale past the 17-suite — adding a project
-would mean writing the paragraph, defeating "drop in any OSS-Fuzz project".
+**Why LLM:** hand-curation doesn't scale across the benchmark suite — adding a
+project would mean writing the paragraph, defeating "drop in any OSS-Fuzz
+project".
 
 **Cost of reverting:** new-project onboarding goes from one YAML line to a
 hand-written paragraph; blocks scaling.
 
 **Falsifiable:** prototyper output quality on a project with a manual
-`library_purpose` vs the analyzer's. If manual is consistently better, the
-analyzer is too generic.
+`library_purpose` vs the comprehender's. If manual is consistently better, the
+purpose stage is too generic.
 
 ### G. Where we deliberately did **not** use LLM
 
@@ -704,7 +716,7 @@ Add an LLM call **only** when both hold:
    that constant-folds / pattern-matches / typestate-checks, the symbolic layer
    owns it.
 
-When evaluating a new "let's use LLM here" proposal, write the A–F template
+When evaluating a new "let's use LLM here" proposal, write the A–E template
 above BEFORE implementing. If the "cost of reverting" line is empty or
 hand-wavy, the LLM call probably isn't justified.
 

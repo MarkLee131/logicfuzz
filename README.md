@@ -6,7 +6,7 @@
   <p align="center">
     <a href="#installation"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="License"></a>
-    <a href="#supported-models"><img src="https://img.shields.io/badge/LLM-GPT%20%7C%20DeepSeek-purple.svg" alt="LLM Support"></a>
+    <a href="#supported-models"><img src="https://img.shields.io/badge/LLM-GPT%20%7C%20Claude%20%7C%20DeepSeek-purple.svg" alt="LLM Support"></a>
   </p>
 </p>
 
@@ -16,11 +16,13 @@ LogicFuzz automatically generates high-quality fuzz drivers (harnesses) for C/C+
 
 ## Key Features
 
+- **Reconcile-then-Construct** - Builds an `APISemanticModel` (IR ⊕ doc ⊕ usage), then constructs lifecycle-complete API sequences that are valid by construction (no repair stage)
 - **Multi-Agent Workflow** - Specialized agents for prototyping, compile-error fixing, and crash analysis (LangGraph)
 - **Z3-Guided Synthesis** - Constraint-based driver generation with type matching, provenance tracking, and resource lifecycle management
 - **Progressive Filter Pipeline** - layered filtering (L0–L4) from thousands of APIs down to high-value sequences
 - **Automatic Error Recovery** - Intelligent error triage and iterative fixing with up to 3 retry attempts
-- **Coverage-Aware Generation** - Prioritizes uncovered code paths and API combinations
+- **Gap-Directed Construction** - Sequence construction and ranking are biased toward baseline-uncovered APIs (coverage-gap signal)
+- **Portfolio Merge** - Folds successful trials into a single multi-task harness for breadth, with a compile-validation gate
 - **OSS-Fuzz Integration** - Seamless integration with Google's OSS-Fuzz infrastructure
 
 ## How It Works
@@ -94,7 +96,7 @@ export ANTHROPIC_API_KEY="your-key-here"
 python3 run_logicfuzz.py -y comparison/cjson.yaml -l gpt-4o
 
 # Use Claude instead
-python3 run_logicfuzz.py -y comparison/cjson.yaml -l claude-3-5-sonnet-20241022
+python3 run_logicfuzz.py -y comparison/cjson.yaml -l claude-3-5-sonnet
 ```
 
 ### Step-by-Step Execution
@@ -103,7 +105,7 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml -l claude-3-5-sonnet-20241022
 # Step 1: Extract APIs only (no LLM calls)
 python3 run_logicfuzz.py -y comparison/cjson.yaml --extract-only
 
-# Step 2: Generate drivers with Z3-guided synthesis
+# Step 2: Generate drivers with Z3-guided synthesis (static-only baseline, no LLM)
 python3 run_logicfuzz.py -y comparison/cjson.yaml --generate-drivers --num-drivers 10
 
 # Step 3: Run full pipeline with LLM agents
@@ -115,6 +117,19 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml -l gpt-4o
 ```bash
 # Run 5 experiments in parallel
 LLM_NUM_EXP=5 python3 run_logicfuzz.py -y comparison/cjson.yaml -l gpt-4o
+```
+
+### Evaluation
+
+```bash
+# Fold successful trials into a single multi-task harness
+python3 run_logicfuzz.py -y comparison/cjson.yaml --merge-drivers
+
+# Closed-loop CBFactory feedback (re-synthesise with the grown automaton)
+python3 run_logicfuzz.py -y comparison/cjson.yaml --closed-loop --closed-loop-iters 3
+
+# Evaluation profile: bundles --closed-loop + --merge-drivers
+python3 run_logicfuzz.py -y comparison/cjson.yaml --eval
 ```
 
 ## Configuration
@@ -204,7 +219,7 @@ logicfuzz/
 │   ├── agents/               # LLM agents (Prototyper, Fixer, etc.)
 │   ├── context/              # FuzzingContext (SSOT)
 │   ├── workflow/             # LangGraph workflow & supervisor
-│   └── tools/                # Agent tools (FuzzIntrospector, Bash)
+│   └── tools/                # Agent tools (Bash, GDB; introspector context is pre-fetched)
 ├── liberator_adapter/
 │   ├── constraints/          # Filter pipeline (L0-L4)
 │   └── driver/factory/       # Z3-guided synthesis
