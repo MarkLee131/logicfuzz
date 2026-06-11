@@ -1945,12 +1945,16 @@ class FuzzingContext:
             except Exception as _he:
                 log.warning('G4 hole annotation failed (non-critical): %s', _he)
 
-        # T12: pin proven hole values from a PRIOR run (LOGICFUZZ_VALUE_FEEDBACK).
-        # Read the persisted coverage_memory and attach, per skeleton, the leaf
-        # values that reached the deepest coverage last time — the Prototyper
-        # renders them as reuse-unless-reason hints. The "read" side of Phase C
-        # (cross-run; the write side is the post-merge snapshot).
-        if skeleton_drivers and os.environ.get('LOGICFUZZ_VALUE_FEEDBACK'):
+        # T12: pin proven hole values from a PRIOR run. DEFAULT-ON (opt-out
+        # LOGICFUZZ_VALUE_FEEDBACK=0): read the persisted coverage_memory and
+        # attach, per skeleton, the leaf values that reached the deepest coverage
+        # last time — the Prototyper renders them as reuse-unless-reason
+        # (advisory, so it cannot freeze exploration) hints. The "read" side of
+        # Phase C (cross-run; write side is the post-merge snapshot). A fresh
+        # project with no coverage_memory.json is a clean no-op (attach pins 0).
+        _vf_on = os.environ.get('LOGICFUZZ_VALUE_FEEDBACK', '1').strip().lower() \
+            not in ('0', 'false', 'no', 'off', '')
+        if skeleton_drivers and _vf_on:
             try:
                 from pathlib import Path as _Path
                 from src.state.coverage_memory import (

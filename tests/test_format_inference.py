@@ -108,8 +108,8 @@ def test_synth_fallback_writes_seed_when_gated(tmp_path, monkeypatch):
     monkeypatch.setenv("LOGICFUZZ_FORMAT_INFER", "1")
     corpus = tmp_path / "corpus"
     n = seed_corpus_for_driver("proj", corpus, _icc_driver(tmp_path), seeds=[])
-    assert n == 1
-    synth = corpus / "synthseed_icc"
+    assert n >= 1   # diverse corpus: minimal seed + varied-body variants
+    synth = corpus / "synthseed_icc_00"
     assert synth.exists()
     assert synth.read_bytes()[36:40] == b"acsp"   # front gate cleared
 

@@ -61,9 +61,9 @@ def _is_scalar_float(type_str: str) -> bool:
 
 
 def _fuzzable_holes() -> bool:
-    """Tier 1 (opt-in `LOGICFUZZ_FUZZABLE_HOLES`): render fuzzable scalar/enum/
-    flag CONFIG holes as 'DERIVE from the fuzz input' directives instead of
-    'pick a constant'.
+    """Tier 1 (DEFAULT-ON; opt-out via `LOGICFUZZ_FUZZABLE_HOLES=0`): render
+    fuzzable scalar/enum/flag CONFIG holes as 'DERIVE from the fuzz input'
+    directives instead of 'pick a constant'.
 
     The depth gap vs PromeFuzz is that we FREEZE the API's tunable parameters
     (gamma=1.0, curve type=1) — a constant arg means the fuzzer's bytes never
@@ -72,12 +72,14 @@ def _fuzzable_holes() -> bool:
     84→121 branches (+44%) at equal budget. The symbolic layer knows precisely
     which args are tunable DOFs (CONFIG enum/scalar) vs validity-required
     (handles, magic, length) — so it exposes ONLY the DOFs, avoiding the
-    fuzz-everything failure (NULL handles / broken magic) a blind LLM hits."""
-    # NB: explicit truthy parse — `bool(os.environ.get(...))` treats "0"/"false"
-    # as True (any non-empty string), so FUZZABLE_HOLES=0 would ENABLE the
-    # feature. 2026-06 review.
-    return os.environ.get("LOGICFUZZ_FUZZABLE_HOLES", "").strip().lower() in (
-        "1", "true", "yes", "on")
+    fuzz-everything failure (NULL handles / broken magic) a blind LLM hits.
+
+    Default-on (2026-06): the +44% win + the CONFIG-only scope (the always-on
+    NULL-guard floor + handle provenance are untouched) make this safe to ship
+    by default — same path factory-chain / density / diversity took. Explicit
+    `=0`/`false`/`no`/`off` (or empty) still disables for the A/B control."""
+    return os.environ.get("LOGICFUZZ_FUZZABLE_HOLES", "1").strip().lower() not in (
+        "0", "false", "no", "off", "")
 
 
 def _format_for_api(api_name: str):

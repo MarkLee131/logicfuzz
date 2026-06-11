@@ -136,6 +136,34 @@ def synthesize_minimal_seed(spec: FormatSpec) -> bytes:
     return bytes(buf)
 
 
+def synthesize_seed_corpus(spec: FormatSpec, k: int = 6) -> List[bytes]:
+    """``k`` deterministic gate-passing seeds (not just one zero-body seed).
+
+    A single all-zero body (``synthesize_minimal_seed``) gives libFuzzer almost
+    nothing to mutate structurally. This emits the minimal seed PLUS variants
+    whose post-magic body carries distinct fixed byte patterns, so the fuzzer
+    starts from structurally-varied inputs that already clear the magic gate.
+    Fully deterministic (no RNG) for reproducibility; only the body past the
+    magic is varied (the gate-passing prefix is preserved in every variant)."""
+    base = bytes(synthesize_minimal_seed(spec))
+    body = spec.offset + len(spec.magic)
+    out: List[bytes] = [base]
+    for pat in (0xFF, 0xAA, 0x55, 0x01):
+        if len(out) >= k:
+            break
+        v = bytearray(base)
+        for i in range(body, len(v)):
+            v[i] = pat
+        out.append(bytes(v))
+    # One variant with a plausible big-endian length field right after the magic
+    # (many binary formats carry a size/version word there).
+    if len(out) < k and len(base) >= body + 4:
+        v = bytearray(base)
+        v[body:body + 4] = len(base).to_bytes(4, "big")
+        out.append(bytes(v))
+    return out[:k]
+
+
 def format_recipe_text(spec: FormatSpec) -> str:
     """Human recipe for the hole / prompt: how to clear this front gate."""
     hexm = spec.magic.hex()

@@ -36,8 +36,9 @@ def test_tier1_fuzzable_holes_gated():
     handle = SimpleNamespace(role=ArgRole.HANDLE_IN, type_str="void *", index=0, pairs_with=None)
     saved = os.environ.pop("LOGICFUZZ_FUZZABLE_HOLES", None)
     try:
-        # gate OFF: the float CONFIG has no FUZZ_DERIVE (the gap that lets the
-        # LLM hardcode a constant — gamma=1.0 — so the fuzzer never varies it).
+        # gate OFF (explicit =0 — the default is now ON): the float CONFIG has
+        # no FUZZ_DERIVE (the gap that lets the LLM hardcode a constant gamma=1.0).
+        os.environ["LOGICFUZZ_FUZZABLE_HOLES"] = "0"
         assert "FUZZ_DERIVE" not in (H._arg_intent(cfg, "set_gamma") or "")
         # gate ON: tunable scalar → FUZZ_DERIVE; a handle stays FIXED (never fuzzed).
         os.environ["LOGICFUZZ_FUZZABLE_HOLES"] = "1"
@@ -87,8 +88,10 @@ def test_length_pairs_with_buffer():
     assert args[1]["pairs_with"] == 0
 
 
-def test_scalar_config_gets_vary_range_intent():
-    """The P-gen-8 fix: a scalar config hole must carry in/out-of-range intent."""
+def test_scalar_config_gets_vary_range_intent(monkeypatch):
+    """The P-gen-8 fix: a scalar config hole carries in/out-of-range intent on
+    the FUZZABLE-OFF path (now the explicit opt-out; default is FUZZ_DERIVE)."""
+    monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "0")
     intents = _intents_for("thing_parse")
     assert "VARY_RANGE" in intents[2]
 

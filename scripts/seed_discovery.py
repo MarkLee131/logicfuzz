@@ -289,6 +289,30 @@ def select_seeds_for_driver(
     return matched if matched else list(seeds)
 
 
+def _project_header_texts(project: str, *, max_headers: int = 40,
+                          max_bytes: int = 20000) -> List[str]:
+    """Best-effort sample of the project's headers so
+    ``format_inference.magic_defines_from_text`` can mine ``#define <MAGIC>``
+    signatures — generalises front-gate seed synthesis beyond the small
+    hardcoded format registry (no hand-written per-lib hint needed). Reuses the
+    same source roots seed discovery walks. Never raises."""
+    texts: List[str] = []
+    try:
+        for root in _default_roots(project):
+            if not root.exists():
+                continue
+            for h in sorted(root.rglob("*.h"))[:max_headers]:
+                try:
+                    texts.append(h.read_text(errors="replace")[:max_bytes])
+                except OSError:
+                    continue
+            if texts:
+                break
+    except Exception:
+        pass
+    return texts
+
+
 def seed_corpus_for_driver(
     project: str,
     corpus_dir: Path,
@@ -359,23 +383,42 @@ def seed_corpus_for_driver(
         # seed from the driver's inferred format so a parser-entry driver clears
         # its magic gate (random bytes never would). Gated, best-effort,
         # additive. Real seeds always win (this only fires when n == 0).
-        if n == 0 and driver_source and os.environ.get("LOGICFUZZ_FORMAT_INFER"):
+        _fmt_on = os.environ.get(
+            "LOGICFUZZ_FORMAT_INFER", "").strip().lower() in (
+                "1", "true", "yes", "on")  # explicit: "0" must mean off
+        if n == 0 and driver_source and _fmt_on:
             try:
                 from liberator_adapter.analysis.format_inference import (
-                    infer_spec, synthesize_minimal_seed)
+                    infer_spec, synthesize_seed_corpus)
+                # Activate infer_spec's previously-dead sources: project header
+                # #define magics (generalises beyond the 5-entry registry) and,
+                # if a real seed of THIS family exists project-wide but wasn't
+                # routed here, its header prefix. infer_spec prefers
+                # seed_sample > registry > header_define.
+                _hdrs = _project_header_texts(project)
                 for fam in sorted(infer_driver_formats(driver_source)):
-                    spec = infer_spec(fam)
+                    _sample = None
+                    for s in all_seeds:
+                        if (fam in s.name.lower()
+                                or s.suffix.lower().lstrip(".") == fam):
+                            try:
+                                _sample = s.read_bytes()[:256]
+                            except OSError:
+                                _sample = None
+                            break
+                    spec = infer_spec(fam, seed_sample=_sample, header_texts=_hdrs)
                     if spec is None:
                         continue
-                    dst = corpus_dir / f"synthseed_{fam}"
-                    if dst.exists():
-                        continue
-                    dst.write_bytes(synthesize_minimal_seed(spec))
-                    n += 1
+                    for j, seed in enumerate(synthesize_seed_corpus(spec)):
+                        dst = corpus_dir / f"synthseed_{fam}_{j:02d}"
+                        if dst.exists():
+                            continue
+                        dst.write_bytes(seed)
+                        n += 1
                 if n:
                     logger.info(
-                        "Synthesized %d minimal format seed(s) for %s "
-                        "(no real seed matched)", n, project)
+                        "Synthesized %d format seed(s) for %s (no real seed "
+                        "matched; magic + varied bodies)", n, project)
             except Exception as exc:  # synthesis must never break a run
                 logger.debug("synthetic seed gen skipped: %s", exc)
 

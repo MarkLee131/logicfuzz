@@ -64,7 +64,8 @@ def test_enum_members_for_type_lookup():
     assert enum_members_for_type({}, "cmsColorSpaceSignature") == []
 
 
-def test_config_enum_intent_carries_legal_set():
+def test_config_enum_intent_carries_legal_set(monkeypatch):
+    monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "0")  # pin the ENUM (off) path
     v = _vocab()
 
     class EnumArg:
@@ -81,7 +82,8 @@ def test_config_enum_intent_carries_legal_set():
     assert _arg_intent(EnumArg(), "x", None) is None
 
 
-def test_config_plain_int_still_varies_range():
+def test_config_plain_int_still_varies_range(monkeypatch):
+    monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "0")  # pin the VARY_RANGE (off) path
     v = _vocab()
 
     class IntArg:
