@@ -455,6 +455,19 @@ class Comprehender:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt),
             ])
+            # Per-run token meter: the comprehender is the one LLM stage outside
+            # the LangGraph agents, so feed it here too (else the per-run total
+            # under-counts the upfront knowledge cost).
+            try:
+                from src.utils.token_meter import record as _meter_record
+                _md = getattr(response, "response_metadata", None) or {}
+                _u = _md.get("token_usage") or _md.get("usage") or {}
+                _meter_record(
+                    _u.get("prompt_tokens") or _u.get("input_tokens", 0),
+                    _u.get("completion_tokens") or _u.get("output_tokens", 0),
+                    _u.get("total_tokens", 0), agent="comprehender")
+            except Exception:
+                pass
             content = getattr(response, "content", "") or ""
             if isinstance(content, list):
                 # Some providers return content as a list of parts.

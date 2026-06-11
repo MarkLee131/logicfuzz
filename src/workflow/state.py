@@ -254,6 +254,14 @@ def update_token_usage(state: FuzzingWorkflowState, agent_name: str,
     state["token_usage"]["total_completion_tokens"] += completion_tokens
     state["token_usage"]["total_tokens"] += total_tokens
 
+    # Per-RUN global meter (process-global, across all in-process ThreadPool
+    # trials) so total LLM token cost is comparable vs PromeFuzz. Best-effort.
+    try:
+        from src.utils.token_meter import record as _meter_record
+        _meter_record(prompt_tokens, completion_tokens, total_tokens, agent_name)
+    except Exception:
+        pass
+
     # Update per-agent statistics
     if agent_name not in state["token_usage"]["by_agent"]:
         state["token_usage"]["by_agent"][agent_name] = {

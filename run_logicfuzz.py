@@ -1134,10 +1134,33 @@ def run_experiments(benchmark: benchmarklib.Benchmark, args) -> Result:
     # Model name is passed directly - LangChain handles instantiation
     model_name = args.model
 
+    # Per-run LLM token meter: reset at run start, dump the total at the end
+    # (across all in-process ThreadPool trials + the comprehender) so token cost
+    # is comparable vs PromeFuzz.
+    try:
+      from src.utils import token_meter as _tm
+      _tm.reset()
+    except Exception:
+      _tm = None
+
     result = run_single_fuzz.run(benchmark=benchmark,
                                     model_name=model_name,
                                     args=args,
                                     work_dirs=work_dirs)
+
+    if _tm is not None:
+      try:
+        _proj = getattr(benchmark, 'project', None) or benchmark.id
+        _snap = _tm.dump(f"results/{_proj}/token_summary.json")
+        logger.info(
+            '💰 [token] per-run LLM total: %d calls, %d prompt + %d completion '
+            '= %d tokens; by-agent totals: %s → results/%s/token_summary.json',
+            _snap['calls'], _snap['prompt_tokens'], _snap['completion_tokens'],
+            _snap['total_tokens'],
+            {k: v['total_tokens'] for k, v in _snap['by_agent'].items()},
+            _proj)
+      except Exception as _e:
+        logger.warning('token summary dump failed: %s', _e)
     return Result(benchmark, result)
   except Exception as e:
     logger.error('Exception while running experiment: %s', str(e))
