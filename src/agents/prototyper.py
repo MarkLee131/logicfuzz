@@ -613,9 +613,12 @@ Without extern "C", the linker will fail with "undefined reference to LLVMFuzzer
             base_prompt += f"""
 
 <task>
-Generate a high-coverage LibFuzzer fuzz driver for the {benchmark.get('project', 'unknown')} project.
+LibFuzzer fuzz driver for the {benchmark.get('project', 'unknown')} project.
 Target language: **{target_language.upper()}**
 {lang_guidance}
+Your EXACT task and output format are defined by the MODE block at the END of
+this message — read it; it is authoritative (skeleton hole-filling, or
+complete-driver generation only if no skeleton is given).
 </task>
 
 <step1_understand_project>
@@ -665,11 +668,13 @@ Before writing any code, think about:
                 base_prompt += f"""
 
 <skeleton_template_mode>
-**MANDATORY SKELETON MODE ENABLED**
+**HOLE-FILLING MODE — your EXACT task. This OVERRIDES any "generate a complete
+driver / call more APIs / example-driver / line-budget" guidance earlier in this
+message; that guidance applies ONLY when no skeleton is given.**
 
-A type-safe skeleton has been generated for you. You MUST use this skeleton as your template.
-Do NOT modify the skeleton structure, API sequence, or variable declarations.
-Your task is to fill the marked holes with appropriate code.
+A lifecycle-complete, type-validated skeleton is provided. Its API sequence,
+structure, variable declarations, and lifecycle are CORRECT BY CONSTRUCTION
+(Z3 + typestate validated). Your ONLY job is to fill the marked leaf holes.
 
 <skeleton_template>
 ```c
@@ -681,24 +686,18 @@ Your task is to fill the marked holes with appropriate code.
 {holes_description}
 </holes_to_fill>
 
-**IMPORTANT INSTRUCTIONS:**
-1. The skeleton above contains placeholders like __HOLE_xxx__ or __BUFSIZE_xxx__
-2. Replace each placeholder with appropriate code
-3. Keep ALL other code exactly as shown
-4. Do NOT add new API calls or change the API sequence
-5. Do NOT modify variable declarations or types
+**RULES:**
+1. Replace each __HOLE_*__ / __BUFSIZE_*__ placeholder with minimal appropriate code.
+2. Keep ALL other code EXACTLY as shown — do NOT reorder, modify declarations/types, or change the API sequence.
+3. Do NOT add new API calls. Call ONLY functions/types/constants that appear in the <sequence_api_signatures>/<project_apis> above — NEVER invent or guess a symbol (no companion getters, no renamed variants, no case changes).
 
-**OUTPUT FORMAT:**
-You have two options:
-
-**Option 1 (Preferred): JSON Hole Fillings**
-Output your hole fillings as JSON wrapped in <hole_fillings> tags:
+**OUTPUT (the ONLY format for this mode — ignore the <fuzz_target> instruction above):**
+A single <hole_fillings> JSON object mapping each placeholder to its fill text:
 <hole_fillings>
 {{"__HOLE_callback_1__": "int my_callback(void* data) {{ return 0; }}", "__BUFSIZE_bufsize_1__": "size"}}
 </hole_fillings>
-
-**Option 2: Complete Code**
-If JSON mode doesn't work, output the complete filled code in <fuzz_target> tags.
+Only if a filling genuinely cannot be expressed as JSON, output the complete
+filled skeleton in <fuzz_target> tags — changing ONLY the holes, nothing else.
 </skeleton_template_mode>
 """
             else:
