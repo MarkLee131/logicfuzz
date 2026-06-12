@@ -225,8 +225,20 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         result = skeleton_code
         filled_count = 0
 
-        # First pass: direct replacement for exact matches
+        # First pass: direct replacement for exact matches — ONLY for keys that
+        # are actual hole placeholders (``__…__`` markers). Some LLMs, handed a
+        # hole-LESS skeleton, return fillings keyed by a VARIABLE NAME with a
+        # value fill (e.g. {"arg0_cmsDictDup": "NULL", "arg1_x": "data[0] % 10"}).
+        # A blind global replace of such a bare name rewrites the DECLARATION's
+        # name slot too — ``void * arg0_cmsDictDup = NULL;`` → ``void * NULL =
+        # NULL;`` / ``int arg1_x = 0;`` → ``int data[0] % 10 = 0;`` — invalid C
+        # that then weak-stubs to an edges=0 driver. Reject name-keyed fills here;
+        # the derived-pattern second pass below only ever rewrites ``__…__`` tokens
+        # so it is already safe. (Valid-by-construction: a hole-less skeleton is
+        # already a complete, valid driver — dropping spurious fills keeps it so.)
         for placeholder, filling in hole_fillings.items():
+            if not (placeholder.startswith('__') and placeholder.endswith('__')):
+                continue
             if placeholder in result:
                 result = result.replace(placeholder, str(filling))
                 filled_count += 1
