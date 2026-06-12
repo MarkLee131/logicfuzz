@@ -153,6 +153,40 @@ def _public_pointer_type(c_type: str) -> str:
     return c_type
 
 
+def _complete_value_struct(c_type: str) -> Optional[str]:
+    """When ``c_type`` is a SINGLE pointer to a complete, non-opaque public
+    value struct (``cmsCIELab *``, ``cmsCIEXYZ *`` — a struct whose layout the
+    IR knows), return its bare struct name so the renderer can stack-allocate it
+    and pass its address. Else ``None``.
+
+    A complete-struct pointer is structurally **not** an opaque handle (handles
+    are ``void *`` or forward-declared/incomplete structs such as
+    ``cmsToneCurve *``): the caller declares it on the stack, it has no producer.
+    The renderer's own "complete" notion is scalar-only, so without this every
+    such arg renders ``NULL`` in all branches (HANDLE_IN → NULL, OUTPUT →
+    degraded NULL) and the API no-ops / crashes on a NULL struct pointer →
+    edges=0 (the lcms color-math subsystem: cmsLab2LCh/cmsDeltaE/cmsD50_XYZ…).
+
+    Gated on DataLayout's IR type table — library-agnostic, no per-library list.
+    Returns ``None`` when the layout is unpopulated (no-model / unit path) so the
+    caller keeps the prior NULL render; never raises.
+    """
+    if c_type.count('*') != 1:
+        return None                      # T** out-pointers stay OUTPUT-handled
+    bare = _bare_name(c_type)
+    if not bare or bare == 'void':
+        return None
+    try:
+        from liberator_adapter.common.datalayout import DataLayout
+        dl = DataLayout.instance()
+        if dl.is_a_struct(bare) and not dl.is_incomplete(bare) \
+                and not dl.is_enum_type(bare):
+            return bare
+    except Exception:
+        return None
+    return None
+
+
 def _is_internal_header(header: str) -> bool:
     """True for a non-public (internal/private/impl) header basename."""
     h = header.lower()
@@ -954,6 +988,26 @@ class SkeletonGenerator:
 
         ttype_norm = c_type.replace(' ', '')
         is_char_star = 'char*' in ttype_norm
+
+        # ---- Complete value-struct pointer (type-structural, role-dominant) --
+        # A single pointer to a complete public struct (cmsCIELab *, cmsCIEXYZ *)
+        # is NOT an opaque handle: stack-allocate the struct and pass its address
+        # so the API has real storage to read/write. Without this it renders NULL
+        # in every role branch (the renderer's "complete" set is scalar-only) and
+        # the color-math / introspect-struct subsystems no-op on NULL → edges=0.
+        # Skipped for char* (string-wrapped elsewhere); a real upstream producer,
+        # if any, still overrides via _apply_arg_bindings (bound_expr).
+        if not is_char_star:
+            _vstruct = _complete_value_struct(c_type)
+            if _vstruct is not None:
+                # DataLayout proved it's a struct → ``{0}`` is the only valid
+                # zero-init (a typedef'd struct name carries no ``struct``
+                # keyword, so _scalar_init_value would wrongly pick ``= 0``).
+                return SkeletonVariable(
+                    name=name, c_type=_vstruct, is_pointer=False,
+                    allocation=AllocationType.STACK, init_value="{0}",
+                    bound_expr=f"&{name}",
+                )
 
         # ---- Role-first routing (the reconcile-model floor) ----------------
         # When the model is threaded in, route each arg by its SEMANTIC role
