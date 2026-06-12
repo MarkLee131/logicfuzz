@@ -321,6 +321,14 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                 f'{len(hole_comments)} HOLE comments remain: {hole_comments[:2]}',
                 trial=self.trial)
 
+        # FIX C floor-safety: any tunable CONFIG value-hole (``__INIT_…__``) the
+        # LLM left unfilled degrades to a valid scalar default (``0``) — keeps the
+        # #1b empty-fill FLOOR valid C (an unfilled placeholder is a compile
+        # error). Filled holes are already substituted above; this only rewrites
+        # the residue, so it is byte-identical to the prior fixed ``= 0`` floor on
+        # any arg the LLM didn't fill.
+        result = re.sub(r'__INIT_[\w]+__', '0', result)
+
         # Post-merge fixup #1: resolve the __MIN_SIZE__ placeholder using the
         # actual data[N] indices that the LLM (or HoleFiller) wrote.
         result = self._fixup_min_size_guard(result)

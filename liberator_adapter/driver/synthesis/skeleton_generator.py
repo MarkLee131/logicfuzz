@@ -13,6 +13,7 @@ Design principles:
 """
 
 import logging
+import os
 from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -185,6 +186,45 @@ def _complete_value_struct(c_type: str) -> Optional[str]:
     except Exception:
         return None
     return None
+
+
+def _fuzzable_holes_enabled() -> bool:
+    """FIX C / FUZZABLE_HOLES gate (default-on; opt-out ``=0``)."""
+    return os.environ.get("LOGICFUZZ_FUZZABLE_HOLES", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _is_tunable_scalar(c_type: str) -> bool:
+    """True when a NON-pointer CONFIG arg is a tunable scalar/enum/signature
+    (a value DOF the fuzzer should sweep: a format/intent/level/flag) — so the
+    renderer emits a FUZZABLE value HOLE instead of a fixed ``= 0``.
+
+    Catches plain scalars, IR-known enums, and integer typedefs
+    (``cmsUInt32Number``, ``cmsColorSpaceSignature``). A by-value struct CONFIG
+    is NOT a scalar (it is handled by the complete-value-struct path); pointers
+    never reach here. DataLayout-gated where available, with a name-pattern
+    fallback so the no-model/unit path still recognizes integer typedefs.
+    """
+    if '*' in c_type or '[' in c_type:
+        return False
+    bare = _bare_name(c_type)
+    if not bare:
+        return False
+    if _is_scalar_value_type(c_type):
+        return True
+    try:
+        from liberator_adapter.common.datalayout import DataLayout
+        dl = DataLayout.instance()
+        if dl.is_enum_type(bare):
+            return True
+        if bare in dl.clang_to_llvm_struct and not dl.is_a_struct(bare):
+            return True   # typedef'd integer / signature (not an aggregate)
+    except Exception:
+        pass
+    low = bare.lower()
+    return any(t in low for t in (
+        "int", "uint", "long", "short", "char", "size", "byte",
+        "float", "double", "real", "signature", "flag", "bool", "enum"))
 
 
 def _is_internal_header(header: str) -> bool:
@@ -1052,6 +1092,28 @@ class SkeletonGenerator:
             return SkeletonVariable(
                 name=name, c_type=_public_pointer_type(c_type),
                 is_pointer=True, init_value="NULL")
+        if (role == 'CONFIG' and not is_pointer
+                and _fuzzable_holes_enabled() and _is_tunable_scalar(c_type)):
+            # FIX C: a tunable CONFIG scalar/enum (format, intent, level) renders
+            # as a FUZZABLE value HOLE, not a fixed ``= 0``. A hole-LESS skeleton
+            # makes the LLM key its value rewrite by VARIABLE NAME → dropped by
+            # the #1a merge whitelist → floor ``= 0`` (e.g. cmsCreateTransform
+            # InputFormat=0 → cmsCreateTransform returns NULL → guard → the whole
+            # object-construction chain is dead → edges=0). A ``__INIT_<var>__``
+            # hole lets the LLM's valid-constant fill (TYPE_RGB_8) apply
+            # PLACEHOLDER-keyed (survives #1a) so construction SUCCEEDS and the
+            # consumer (cmsDoTransform(data,…)) runs input-dependently. The
+            # hole_semantics FUZZ_DERIVE intent supplies the value domain; an
+            # UNFILLED hole degrades to ``0`` in the merge (floor-safe, == prior
+            # ``= 0``). Gated on FUZZABLE_HOLES (default-on); opt-out restores the
+            # fixed-scalar floor. The hole is var-NAMED so the LLM maps the
+            # per-arg intent (``arg1_cmsCreateTransform``) onto the placeholder.
+            hole = InitValueHole(name=name, target_type=c_type,
+                                 is_pointer=False, default_value=0)
+            skeleton.add_hole(hole)
+            return SkeletonVariable(
+                name=name, c_type=c_type, is_pointer=False,
+                init_value=hole.get_placeholder())
 
         # B4 safety net: entry-API non-const pointer that ISN'T a char*
         # (char* is handled by `_maybe_inject_c_string_wrapper`) — force
