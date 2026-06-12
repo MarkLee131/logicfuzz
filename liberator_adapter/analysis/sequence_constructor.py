@@ -30,6 +30,7 @@ one implementation.
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -317,6 +318,45 @@ def _word_in_name(stem: str, name: str) -> bool:
         start = i + 1
 
 
+_SUBSYS_VERBS = (
+    "Alloc", "Set", "Get", "Dup", "Free", "Create", "Open", "Write", "Read",
+    "Delete", "Close", "Build", "Save", "Load", "Init", "Done", "Add", "Insert",
+    "Eval", "New", "Compute", "Append", "Reverse", "Join", "Smooth", "Estimate",
+    "Detect", "Adapt", "Desaturate", "Link", "Check",
+)
+
+
+def _subsystem_token(name: str, lib_prefix: str) -> str:
+    """The SUBSYSTEM noun of an API name. Handles both name shapes:
+      * VERB-FIRST (``cmsCreateProfile``/``cmsOpenProfileFromMem`` → ``profile``):
+        strip the leading verb, take the following noun.
+      * NOUN-FIRST (``cmsDictAlloc``/``cmsDictDup`` → ``dict``; ``cmsIT8Alloc``/
+        ``cmsIT8SetDataRowCol`` → ``it8``): cut at the first INTERNAL verb.
+    So same-subsystem opaque builders + consumers share a token (binds Dict↔Dict,
+    IT8↔IT8, profile-creators together) — NOT ``subsystem_clusters._name_token``,
+    which would split IT8Alloc='IT8All' vs IT8Set='IT8Set'."""
+    core = name
+    if lib_prefix and core.lower().startswith(lib_prefix.lower()):
+        core = core[len(lib_prefix):]
+    core = core.lstrip("_")
+    # 1. strip a LEADING verb (verb-first names key on the following noun).
+    for v in _SUBSYS_VERBS:
+        if (core.startswith(v) and len(core) > len(v)
+                and core[len(v):len(v) + 1].isupper()):
+            core = core[len(v):]
+            break
+    # 2. cut at the first INTERNAL verb (noun-first: IT8SetData → IT8).
+    cut = len(core)
+    for v in _SUBSYS_VERBS:
+        i = core.find(v)
+        if 0 < i < cut:
+            cut = i
+    core = core[:cut] or core
+    # 3. take the leading word (all-caps run like IT8, else CamelCase word).
+    m = re.match(r'[A-Z0-9]{2,}|[A-Za-z][a-z0-9]*', core)
+    return (m.group(0) if m else core).lower()
+
+
 def _recover_opaque_producers(
     model: APISemanticModel,
     producers: Dict[str, List[APISemantics]],
@@ -346,6 +386,20 @@ def _recover_opaque_producers(
                    if any(_word_in_name(st, c.name) for st in stems)]
         if matched:
             out[t] = matched
+
+    # Generic opaque-handle fallback: a handle like cmsHANDLE (typedef void*)
+    # shared across subsystems has CREATORs (cmsDictAlloc, cmsIT8Alloc) with
+    # produces=[] (void* return erased) that the name-stem match above MISSES
+    # (they are named for the subsystem, not the handle word). Map such an
+    # unrecovered opaque handle to ALL opaque CREATORs (role==CREATOR, no
+    # produces); _build_prefix.resolve applies a STRICT same-subsystem gate when
+    # the bucket spans >1 subsystem, so it binds Dict↔Dict / IT8↔IT8 and leaves
+    # a hole (never cross-connects) when there is no same-subsystem builder.
+    opaque_builders = [c for c in creators if not c.produces]
+    if opaque_builders:
+        for t in unproduced:
+            if t not in out:
+                out[t] = list(opaque_builders)
     return out
 
 
@@ -497,6 +551,7 @@ def _build_prefix(
     satisfied: Set[str] = set()
     opened: Set[str] = set()
     in_progress: Set[str] = set()
+    _lib_prefix = _detect_lib_prefix(list(idx.by_name.keys()))
 
     def resolve(t: str, depth: int) -> bool:
         if t in satisfied:
@@ -516,6 +571,22 @@ def _build_prefix(
             from_recovery = bool(cands)
         if not cands:
             return False
+
+        # Over-connection guard: a recovered bucket spanning MORE THAN ONE
+        # subsystem (a generic opaque handle like cmsHANDLE shared by Dict/IT8/…)
+        # may bind ONLY a creator in the CONSUMER's subsystem. If none, leave the
+        # type UNMET (a hole) — never cross-subsystem (the project's type
+        # over-connection guardrail). Single-subsystem buckets (the existing
+        # cmsHTRANSFORM/cmsHPROFILE name-stem recovery) skip this (no-op).
+        if from_recovery and len(cands) > 1:
+            _toks = {_subsystem_token(c.name, _lib_prefix) for c in cands}
+            if len(_toks) > 1:
+                _want = _subsystem_token(target.name, _lib_prefix)
+                _same = [c for c in cands
+                         if _subsystem_token(c.name, _lib_prefix) == _want]
+                if not _same:
+                    return False
+                cands = _same
 
         # Prefer a creator that INGESTS FUZZER BYTES (has an INPUT_BUFFER arg,
         # e.g. cmsOpenProfileFromMem) over an equivalent synthetic creator
