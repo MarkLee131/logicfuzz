@@ -81,6 +81,29 @@ def test_role_first_wires_buffer_and_length_not_handle():
     assert "thing_parse(" in code
 
 
+def test_config_pointer_renders_null_not_garbage_array():
+    # cmsCreateContext-style CONFIG void* args (plugin/userdata) must render NULL,
+    # not a garbage uninitialised uint8_t[] (the role-blind output-branch render)
+    # and not (void*)data. This is the driver-33 cmsCreateContext mis-render.
+    apis = [{"function_name": "cmsCreateContext", "arguments": [
+        {"type": "void *", "is_const": [False], "name": "Plugin"},
+        {"type": "void *", "is_const": [False], "name": "UserData"}],
+        "return_type": "void *", "is_vararg": False, "namespace": []}]
+    model = reconcile(apis)
+    roles = {a.index: a.role.name for a in model.apis["cmsCreateContext"].args}
+    if not all(r == "CONFIG" for r in roles.values()):
+        import pytest
+        pytest.skip(f"reconcile roles differ from the real model: {roles}")
+    seq = [_api("cmsCreateContext", "void *",
+                [_arg("Plugin", "void *"), _arg("UserData", "void *")])]
+    sk = SkeletonGenerator().generate(
+        api_sequence=seq, driver_name="t", is_cpp=False, dep_model=model)
+    code = SkeletonRenderer().render(sk)
+    assert "(void*)data" not in code, code           # not mis-wired to the buffer
+    assert not re.search(r"uint8_t\s+\w+\s*\[", code), code  # not a garbage array
+    assert "= NULL" in code and "cmsCreateContext(" in code
+
+
 def test_no_model_leaves_buffer_unwired_legacy():
     # The contrast: with NO model, the non-entry const-void* buffer stays the
     # legacy degraded NULL (this is exactly the edges=0 bug the role fix cures).

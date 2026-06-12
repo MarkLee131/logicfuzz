@@ -984,6 +984,16 @@ class SkeletonGenerator:
             return SkeletonVariable(
                 name=name, c_type=_public_pointer_type(c_type),
                 is_pointer=True, init_value="NULL")
+        if role == 'CONFIG' and is_pointer:
+            # An optional/config pointer (e.g. cmsCreateContext's plugin /
+            # userdata ``void*`` args) — NULL is the safe by-construction default
+            # the API tolerates, NOT a garbage uninitialised byte-array (the
+            # role-blind output-branch render) and NOT ``(void*)data``. The
+            # LLM/binding can override via the value-intent. (A CONFIG SCALAR
+            # falls through to the scalar-init path + its FUZZABLE_HOLES intent.)
+            return SkeletonVariable(
+                name=name, c_type=_public_pointer_type(c_type),
+                is_pointer=True, init_value="NULL")
 
         # B4 safety net: entry-API non-const pointer that ISN'T a char*
         # (char* is handled by `_maybe_inject_c_string_wrapper`) — force
