@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from liberator_adapter.common.api import Api, Arg
+from liberator_adapter.analysis.constant_usage import legal_constants_for
 from liberator_adapter.analysis.sequence_constructor import (
     _dependency_components, _scoped_guards,
 )
@@ -843,6 +844,7 @@ class SkeletonGenerator:
                     'name': arg.name or f"arg{idx}",
                     'type': arg.type,
                     'idx': idx,
+                    'api_name': api.function_name,           # FIX D: usage lookup
                     'is_input': self._is_input_param(arg),
                     'is_output': self._is_output_param(arg),
                     'is_callback': self._is_callback_param(arg),
@@ -1092,6 +1094,20 @@ class SkeletonGenerator:
             return SkeletonVariable(
                 name=name, c_type=_public_pointer_type(c_type),
                 is_pointer=True, init_value="NULL")
+        if role == 'CONFIG' and not is_pointer and _is_tunable_scalar(c_type):
+            # FIX D: if the library's OWN call-sites pass a legal constant at this
+            # (api, arg) — mined deterministically from usage — render the modal
+            # one (TYPE_RGB_8 for cmsCreateTransform's format) so construction
+            # SUCCEEDS by construction, no LLM guess, no invalid ``data % 256``.
+            # This is the symbolic side supplying the legal value; floor-valid +
+            # measurable. Falls through to the FIX C FUZZABLE hole when usage has
+            # nothing for this arg.
+            _consts = legal_constants_for(
+                arg_info.get('api_name', ''), arg_info.get('idx', -1))
+            if _consts:
+                return SkeletonVariable(
+                    name=name, c_type=c_type, is_pointer=False,
+                    init_value=_consts[0])
         if (role == 'CONFIG' and not is_pointer
                 and _fuzzable_holes_enabled() and _is_tunable_scalar(c_type)):
             # FIX C: a tunable CONFIG scalar/enum (format, intent, level) renders

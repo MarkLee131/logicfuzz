@@ -1173,6 +1173,23 @@ class FuzzingContext:
                 _gap_apis = compute_gap_apis(
                     _all_api_names, project=project_name,
                     existing_coverage=existing_coverage or None)
+                # FIX D: mine the legal constants the library's OWN call-sites
+                # pass per (api, arg) and publish the process-global usage map the
+                # skeleton renderer reads — so a CONFIG scalar (cmsCreateTransform
+                # InputFormat) renders the modal VALID constant (TYPE_RGB_8) by
+                # construction, not =0 / data%256 (→ NULL → dead chain). Set BEFORE
+                # construction (Step 5h renders here). Best-effort; empty → the
+                # FUZZABLE hole (FIX C) still applies.
+                try:
+                    from liberator_adapter.analysis.constant_usage import set_usage_map
+                    _usage_vocab = _build_constant_vocabulary(project_name, log)
+                    _usage_map = _build_constant_usage(
+                        project_name, set(_all_api_names), _usage_vocab, log)
+                    set_usage_map(_usage_map)
+                    log.info('  5h FIX D constant-usage: %d APIs with legal '
+                             'constants mined', len(_usage_map))
+                except Exception as _ue:
+                    log.debug('  5h constant-usage mining skipped: %s', _ue)
                 # Top-down WORKFLOW backbone: the automaton's accepting paths
                 # are real usage compositions from the library's own tests
                 # (e.g. lcms profile→transform→dotransform) — domain knowledge
@@ -2494,6 +2511,35 @@ def _build_constant_vocabulary(project_name: str, log) -> Dict[str, Any]:
         return extract_constant_vocabulary(paths)
     except Exception as exc:
         log.debug('   10b constant-vocabulary build skipped: %s', exc)
+        return {}
+
+
+def _build_constant_usage(project_name: str, api_names, vocab, log):
+    """FIX D: mine the legal constants the library's own call-sites pass at each
+    (api, arg) from the cached project source — so the renderer fills a CONFIG
+    scalar with a VALID library constant by construction (deterministic, no LLM).
+
+    Best-effort: globs ``*.c/*.cc/*.cpp/*.h`` under the cached source tree and
+    returns ``{}`` on any failure (the caller falls back to the FUZZABLE hole).
+    """
+    import glob as _glob
+    from liberator_adapter.analysis.constant_usage import mine_constant_usage
+    try:
+        roots = [f'./results/{project_name}/src_ossfuzz',
+                 f'./results/{project_name}']
+        exts = ('*.c', '*.cc', '*.cpp', '*.cxx', '*.h', '*.hpp', '*.hh')
+        paths: List[str] = []
+        for root in roots:
+            for ext in exts:
+                paths.extend(_glob.glob(os.path.join(root, '**', ext),
+                                        recursive=True))
+            if paths:
+                break
+        if not paths:
+            return {}
+        return mine_constant_usage(paths, set(api_names), vocab)
+    except Exception as exc:
+        log.debug('   constant-usage mining build skipped: %s', exc)
         return {}
 
 
