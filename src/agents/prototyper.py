@@ -6,6 +6,7 @@ The FuzzIntrospector tool surface was removed; all context is pre-fetched.
 """
 from typing import Any, Dict, List, Optional
 import argparse
+import re
 
 import logger
 from langchain_core.tools import BaseTool
@@ -413,6 +414,19 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                 f'Driver validation issues: {"; ".join(problems)}',
                 trial=self.trial)
 
+    # value-in-name-slot corruption: a declaration/statement where an operator
+    # (% or /) appears BEFORE the first ``=`` on a line, or a pointer literally
+    # named ``NULL`` (``void * NULL =``). Neither is valid C — they only arise
+    # when a hole fill leaked a VALUE into a variable-NAME slot. (Operators AFTER
+    # ``=`` are fine — that's a normal initializer.)
+    _MALFORMED_DECL = re.compile(
+        r'(?m)^[^=;\n]*[%/][^=;\n]*=[^;\n]*;|\*\s*NULL\s*=')
+
+    def _is_structurally_valid(self, code: str) -> bool:
+        """Cheap structural guard (no compile): False when the driver carries the
+        value-in-name-slot corruption that weak-stubs to an edges=0 binary."""
+        return self._MALFORMED_DECL.search(code or "") is None
+
     # =========================================================================
     # Main Execution
     # =========================================================================
@@ -796,6 +810,20 @@ Output your fuzz driver code inside <fuzz_target> tags.
             if skeleton_code and hole_fillings:
                 fuzz_target_code = self._merge_holes_into_skeleton(
                     skeleton_code, hole_fillings)
+                # Floor fallback: if a fill still corrupted the driver into
+                # invalid C (a value in a variable-NAME slot — see
+                # _is_structurally_valid), DON'T ship it. The skeleton is
+                # valid-by-construction, so fall back to the deterministic FLOOR
+                # = the skeleton merged with NO fills (default NULL/0/(void*)data
+                # + min-size fixup, no LLM). A valid floor driver beats an
+                # edges=0 weak-stubbed garbage driver.
+                if not self._is_structurally_valid(fuzz_target_code):
+                    logger.warning(
+                        'merged driver structurally invalid (value-in-name '
+                        'declaration); falling back to the deterministic skeleton '
+                        'floor', trial=self.trial)
+                    fuzz_target_code = self._merge_holes_into_skeleton(
+                        skeleton_code, {})
                 logger.info(
                     f'Generated code via hole-filling: '
                     f'{len(hole_fillings)} holes filled',

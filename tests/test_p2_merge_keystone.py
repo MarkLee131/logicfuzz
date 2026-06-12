@@ -52,6 +52,27 @@ def test_name_keyed_fills_dropped_no_decl_corruption():
     assert "int data[0] % 10 = 0" not in out, out
 
 
+def test_structural_validity_detector():
+    chk = lambda c: LangGraphPrototyper._MALFORMED_DECL.search(c) is None
+    bad = [
+        "void * NULL = NULL;",                               # pointer named NULL
+        "    int data[0] % 10 = 0;",                         # operator in name slot
+        "double (double)(data[5]%256)/255.0 = 0.0;",         # expr in name slot
+    ]
+    good = [
+        "int x = a % b;",                  # operator in the INITIALIZER — fine
+        "cmsHPROFILE h = NULL;",           # NULL as a value, not a name
+        "if (size < 4) return 0;",
+        "uint8_t buf[128];",               # sized array, no init
+        "double d = (double)x / 2.0;",     # cast/div in the init
+        "ret = cmsDoTransform(t, data, out, n);",
+    ]
+    for b in bad:
+        assert not chk(b), b
+    for g in good:
+        assert chk(g), g
+
+
 def test_placeholder_keyed_fills_still_apply():
     skel = "int f(){ void* p = __HOLE_buf_1__; int n = __BUFSIZE_len_1__; return 0; }"
     out = _merge(_Dummy(), skel,
