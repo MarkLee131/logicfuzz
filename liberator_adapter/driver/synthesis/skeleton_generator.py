@@ -917,19 +917,23 @@ class SkeletonGenerator:
         skeleton: DriverSkeleton,
         is_entry_api: bool = False,
     ) -> Optional[SkeletonVariable]:
-        """Create variable for parameter.
+        """Render one parameter's variable — MODEL-DRIVEN (reconcile-then-construct:
+        the APISemanticModel is the single source of truth for arg semantics).
 
-        ``is_entry_api`` triggers the B4 safety net: ``_is_input_param``
-        misclassifies non-const pointers as "not input" (75% of OSS-Fuzz
-        entry-point calls in the 2026-05 study used const pointers, so
-        the heuristic was tuned for those). For the *entry* API we
-        cannot rely on producer→consumer wiring (no prior call) and the
-        fuzz buffer is the only sensible source. So when:
-          - the arg is a non-callback pointer
-          - on the entry API
-          - and not already covered by the C_STRING wrapper (char*)
-        force the FUZZ_INPUT branch with ``(void*)data`` regardless of
-        what ``is_input``/``is_output`` claim.
+        Structure:
+          1. callback → callback hole.
+          2. ROLE DISPATCH (authoritative when the model is threaded in): the
+             arg's reconciled ArgRole decides the render —
+               INPUT_BUFFER → ``(void*)data`` (+ paired-length size hole),
+               LENGTH       → ``(type)size``,
+               HANDLE_IN    → NULL (producer-wired later by _apply_arg_bindings),
+               CONFIG ptr   → NULL,
+               OUTPUT ptr   → a by-construction-safe backing buffer.
+          3. C-TYPE HEURISTIC FALLBACK (no-model path only — role is None): the
+             pre-model "guess input/output from the signature" branches, incl.
+             the entry-API ``(void*)data`` B4 net (``is_entry_api``). Kept only
+             for direct-generate callers that supply no model; the construct path
+             always supplies one, so the model drives every constructed driver.
         """
         c_type = arg_info['type']
         is_pointer = '*' in c_type
@@ -1020,8 +1024,14 @@ class SkeletonGenerator:
                 init_value="(void*)data",
             )
 
+        # ---- Legacy C-type heuristic FALLBACK (no-model path only) ---------
+        # The model-driven role dispatch above is AUTHORITATIVE. The branches
+        # below re-derive input/output from the C type — the render-layer remnant
+        # of the pre-model "guess from the signature" approach. They run only
+        # when role is None (the no-model direct-generate path), so the model is
+        # the single source of truth whenever it is present (the construct path).
         # Input buffer parameter - may need to get from fuzz input
-        if arg_info['is_input'] and is_pointer:
+        if role is None and arg_info['is_input'] and is_pointer:
             # Check if there's var-len relationship
             if arg_info.get('varlen_target'):
                 len_idx, rel = arg_info['varlen_target']
@@ -1052,7 +1062,10 @@ class SkeletonGenerator:
         #   * anything else (a possibly-incomplete aggregate / opaque struct
         #     value) → a single typed pointer ``Type *name = NULL`` (valid,
         #     passable, degraded — the binding/LLM layer fills the real value).
-        if arg_info['is_output'] and is_pointer:
+        # OUTPUT is MODEL-DRIVEN when the model is present (role=='OUTPUT'); the
+        # is_output heuristic is the no-model fallback. Both need a backing buffer.
+        if (role == 'OUTPUT'
+                or (role is None and arg_info['is_output'])) and is_pointer:
             star_count = c_type.count('*')
             element = _strip_one_pointer(c_type)  # one level only
             element_bare = _bare_name(element)
