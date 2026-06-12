@@ -465,9 +465,9 @@ class SkeletonGenerator:
         # 1. Generate includes (with FuzzedDataProvider for C++)
         skeleton.includes = self._generate_includes(api_sequence, is_cpp=is_cpp)
 
-        # 2. Analyze variable requirements
+        # 2. Analyze variable requirements (role-aware when dep_model present)
         var_requirements = self._analyze_variable_requirements(
-            api_sequence, varlen_relations or {}
+            api_sequence, varlen_relations or {}, dep_model
         )
 
         # 3. Generate variable declarations
@@ -715,18 +715,29 @@ class SkeletonGenerator:
     def _analyze_variable_requirements(
         self,
         apis: List[Api],
-        varlen_relations: Dict[str, List[Tuple[int, int, str]]]
+        varlen_relations: Dict[str, List[Tuple[int, int, str]]],
+        dep_model=None,
     ) -> Dict[str, Dict]:
         """
         Analyze variable requirements
 
         Returns:
             {api_name: {
-                'args': [{name, type, is_input, is_output, varlen_idx}, ...],
+                'args': [{name, type, is_input, is_output, role, pairs_with,
+                          varlen_idx}, ...],
                 'return': {type, name}
             }}
+
+        When ``dep_model`` (the reconciled ``APISemanticModel``) is threaded in,
+        each arg also carries its reconciled ``role`` (INPUT_BUFFER / LENGTH /
+        HANDLE_IN / CONFIG / OUTPUT) + ``pairs_with`` so the renderer can route
+        by SEMANTIC ROLE instead of re-guessing from the C type — otherwise a
+        real INPUT_BUFFER renders NULL (driver bails every input) and a HANDLE
+        renders ``(void*)data`` (garbage handle). ``role`` is None when no model
+        is supplied (legacy heuristic path, byte-identical).
         """
         requirements = {}
+        _model_apis = getattr(dep_model, 'apis', None) or {}
 
         for api in apis:
             api_req = {
@@ -738,8 +749,22 @@ class SkeletonGenerator:
             api_varlen = varlen_relations.get(api.function_name, [])
             varlen_map = {buf_idx: (len_idx, rel) for buf_idx, len_idx, rel in api_varlen}
 
+            # Reconciled per-arg roles for this API (by arg index), if a model
+            # was threaded in.
+            _sem = _model_apis.get(api.function_name)
+            _arg_sem = {getattr(a, 'index', i): a
+                        for i, a in enumerate(getattr(_sem, 'args', ()) or ())} \
+                if _sem is not None else {}
+
             # Analyze parameters
             for idx, arg in enumerate(api.arguments_info):
+                _as = _arg_sem.get(idx)
+                _role = None
+                _pairs = None
+                if _as is not None:
+                    _r = getattr(_as, 'role', None)
+                    _role = getattr(_r, 'value', _r) if _r is not None else None
+                    _pairs = getattr(_as, 'pairs_with', None)
                 arg_info = {
                     'name': arg.name or f"arg{idx}",
                     'type': arg.type,
@@ -748,6 +773,8 @@ class SkeletonGenerator:
                     'is_output': self._is_output_param(arg),
                     'is_callback': self._is_callback_param(arg),
                     'varlen_target': varlen_map.get(idx),  # (len_idx, rel) or None
+                    'role': _role,                          # ArgRole value or None
+                    'pairs_with': _pairs,                   # LENGTH↔buffer idx or None
                 }
                 api_req['args'].append(arg_info)
 
@@ -921,13 +948,49 @@ class SkeletonGenerator:
                 init_value=hole.get_placeholder()
             )
 
-        # B4 safety net: entry-API non-const pointer that ISN'T a char*
-        # (char* is handled by `_maybe_inject_c_string_wrapper`) — force
-        # the fuzz-input bridge so the caller doesn't get a stack array
-        # for a buffer-input parameter the const-check missed.
         ttype_norm = c_type.replace(' ', '')
         is_char_star = 'char*' in ttype_norm
-        if (is_entry_api and is_pointer and not is_char_star
+
+        # ---- Role-first routing (the reconcile-model floor) ----------------
+        # When the model is threaded in, route each arg by its SEMANTIC role
+        # instead of re-guessing from the C type. The legacy heuristics below
+        # still run when role is None (no model) so behaviour is byte-identical.
+        # This fixes the role-blind floor that rendered NULL on a real
+        # INPUT_BUFFER (driver bails every input → edges=0) and ``(void*)data``
+        # on a HANDLE (garbage handle).
+        role = arg_info.get('role')
+        if role == 'INPUT_BUFFER' and is_pointer and not is_char_star:
+            pw = arg_info.get('pairs_with')
+            if isinstance(pw, int) and pw >= 0:
+                hole = create_buffer_size_hole(
+                    name=f"bufsize_{self._next_hole_id()}",
+                    buffer_idx=arg_info['idx'], length_idx=pw,
+                    relationship=">=")
+                skeleton.add_hole(hole)
+            return SkeletonVariable(
+                name=name, c_type=_public_pointer_type(c_type),
+                allocation=AllocationType.FUZZ_INPUT, is_pointer=True,
+                init_value="(void*)data")
+        if role == 'LENGTH' and not is_pointer:
+            # The fuzz buffer this length pairs with renders as ``(void*)data``
+            # of length ``size`` → ``size`` is exactly the right length.
+            return SkeletonVariable(
+                name=name, c_type=c_type, is_pointer=False,
+                init_value=f"({c_type})size")
+        if role == 'HANDLE_IN' and is_pointer:
+            # NEVER the fuzz buffer: the producer→consumer wiring is applied by
+            # _apply_arg_bindings (a prior producer's ret_<x>); absent that, a
+            # NULL-guarded pointer. Kills the ``(void*)data``-on-handle bug.
+            return SkeletonVariable(
+                name=name, c_type=_public_pointer_type(c_type),
+                is_pointer=True, init_value="NULL")
+
+        # B4 safety net: entry-API non-const pointer that ISN'T a char*
+        # (char* is handled by `_maybe_inject_c_string_wrapper`) — force
+        # the fuzz-input bridge so the caller doesn't get a stack array for a
+        # buffer-input parameter the const-check missed. ONLY when role is
+        # unknown (no model) — otherwise the role branches above own the call.
+        if (role is None and is_entry_api and is_pointer and not is_char_star
                 and not arg_info['is_input']):
             varlen = arg_info.get('varlen_target')
             if varlen:
