@@ -20,6 +20,7 @@ from enum import Enum, auto
 
 from liberator_adapter.common.api import Api, Arg
 from liberator_adapter.analysis.constant_usage import legal_constants_for
+from liberator_adapter.analysis import header_facts
 from liberator_adapter.analysis.sequence_constructor import (
     _dependency_components, _scoped_guards,
 )
@@ -1130,6 +1131,16 @@ class SkeletonGenerator:
                 name=name, c_type=_public_pointer_type(c_type),
                 is_pointer=True, init_value="NULL")
         if role == 'CONFIG' and not is_pointer and _is_tunable_scalar(c_type):
+            # L3a: header-fact literal fills (highest priority: INIT scalars
+            # with a known compile-time constant from the project headers, e.g.
+            # ZLIB_VERSION / (int)sizeof(z_stream) for deflateInit_).  Set via
+            # header_facts.set_fact_map() by the extraction pipeline.
+            _fact = header_facts.literal_for(
+                arg_info.get('api_name', ''), arg_info.get('idx', -1))
+            if _fact is not None:
+                return SkeletonVariable(
+                    name=name, c_type=c_type, is_pointer=False,
+                    init_value=_fact)
             # FIX D: if the library's OWN call-sites pass a legal constant at this
             # (api, arg) — mined deterministically from usage — render the modal
             # one (TYPE_RGB_8 for cmsCreateTransform's format) so construction
