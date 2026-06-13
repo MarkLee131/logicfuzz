@@ -913,6 +913,11 @@ class FuzzingContext:
         # e.g. lcms ``cmsFree*`` free-array out-pointers as CREATORs).
         api_semantic_model = None
         api_semantic_model_dict: Dict[str, Any] = {}
+        # Prose API-doc signals (doc/api.md & friends) mined once here, reused by
+        # Step 6b for the comprehender. Header doxygen takes precedence; this
+        # fills only the APIs the headers leave undocumented (parity with a
+        # doc-driven baseline that ingests document_paths).
+        _md_api_docs: Dict[str, Any] = {}
         _lc_pairs: List[Tuple[str, str]] = []   # bound for Step 5h even if 5g fails
         try:
             from liberator_adapter.analysis import reconcile as _reconcile_model
@@ -945,6 +950,23 @@ class FuzzingContext:
                     from src.knowledge.project_docs import extract_doc_signals
                     _doc_signals = extract_doc_signals(
                         Path(_hdr_dir), _ph_names, _all_api_names)
+                # Prose API docs (doc/api.md, …) — fill the APIs the headers
+                # don't document. Header doxygen wins; markdown is additive.
+                if _all_api_names:
+                    from src.knowledge.project_docs import extract_markdown_api_docs
+                    _src_root = Path(f"./results/{project_name}/src_ossfuzz/{project_name}")
+                    if not _src_root.is_dir():
+                        _src_root = Path(f"./results/{project_name}/src_ossfuzz")
+                    _md_api_docs = extract_markdown_api_docs(_src_root, _all_api_names)
+                    _md_fill = 0
+                    for _api, _sig in _md_api_docs.items():
+                        if _api not in _doc_signals:
+                            _doc_signals[_api] = _sig
+                            _md_fill += 1
+                    if _md_fill:
+                        log.info('  5g/12 markdown API-doc signals: +%d APIs '
+                                 '(header doxygen had %d)', _md_fill,
+                                 len(_doc_signals) - _md_fill)
             except Exception as _de:
                 log.debug('  5g/12 structured doc-signal extraction skipped: %s', _de)
 
@@ -1483,6 +1505,22 @@ class FuzzingContext:
                         log.warning(
                             'Doxygen extraction failed (T1 prior unused): %s', exc,
                         )
+
+            # Prose API docs (doc/api.md, …) fill the comprehender's per-API
+            # briefs for APIs the headers don't document with doxygen — same
+            # additive, header-wins merge as the 5g doc_signals. Mined once in
+            # Step 5g; reused here (no second file walk).
+            if use_doxygen_priors and _md_api_docs:
+                _md_brief_fill = 0
+                for _api, _sig in _md_api_docs.items():
+                    _brief = (_sig.get('brief') or '').strip() if isinstance(_sig, dict) else ''
+                    if _brief and _api not in api_docstrings:
+                        api_docstrings[_api] = _brief
+                        _md_brief_fill += 1
+                if _md_brief_fill:
+                    log.info('   📖 Markdown API-doc briefs: +%d APIs (doxygen '
+                             'had %d)', _md_brief_fill,
+                             len(api_docstrings) - _md_brief_fill)
 
             # Persist T1 priors so subsequent runs skip the libclang walk.
             if cache is not None and (readme_excerpt or api_docstrings):

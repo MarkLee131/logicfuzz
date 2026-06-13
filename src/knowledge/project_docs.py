@@ -504,3 +504,289 @@ def extract_doc_signals(
     logger.info("Structured doc signals: %d/%d APIs (across %d headers)",
                 len(out), len(api_set), len(header_paths))
     return out
+
+
+# ------------------------------------------- Markdown / prose API docs (parity)
+#
+# ``extract_doxygen_comments`` / ``extract_doc_signals`` only see ``/** ... */``
+# blocks in the HEADERS. Many libraries document their public API in a prose
+# reference under ``doc/`` or ``docs/`` (libucl's ``doc/api.md`` — 506 lines of
+# per-function reference) INSTEAD OF, or in addition to, header comments. A
+# baseline that ingests such files (PromeFuzz's ``document_paths``) then has a
+# semantic edge we'd be throwing away. This extractor mines those files for the
+# SAME structured per-API record ``{brief, params, returns}`` as
+# ``extract_doc_signals`` so a markdown reference feeds the Comprehender +
+# APISemanticModel exactly like a doxygen block would. Deterministic (no LLM);
+# best-effort; never raises. The caller merges header doxygen FIRST and lets the
+# markdown fill only the APIs the headers leave undocumented (doc-rich libraries
+# stay byte-identical).
+
+_DOC_DIR_CANDIDATES = ("doc", "docs", "Documentation", "documentation", "man")
+_DOC_FILE_GLOBS = ("*.md", "*.markdown", "*.mdown", "*.mkd", "*.rst")
+_DOC_ROOT_FILES = ("API.md", "api.md", "APIS.md", "apis.md",
+                   "API.rst", "api.rst", "API.markdown")
+_DOC_MAX_FILES = 64
+_DOC_MAX_BYTES = 2_000_000
+
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+_RST_UNDERLINE_RE = re.compile(r"^\s*([=~`'\"^\-_*+#:.])\1{2,}\s*$")
+_CODE_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
+_RETURN_SENTENCE_RE = re.compile(r"[^.\n]*\breturns?\b[^.\n]*\.", re.IGNORECASE)
+_LIST_PREFIX_RE = re.compile(r"^\s*([*+\-]|\d+\.)\s")
+
+# C declaration keywords that are never the parameter NAME (so the name is the
+# last identifier in an arg decl that isn't one of these).
+_TYPE_KEYWORDS = {
+    "const", "unsigned", "signed", "struct", "union", "enum", "void", "char",
+    "short", "int", "long", "float", "double", "size_t", "ssize_t", "bool",
+    "uint8_t", "uint16_t", "uint32_t", "uint64_t", "int8_t", "int16_t",
+    "int32_t", "int64_t", "restrict", "volatile", "static", "inline",
+}
+
+# Doc-safe inline-markdown strip: links / inline-code / bold only. Unlike
+# ``_strip_inline_markdown`` (tuned for README prose) it does NOT apply the
+# ``_italic_`` / ``*italic*`` rules — technical API docs use ``_`` and ``*``
+# literally (``ucl_parser_new``, ``*ptr``) far more than as emphasis, and the
+# italic rules would corrupt every underscored identifier.
+_DOC_INLINE_MARKDOWN = (
+    (re.compile(r"\[([^\]]+)\]\([^)]+\)"), r"\1"),     # [text](url) → text
+    (re.compile(r"`([^`]+)`"), r"\1"),                  # `code` → code
+    (re.compile(r"\*\*([^*]+)\*\*"), r"\1"),            # **bold** → bold
+)
+
+
+def _strip_doc_markdown(text: str) -> str:
+    for pat, repl in _DOC_INLINE_MARKDOWN:
+        text = pat.sub(repl, text)
+    return text.strip()
+
+
+def _split_call_args(s: str) -> List[str]:
+    """Split a C arg-list string on top-level commas (paren/bracket aware)."""
+    args: List[str] = []
+    depth = 0
+    cur: List[str] = []
+    for c in s:
+        if c in "([{":
+            depth += 1
+            cur.append(c)
+        elif c in ")]}":
+            depth -= 1
+            cur.append(c)
+        elif c == "," and depth == 0:
+            args.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(c)
+    if cur:
+        args.append("".join(cur).strip())
+    return args
+
+
+def _heading_to_api(title: str, api_set: Set[str]) -> Optional[str]:
+    """If a heading names exactly one API in ``api_set``, return it.
+
+    Handles ``ucl_parser_new``, ``ucl_parser_new()``, ``` `ucl_parser_new` ```,
+    and ``[ucl_parser_new](#anchor)`` heading forms.
+    """
+    t = _strip_doc_markdown(title)
+    t = re.sub(r"\(.*?\)", "", t)            # drop a trailing (args) group
+    for tok in _IDENT_RE.findall(t):
+        if tok in api_set:
+            return tok
+    return None
+
+
+def _params_from_signature(sig_line: str, api_name: str) -> List[Dict[str, Any]]:
+    """Parse ordered params from a ``ret api_name(a, b, c)`` signature line."""
+    i = sig_line.find(api_name)
+    if i < 0:
+        return []
+    p = sig_line.find("(", i)
+    if p < 0:
+        return []
+    depth = 0
+    end = -1
+    for j in range(p, len(sig_line)):
+        if sig_line[j] == "(":
+            depth += 1
+        elif sig_line[j] == ")":
+            depth -= 1
+            if depth == 0:
+                end = j
+                break
+    if end < 0:
+        return []
+    params: List[Dict[str, Any]] = []
+    for raw in _split_call_args(sig_line[p + 1:end]):
+        a = raw.strip()
+        if not a or a in ("void", "...", "void)"):
+            continue
+        toks = _IDENT_RE.findall(a.replace("*", " ").replace("[", " ").replace("]", " "))
+        name = ""
+        for tok in reversed(toks):
+            if tok not in _TYPE_KEYWORDS:
+                name = tok
+                break
+        params.append({
+            "index": len(params), "name": name, "text": a,
+            "role": _param_role_from_text(a),
+        })
+    return params
+
+
+def _record_from_body(body: List[str], api_name: str) -> Dict[str, Any]:
+    """Build a ``{brief, params, returns}`` record from one API section body."""
+    prose: List[str] = []
+    code: List[str] = []
+    in_code = False
+    for line in body:
+        if _CODE_FENCE_RE.match(line):
+            in_code = not in_code
+            continue
+        (code if in_code else prose).append(line)
+
+    sig_line = ""
+    for cl in code:
+        if api_name in cl and "(" in cl:
+            sig_line = cl.strip()
+            break
+    params = _params_from_signature(sig_line, api_name) if sig_line else []
+
+    # brief: first prose paragraph (stop at blank line / list / sub-heading).
+    brief_parts: List[str] = []
+    for line in prose:
+        s = line.strip()
+        if not s:
+            if brief_parts:
+                break
+            continue
+        if _LIST_PREFIX_RE.match(line) or _MD_HEADING_RE.match(line) \
+                or _RST_UNDERLINE_RE.match(line) or s.startswith(("|", ">")):
+            if brief_parts:
+                break
+            continue
+        brief_parts.append(s)
+    brief = _strip_doc_markdown(" ".join(brief_parts)).strip()
+    if len(brief) > 400:
+        brief = brief[:400].rsplit(" ", 1)[0] + "..."
+
+    prose_blob = " ".join(l.strip() for l in prose if l.strip())
+    rm = _RETURN_SENTENCE_RE.search(prose_blob)
+    returns = _strip_doc_markdown(rm.group(0).strip()) if rm else ""
+
+    rec: Dict[str, Any] = {}
+    if brief:
+        rec["brief"] = brief
+    if params:
+        rec["params"] = params
+    if returns:
+        rec["returns"] = returns
+    return rec
+
+
+def _collect_headings(lines: List[str]) -> List[tuple]:
+    """Return ``(line_idx, level, raw_title)`` for markdown ATX + rST headings.
+
+    rST underlined headings (a text line followed by a rule line) are assigned
+    a synthetic level below any ATX heading so the section-end logic (next
+    heading with ``level <= mine``) still bounds them sensibly.
+    """
+    heads: List[tuple] = []
+    n = len(lines)
+    for idx, line in enumerate(lines):
+        m = _MD_HEADING_RE.match(line)
+        if m:
+            heads.append((idx, len(m.group(1)), m.group(2)))
+            continue
+        # rST: a non-blank title line whose NEXT line is a rule of >= its length
+        if idx + 1 < n and line.strip() and not _CODE_FENCE_RE.match(line):
+            nxt = lines[idx + 1]
+            if _RST_UNDERLINE_RE.match(nxt) and len(nxt.strip()) >= len(line.strip()):
+                heads.append((idx, 3, line.strip()))   # synthetic level 3
+    return heads
+
+
+def _parse_api_doc_file(text: str, api_set: Set[str],
+                        out: Dict[str, Dict[str, Any]]) -> None:
+    """Parse one markdown/rST file, adding per-API records to ``out`` in place.
+
+    First documented occurrence of an API wins (``out`` is not overwritten), so
+    a table-of-contents heading that names the API but carries no body is
+    skipped in favour of the real section (which yields a non-empty record).
+    """
+    lines = text.splitlines()
+    heads = _collect_headings(lines)
+    for h_i, (start, level, title) in enumerate(heads):
+        api = _heading_to_api(title, api_set)
+        if not api or api in out:
+            continue
+        end = len(lines)
+        for (s2, l2, _title2) in heads[h_i + 1:]:
+            if l2 <= level:
+                end = s2
+                break
+        rec = _record_from_body(lines[start + 1:end], api)
+        if rec:                       # skip empty (TOC) occurrences
+            out[api] = rec
+
+
+def extract_markdown_api_docs(
+    src_root: Optional[Path],
+    api_names: Sequence[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Map ``api_name`` → structured doc signal ``{brief, params, returns}``
+    mined from prose API docs under ``src_root`` (``doc/``, ``docs/``, a
+    top-level ``api.md``, …).
+
+    Same record shape as ``extract_doc_signals`` so the caller can merge the two
+    (header doxygen first, markdown fills the rest). Empty dict when no doc files
+    are found or none name a known API.
+    """
+    if not src_root or not api_names:
+        return {}
+    root = Path(src_root)
+    if not root.is_dir():
+        return {}
+    api_set: Set[str] = {n for n in api_names if n}
+    if not api_set:
+        return {}
+
+    files: List[Path] = []
+    seen: Set[Path] = set()
+    for d in _DOC_DIR_CANDIDATES:
+        dd = root / d
+        if dd.is_dir():
+            for g in _DOC_FILE_GLOBS:
+                for p in sorted(dd.rglob(g)):
+                    if p.is_file() and p not in seen:
+                        files.append(p)
+                        seen.add(p)
+                        if len(files) >= _DOC_MAX_FILES:
+                            break
+    for fn in _DOC_ROOT_FILES:
+        p = root / fn
+        if p.is_file() and p not in seen:
+            files.append(p)
+            seen.add(p)
+    if not files:
+        return {}
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for p in files:
+        try:
+            if p.stat().st_size > _DOC_MAX_BYTES:
+                continue
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        try:
+            _parse_api_doc_file(text, api_set, out)
+        except Exception as exc:        # never let a malformed doc break prepare()
+            logger.debug("markdown API-doc parse failed for %s: %s", p, exc)
+            continue
+
+    logger.info("Markdown API docs: %d/%d APIs documented (across %d files)",
+                len(out), len(api_set), len(files))
+    return out
