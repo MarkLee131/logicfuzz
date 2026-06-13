@@ -598,7 +598,7 @@ def _resolve_candidate_binary(src, work_dirs):
   return None
 
 
-def _preflight_filter_candidates(sources, work_dirs):
+def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
   """Smoke-test candidate drivers and drop crash / no-progress ones.
 
   Returns the surviving source paths. Drops a driver ONLY on a crash or
@@ -606,6 +606,11 @@ def _preflight_filter_candidates(sources, work_dirs):
   resolved/run is kept (couldn't vet ≠ reject). If fewer than 2 binaries are
   resolvable, preflight is skipped entirely and all sources are returned
   unchanged (logged), preserving prior behaviour.
+
+  *project*: OSS-Fuzz project name threaded into ``preflight()`` so each
+  smoke run can execute inside the base-runner container (avoids host glibc
+  version mismatches for binaries built against a newer glibc, e.g. 2.38).
+  Defaults to ``""`` (legacy host-run behaviour).
   """
   from pathlib import Path
   pairs = []
@@ -627,7 +632,8 @@ def _preflight_filter_candidates(sources, work_dirs):
                    f'merging unvetted', trial=0)
     return sources
 
-  results = preflight(pairs, smoke_duration_sec=15, drop_on_crash=True)
+  results = preflight(pairs, smoke_duration_sec=15, drop_on_crash=True,
+                      project=project)
   try:
     write_report(results, Path(work_dirs.base) / 'merged' / 'preflight.json')
   except Exception:
@@ -836,7 +842,9 @@ def _maybe_merge_drivers(benchmark: Benchmark,
   # (preserving prior behaviour), and a crash will surface in the merged run.
   # Only crash / no-progress verdicts drop a driver; a missing/unrunnable
   # binary is treated as "couldn't vet", never as a reason to drop.
-  successful_sources = _preflight_filter_candidates(successful_sources, work_dirs)
+  successful_sources = _preflight_filter_candidates(
+      successful_sources, work_dirs,
+      project=getattr(benchmark, 'project', '') or '')
   if len(successful_sources) < 2:
     logger.info(
         f'merge_drivers: skipping (only {len(successful_sources)} '

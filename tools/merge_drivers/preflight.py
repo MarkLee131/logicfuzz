@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
@@ -84,8 +85,16 @@ def _smoke_one(
     fuzzer_binary: Path,
     duration_sec: int,
     workspace: Path,
+    project: str = "",
 ) -> PreflightResult:
-    """Run one fuzzer binary for ``duration_sec`` seconds and parse output."""
+    """Run one fuzzer binary for ``duration_sec`` seconds and parse output.
+
+    When *project* is non-empty and ``docker`` is on PATH, the binary is
+    executed inside ``gcr.io/oss-fuzz-base/base-runner`` so that binaries
+    built against a newer glibc (e.g. 2.38) run correctly even on hosts with
+    an older glibc (e.g. 2.35).  Falls back to a plain host subprocess when
+    docker is unavailable or *project* is empty.
+    """
     workspace.mkdir(parents=True, exist_ok=True)
     corpus_dir = workspace / "corpus"
     crashes_dir = workspace / "crashes"
@@ -96,7 +105,7 @@ def _smoke_one(
     # Single empty seed — libFuzzer needs ≥1 entry to start
     (corpus_dir / "empty").write_bytes(b"")
 
-    cmd = [
+    host_cmd = [
         str(fuzzer_binary),
         str(corpus_dir),
         f"-max_total_time={duration_sec}",
@@ -105,6 +114,29 @@ def _smoke_one(
         f"-artifact_prefix={crashes_dir}/",
         # Don't fork — we want a clean exit code if the binary itself dies
     ]
+    if shutil.which("docker") and project:
+        # Run inside the OSS-Fuzz base-runner container so glibc version
+        # matches the build environment.  We mount the binary's parent
+        # directory read-only at /o and the corpus read-only at /c.
+        # Artifacts (crashes) written to /c are not persisted back, but
+        # the libFuzzer exit code (77) still flags a crash.
+        cmd = [
+            "docker", "run", "--rm",
+            "-v", f"{fuzzer_binary.parent.resolve()}:/o:ro",
+            "-v", f"{Path(corpus_dir).resolve()}:/c:ro",
+            "--entrypoint", f"/o/{fuzzer_binary.name}",
+            "gcr.io/oss-fuzz-base/base-runner",
+            "/c",
+            f"-max_total_time={duration_sec}",
+            "-print_final_stats=1",
+            "-detect_leaks=0",
+            # Write any crash artifact to a writable in-container path (the
+            # corpus mount is :ro); not persisted back — exit code 77 is the
+            # crash signal. Avoids libFuzzer erroring on an unwritable prefix.
+            "-artifact_prefix=/tmp/",
+        ]
+    else:
+        cmd = host_cmd  # fail-open: no docker or no project → host run
     try:
         with open(log_file, "wb") as out:
             proc = subprocess.run(
@@ -155,6 +187,7 @@ def preflight(
     workspace_root: Optional[Path] = None,
     min_edges: int = 1,
     drop_on_crash: bool = True,
+    project: str = "",
 ) -> List[PreflightResult]:
     """Smoke-test a list of (driver_source, fuzzer_binary) pairs.
 
@@ -172,6 +205,11 @@ def preflight(
         drop_on_crash: if True (default), reject drivers whose smoke run
             produced a crash artifact. Set False if your goal is to
             *find* crashes during preflight (rare, but supported).
+        project: OSS-Fuzz project name (e.g. ``"zlib"``).  When non-empty
+            and ``docker`` is available, each smoke run executes inside
+            ``gcr.io/oss-fuzz-base/base-runner`` to avoid host glibc
+            version mismatches.  Defaults to ``""`` (host run, legacy
+            behaviour).
 
     Returns:
         ``List[PreflightResult]`` in the same order as ``candidates``,
@@ -189,7 +227,8 @@ def preflight(
             i + 1, len(candidates), drv_src.name, smoke_duration_sec,
         )
         try:
-            res = _smoke_one(drv_src, drv_bin, smoke_duration_sec, ws)
+            res = _smoke_one(drv_src, drv_bin, smoke_duration_sec, ws,
+                             project=project)
         except FileNotFoundError as e:
             res = PreflightResult(
                 driver_path=str(drv_src),
