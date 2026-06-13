@@ -189,6 +189,41 @@ def _complete_value_struct(c_type: str) -> Optional[str]:
     return None
 
 
+def _is_caller_alloc_struct(c_type: str) -> Optional[str]:
+    """Looser gate for the OUTPUT-branch fallthrough: a single pointer to a
+    struct that DataLayout can SIZE (even if it is NOT recorded in
+    ``clang_to_llvm_struct``) is a caller-alloc init struct
+    (e.g. ``z_stream *`` when only ``dl.layout["z_stream"]`` is known).
+
+    Returns the bare struct name when the test passes, else ``None``.
+
+    Complements ``_complete_value_struct``, which requires ``is_a_struct``
+    (strict — needs a ``clang_to_llvm_struct`` entry). This helper is the
+    fallback when the strict gate misses a struct that is nonetheless sizeable.
+    Skips void, scalars, and multi-level pointers — only a single-pointer
+    aggregate can be caller-stack-allocated. Never raises.
+    """
+    if c_type.count('*') != 1:
+        return None            # T** stays in the OUTPUT array-of-ptrs path
+    bare = _bare_name(c_type)
+    if not bare or bare == 'void':
+        return None
+    if _is_scalar_value_type(c_type):
+        return None
+    try:
+        from liberator_adapter.common.datalayout import DataLayout  # lazy: avoid circular import
+        dl = DataLayout.instance()
+        # Sizeable AND complete: an incomplete/opaque type may carry a
+        # pointer-width ``layout`` entry yet must NOT be stack-allocated — it is
+        # a handle to be produced by a creator, not a caller-alloc value struct.
+        # (``_complete_value_struct`` guards the same way via ``not is_incomplete``.)
+        if dl.get_type_size(bare) and not dl.is_incomplete(bare):
+            return bare
+    except Exception:
+        return None
+    return None
+
+
 def _fuzzable_holes_enabled() -> bool:
     """FIX C / FUZZABLE_HOLES gate (default-on; opt-out ``=0``)."""
     return os.environ.get("LOGICFUZZ_FUZZABLE_HOLES", "1").strip().lower() not in (
@@ -1213,6 +1248,21 @@ class SkeletonGenerator:
                 buf_element = element
                 value_array = True
             else:
+                # L3a: before degrading to a NULL typed pointer, check if
+                # ``element`` is a caller-alloc struct (sizable by DataLayout
+                # even when not yet in ``clang_to_llvm_struct``).  If so,
+                # stack-allocate it and pass its address — identical to the
+                # ``_complete_value_struct`` shape above but gated on the
+                # LOOSER ``get_type_size`` check.  This recovers
+                # ``deflateInit_(z_stream*)``-style init producers that the
+                # strict ``is_a_struct`` gate missed.
+                _ca = _is_caller_alloc_struct(c_type)
+                if _ca is not None:
+                    return SkeletonVariable(
+                        name=name, c_type=_ca, is_pointer=False,
+                        allocation=AllocationType.STACK, init_value="{0}",
+                        bound_expr=f"&{name}",
+                    )
                 value_array = False
 
             if value_array:
