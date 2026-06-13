@@ -156,6 +156,13 @@ EXT_INC=""
 for d in /src/$PROJ/include /src/$PROJ /src/$PROJ/src /src/include /src; do
   [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
 done
+# Populate configure/cmake-generated headers (e.g. c-ares ares_build.h) so the
+# syntax check sees the SAME tree the real merged coverage build compiles (A≡B).
+# Best-effort + fail-open: a failing/absent build must never drop candidates.
+( compile >/dev/null 2>&1 || bash /src/build.sh >/dev/null 2>&1 || true )
+for g in $(find /src/$PROJ /work \( -name '*_build.h' -o -name '*_config.h' \) 2>/dev/null); do
+  EXT_INC="$EXT_INC -I$(dirname "$g")"
+done
 COV_FLAGS="${SANITIZER_FLAGS_coverage:-} ${COVERAGE_FLAGS_coverage:-}"
 # The project $CFLAGS carries ``-Wno-error=implicit-function-declaration`` and
 # ``-Wno-error=implicit-int`` — so a C driver that CALLS a real library function
