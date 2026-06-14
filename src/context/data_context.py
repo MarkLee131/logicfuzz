@@ -2123,6 +2123,37 @@ class FuzzingContext:
             except Exception as _he:
                 log.warning('G4 hole annotation failed (non-critical): %s', _he)
 
+        # B-2 (LOGICFUZZ_PAIRWISE_DEDUP): drop near-twin skeletons by fingerprint
+        # similarity over the FULL Layer-C fingerprint (incl. value-domain), so
+        # value-distinct variants survive. Optional Stage-B VALID guard
+        # (LOGICFUZZ_DEDUP_SEMANTIC_GUARD) protects semantically-VALID sequences.
+        if (os.environ.get("LOGICFUZZ_PAIRWISE_DEDUP", "").strip().lower()
+                in ("1", "true", "yes", "on")) and skeleton_drivers \
+                and api_semantic_model is not None:
+            try:
+                from liberator_adapter.analysis.driver_dedup import (
+                    pairwise_dedup_skeletons)
+                try:
+                    _tau = float(os.environ.get("LOGICFUZZ_PAIRWISE_TAU", "0.8"))
+                except ValueError:
+                    _tau = 0.8
+                _valid_seqs = None
+                if (os.environ.get("LOGICFUZZ_DEDUP_SEMANTIC_GUARD", "")
+                        .strip().lower() in ("1", "true", "yes", "on")):
+                    _valid_seqs = {
+                        tuple(s.get("sequence") or [])
+                        for s in (sequence_semantics_dicts or [])
+                        if str(s.get("semantic_status", "")).upper() == "VALID"}
+                _before = len(skeleton_drivers)
+                skeleton_drivers = pairwise_dedup_skeletons(
+                    skeleton_drivers, api_semantic_model, _tau, _valid_seqs)
+                log.info("   🧬 pairwise dedup: %d → %d (tau=%.2f)",
+                         _before, len(skeleton_drivers), _tau)
+                api_sequences = [s.get('api_sequence', [])
+                                 for s in skeleton_drivers]
+            except Exception as _de:
+                log.warning("pairwise dedup failed (non-critical): %s", _de)
+
         # T12: pin proven hole values from a PRIOR run. DEFAULT-ON (opt-out
         # LOGICFUZZ_VALUE_FEEDBACK=0): read the persisted coverage_memory and
         # attach, per skeleton, the leaf values that reached the deepest coverage
