@@ -173,6 +173,58 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 (default-on, fail-open): the merge ships only drivers
 #                                 that compile under the real coverage-build flags
 #                                 (`tools/merge_drivers/compile_validate.py`).
+#   --- Driver DECOUPLING / DE-DUP levers (2026-06; gated default-OFF, A/B pending) ---
+#   Spec: docs/superpowers/specs/2026-06-14-driver-decoupling-dedup-design.md
+#   Plan: docs/superpowers/plans/2026-06-14-driver-decoupling-dedup.md
+#   Motivation: generated drivers overlapped too much → merge gained little. Two
+#   channels: API-SET overlap (shared prefix/densifier/destroyer manufactured at
+#   construction, passed through by exact-tuple dedup, not penalized by the
+#   ROUND-ROBIN depth selector that actually ships ~half the portfolio) and
+#   VALUE/PATH overlap (selection blind to filled values). Fixes are deterministic
+#   /symbolic; the one doc/LLM touch (B-2 VALID guard) CONSUMES an existing
+#   Comprehender Stage-B verdict (no new LLM calls).
+#   LOGICFUZZ_MARGINAL_DEPTH=1    B-1: the data_context Step-10 depth pass picks
+#                                 drivers by MAX marginal new-API coverage (shared
+#                                 `coverage_ranker.select_marginal`) instead of bucket
+#                                 round-robin — the headline fix (round-robin chose
+#                                 ~0.5× of the portfolio with NO overlap check).
+#   LOGICFUZZ_DEDUP_FINGERPRINT_VALUE_DOMAIN  (reserved) Layer-C value-domain slot;
+#                                 currently the value-domain signature is ALWAYS part of
+#                                 the fingerprint (`driver_fingerprint.py`) so B-2/B-3
+#                                 keep doc-distinct value variants apart by default.
+#   LOGICFUZZ_DENSE_PARTITION=1   A-2a: sibling chains sharing a handle set take DISJOINT
+#                                 ranked slices of the densifier candidate pool (rotate by
+#                                 sibling_rank) → different suffixes, higher portfolio
+#                                 breadth (`sequence_constructor._densify`).
+#   LOGICFUZZ_DEDUP_WORKFLOW_PARTITION=1  A-2b: group densifier candidates by co-occurrence
+#                                 workflow (`_workflow_clusters`, connected components of
+#                                 the accepting-paths cooccur graph) and rotate WHOLE
+#                                 clusters across siblings so a coherent workflow is never
+#                                 split; `_rank` gains `workflow_affinity` AFTER `sat`
+#                                 (lifecycle-satisfiability still wins). Workflow source =
+#                                 accepting_paths (already wired); idioms.json is code
+#                                 patterns, not API chains.
+#   LOGICFUZZ_PAIRWISE_DEDUP=1 / LOGICFUZZ_PAIRWISE_TAU=0.8  B-2: drop a near-twin skeleton
+#                                 whose full-fingerprint similarity to a kept one exceeds
+#                                 tau (`driver_dedup.pairwise_dedup_skeletons`). Similarity
+#                                 is value-domain-guarded (different value domain ⇒ 0.0 ⇒
+#                                 never dropped).
+#   LOGICFUZZ_DEDUP_SEMANTIC_GUARD=1  B-2 guard: never drop a sequence Comprehender Stage-B
+#                                 marked VALID in favor of a SUBOPTIMAL near-twin (consumes
+#                                 existing verdicts; no new LLM calls).
+#   LOGICFUZZ_SUBSET_ELIM=1       B-3: drop a skeleton whose fingerprint is a strict
+#                                 same-value-domain subset of another's, BEFORE B-2
+#                                 (`driver_dedup.subset_eliminate_skeletons`).
+#   LOGICFUZZ_DIVERSIFY_PRODUCERS=1  A-1/A-1b/A-3: when a handle has >1 creator/destroyer,
+#                                 rotate which one each sibling chain uses (deterministic
+#                                 per-handle round-robin in `_build_prefix` /
+#                                 `_closing_destroyers`) so the portfolio exercises the full
+#                                 producer/destroyer set.
+#   (Always-on, cheap) Layer E redundancy telemetry → results/<project>/static_analysis/
+#   `redundancy_telemetry.json` (`portfolio_redundancy`): mean pairwise API Jaccard +
+#   disjointness (=union/total). The A/B oracle — lower jaccard / higher disjointness ⇒
+#   better-decoupled portfolio. D-1 (dynamic edge-set marginal) is DEFERRED (needs a
+#   preflight→selection feedback edge; see plan Phase 4).
 #   LIBERATOR_SVF_TIMEOUT_SECS=N  SVF pointer-analysis WALL-TIME cap (default 1800s;
 #                                 raised from 600). Measured 2026-06: libtiff/libvpx
 #                                 are TIME-bound (timed out at 7200s, only 4.5/7.7GB
