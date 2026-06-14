@@ -239,10 +239,11 @@ def test_documented_range_reaches_intent_when_gated(monkeypatch):
     # Gate OFF
     monkeypatch.setenv("LOGICFUZZ_VALUE_DOMAINS", "0")
     intent_off = _arg_intent(a, "someApiFunc", {})
-    # The generic FUZZ_DERIVE scalar float intent must NOT reference the doc_text range
+    # The generic FUZZ_DERIVE scalar float intent must NOT reference the doc_text
+    # range. (Both bounds absent — an OR of disjuncts was a tautology that could
+    # not catch a leak; require BOTH bounds to be absent.)
     if intent_off is not None:
-        assert "2.5" not in intent_off or "99.7" not in intent_off or \
-               "between 2.5 and 99.7" not in intent_off, (
+        assert "2.5" not in intent_off and "99.7" not in intent_off, (
             f"doc_text range leaked into gate-OFF intent; got: {intent_off!r}"
         )
 

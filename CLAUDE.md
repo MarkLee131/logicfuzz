@@ -143,6 +143,32 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 default True, like factory/diversity/density. The
 #                                 +44% is shipped; the coverage A/B uses =0 as the
 #                                 control. `hole_semantics._arg_intent`.
+#   --- Phase 1 knowledge levers (2026-06; gated default-OFF, A/B pending) ---
+#   LOGICFUZZ_OBJCONSTRUCT_FIRST=1  L1: prefer object-construction (data_buildable)
+#                                 chain roots over parser-entry roots (REBALANCES the
+#                                 existing parser-first bias); keeps >=1 parser-rooted
+#                                 driver per parser-only subsystem (cluster-cover
+#                                 invariant). THE top coverage lever — lcms parser
+#                                 drivers plateau ~79 edges vs PromeFuzz 83/141
+#                                 object-construction. `sequence_constructor._root_kind`
+#                                 + _creator_key/_recovered_key + data_context strand/
+#                                 bucket order.
+#   LOGICFUZZ_VALUE_DOMAINS=1      L6: knowledge DICTATES leaf-hole values — extend the
+#                                 legal-constant mine to 4cc signature #defines + FORBID
+#                                 `(Enum)(data%N)` arithmetic (index a fuzz byte into the
+#                                 mined legal SET); carry documented @param ranges into
+#                                 `_arg_intent` instead of LLM-guessing. `named_constants`
+#                                 + `hole_semantics._arg_intent` + `api_semantic_model`.
+#   LOGICFUZZ_ORDERSETS=1         L7: normalize+Set-Cover-minimize the raw consumer-trace
+#                                 sequences (already extracted) before they seed
+#                                 construction — pure-Python port of PromeFuzz
+#                                 OrderSet/minimize. `liberator_adapter/analysis/order_sets.py`
+#                                 wired at `data_context` (_accept).
+#   LOGICFUZZ_API_FLOOR=1         L7: ALL-COVER floor — a greedy set-cover pass in
+#                                 `coverage_ranker._coverage_complete_select` guarantees
+#                                 every constructable API appears in >=1 selected sequence
+#                                 (per-API, not just per-cluster); surfaces
+#                                 `api_floor_residual_count` (the binding-layer tail).
 #   LOGICFUZZ_SKIP_COMPILE_VALIDATE=1   opt OUT of the merge compile-validation gate
 #                                 (default-on, fail-open): the merge ships only drivers
 #                                 that compile under the real coverage-build flags
