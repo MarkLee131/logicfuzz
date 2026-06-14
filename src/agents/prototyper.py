@@ -18,6 +18,29 @@ from src.utils.prompt_loader import get_prompt_manager
 from data_prep.api_classifier import classify_project_apis
 
 
+def _drop_hallucinated_calls(code: str, names: set) -> str:
+    """Remove whole lines that call an undeclared/hallucinated symbol.
+
+    Never invents a substitute — a dropped call is safer than a fake one.
+    Uses a word-boundary regex so ``cmsBogusApiExtra`` is NOT dropped when
+    only ``cmsBogusApi`` appears in *names*.
+
+    Trailing newline is preserved: if *code* ends with ``'\\n'`` the result
+    also ends with ``'\\n'``.
+    """
+    if not names:
+        return code
+    out = []
+    for line in code.splitlines():
+        if any(re.search(rf"\b{re.escape(n)}\s*\(", line) for n in names):
+            continue
+        out.append(line)
+    result = "\n".join(out)
+    if code.endswith("\n"):
+        result += "\n"
+    return result
+
+
 # Multi-hop reasoning directive (2026-05-12). Appended to the
 # Prototyper user prompt when the operator sets
 # ``--multihop-prototyper``. The base prompt already carries the priors
@@ -886,7 +909,7 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if fuzz_target_code and is_c_project:
             fuzz_target_code = self._ensure_extern_c_wrapper(fuzz_target_code)
 
-        validation_warnings = self._validate_api_usage(
+        validation_warnings, fuzz_target_code = self._validate_api_usage(
             fuzz_target_code, benchmark.get('project', 'unknown'),
             known_apis=project_apis)
 
@@ -1758,9 +1781,15 @@ Output your fuzz driver code inside <fuzz_target> tags.
         return "\n".join(lines)
 
     def _validate_api_usage(self, code: str, project_name: str,
-                            known_apis: Optional[List[Dict[str, Any]]] = None) -> str:
+                            known_apis: Optional[List[Dict[str, Any]]] = None,
+                            ) -> tuple:
         """Validate generated code for internal/private API usage + smuggled
         hallucinated calls.
+
+        Returns a 2-tuple ``(warnings: str, rewritten_code: str)``.  When
+        hallucinated / undeclared symbols are found their call-sites are
+        silently dropped from the source (``_drop_hallucinated_calls``) so the
+        build never sees them — a dropped call is always safer than a fake one.
 
         Previously swallowed validator exceptions and returned ``""`` (the
         signal for "validation passed"). The 2026-05 Agent review caught
@@ -1777,13 +1806,33 @@ Output your fuzz driver code inside <fuzz_target> tags.
         'unknown symbol X; did you mean Y?' warning lets the Fixer correct it on
         the FIRST round instead of after a wasted compile. Advisory only —
         never terminates (hole fills are recoverable, unlike a fake skeleton).
+
+        2026-06 (L5a): auto-drop hallucinated/undeclared calls pre-build.
+        Collects hallucinated names from ``result.fake_functions`` (FAKE_DEFINITION)
+        and UNDECLARED_CALL issues (``issue.pattern``), then rewrites the source
+        via ``_drop_hallucinated_calls`` before the caller stores it in state.
         """
         warnings = ""
+        hallucinated_names: set = set()
         try:
-            from src.utils.unified_validator import UnifiedCodeValidator, format_validation_report
+            from src.utils.unified_validator import (
+                UnifiedCodeValidator, format_validation_report,
+                ValidationCategory,
+            )
 
             validator = UnifiedCodeValidator()
-            result = validator.validate(code=code, project_name=project_name)
+            result = validator.validate(code=code, project_name=project_name,
+                                        known_apis=known_apis)
+
+            # Collect names to drop: undeclared calls (UNDECLARED_CALL issues
+            # are populated by _check_called_symbols when known_apis is
+            # supplied above).  FAKE_DEFINITION requires build_errors which
+            # is not available here; result.fake_functions is always [] in
+            # this call-path so that arm is intentionally omitted.
+            for issue in result.issues:
+                if (issue.category == ValidationCategory.UNDECLARED_CALL
+                        and issue.pattern):
+                    hallucinated_names.add(issue.pattern)
 
             if not result.success:
                 logger.warning('Generated code contains internal API usage',
@@ -1795,17 +1844,26 @@ Output your fuzz driver code inside <fuzz_target> tags.
         except Exception as e:
             logger.warning(f'API validation crashed with {type(e).__name__}: {e}',
                            trial=self.trial)
-            return f"validator_error: {type(e).__name__}: {e}"
+            return f"validator_error: {type(e).__name__}: {e}", code
+
+        # Drop hallucinated call-sites before the source is stored in state
+        rewritten_code = _drop_hallucinated_calls(code, hallucinated_names)
+        if rewritten_code != code:
+            logger.info(
+                f'Dropped {len(hallucinated_names)} hallucinated call(s) '
+                f'pre-build: {sorted(hallucinated_names)}',
+                trial=self.trial,
+            )
 
         try:
-            htxt = self._scan_hole_hallucinations(code, known_apis)
+            htxt = self._scan_hole_hallucinations(rewritten_code, known_apis)
             if htxt:
                 logger.warning('Hole-fill introduced unknown library symbol(s)',
                                trial=self.trial)
                 warnings = (warnings + "\n" + htxt) if warnings else htxt
         except Exception:
             pass  # advisory scan must never break generation
-        return warnings
+        return warnings, rewritten_code
 
     def _scan_hole_hallucinations(self, code: str,
                                   known_apis: Optional[List[Dict[str, Any]]]) -> str:
