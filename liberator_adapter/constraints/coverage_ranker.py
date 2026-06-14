@@ -41,6 +41,36 @@ def _portfolio_config() -> Tuple[str, float]:
         depth = 0.5
     return mode, max(0.0, depth)
 
+
+def select_marginal(items, seq_of, budget, covered=None):
+    """Greedy max-marginal-new-API selection (shared primitive).
+
+    At each step picks the remaining item whose ``seq_of(item)`` adds the most
+    APIs not yet in ``covered``; stops at ``budget`` or when nothing new is
+    added. ``covered`` is an optional pre-covered API set (copied, not
+    mutated). Returns the selected items in selection order.
+
+    This is the SAME objective ``_coverage_complete_select`` Phase 2 uses; it
+    exists so the data_context skeleton depth pass can stop using round-robin
+    and share one marginal selector (B-1).
+    """
+    covered_set = set(covered or ())
+    remaining = list(items)
+    selected = []
+    while remaining and len(selected) < budget:
+        best_i = max(
+            range(len(remaining)),
+            key=lambda i: len(set(seq_of(remaining[i])) - covered_set),
+        )
+        best = remaining.pop(best_i)
+        new = set(seq_of(best)) - covered_set
+        if not new:
+            break
+        selected.append(best)
+        covered_set.update(seq_of(best))
+    return selected
+
+
 logger = logging.getLogger(__name__)
 
 
