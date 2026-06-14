@@ -492,6 +492,31 @@ def _recover_opaque_producers(
     return out
 
 
+def _workflow_clusters(cooccur: Dict[str, Set[str]]) -> Dict[str, int]:
+    """Connected components of the co-occurrence graph → a workflow_id per API.
+
+    APIs that appear together in the library's real usage paths form one
+    coherent workflow; A-2b keeps each workflow INTACT when partitioning
+    densifier candidates across sibling chains (so it never splits a coherent
+    workflow into two incoherent halves). Deterministic (sorted traversal).
+    """
+    seen: Dict[str, int] = {}
+    wid = 0
+    for node in sorted(cooccur.keys()):
+        if node in seen:
+            continue
+        stack = [node]
+        seen[node] = wid
+        while stack:
+            cur = stack.pop()
+            for nb in sorted(cooccur.get(cur, ())):
+                if nb not in seen:
+                    seen[nb] = wid
+                    stack.append(nb)
+        wid += 1
+    return seen
+
+
 def _build_index(model: APISemanticModel) -> _Index:
     producers: Dict[str, List[APISemantics]] = {}
     destroyers: Dict[str, List[APISemantics]] = {}
@@ -535,7 +560,9 @@ def _build_index(model: APISemanticModel) -> _Index:
 
 def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
              max_extra: int, repeat: bool,
-             cooccur: Optional[Dict[str, Set[str]]] = None) -> List[str]:
+             cooccur: Optional[Dict[str, Set[str]]] = None,
+             sibling_rank: int = 0,
+             workflow_of: Optional[Dict[str, int]] = None) -> List[str]:
     """Thicken a thin lifecycle chain toward the PromeFuzz density band (5.6–7.6
     calls) from TWO sources:
 
@@ -591,14 +618,29 @@ def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
         return list(core_seq)
 
     def _rank(sem: APISemantics):
-        # handle-satisfiable extenders first (valid), then co-occurrence holes
+        # handle-satisfiable extenders first (valid), then co-occurrence holes.
+        # A-2b: workflow_affinity is inserted AFTER sat (lifecycle wins) and
+        # BEFORE role so candidates from the same workflow cluster group together
+        # and rotate as whole units. workflow_of empty ⇒ waff constant ⇒ no-op.
         sat = 0 if set(getattr(sem, "requires", ()) or ()) <= opened else 1
+        waff = (workflow_of or {}).get(sem.name, -1)
         if sem.role is APIRole.MUTATOR:
-            return (sat, 0, sem.name)
+            return (sat, waff, 0, sem.name)
         is_getter = bool(getattr(sem, "requires", ())) and not getattr(sem, "produces", ())
-        return (sat, 2 if is_getter else 1, sem.name)   # consumer(1) then getter(2)
+        return (sat, waff, 2 if is_getter else 1, sem.name)
 
-    ordered = sorted(cands.values(), key=_rank)[:max(0, max_extra)]
+    _ranked = sorted(cands.values(), key=_rank)
+    # A-2a (LOGICFUZZ_DENSE_PARTITION): sibling chains sharing this handle set
+    # take DISJOINT slices of the ranked candidate pool, so two near-twin chains
+    # get DIFFERENT densifier suffixes (raises portfolio breadth, cuts overlap).
+    # Deterministic: slice offset = sibling_rank * max_extra, wrap when exhausted.
+    if (max_extra > 0 and os.environ.get("LOGICFUZZ_DENSE_PARTITION", "")
+            .strip().lower() in ("1", "true", "yes", "on")):
+        start = (sibling_rank * max_extra) % max(1, len(_ranked))
+        rotated = _ranked[start:] + _ranked[:start]
+        ordered = rotated[:max(0, max_extra)]
+    else:
+        ordered = _ranked[:max(0, max_extra)]
     extra = [s.name for s in ordered]
     if repeat:   # PF-style: re-call one CONFIG-bearing consumer/getter in a 2nd state
         for s in ordered:
@@ -797,6 +839,14 @@ def construct_sequences(
             for _a in _ps:
                 _cooccur.setdefault(_a, set()).update(x for x in _ps if x != _a)
 
+    # A-2b (LOGICFUZZ_DEDUP_WORKFLOW_PARTITION): group densifier candidates by
+    # co-occurrence workflow so sibling partitioning keeps each coherent
+    # workflow intact instead of splitting it. Empty/off ⇒ no effect.
+    _workflow_of: Dict[str, int] = {}
+    if (_cooccur and os.environ.get("LOGICFUZZ_DEDUP_WORKFLOW_PARTITION", "")
+            .strip().lower() in ("1", "true", "yes", "on")):
+        _workflow_of = _workflow_clusters(_cooccur)
+
     seqs: List[List[str]] = []
     seen: Set[Tuple[str, ...]] = set()
     source_of: Dict[Tuple[str, ...], str] = {}
@@ -915,6 +965,7 @@ def construct_sequences(
                 seen_targets.add(sem.name)
                 targets.append(sem)
 
+        _sibling_rank: Dict[frozenset, int] = {}
         for target in targets:
             n_attempted += 1
             prefix, opened = _build_prefix(target, idx, max_prefix_depth)
@@ -922,8 +973,12 @@ def construct_sequences(
             opened = set(opened) | set(target.produces)
             core = prefix + [target.name]
             if _dense:
+                _grp = frozenset(opened)
+                _rank_i = _sibling_rank.get(_grp, 0)
+                _sibling_rank[_grp] = _rank_i + 1
                 core = _densify(core, opened, idx, _dense_max_extra,
-                                _dense_repeat, _cooccur)
+                                _dense_repeat, _cooccur, sibling_rank=_rank_i,
+                                workflow_of=_workflow_of)
                 if len(core) > len(prefix) + 1:
                     n_densified += 1
             if _exercise_object():
