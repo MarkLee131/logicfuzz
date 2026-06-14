@@ -10,15 +10,18 @@
 # PYTHONHASHSEED (any value) is honored; only the unset default is forced to 0.
 import os as _os
 import sys as _sys
-# Re-exec ONLY for a genuine `python run_logicfuzz.py ...` invocation: skip when
-# imported (__name__ != "__main__") and when launched via `python -c`/runpy (the
-# argparse-shim tests do this with run_name="__main__" but argv[0]=="-c"); a
-# blind execv there would relaunch with the wrong argv.
-if (__name__ == "__main__"
-        and _os.path.basename(_sys.argv[0] or "") == "run_logicfuzz.py"
+# Re-exec ONLY for a genuine `python run_logicfuzz.py ...` launch. Discriminate
+# via sys.orig_argv (the REAL interpreter argv, Py3.10+): runpy.run_path /
+# `python -c` (the argparse-shim tests) rewrite sys.argv[0] to "run_logicfuzz.py"
+# but leave orig_argv[1]=="-c"; imports / pytest / `-m` never have
+# orig_argv[1]==the script. A blind execv under the shim relaunches with the
+# wrong argv and (worse) bypasses the test's parse_args patch into a real eval.
+_orig = getattr(_sys, "orig_argv", [])
+if (len(_orig) >= 2 and not _orig[1].startswith("-")
+        and _os.path.basename(_orig[1]) == "run_logicfuzz.py"
         and "PYTHONHASHSEED" not in _os.environ):
     _os.environ["PYTHONHASHSEED"] = "0"
-    _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+    _os.execv(_sys.executable, list(_orig))
 
 import argparse
 import json
