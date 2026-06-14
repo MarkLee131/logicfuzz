@@ -632,8 +632,13 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
                    f'merging unvetted', trial=0)
     return sources
 
+  # Route real format-matching seeds into the preflight smoke corpus so
+  # parser-entry drivers aren't culled as no_progress on random bytes (the
+  # seed-starvation gate). Kill-switch reproduces the legacy empty-corpus gate.
+  _route_seeds = os.environ.get("LOGICFUZZ_PREFLIGHT_SEEDS", "1").strip().lower() \
+      not in ("0", "false", "no", "off")
   results = preflight(pairs, smoke_duration_sec=15, drop_on_crash=True,
-                      project=project)
+                      project=project, route_seeds=_route_seeds)
   try:
     write_report(results, Path(work_dirs.base) / 'merged' / 'preflight.json')
   except Exception:

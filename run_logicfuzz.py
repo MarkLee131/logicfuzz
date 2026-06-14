@@ -10,7 +10,13 @@
 # PYTHONHASHSEED (any value) is honored; only the unset default is forced to 0.
 import os as _os
 import sys as _sys
-if "PYTHONHASHSEED" not in _os.environ:
+# Re-exec ONLY for a genuine `python run_logicfuzz.py ...` invocation: skip when
+# imported (__name__ != "__main__") and when launched via `python -c`/runpy (the
+# argparse-shim tests do this with run_name="__main__" but argv[0]=="-c"); a
+# blind execv there would relaunch with the wrong argv.
+if (__name__ == "__main__"
+        and _os.path.basename(_sys.argv[0] or "") == "run_logicfuzz.py"
+        and "PYTHONHASHSEED" not in _os.environ):
     _os.environ["PYTHONHASHSEED"] = "0"
     _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
 

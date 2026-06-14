@@ -118,6 +118,7 @@ def _smoke_one(
     duration_sec: int,
     workspace: Path,
     project: str = "",
+    route_seeds: bool = True,
 ) -> PreflightResult:
     """Run one fuzzer binary for ``duration_sec`` seconds and parse output.
 
@@ -134,8 +135,24 @@ def _smoke_one(
     corpus_dir.mkdir(exist_ok=True)
     crashes_dir.mkdir(exist_ok=True)
 
-    # Single empty seed — libFuzzer needs ≥1 entry to start
-    (corpus_dir / "empty").write_bytes(b"")
+    # Route the project's REAL format-matching seeds into the smoke corpus so
+    # parser-entry drivers (cmsOpenProfileFromMem, cmsIT8LoadFromMem, …) clear
+    # their magic/header gate and move edges in the 15s window — otherwise they
+    # see only random bytes, get 0 edges, and are wrongly dropped as
+    # `no_progress` (the seed-starvation gate the merged-coverage A/B exposed:
+    # 50/58 lcms drivers culled). Reuses the SAME seed_corpus_for_driver routing
+    # the generation phase already uses; falls back to a single empty seed when
+    # no seeds match (libFuzzer needs >=1 entry to start).
+    n_seeded = 0
+    if route_seeds and project:
+        try:
+            from scripts.seed_discovery import seed_corpus_for_driver
+            n_seeded = seed_corpus_for_driver(
+                project, corpus_dir, driver_path, max_seeds=64)
+        except Exception:
+            n_seeded = 0
+    if n_seeded == 0:
+        (corpus_dir / "empty").write_bytes(b"")
 
     host_cmd = [
         str(fuzzer_binary),
@@ -210,6 +227,7 @@ def preflight(
     min_edges: int = 1,
     drop_on_crash: bool = True,
     project: str = "",
+    route_seeds: bool = True,
 ) -> List[PreflightResult]:
     """Smoke-test a list of (driver_source, fuzzer_binary) pairs.
 
@@ -250,7 +268,7 @@ def preflight(
         )
         try:
             res = _smoke_one(drv_src, drv_bin, smoke_duration_sec, ws,
-                             project=project)
+                             project=project, route_seeds=route_seeds)
         except FileNotFoundError as e:
             res = PreflightResult(
                 driver_path=str(drv_src),
