@@ -60,6 +60,18 @@ def _is_scalar_float(type_str: str) -> bool:
     return any(t in low for t in _FLOAT_TYPES)
 
 
+def _value_domains() -> bool:
+    """L6a (DEFAULT-OFF): when on, enum/signature-typed CONFIG args with no known
+    enum members get an intent that explicitly FORBIDS ``(T)(data[i] % N)``
+    arithmetic and demands legal-set indexing from <library_constants>.
+
+    Gate: ``LOGICFUZZ_VALUE_DOMAINS=1`` (or ``true``/``yes``/``on``).
+    Default OFF so the baseline run is unchanged.
+    """
+    return os.environ.get("LOGICFUZZ_VALUE_DOMAINS", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _fuzzable_holes() -> bool:
     """Tier 1 (DEFAULT-ON; opt-out via `LOGICFUZZ_FUZZABLE_HOLES=0`): render
     fuzzable scalar/enum/flag CONFIG holes as 'DERIVE from the fuzz input'
@@ -189,6 +201,29 @@ def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
                     f"from the fuzz input, so the fuzzer sweeps real + boundary "
                     f"values the API ACCEPTS — not mostly-rejected garbage that "
                     f"bounces off the entry check before reaching deep code.")
+        # L6a (LOGICFUZZ_VALUE_DOMAINS gate): enum/signature-typed CONFIG arg with
+        # no matched true-enum members → forbid (T)(data%N) arithmetic and demand
+        # legal-set indexing.  Only fires when the type LOOKS like an enum/signature
+        # (keyword heuristic) so plain ``int`` args are unaffected by the gate.
+        _ENUM_KEYWORDS = ("signature", "enum", "flag", "format", "kind", "type",
+                          "intent", "colorspace", "space")
+        if (_fuzzable_holes() and not members
+                and _value_domains()
+                and any(k in (arg.type_str or "").lower() for k in _ENUM_KEYWORDS)):
+            type_name = (arg.type_str or "").strip()
+            return (
+                f"FUZZ_DERIVE: this arg has type ``{type_name}`` — an enum / "
+                f"signature type whose LEGAL values are named constants (e.g. from "
+                f"<library_constants>). FORBIDDEN: do NOT cast a raw arithmetic "
+                f"modulus to this type — that produces out-of-range values the API "
+                f"rejects at the front gate, bouncing off before reaching deep code. "
+                f"REQUIRED: look up the LEGAL constant set for ``{type_name}`` in "
+                f"<library_constants> (4cc / #define families / enum members), then "
+                f"index a fuzz-input byte into that set using the count of LEGAL "
+                f"values as the modulus. If no named constant is listed, use the ONE "
+                f"constant you know drives the most code for this parameter of "
+                f"``{api_name}``."
+            )
         if members:
             shown = ", ".join(members[:12])
             more = "" if len(members) <= 12 else f" (+{len(members)-12} more in <library_constants>)"

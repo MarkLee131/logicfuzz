@@ -30,6 +30,15 @@ _ENUM_RE = re.compile(
 _DEFINE_RE = re.compile(
     r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+(?!\()", re.MULTILINE,
 )
+# L6a: 4cc / 32-bit hex literal defines — ``#define NAME 0x????????`` (exactly 8
+# hex digits). These are ICC-style type-signature constants (cmsSigRgbData etc.)
+# that act as a true enum even though they're #defines.  NOT subject to
+# _MIN_GROUP filtering: even a single such define is a meaningful signature
+# constant (unlike a one-off version macro).
+_HEX32_RE = re.compile(
+    r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+0[xX][0-9A-Fa-f]{8}\b",
+    re.MULTILINE,
+)
 _LINE_COMMENT = re.compile(r"//[^\n]*")
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
@@ -57,15 +66,19 @@ def _prefix_of(name: str) -> str:
     return name[: i + 1]
 
 
-def extract_constant_vocabulary(header_paths: List[str]) -> Dict[str, Dict[str, List[str]]]:
+def extract_constant_vocabulary(header_paths: List[str]) -> Dict[str, Dict]:
     """Scan ``header_paths`` for the named-constant vocabulary.
 
     Returns ``{"enums": {enum_name: [members...]},
-               "define_groups": {prefix: [full_names...]}}``.
+               "define_groups": {prefix: [full_names...]},
+               "define_4cc": {name: hex_value_str}}``.
     Enum members and define groups are de-duplicated and capped for rendering.
+    ``define_4cc`` captures 32-bit hex-literal #defines (4cc / ICC-signature
+    style) WITHOUT the ``_MIN_GROUP`` filter — even a single define is kept.
     """
     enums: Dict[str, List[str]] = {}
     groups: Dict[str, List[str]] = {}
+    fourtcc: Dict[str, str] = {}          # name -> "0x????????"
     seen_members: Dict[str, set] = {}
 
     for path in header_paths or []:
@@ -94,6 +107,18 @@ def extract_constant_vocabulary(header_paths: List[str]) -> Dict[str, Dict[str, 
                         s.add(mem)
                         bucket.append(mem)
 
+        # L6a: 4cc / 32-bit hex literal #defines — NOT filtered by _MIN_GROUP.
+        # These are ICC-style signature constants that form an implicit enum even
+        # when there is only one define in a header (e.g. cmsSigRgbData alone).
+        for hm in _HEX32_RE.finditer(raw):   # scan raw (comments already stripped by regex line-anchor)
+            nm = hm.group(1)
+            # Capture the matched hex value: reconstruct from the full match
+            # The regex anchors to the define line; extract the hex token.
+            line = hm.group(0)
+            hex_tok_m = re.search(r"0[xX][0-9A-Fa-f]{8}", line)
+            if hex_tok_m and nm not in fourtcc:
+                fourtcc[nm] = hex_tok_m.group(0)
+
         # Prefix-grouped object-like #defines — the legal-value families.
         for dm in _DEFINE_RE.finditer(text):
             nm = dm.group(1)
@@ -108,7 +133,7 @@ def extract_constant_vocabulary(header_paths: List[str]) -> Dict[str, Dict[str, 
 
     # Keep only real families (>= _MIN_GROUP members).
     groups = {p: v for p, v in groups.items() if len(v) >= _MIN_GROUP}
-    return {"enums": enums, "define_groups": groups}
+    return {"enums": enums, "define_groups": groups, "define_4cc": fourtcc}
 
 
 def enum_members_for_type(vocab: Dict[str, Dict[str, List[str]]], type_str: str) -> List[str]:
