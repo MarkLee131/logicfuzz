@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 """Run an experiment with all function-under-tests."""
 
+# D0 (determinism): the symbolic generation core iterates set/dict over API-name
+# strings; Python's per-process hash randomization otherwise leaks that order
+# into the constructed sequences, so the SAME input yields a DIFFERENT driver SET
+# each run (verified: lcms 3 distinct set-digests; counts stable, membership
+# drifts). That makes runs irreproducible and every A/B noisy. The hash seed is
+# fixed only at interpreter startup, so pin it and re-exec ONCE. An explicit
+# PYTHONHASHSEED (any value) is honored; only the unset default is forced to 0.
+import os as _os
+import sys as _sys
+if "PYTHONHASHSEED" not in _os.environ:
+    _os.environ["PYTHONHASHSEED"] = "0"
+    _os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
 import argparse
 import json
 import logging

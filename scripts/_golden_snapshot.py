@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Emit a deterministic gates-OFF snapshot of the generation core for one project.
 
-Used by tests/test_golden_characterization.py via a subprocess with
-PYTHONHASHSEED=0 so the snapshot is reproducible (the core has set/dict
-iteration that otherwise leaks hash order — see the golden test docstring).
-Prints the snapshot as JSON to stdout.
+Used by tests/test_golden_characterization.py via a subprocess pinned to
+PYTHONHASHSEED=0 (the core has set/dict iteration that otherwise leaks hash
+order — see the golden test docstring + D0 in run_logicfuzz.py).
 
-Usage: PYTHONHASHSEED=0 python3 scripts/_golden_snapshot.py <project>
+INPUT IS FROZEN: the snapshot reads the project's APIs + accepting-paths from a
+committed fixture (tests/golden/<project>.input.json), NOT from results/<project>/
+— because live `--merge-drivers`/NO_CACHE runs regenerate results/ and would
+otherwise drift the golden's input out from under it. Capture mode (fixture
+absent) seeds the fixture once from results/.
+
+Usage: PYTHONHASHSEED=0 python3 scripts/_golden_snapshot.py <project> <input_fixture_path>
 """
 import json
 import os
@@ -33,7 +38,8 @@ SC._OBJCONSTRUCT_FIRST = False
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _load(project):
+def _load_from_results(project):
+    """Capture-mode only: read the live artifacts to seed the frozen fixture."""
     pa = json.load(open(
         os.path.join(ROOT, f"results/{project}/static_analysis/project_apis.json")))
     apis = pa.get("apis") if isinstance(pa, dict) else pa
@@ -47,11 +53,12 @@ def _load(project):
                      if c.get("api_name")]
             if len(names) >= 2:
                 acc.append(names)
-    return apis, acc
+    return {"apis": apis, "accepting_paths": acc}
 
 
-def snapshot(project):
-    apis, acc = _load(project)
+def snapshot(project, inp):
+    apis = inp["apis"]
+    acc = inp.get("accepting_paths") or []
     model = reconcile(apis)
     constructed = construct_sequences(
         model, project_apis=apis, accepting_paths=acc).sequences
@@ -70,4 +77,14 @@ def snapshot(project):
 
 
 if __name__ == "__main__":
-    print(json.dumps(snapshot(sys.argv[1]), sort_keys=True))
+    project = sys.argv[1]
+    fixture_path = sys.argv[2]
+    if os.path.exists(fixture_path):
+        inp = json.load(open(fixture_path))
+    else:
+        # capture mode: seed the frozen fixture from the live results once.
+        inp = _load_from_results(project)
+        os.makedirs(os.path.dirname(fixture_path), exist_ok=True)
+        with open(fixture_path, "w") as f:
+            json.dump(inp, f, sort_keys=True)
+    print(json.dumps(snapshot(project, inp), sort_keys=True))

@@ -39,14 +39,20 @@ def _has_artifacts(project):
 
 
 def _snapshot(project):
-    """Run the snapshot in a PYTHONHASHSEED=0 subprocess for reproducibility."""
+    """Run the snapshot in a PYTHONHASHSEED=0 subprocess for reproducibility.
+
+    Input is read from the FROZEN fixture tests/golden/<project>.input.json
+    (seeded once from results/ in capture mode), so live runs that regenerate
+    results/<project>/ cannot drift the golden's input.
+    """
     env = dict(os.environ)
     env["PYTHONHASHSEED"] = "0"
     for k in list(env):
         if k.startswith("LOGICFUZZ_"):
             del env[k]
+    fixture = os.path.join(GOLDEN_DIR, f"{project}.input.json")
     out = subprocess.check_output(
-        [sys.executable, SNAPSHOT_SCRIPT, project], env=env, cwd=ROOT)
+        [sys.executable, SNAPSHOT_SCRIPT, project, fixture], env=env, cwd=ROOT)
     return json.loads(out)
 
 
