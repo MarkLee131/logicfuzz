@@ -508,6 +508,39 @@ class CoverageRanker:
                 covered_clusters |= scl
         n_cover = len(selected)
 
+        # API-FLOOR pass (opt-in: LOGICFUZZ_API_FLOOR=1).
+        # After the cluster-cover phase, some APIs that appear in the pool may
+        # still not be covered by any selected sequence — because the cluster
+        # map is coarse (many APIs map to the same cluster, so one cluster-cover
+        # sequence can leave intra-cluster APIs unvisited) or because pool
+        # sequences contain APIs from clusters that were never the *differentiator*
+        # when that cluster was first covered.
+        # This greedy pass adds the minimum extra sequences needed to cover
+        # EVERY API that is present anywhere in the ranked pool, using the same
+        # max-marginal-coverage logic as the depth pass.
+        _floor_extra: Dict[str, Any] = {}
+        if os.environ.get("LOGICFUZZ_API_FLOOR") == "1":
+            pool_apis = {a for sc in ranked_sequences for a in sc.sequence}
+            floor_uncovered = pool_apis - covered_apis
+            floor_remaining = [sc for sc in ranked_sequences
+                               if tuple(sc.sequence) not in sel_keys]
+            while floor_uncovered and floor_remaining:
+                bi = max(
+                    range(len(floor_remaining)),
+                    key=lambda i: len(set(floor_remaining[i].sequence) & floor_uncovered),
+                )
+                best = floor_remaining.pop(bi)
+                new = set(best.sequence) & floor_uncovered
+                if not new:
+                    break
+                selected.append(best.sequence)
+                sel_keys.add(tuple(best.sequence))
+                marginal.append(len(new))
+                covered_apis.update(best.sequence)
+                floor_uncovered -= new
+            _floor_extra['api_floor_residual_count'] = len(floor_uncovered)
+            _floor_extra['api_floor_added'] = len(selected) - n_cover
+
         # Phase 2 — DEPTH (skipped when minimal): bounded max-marginal-coverage.
         depth_budget = 0 if minimal else int(round(depth_mult * n_cover))
         added = 0
@@ -535,6 +568,7 @@ class CoverageRanker:
             'cover_drivers': n_cover,
             'depth_drivers': added,
             'marginal_contributions': marginal,
+            **_floor_extra,
         }
         return selected, covered_apis, stats
 
