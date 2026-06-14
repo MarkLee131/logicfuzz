@@ -1249,6 +1249,9 @@ class FuzzingContext:
                             _accept = []
                     if not _accept:
                         _accept = automaton_artifact.sample_accepting_paths(n=40)
+                if _accept and os.environ.get("LOGICFUZZ_ORDERSETS") == "1":
+                    from liberator_adapter.analysis.order_sets import normalize_traces, minimize_traces
+                    _accept = minimize_traces(normalize_traces(_accept))
                 _graft = (automaton_artifact.graft_creator_prefix
                           if automaton_artifact is not None else None)
                 _cmode = os.environ.get('LOGICFUZZ_CONSTRUCT_MODE', 'merged')
