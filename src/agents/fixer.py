@@ -393,6 +393,26 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
                 "- Replace with public API equivalents\n"
                 "- Check existing fuzzers for correct public includes"
             ),
+            FixStrategy.FIX_ARGUMENTS: (
+                "### Strategy: Fix Call-Site Arguments\n"
+                "The function call has the wrong number of arguments:\n"
+                "- Check the function declaration for the correct parameter list\n"
+                "- Add or remove arguments at the call site to match the signature\n"
+                "- Do NOT change the function signature itself — only the call"
+            ),
+            FixStrategy.FIX_ENTRYPOINT: (
+                "### Strategy: Fix Fuzzer Entrypoint\n"
+                "The driver has `main()` instead of `LLVMFuzzerTestOneInput`, or the\n"
+                "fuzzer entrypoint is missing entirely:\n"
+                "- Rename / replace `main(int argc, char** argv)` with:\n"
+                "  ```c\n"
+                "  int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {\n"
+                "      // ... driver body ...\n"
+                "      return 0;\n"
+                "  }\n"
+                "  ```\n"
+                "- If using C++, wrap with `extern \"C\" { ... }`"
+            ),
         }
 
         return hints.get(strategy, "")

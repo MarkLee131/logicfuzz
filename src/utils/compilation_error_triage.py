@@ -61,6 +61,8 @@ class FixStrategy(Enum):
     USE_PUBLIC_API = auto()       # replace internal with public API
     REGENERATE = auto()           # cannot fix, need to regenerate
     MANUAL_REVIEW = auto()        # needs human review
+    FIX_ARGUMENTS = auto()        # fix call-site argument list (too few/many args)
+    FIX_ENTRYPOINT = auto()       # replace main() with LLVMFuzzerTestOneInput
 
 
 @dataclass
@@ -316,6 +318,21 @@ class CompilationErrorTriage:
             match = pattern_re.search(error)
             if match:
                 symbol = match.group(1) if match.groups() else None
+                # Special case: undefined reference to `main` — driver wrote
+                # main() instead of LLVMFuzzerTestOneInput, or forgot the
+                # fuzzer entrypoint entirely. Must be classified as
+                # LANGUAGE_MISMATCH / FIX_ENTRYPOINT, NOT swallowed by
+                # _is_system_symbol into LINK_ERROR / INCLUDE_CPP_FILE.
+                if symbol == 'main':
+                    return TriagedError(
+                        raw_error=error,
+                        category=ErrorCategory.LANGUAGE_MISMATCH,
+                        fix_strategy=FixStrategy.FIX_ENTRYPOINT,
+                        extracted_symbol=symbol,
+                        line_number=line_number,
+                        details="stray main / missing LLVMFuzzerTestOneInput",
+                        recoverable=True,
+                    )
                 # Special case: LLVMFuzzerTestOneInput undefined reference
                 # This happens when C code is compiled with clang++ without extern "C"
                 # Check this FIRST before fake definition check
@@ -442,10 +459,19 @@ class CompilationErrorTriage:
                 extracted_type = None
                 if error_type in ('c_struct_tag_required', 'c_enum_tag_required', 'c_union_tag_required'):
                     extracted_type = match.group(1) if match.groups() else None
+                # "too few / too many arguments" is a call-site error: the
+                # driver is passing the wrong number of args to the function.
+                # FIX_ARGUMENTS signals the Fixer to correct the call site
+                # (not the function signature).
+                per_error_strategy = (
+                    FixStrategy.FIX_ARGUMENTS
+                    if error_type == 'argument_count'
+                    else FixStrategy.FIX_SIGNATURE
+                )
                 return TriagedError(
                     raw_error=error,
                     category=ErrorCategory.TYPE_ERROR,
-                    fix_strategy=FixStrategy.FIX_SIGNATURE,
+                    fix_strategy=per_error_strategy,
                     extracted_symbol=extracted_type,
                     line_number=line_number,
                     details=error_type
@@ -551,6 +577,13 @@ class CompilationErrorTriage:
         """Get recommended fix strategy based on error pattern."""
         if not primary_category:
             return None
+
+        # Per-error strategy overrides: surface FIX_ARGUMENTS / FIX_ENTRYPOINT
+        # before the category map, since these are set on specific error
+        # instances that carry more precise information than the category.
+        for special_strategy in (FixStrategy.FIX_ENTRYPOINT, FixStrategy.FIX_ARGUMENTS):
+            if any(e.fix_strategy == special_strategy for e in errors):
+                return special_strategy
 
         # Map category to default strategy
         category_strategy = {
