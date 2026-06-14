@@ -80,6 +80,38 @@ def _parse_libfuzzer_log(log_text: str) -> tuple[int, float]:
     return max_edges, execs
 
 
+_ABI_FAILURE_MARKERS = (
+    "error while loading shared libraries",
+    "version `GLIBC",
+    "GLIBC_",
+    "cannot open shared object",
+)
+
+
+def _is_abi_failure(exit_code: int, log_text: str) -> bool:
+    """True when the binary failed to LOAD (dynamic-linker/glibc mismatch) rather
+    than running normally or crashing — the signal to retry inside the
+    base-runner container. A normal run (0) or a libFuzzer crash (77) is NOT an
+    ABI failure."""
+    if exit_code in (0, 77):
+        return False
+    return any(m in log_text for m in _ABI_FAILURE_MARKERS)
+
+
+def _run_smoke_cmd(cmd, log_file: Path, timeout: int):
+    """Run one smoke command, capturing combined stdout+stderr to ``log_file``.
+    Returns ``(exit_code, timed_out)``."""
+    try:
+        with open(log_file, "wb") as out:
+            proc = subprocess.run(
+                cmd, stdout=out, stderr=subprocess.STDOUT,
+                timeout=timeout, check=False,
+            )
+        return proc.returncode, False
+    except subprocess.TimeoutExpired:
+        return -1, True
+
+
 def _smoke_one(
     driver_path: Path,
     fuzzer_binary: Path,
@@ -114,45 +146,35 @@ def _smoke_one(
         f"-artifact_prefix={crashes_dir}/",
         # Don't fork — we want a clean exit code if the binary itself dies
     ]
-    if shutil.which("docker") and project:
-        # Run inside the OSS-Fuzz base-runner container so glibc version
-        # matches the build environment.  We mount the binary's parent
-        # directory read-only at /o and the corpus read-only at /c.
-        # Artifacts (crashes) written to /c are not persisted back, but
-        # the libFuzzer exit code (77) still flags a crash.
-        cmd = [
-            "docker", "run", "--rm",
-            "-v", f"{fuzzer_binary.parent.resolve()}:/o:ro",
-            "-v", f"{Path(corpus_dir).resolve()}:/c:ro",
-            "--entrypoint", f"/o/{fuzzer_binary.name}",
-            "gcr.io/oss-fuzz-base/base-runner",
-            "/c",
-            f"-max_total_time={duration_sec}",
-            "-print_final_stats=1",
-            "-detect_leaks=0",
-            # Write any crash artifact to a writable in-container path (the
-            # corpus mount is :ro); not persisted back — exit code 77 is the
-            # crash signal. Avoids libFuzzer erroring on an unwritable prefix.
-            "-artifact_prefix=/tmp/",
-        ]
-    else:
-        cmd = host_cmd  # fail-open: no docker or no project → host run
-    try:
-        with open(log_file, "wb") as out:
-            proc = subprocess.run(
-                cmd,
-                stdout=out,
-                stderr=subprocess.STDOUT,
-                timeout=duration_sec + 30,
-                check=False,
-            )
-        exit_code = proc.returncode
-        timed_out = False
-    except subprocess.TimeoutExpired:
-        exit_code = -1
-        timed_out = True
+    # In-container command — used ONLY as an ABI fallback (see below). Mounts the
+    # binary dir read-only at /o and the corpus read-only at /c; crash artifacts
+    # go to a writable /tmp (not persisted — exit 77 is the crash signal).
+    docker_cmd = [
+        "docker", "run", "--rm",
+        "-v", f"{fuzzer_binary.parent.resolve()}:/o:ro",
+        "-v", f"{corpus_dir.resolve()}:/c:ro",
+        "--entrypoint", f"/o/{fuzzer_binary.name}",
+        "gcr.io/oss-fuzz-base/base-runner",
+        "/c",
+        f"-max_total_time={duration_sec}",
+        "-print_final_stats=1",
+        "-detect_leaks=0",
+        "-artifact_prefix=/tmp/",
+    ]
+    timeout = duration_sec + 30
 
+    # Run on the HOST first — fast and correct for ABI-compatible binaries
+    # (e.g. c-ares). Retry inside the base-runner container ONLY when the host
+    # binary cannot LOAD (a newer-glibc build on an older host — the zlib
+    # glibc-2.38 case). Forcing every binary into the container regressed
+    # projects that run fine on the host (empty-corpus / entrypoint issues).
+    exit_code, timed_out = _run_smoke_cmd(host_cmd, log_file, timeout)
     log_text = log_file.read_text(encoding="utf-8", errors="replace")
+    if (not timed_out and _is_abi_failure(exit_code, log_text)
+            and shutil.which("docker") and project):
+        exit_code, timed_out = _run_smoke_cmd(docker_cmd, log_file, timeout)
+        log_text = log_file.read_text(encoding="utf-8", errors="replace")
+
     edges, execs = _parse_libfuzzer_log(log_text)
 
     crashes = sorted(crashes_dir.glob("crash-*"))

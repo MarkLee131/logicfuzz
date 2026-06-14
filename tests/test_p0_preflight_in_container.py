@@ -1,10 +1,11 @@
-"""P0 — preflight smoke runs inside the OSS-Fuzz base-runner container.
+"""P0 — preflight runs on the HOST first, retrying inside the OSS-Fuzz
+base-runner container ONLY when the host binary fails to LOAD (glibc/ABI
+mismatch — the zlib `version GLIBC_2.38 not found` case).
 
-Regression test for the GLIBC version mismatch: fuzz binaries are built
-inside Docker (glibc 2.38) but the host may only have glibc 2.35, causing
-`version GLIBC_2.38 not found` → binary_broken false-positive on every
-zlib driver.  Fix: when docker is available and a project name is given,
-_smoke_one wraps the run in `docker run gcr.io/oss-fuzz-base/base-runner`.
+Host-compatible projects (e.g. c-ares, which runs millions of execs/s on the
+host) must NEVER be forced into the container — doing so regressed c-ares from
+19 accepted preflight drivers to 0 (empty-corpus / entrypoint issues in the
+container path). So the container is a strict fallback gated on _is_abi_failure.
 """
 import importlib
 import sys
@@ -17,107 +18,102 @@ sys.path.insert(0, str(ROOT))
 pf = importlib.import_module("tools.merge_drivers.preflight")
 
 
-def test_smoke_cmd_runs_in_container(monkeypatch, tmp_path):
-    """_smoke_one uses 'docker run base-runner' when docker is available + project given."""
-    captured = {}
-
-    def fake_run(cmd, **kw):
-        captured["cmd"] = cmd
-        class P:
-            returncode = 0
-        return P()
-
-    monkeypatch.setattr(pf.subprocess, "run", fake_run)
-    monkeypatch.setattr(pf.shutil, "which", lambda x: "/usr/bin/docker")
-
-    # Build a minimal workspace as _smoke_one expects:
-    # it creates corpus_dir / crashes_dir / log_file inside workspace itself.
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-
-    # Create a fake fuzzer binary in a parent dir so the mount resolves
+def _mk(tmp_path):
     fuzzer_dir = tmp_path / "out"
     fuzzer_dir.mkdir(parents=True)
-    fuzzer_binary = fuzzer_dir / "zlib_fuzzer"
+    fuzzer_binary = fuzzer_dir / "fuzzer"
     fuzzer_binary.write_bytes(b"\x7fELF")
-
-    # Create a fake driver source path (just needs to exist for the call)
-    driver_src = tmp_path / "03.fuzz_target"
+    driver_src = tmp_path / "01.fuzz_target"
     driver_src.write_text("// stub")
-
-    pf._smoke_one(driver_src, fuzzer_binary, 15, workspace, project="zlib")
-
-    cmd = captured["cmd"]
-    assert cmd[0] == "docker", f"expected docker as first element, got: {cmd}"
-    assert "run" in cmd[:3], f"expected 'run' in first 3 elements, got: {cmd[:3]}"
-    assert any("base-runner" in str(a) for a in cmd), (
-        f"must use base-runner image; cmd was: {cmd}"
-    )
-    # Pin the two subtle parts of the invocation: the binary is the entrypoint
-    # (mounted at /o) and the corpus mount is present.
-    assert "--entrypoint" in cmd, f"must set --entrypoint; cmd was: {cmd}"
-    assert any(str(a).startswith("/o/") for a in cmd), (
-        f"binary must be mounted+run from /o; cmd was: {cmd}"
-    )
-    assert any("/o:ro" in str(a) for a in cmd), (
-        f"binary dir must be mounted read-only at /o; cmd was: {cmd}"
-    )
+    workspace = tmp_path / "ws"
+    return driver_src, fuzzer_binary, workspace
 
 
-def test_smoke_cmd_falls_back_to_host_when_no_docker(monkeypatch, tmp_path):
-    """Without docker, _smoke_one runs the binary directly on the host."""
-    captured = {}
+def test_host_first_no_container_when_binary_runs(monkeypatch, tmp_path):
+    """c-ares case: host run succeeds → container is never invoked."""
+    calls = []
 
-    def fake_run(cmd, **kw):
-        captured["cmd"] = cmd
+    def fake_run(cmd, stdout=None, **kw):
+        calls.append(cmd)
+        if stdout is not None:
+            stdout.write(b"#14600197 DONE cov: 1267 ft: 2000 exec/s: 2433366\n")
+
         class P:
             returncode = 0
+
         return P()
 
     monkeypatch.setattr(pf.subprocess, "run", fake_run)
-    # docker not available
-    monkeypatch.setattr(pf.shutil, "which", lambda x: None)
+    monkeypatch.setattr(pf.shutil, "which", lambda _x: "/usr/bin/docker")
+    driver_src, fuzzer_binary, workspace = _mk(tmp_path)
+    pf._smoke_one(driver_src, fuzzer_binary, 15, workspace, project="c-ares")
 
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    fuzzer_binary = tmp_path / "out" / "zlib_fuzzer"
-    fuzzer_binary.parent.mkdir()
-    fuzzer_binary.write_bytes(b"\x7fELF")
-    driver_src = tmp_path / "03.fuzz_target"
-    driver_src.write_text("// stub")
-
-    pf._smoke_one(driver_src, fuzzer_binary, 15, workspace, project="zlib")
-
-    cmd = captured["cmd"]
-    assert cmd[0] != "docker", f"should fall back to host cmd, got: {cmd}"
-    assert str(fuzzer_binary) == cmd[0], (
-        f"host fallback should run the binary directly; got: {cmd}"
-    )
+    assert calls, "subprocess.run must be called"
+    assert calls[0][0] != "docker", "must run on the HOST first"
+    assert all(c[0] != "docker" for c in calls), \
+        "host binary runs fine → never enter the container"
 
 
-def test_smoke_cmd_falls_back_when_no_project(monkeypatch, tmp_path):
-    """With docker available but no project given, falls back to host run."""
-    captured = {}
+def test_container_retry_on_abi_failure(monkeypatch, tmp_path):
+    """zlib case: host run fails with a glibc loader error → retry in container."""
+    calls = []
 
-    def fake_run(cmd, **kw):
-        captured["cmd"] = cmd
+    def fake_run(cmd, stdout=None, **kw):
+        calls.append(cmd)
+        if cmd[0] != "docker":
+            if stdout is not None:
+                stdout.write(b"./fuzzer: /lib/x86_64-linux-gnu/libc.so.6: "
+                             b"version `GLIBC_2.38' not found\n")
+            rc = 127
+        else:
+            if stdout is not None:
+                stdout.write(b"#2 INITED cov: 5 ft: 10 exec/s: 100\n")
+            rc = 0
+
         class P:
-            returncode = 0
+            returncode = rc
+
         return P()
 
     monkeypatch.setattr(pf.subprocess, "run", fake_run)
-    monkeypatch.setattr(pf.shutil, "which", lambda x: "/usr/bin/docker")
+    monkeypatch.setattr(pf.shutil, "which", lambda _x: "/usr/bin/docker")
+    driver_src, fuzzer_binary, workspace = _mk(tmp_path)
+    pf._smoke_one(driver_src, fuzzer_binary, 15, workspace, project="zlib")
 
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    fuzzer_binary = tmp_path / "out" / "zlib_fuzzer"
-    fuzzer_binary.parent.mkdir()
-    fuzzer_binary.write_bytes(b"\x7fELF")
-    driver_src = tmp_path / "03.fuzz_target"
-    driver_src.write_text("// stub")
+    assert calls[0][0] != "docker", "host first"
+    assert any(c[0] == "docker" for c in calls), \
+        "must retry in the container on a glibc/ABI load failure"
+    dc = [c for c in calls if c[0] == "docker"][0]
+    assert "--entrypoint" in dc and any(str(a).startswith("/o/") for a in dc), \
+        "container run must use the binary as entrypoint, mounted at /o"
+    assert any("base-runner" in str(a) for a in dc)
 
-    # project="" → no docker wrap
-    pf._smoke_one(driver_src, fuzzer_binary, 15, workspace, project="")
 
-    cmd = captured["cmd"]
-    assert cmd[0] != "docker", f"should fall back (no project), got: {cmd}"
+def test_no_container_without_docker(monkeypatch, tmp_path):
+    """Fail-open: no docker on PATH → host run only, even on an ABI failure."""
+    calls = []
+
+    def fake_run(cmd, stdout=None, **kw):
+        calls.append(cmd)
+        if stdout is not None:
+            stdout.write(b"version `GLIBC_2.38' not found\n")
+
+        class P:
+            returncode = 127
+
+        return P()
+
+    monkeypatch.setattr(pf.subprocess, "run", fake_run)
+    monkeypatch.setattr(pf.shutil, "which", lambda _x: None)
+    driver_src, fuzzer_binary, workspace = _mk(tmp_path)
+    pf._smoke_one(driver_src, fuzzer_binary, 15, workspace, project="zlib")
+
+    assert all(c[0] != "docker" for c in calls), "no docker → host only"
+
+
+def test_is_abi_failure_unit():
+    assert pf._is_abi_failure(127, "version `GLIBC_2.38' not found")
+    assert pf._is_abi_failure(1, "error while loading shared libraries: x.so")
+    assert not pf._is_abi_failure(0, "anything")        # normal completion
+    assert not pf._is_abi_failure(77, "GLIBC_2.38")     # libFuzzer crash, not a load failure
+    assert not pf._is_abi_failure(1, "AddressSanitizer: heap-buffer-overflow")
