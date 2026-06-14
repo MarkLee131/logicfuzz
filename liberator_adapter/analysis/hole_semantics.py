@@ -116,6 +116,32 @@ def _format_for_api(api_name: str):
     return None
 
 
+def _extract_range_from_text(text: str) -> Optional[tuple]:
+    """Extract (lo, hi) strings from a @param text description.
+
+    Recognises:
+      - "between X and Y"  / "between X to Y"
+      - "range X to Y"     / "range X and Y"
+      - "from X to Y"      / "from X and Y"
+      - "[X, Y]"           / "[X,Y]"
+      - "X .. Y"           / "X...Y"
+
+    Returns (lo_str, hi_str) or None.  Both lo and hi must look like numbers
+    (int or float, optionally signed).
+    """
+    _NUM = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+    patterns = [
+        rf"(?:between|range|from)\s+({_NUM})\s+(?:and|to)\s+({_NUM})",
+        rf"\[({_NUM})\s*,\s*({_NUM})\]",
+        rf"({_NUM})\s*\.{{2,3}}\s*({_NUM})",
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            return m.group(1), m.group(2)
+    return None
+
+
 def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
     """Value intent for one argument, or ``None`` when nothing to say.
 
@@ -183,6 +209,22 @@ def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
             kind = "float" if _is_scalar_float(arg.type_str) else "integral"
             nm = (getattr(arg, "name", "") or "").strip()
             named = f" (parameter '{nm}')" if nm else ""
+            # L6b: if the @param doc text carries an explicit range and the
+            # VALUE_DOMAINS gate is on, fold it into the FUZZ_DERIVE directive
+            # as a documented range hint — more reliable than asking the LLM to
+            # recall the semantics from training memory.
+            doc_text = (getattr(arg, "doc_text", "") or "").strip()
+            if _value_domains() and doc_text:
+                rng = _extract_range_from_text(doc_text)
+                if rng is not None:
+                    lo, hi = rng
+                    return (
+                        f"FUZZ_DERIVE: documented range [{lo}, {hi}] — derive a "
+                        f"{kind} value WITHIN this documented range from the fuzz "
+                        f"input{named} of `{api_name}`, so the fuzzer sweeps real + "
+                        f"boundary values the API ACCEPTS. Do NOT hardcode a constant "
+                        f"and do NOT use an arbitrary modulus outside this range."
+                    )
             # Tier-1 value-domain judgement (the PromeFuzz-style lever): a leaf
             # "derive from data[N]" with NO domain makes the LLM pick arbitrary
             # ranges (chromaticity got data%65536 — out of [0,1] → API rejects →

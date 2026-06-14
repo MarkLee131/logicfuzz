@@ -2081,8 +2081,13 @@ class FuzzingContext:
                 # T1: per-param SVF set_by (param→param init dependency).
                 _svf_index = _build_svf_index(project_name, log)
                 # T3/T6②: per-API return NULL/error contracts (NULL-check guard).
+                # L6b: pass the freshly-mined doc_signals so @return text from
+                # doxygen is used for contract inference (doc wins over IR).
                 from liberator_adapter.analysis.error_contracts import extract_error_contracts
-                _ret_contracts = extract_error_contracts(project_name)
+                _ret_contracts = extract_error_contracts(
+                    project_name,
+                    doc_signals=_doc_signals if _doc_signals else None,
+                )
                 _n_annot = annotate_skeletons(
                     skeleton_drivers, api_semantic_model, _const_vocab,
                     _svf_index, _ret_contracts)

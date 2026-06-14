@@ -134,13 +134,17 @@ class ArgSemantics:
     type_str: str = ""
     nullable: bool = False
     pairs_with: Optional[int] = None   # LENGTH ↔ buffer index
+    doc_text: Optional[str] = None     # L6b: @param free-text description
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "index": self.index, "role": self.role.value,
             "type_str": self.type_str, "nullable": self.nullable,
             "pairs_with": self.pairs_with,
         }
+        if self.doc_text:
+            d["doc_text"] = self.doc_text
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ArgSemantics":
@@ -148,6 +152,7 @@ class ArgSemantics:
             index=int(d["index"]), role=ArgRole(d.get("role", "UNKNOWN")),
             type_str=d.get("type_str", ""), nullable=bool(d.get("nullable", False)),
             pairs_with=d.get("pairs_with"),
+            doc_text=d.get("doc_text") or None,
         )
 
 
@@ -423,6 +428,7 @@ class _DocEvidence:
     role_source: Optional[str]   # EvidenceSource.DOC | NAMING value, or None
     role_strong: bool            # may override IR (strong) vs fill-only (weak)
     arg_roles: Dict[int, ArgRole]
+    arg_texts: Dict[int, str] = field(default_factory=dict)  # L6b: @param text
 
 
 def collect_doc_evidence(
@@ -464,18 +470,25 @@ def collect_doc_evidence(
                 role_strong = (nm[2] == "strong")
 
         # Arg roles parsed from @param descriptions, keyed by index.
+        # L6b: also capture the free-text param description (p["text"]) so
+        # hole_semantics can mine a documented value range from it.
         arg_roles: Dict[int, ArgRole] = {}
+        arg_texts: Dict[int, str] = {}
         for p in (sig.get("params") or []):
             idx = p.get("index")
             r = p.get("role")
-            if isinstance(idx, int) and r:
-                try:
-                    arg_roles[idx] = ArgRole(r)
-                except ValueError:
-                    pass
+            if isinstance(idx, int):
+                if r:
+                    try:
+                        arg_roles[idx] = ArgRole(r)
+                    except ValueError:
+                        pass
+                t = (p.get("text") or "").strip()
+                if t:
+                    arg_texts[idx] = t
         out[name] = _DocEvidence(
             role=role, role_conf=conf, role_source=role_source,
-            role_strong=role_strong, arg_roles=arg_roles)
+            role_strong=role_strong, arg_roles=arg_roles, arg_texts=arg_texts)
     return out
 
 
@@ -596,6 +609,7 @@ def _reconcile_args(
     args = api.get("arguments", api.get("arguments_info", [])) or []
     ir_arg = ir.arg_roles if ir else {}
     doc_arg = doc.arg_roles if doc else {}
+    doc_texts: Dict[int, str] = doc.arg_texts if doc else {}  # L6b
     llm_arg = llm_arg or {}
     log: List[Evidence] = []
 
@@ -681,6 +695,7 @@ def _reconcile_args(
         out_args.append(ArgSemantics(
             index=i, role=role, type_str=atype.strip(),
             nullable=nullable, pairs_with=pairs_with,
+            doc_text=doc_texts.get(i) or None,  # L6b: thread @param text
         ))
     return tuple(out_args), log
 
