@@ -62,6 +62,54 @@ _ORDERING_FAULTS = frozenset({
 _ERROR_VARIANT_SHAPES = ("DOUBLE_DESTROY", "USE_AFTER_DESTROY", "SKIP_INIT")
 
 
+# =============================================================================
+# Phase-3 L1a: object-construction-first gate + root-kind classifier
+# =============================================================================
+
+import os as _os
+_OBJCONSTRUCT_FIRST: bool = (
+    _os.environ.get("LOGICFUZZ_OBJCONSTRUCT_FIRST", "0").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+
+
+def _root_kind(sem: "APISemantics") -> str:
+    """Classify a CREATOR (or CONSUMER) API by how it obtains its primary handle.
+
+    Returns one of:
+
+    * ``"parser_entry"``  — the API ingests raw fuzzer bytes (has an
+      ``INPUT_BUFFER`` arg) and decodes them into a handle / state object.
+      Both CREATOR and CONSUMER roles are tagged here (a CONSUMER that parses
+      bytes also gates downstream coverage on valid input).
+
+    * ``"caller_alloc"``  — a CREATOR that writes through an OUTPUT pointer
+      the *caller* allocates (e.g. ``deflateInit(z_stream*)``).  The caller
+      stack-allocates the struct and passes its address; the library initialises
+      it in-place.  Identified by: CREATOR role + at least one OUTPUT arg +
+      non-empty ``produces``.
+
+    * ``"data_buildable"`` — a CREATOR with no INPUT_BUFFER and no OUTPUT arg;
+      it synthesises an object from scalar / enum / config arguments that the
+      fuzzer or the LLM can supply directly (e.g. ``cmsCreate_sRGBProfile``).
+      This is the "object-construction" class that ``LOGICFUZZ_OBJCONSTRUCT_FIRST``
+      promotes to rank ahead of parser-entry chains.
+
+    * ``"other"``         — everything else (MUTATOR, DESTROYER, UNKNOWN, or a
+      CONSUMER without an INPUT_BUFFER arg).
+
+    Pure and deterministic — no I/O, no env reads.
+    """
+    has_buf = any(a.role is ArgRole.INPUT_BUFFER for a in sem.args)
+    if has_buf and sem.role in (APIRole.CREATOR, APIRole.CONSUMER):
+        return "parser_entry"
+    if sem.role is APIRole.CREATOR:
+        if any(a.role is ArgRole.OUTPUT for a in sem.args) and sem.produces:
+            return "caller_alloc"
+        return "data_buildable"
+    return "other"
+
+
 def error_shape_variants(
     seq: Sequence[str],
     creator_names: Set[str],
