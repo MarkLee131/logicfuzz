@@ -39,6 +39,8 @@ class ValidationCategory(Enum):
     LANGUAGE_MISMATCH = auto()    # C++ features in C code
     DIRECT_STRUCT_ACCESS = auto() # Direct struct member access
     MISSING_TARGET_API = auto()   # Target API not called
+    UNDECLARED_CALL = auto()      # Library-prefixed call not in known_apis
+    WRONG_ARITY = auto()          # Too-few arguments to a known library API
 
 
 class Severity(Enum):
@@ -377,6 +379,11 @@ class UnifiedCodeValidator:
             )
             issues.extend(api_issues)
             validation_methods.append("target_api_check")
+
+        # 6. Check called symbols: existence + arity (library-prefixed calls only)
+        if known_apis:
+            issues.extend(self._check_called_symbols(code_no_comments, known_apis))
+            validation_methods.append("symbol_arity_check")
 
         # Calculate overall status
         errors = [i for i in issues if i.severity == Severity.ERROR]
@@ -776,6 +783,181 @@ class UnifiedCodeValidator:
         elif '_internal' in func_name or '_impl' in func_name:
             return 'Use public API from existing fuzzers'
         return 'Replace with public API function'
+
+    def _derive_lib_prefix(self, known_apis: List[Dict[str, Any]]) -> Optional[str]:
+        """Derive the common library prefix from known_apis function names.
+
+        Finds the longest common leading substring of all API names, then
+        trims back to a meaningful word boundary:
+        * underscore boundary (``foo_bar`` → ``foo_``)
+        * camelCase boundary: first uppercase letter after an all-lowercase
+          run (``cmsCreate`` / ``cmsClose`` → ``cms``)
+
+        Returns None if fewer than 2 APIs or no meaningful prefix (>= 3
+        chars including any trailing underscore) is found.
+        """
+        names = [a.get('function_name', '') for a in known_apis if a.get('function_name')]
+        if len(names) < 2:
+            return None
+
+        # Find longest common prefix of all names
+        first = names[0]
+        common = first
+        for name in names[1:]:
+            i = 0
+            while i < len(common) and i < len(name) and common[i] == name[i]:
+                i += 1
+            common = common[:i]
+            if not common:
+                return None
+
+        if len(common) < 3:
+            return None
+
+        # Trim back to the last word boundary so we get the true library
+        # prefix, not a spurious shared substring.
+        #
+        # Strategy: prefer underscore boundary; otherwise find the last
+        # lowercase→uppercase transition (camelCase) within common.
+        last_underscore = common.rfind('_')
+        if last_underscore >= 2:
+            # e.g. "ares_" from "ares_create" / "ares_close"
+            return common[:last_underscore + 1]
+
+        # camelCase: scan forward and find the first position where a
+        # lowercase char is followed by an uppercase char.  The prefix is
+        # everything UP TO (but not including) that uppercase letter.
+        # e.g. "cmsC" (cmsCreate, cmsClose) → trim at index 3 → "cms"
+        camel_boundary = None
+        for i in range(1, len(common)):
+            if common[i - 1].islower() and common[i].isupper():
+                camel_boundary = i
+                break
+
+        if camel_boundary is not None and camel_boundary >= 3:
+            return common[:camel_boundary]
+
+        # Fall back to raw common prefix if it's >= 3 chars
+        if len(common) >= 3:
+            return common
+
+        return None
+
+    def _count_actual_args(self, code: str, call_start: int) -> int:
+        """Count top-level comma-separated arguments in a function call.
+
+        ``call_start`` must point to the character AFTER the opening '(' of
+        the call.  Returns 0 for empty argument lists.  Only counts at
+        depth==0 relative to the opening paren so nested calls / array
+        initialisers don't confuse the count.
+        """
+        depth = 1  # we are already inside the first '('
+        arg_count = 0
+        has_content = False
+        i = call_start
+        n = len(code)
+        while i < n and depth > 0:
+            ch = code[i]
+            if ch in ('(', '[', '{'):
+                depth += 1
+                has_content = True
+            elif ch in (')', ']', '}'):
+                depth -= 1
+                if depth == 0:
+                    # Closing paren reached; if we saw content this is the last arg
+                    if has_content:
+                        arg_count += 1
+                    break
+                has_content = True
+            elif ch == ',' and depth == 1:
+                arg_count += 1
+                has_content = False
+            elif ch not in (' ', '\t', '\n', '\r'):
+                has_content = True
+            i += 1
+        return arg_count
+
+    def _check_called_symbols(
+        self,
+        code_no_comments: str,
+        known_apis: List[Dict[str, Any]]
+    ) -> List[ValidationIssue]:
+        """Check library-prefixed calls against known_apis for existence and arity.
+
+        Only library-prefixed identifiers are inspected (stdlib, LLVM
+        fuzzer entry-points, and non-prefixed names are skipped).
+
+        Rules applied:
+        * UNDECLARED_CALL (ERROR, not recoverable) — a name matching the
+          library prefix is called but not present in known_apis.
+        * WRONG_ARITY (WARNING, recoverable) — a known API is called with
+          fewer arguments than its ``arguments_info`` list specifies.
+          We use ``<`` (too-few) rather than ``!=`` because no is_vararg
+          field is present in apis_clang.json.
+        """
+        issues: List[ValidationIssue] = []
+
+        # Build {name: expected_arity} from known_apis
+        known: Dict[str, int] = {}
+        for api in known_apis:
+            name = api.get('function_name', '')
+            if name:
+                known[name] = len(api.get('arguments_info') or [])
+
+        if not known:
+            return issues
+
+        known_names_set: Set[str] = set(known.keys())
+
+        lib_prefix = self._derive_lib_prefix(known_apis)
+
+        # Never flag these names regardless of prefix
+        skip_names: Set[str] = {'LLVMFuzzerTestOneInput', 'LLVMFuzzerInitialize'} | self.IGNORE_FUNCTIONS
+
+        # Find every identifier immediately followed by '(' in the
+        # comment-stripped code
+        call_pattern = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
+        for m in call_pattern.finditer(code_no_comments):
+            name = m.group(1)
+
+            if name in skip_names:
+                continue
+
+            # Only judge library-prefixed calls
+            if lib_prefix is None or not name.startswith(lib_prefix):
+                continue
+
+            if name not in known:
+                # Undeclared library call
+                issues.append(ValidationIssue(
+                    category=ValidationCategory.UNDECLARED_CALL,
+                    severity=Severity.ERROR,
+                    message=f"Undeclared library call: {name} (not in known APIs)",
+                    pattern=name,
+                    suggestion=self._suggest_similar_api(name, known_names_set),
+                    recoverable=False,
+                ))
+            else:
+                # Known call — check arity
+                expected = known[name]
+                if expected > 0:
+                    # Position of '(' is right after the identifier + optional spaces
+                    paren_pos = code_no_comments.index('(', m.start(1))
+                    actual = self._count_actual_args(code_no_comments, paren_pos + 1)
+                    if actual < expected:
+                        issues.append(ValidationIssue(
+                            category=ValidationCategory.WRONG_ARITY,
+                            severity=Severity.WARNING,
+                            message=(
+                                f"Wrong arity for {name}: "
+                                f"called with {actual} arg(s), expected at least {expected}"
+                            ),
+                            pattern=name,
+                            suggestion=f"Provide all {expected} required argument(s) for {name}",
+                            recoverable=True,
+                        ))
+
+        return issues
 
     def _suggest_similar_api(self, fake_name: str, known_apis: Set[str]) -> Optional[str]:
         """Suggest similar API name."""
