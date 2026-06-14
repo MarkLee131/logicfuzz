@@ -643,9 +643,17 @@ def _build_prefix(
         # downstream consumers (cmsReadTag → cmstypes.c tag deserializers) reach
         # real depth instead of operating on a fixed in-memory object. Tie-break
         # by fewest prerequisites, then name (deterministic).
+        #
+        # LOGICFUZZ_OBJCONSTRUCT_FIRST: invert the preference — prefer a
+        # data-buildable (synthetic) creator over a parser-entry creator.  This
+        # promotes object-construction subsystems (cmsCreate_sRGBProfile) ahead
+        # of parser-entry chains (cmsOpenProfileFromMem) so the portfolio covers
+        # more subsystems rather than deep-diving the ICC parser exclusively.
+        _prefer_parser = not _OBJCONSTRUCT_FIRST
         def _creator_key(s: APISemantics) -> Tuple[int, int, str]:
             is_entry = any(a.role is ArgRole.INPUT_BUFFER for a in s.args)
-            return (0 if is_entry else 1, len(s.requires), s.name)
+            return (0 if (is_entry == _prefer_parser) else 1,
+                    len(s.requires), s.name)
 
         # Recovered opaque factories rank differently. The IR erased the inner
         # handle args of several variants (cmsCreateMultiprofileTransform's profile
@@ -658,7 +666,7 @@ def _build_prefix(
         def _recovered_key(s: APISemantics) -> Tuple[int, int, int, str]:
             is_entry = any(a.role is ArgRole.INPUT_BUFFER for a in s.args)
             deep = any(h in idx.recovered_producers for h in s.requires)
-            return (0 if is_entry else 1, 0 if deep else 1,
+            return (0 if (is_entry == _prefer_parser) else 1, 0 if deep else 1,
                     len(s.requires), s.name)
 
         producer = sorted(
@@ -840,8 +848,20 @@ def construct_sequences(
     if do_bottomup:
         targets: List[APISemantics] = []
         seen_targets: Set[str] = set()
-        target_pool = list(idx.entries) + list(idx.consumers) \
-            + [s for ms in idx.mutators.values() for s in ms]
+        if _OBJCONSTRUCT_FIRST:
+            # LOGICFUZZ_OBJCONSTRUCT_FIRST: prepend data-buildable creators
+            # (no INPUT_BUFFER arg) before parser-entry creators so the
+            # bottom-up builder visits object-construction subsystems first.
+            # Parser-entry targets (idx.entries) follow so they are still
+            # covered — breadth is preserved, only visit-order changes.
+            _data_buildable = [s for s in idx.creators
+                               if not any(a.role is ArgRole.INPUT_BUFFER
+                                          for a in s.args)]
+            target_pool = _data_buildable + list(idx.entries) + list(idx.consumers) \
+                + [s for ms in idx.mutators.values() for s in ms]
+        else:
+            target_pool = list(idx.entries) + list(idx.consumers) \
+                + [s for ms in idx.mutators.values() for s in ms]
         if gap_apis:
             # Add gap APIs that aren't already entries/consumers/mutators so we
             # build a reaching sequence for them too.

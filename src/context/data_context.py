@@ -1351,10 +1351,26 @@ class FuzzingContext:
                     # then gap-novelty, automaton-feasible, and the grammar
                     # floor. Step 10's top-K cap keeps parser entries + focused
                     # workflows; the rest provide breadth + a floor.
+                    #
+                    # LOGICFUZZ_OBJCONSTRUCT_FIRST: invert the lead strand —
+                    # gap-novelty (object-construction subsystems) goes FIRST,
+                    # with parser-entry strand and workflow backbone demoted.
+                    # This promotes subsystem breadth over parser-entry depth.
+                    _objconstruct_first_gate = (
+                        os.environ.get("LOGICFUZZ_OBJCONSTRUCT_FIRST", "")
+                        .strip().lower() in ("1", "true", "yes", "on")
+                    )
+                    if _objconstruct_first_gate:
+                        _first_strands = (_gap_ranked
+                                          + _buffer_ranked[:_k]
+                                          + _wf_ranked[:_k])
+                    else:
+                        _first_strands = (_buffer_ranked
+                                          + _wf_ranked[:_k]
+                                          + _gap_ranked[:_k])
                     _seen2: set = set()
                     _merged: List[List[str]] = []
-                    for _seq in (_buffer_ranked + _wf_ranked[:_k]
-                                 + _gap_ranked[:_k]
+                    for _seq in (_first_strands
                                  + _acc_ranked[:_k] + _grammar_candidates
                                  + _gap_ranked):
                         _key = tuple(_seq)
@@ -1939,7 +1955,15 @@ class FuzzingContext:
                     _pf_mode, _pf_depth = _portfolio_config()
                     _clusters = (subsystem_clusters(api_semantic_model)
                                  if _pf_mode != 'off' else {})
-                    _buckets = [_bA, _bB, _bC]
+                    # LOGICFUZZ_OBJCONSTRUCT_FIRST: demote parser-entry bucket
+                    # (_bA) to last so the coverage-complete Phase-1 cover pass
+                    # visits workflow + novel subsystem drivers before parsers.
+                    _objconstruct_first_portfolio = (
+                        os.environ.get("LOGICFUZZ_OBJCONSTRUCT_FIRST", "")
+                        .strip().lower() in ("1", "true", "yes", "on")
+                    )
+                    _buckets = ([_bB, _bC, _bA] if _objconstruct_first_portfolio
+                                else [_bA, _bB, _bC])
                     _portfolio: List[Dict[str, Any]] = []
 
                     if _clusters:
