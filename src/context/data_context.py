@@ -3935,6 +3935,23 @@ def save_intermediate_results(project_name: str,
             json.dump(summary, f, indent=2)
         log.info(f"   📄 Saved analysis summary: {summary_path}")
 
+        # Layer E: portfolio-redundancy telemetry (always-on, cheap) — the A/B
+        # oracle for the decoupling/dedup levers. Lower mean_pairwise_jaccard /
+        # higher disjointness ⇒ better-decoupled portfolio.
+        if skeleton_drivers:
+            try:
+                from liberator_adapter.analysis.portfolio_redundancy import (
+                    portfolio_redundancy)
+                _red = portfolio_redundancy(
+                    [d.get('api_sequence', []) for d in skeleton_drivers])
+                with open(results_path / "redundancy_telemetry.json", 'w') as f:
+                    json.dump(_red, f, indent=2)
+                log.info("   📄 Saved redundancy telemetry: "
+                         f"disjointness={_red.get('disjointness'):.3f} "
+                         f"mean_jaccard={_red.get('mean_pairwise_jaccard'):.3f}")
+            except Exception as _e:
+                log.warning(f"redundancy telemetry failed (non-critical): {_e}")
+
         log.info(f"✅ All intermediate results saved to: {results_path}")
 
     except Exception as e:
