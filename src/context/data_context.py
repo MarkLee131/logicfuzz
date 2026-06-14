@@ -2123,6 +2123,25 @@ class FuzzingContext:
             except Exception as _he:
                 log.warning('G4 hole annotation failed (non-critical): %s', _he)
 
+        # B-3 (LOGICFUZZ_SUBSET_ELIM): drop skeletons whose fingerprint is a
+        # strict same-value-domain subset of another's. Runs BEFORE B-2 so it
+        # removes only true subsets (never near-twins → that is B-2's job).
+        if (os.environ.get("LOGICFUZZ_SUBSET_ELIM", "").strip().lower()
+                in ("1", "true", "yes", "on")) and skeleton_drivers \
+                and api_semantic_model is not None:
+            try:
+                from liberator_adapter.analysis.driver_dedup import (
+                    subset_eliminate_skeletons)
+                _before_se = len(skeleton_drivers)
+                skeleton_drivers = subset_eliminate_skeletons(
+                    skeleton_drivers, api_semantic_model)
+                log.info("   🧬 subset elim: %d → %d",
+                         _before_se, len(skeleton_drivers))
+                api_sequences = [s.get('api_sequence', [])
+                                 for s in skeleton_drivers]
+            except Exception as _se:
+                log.warning("subset elim failed (non-critical): %s", _se)
+
         # B-2 (LOGICFUZZ_PAIRWISE_DEDUP): drop near-twin skeletons by fingerprint
         # similarity over the FULL Layer-C fingerprint (incl. value-domain), so
         # value-distinct variants survive. Optional Stage-B VALID guard
