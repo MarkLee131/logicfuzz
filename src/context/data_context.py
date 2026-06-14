@@ -1995,23 +1995,45 @@ class FuzzingContext:
                         # remaining drivers up to depth_mult x cover.
                         if _pf_mode != 'minimal':
                             _depth_budget = int(round(_pf_depth * _n_cover))
-                            _used = [[(id(_d) in _sel_ids) for _d in _b]
-                                     for _b in _buckets]
-                            _added = 0
-                            while _added < _depth_budget:
-                                _moved = False
-                                for _j, _b in enumerate(_buckets):
-                                    for _i, _d in enumerate(_b):
-                                        if not _used[_j][_i]:
-                                            _portfolio.append(_d)
-                                            _used[_j][_i] = True
-                                            _added += 1
-                                            _moved = True
+                            _marginal_depth = (
+                                os.environ.get("LOGICFUZZ_MARGINAL_DEPTH", "")
+                                .strip().lower() in ("1", "true", "yes", "on"))
+                            if _marginal_depth:
+                                # B-1: pick depth drivers by MAX marginal new-API
+                                # coverage over the already-selected cover set —
+                                # the same objective coverage_ranker uses —
+                                # instead of bucket round-robin (which admits
+                                # near-twins).
+                                from liberator_adapter.constraints.coverage_ranker \
+                                    import select_marginal
+                                _covered_apis = {
+                                    a for _d in _portfolio
+                                    for a in (_d.get('api_sequence') or [])}
+                                _pool = [_d for _b in _buckets for _d in _b
+                                         if id(_d) not in _sel_ids]
+                                _depth_sel = select_marginal(
+                                    _pool,
+                                    lambda _d: _d.get('api_sequence') or [],
+                                    _depth_budget, _covered_apis)
+                                _portfolio.extend(_depth_sel)
+                            else:
+                                _used = [[(id(_d) in _sel_ids) for _d in _b]
+                                         for _b in _buckets]
+                                _added = 0
+                                while _added < _depth_budget:
+                                    _moved = False
+                                    for _j, _b in enumerate(_buckets):
+                                        for _i, _d in enumerate(_b):
+                                            if not _used[_j][_i]:
+                                                _portfolio.append(_d)
+                                                _used[_j][_i] = True
+                                                _added += 1
+                                                _moved = True
+                                                break
+                                        if _added >= _depth_budget:
                                             break
-                                    if _added >= _depth_budget:
+                                    if not _moved:
                                         break
-                                if not _moved:
-                                    break
                         log.info(
                             '   🎯 portfolio (coverage-complete %s): %d clusters '
                             'covered → %d cover + %d depth = %d of %d drivers',
