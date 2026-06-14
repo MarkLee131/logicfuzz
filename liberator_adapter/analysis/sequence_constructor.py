@@ -110,6 +110,47 @@ def _root_kind(sem: "APISemantics") -> str:
     return "other"
 
 
+def _exercise_object() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_EXERCISE_OBJECT`` extends a construction
+    chain FORWARD with the deepest fuzz-data-consuming consumer of each produced
+    handle, so a built object is actually RUN on fuzz bytes (e.g. a constructed
+    ``cmsHTRANSFORM`` gets ``cmsDoTransform(t, data, …)``) rather than just
+    built-then-freed. Addresses the per-driver DEPTH gap: backward ``_build_prefix``
+    stops at object construction; this is the missing forward 'exercise' step."""
+    return _os.environ.get("LOGICFUZZ_EXERCISE_OBJECT", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _append_exercisers(core: List[str], opened: Set[str], idx) -> List[str]:
+    """For each handle the chain PRODUCED, append ONE consumer that exercises it.
+
+    Prefers a consumer that ingests fuzz bytes (an ``INPUT_BUFFER`` arg — it runs
+    the object on fuzz data) and whose every *other* required handle is already
+    produced in-chain (so no arg becomes a NULL hole). Appends names only; pure
+    and order-stable. A consumer already in the chain is never duplicated."""
+    in_core = set(core)
+    extra: List[str] = []
+    cbh = getattr(idx, "consumers_by_handle", None) or {}
+    for h in sorted(opened):
+        best = None  # (sem, takes_fuzz)
+        for c in cbh.get(h, ()):  # consumers whose ``requires`` includes h
+            if c.name in in_core or c.name in extra:
+                continue
+            req = set(getattr(c, "requires", ()) or ())
+            if not req <= opened:
+                continue  # an unsatisfied handle would NULL-hole the call
+            takes_fuzz = any(a.role is ArgRole.INPUT_BUFFER
+                             for a in getattr(c, "args", ()) or ())
+            if best is None or (takes_fuzz and not best[1]):
+                best = (c, takes_fuzz)
+                if takes_fuzz:
+                    break  # a fuzz-data consumer is the deepest exercise
+        if best is not None:
+            extra.append(best[0].name)
+            in_core.add(best[0].name)
+    return list(core) + extra
+
+
 def error_shape_variants(
     seq: Sequence[str],
     creator_names: Set[str],
@@ -885,6 +926,11 @@ def construct_sequences(
                                 _dense_repeat, _cooccur)
                 if len(core) > len(prefix) + 1:
                     n_densified += 1
+            if _exercise_object():
+                # Forward 'exercise the object' (per-driver DEPTH): append a
+                # fuzz-data consumer for each constructed handle so the object is
+                # RUN, not just built+freed. Gate-OFF leaves ``core`` unchanged.
+                core = _append_exercisers(core, opened, idx)
             if _scoped_guards():
                 # D — reorder ``core`` so its dependency components are
                 # CONTIGUOUS (parser+consumers block first, independent producer
@@ -903,7 +949,12 @@ def construct_sequences(
                 continue
             prefix, opened = _build_prefix(creator, idx, max_prefix_depth)
             opened = set(opened) | set(creator.produces)
-            _add(prefix + [creator.name] + _closing_destroyers(opened, idx))
+            _core = prefix + [creator.name]
+            if _exercise_object():
+                # The shallowest chains (pure create→destroy) benefit most from
+                # the forward exercise step — these are 'build but never use'.
+                _core = _append_exercisers(_core, opened, idx)
+            _add(_core + _closing_destroyers(opened, idx))
 
     if len(seqs) > max_sequences:
         seqs = seqs[:max_sequences]
