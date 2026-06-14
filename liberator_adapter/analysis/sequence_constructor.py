@@ -659,6 +659,7 @@ def _build_prefix(
     target: APISemantics,
     idx: _Index,
     max_depth: int,
+    producer_rank: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[str], Set[str]]:
     """Build a **coherent, best-effort** creator prefix for ``target``.
 
@@ -752,8 +753,21 @@ def _build_prefix(
             return (0 if (is_entry == _prefer_parser) else 1, 0 if deep else 1,
                     len(s.requires), s.name)
 
-        producer = sorted(
-            cands, key=_recovered_key if from_recovery else _creator_key)[0]
+        _sorted_cands = sorted(
+            cands, key=_recovered_key if from_recovery else _creator_key)
+        # A-1/A-1b (LOGICFUZZ_DIVERSIFY_PRODUCERS): when a handle type has >1
+        # creator, rotate which one each sibling chain uses (deterministic,
+        # per-handle round-robin) so the portfolio exercises the full producer
+        # set instead of always the single sorted-first one. A-1b: confidence
+        # ordering already lives in _creator_key/_recovered_key (role-authored).
+        if (producer_rank is not None and len(_sorted_cands) > 1
+                and os.environ.get("LOGICFUZZ_DIVERSIFY_PRODUCERS", "")
+                .strip().lower() in ("1", "true", "yes", "on")):
+            _r = producer_rank.get(t, 0)
+            producer_rank[t] = _r + 1
+            producer = _sorted_cands[_r % len(_sorted_cands)]
+        else:
+            producer = _sorted_cands[0]
         in_progress.add(t)
         for rt in producer.requires:
             resolve(rt, depth + 1)   # best-effort: a sub-req hole is fine
@@ -776,13 +790,28 @@ def _build_prefix(
     return prefix, opened
 
 
-def _closing_destroyers(opened: Set[str], idx: _Index) -> List[str]:
-    """One destroyer per opened handle type (deterministic pick)."""
+def _closing_destroyers(opened: Set[str], idx: _Index,
+                        destroyer_rank: Optional[Dict[str, int]] = None) -> List[str]:
+    """One destroyer per opened handle type.
+
+    A-3 (LOGICFUZZ_DIVERSIFY_PRODUCERS): when a handle has >1 destroyer, rotate
+    which one each sibling chain closes with (deterministic per-handle
+    round-robin). Gate-off ⇒ the sorted-first destroyer (unchanged).
+    """
+    _rotate = (destroyer_rank is not None
+               and os.environ.get("LOGICFUZZ_DIVERSIFY_PRODUCERS", "")
+               .strip().lower() in ("1", "true", "yes", "on"))
     out: List[str] = []
     for t in sorted(opened):
         dz = idx.destroyers.get(t)
         if dz:
-            name = sorted(dz, key=lambda s: s.name)[0].name
+            names = [s.name for s in sorted(dz, key=lambda s: s.name)]
+            if _rotate and destroyer_rank is not None and len(names) > 1:
+                _r = destroyer_rank.get(t, 0)
+                destroyer_rank[t] = _r + 1
+                name = names[_r % len(names)]
+            else:
+                name = names[0]
             if name not in out:
                 out.append(name)
     return out
@@ -966,9 +995,12 @@ def construct_sequences(
                 targets.append(sem)
 
         _sibling_rank: Dict[frozenset, int] = {}
+        _producer_rank: Dict[str, int] = {}
+        _destroyer_rank: Dict[str, int] = {}
         for target in targets:
             n_attempted += 1
-            prefix, opened = _build_prefix(target, idx, max_prefix_depth)
+            prefix, opened = _build_prefix(target, idx, max_prefix_depth,
+                                           producer_rank=_producer_rank)
             # The target itself opens handles if it is also a producer.
             opened = set(opened) | set(target.produces)
             core = prefix + [target.name]
@@ -994,7 +1026,8 @@ def construct_sequences(
                 # clean. Gate-OFF leaves ``core`` untouched (byte-identical).
                 core = [a for comp in _dependency_components(core, model)
                         for a in comp]
-            seq = core + _closing_destroyers(opened, idx)
+            seq = core + _closing_destroyers(opened, idx,
+                                             destroyer_rank=_destroyer_rank)
             _add(seq)
 
         # 3. create→destroy coverage for creators no target reached.
@@ -1002,14 +1035,16 @@ def construct_sequences(
         for creator in idx.creators:
             if creator.name in covered:
                 continue
-            prefix, opened = _build_prefix(creator, idx, max_prefix_depth)
+            prefix, opened = _build_prefix(creator, idx, max_prefix_depth,
+                                           producer_rank=_producer_rank)
             opened = set(opened) | set(creator.produces)
             _core = prefix + [creator.name]
             if _exercise_object():
                 # The shallowest chains (pure create→destroy) benefit most from
                 # the forward exercise step — these are 'build but never use'.
                 _core = _append_exercisers(_core, opened, idx)
-            _add(_core + _closing_destroyers(opened, idx))
+            _add(_core + _closing_destroyers(opened, idx,
+                                             destroyer_rank=_destroyer_rank))
 
     if len(seqs) > max_sequences:
         seqs = seqs[:max_sequences]
