@@ -31,6 +31,7 @@ sys.path.insert(0, str(ROOT))
 
 from liberator_adapter.analysis.named_constants import (
     extract_constant_vocabulary,
+    render_constant_vocabulary,
 )
 from liberator_adapter.analysis.hole_semantics import _arg_intent
 from liberator_adapter.analysis.api_semantic_model import ArgRole
@@ -85,6 +86,21 @@ def test_4cc_values_stored():
     v = _vocab_from_text(_4CC_HEADER)
     names = v.get("define_4cc", {})
     assert names["cmsSigRgbData"] == "0x52474220"
+
+
+def test_4cc_signatures_reach_rendered_vocab():
+    """L6a end-to-end: mined 4cc names MUST be surfaced in the prompt vocab
+    block, else _arg_intent's 'look up the legal set in <library_constants>'
+    points at names the LLM cannot see."""
+    out = render_constant_vocabulary(_vocab_from_text(_4CC_HEADER))
+    assert "4cc signatures" in out, f"no 4cc section rendered:\n{out}"
+    assert "cmsSigRgbData" in out and "cmsSigLabData" in out, out
+
+
+def test_render_4cc_only_vocab_not_empty():
+    """A vocab with ONLY 4cc defines (no enums/groups) still renders."""
+    out = render_constant_vocabulary(_vocab_from_text(_4CC_HEADER_SINGLE))
+    assert "cmsSigRgbData" in out
 
 
 # ---------------------------------------------------------------------------

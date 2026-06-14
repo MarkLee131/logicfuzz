@@ -152,7 +152,8 @@ def render_constant_vocabulary(vocab: Dict[str, Dict[str, List[str]]]) -> str:
         return ""
     enums = vocab.get("enums", {})
     groups = vocab.get("define_groups", {})
-    if not enums and not groups:
+    fourcc = vocab.get("define_4cc", {})
+    if not enums and not groups and not fourcc:
         return ""
     lines = ["Library constant vocabulary — for CONFIG/flag/format args, use a "
              "LEGAL named constant from here (the one that drives deep code), "
@@ -165,4 +166,14 @@ def render_constant_vocabulary(vocab: Dict[str, Dict[str, List[str]]]) -> str:
         shown = members[:_RENDER_CAP]
         more = "" if len(members) <= _RENDER_CAP else f" (+{len(members)-_RENDER_CAP} more)"
         lines.append(f"  {pfx}* family: {', '.join(shown)}{more}")
+    if fourcc:
+        # 4cc / ICC-signature #defines (cmsSigRgbData, …): one-off 32-bit hex
+        # literals the prefix-group filter drops. Surface a capped legal set so
+        # a signature/enum hole indexes a REAL signature, never (Sig)(data%N).
+        _cap = _RENDER_CAP * 4
+        names = sorted(fourcc.keys())
+        shown = names[:_cap]
+        more = "" if len(names) <= _cap else f" (+{len(names)-_cap} more)"
+        lines.append("  4cc signatures (pick a legal one, never cast data%N): "
+                     f"{', '.join(shown)}{more}")
     return "\n".join(lines)
