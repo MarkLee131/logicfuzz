@@ -4,13 +4,25 @@ import logging
 import os
 import subprocess as sp
 import threading
+import uuid
 from typing import Dict, Tuple
 
-from experiment import oss_fuzz_checkout
+from experiment import container_cleanup, oss_fuzz_checkout
 from experiment.benchmark import Benchmark
 from tool.base_tool import BaseTool
 
 logger = logging.getLogger(__name__)
+
+# Per-RUN id shared across the main process AND its forked Pool workers (set in
+# the env at run_logicfuzz startup, BEFORE the Pool fork, so every worker
+# inherits the same value). Agent containers are labelled with it so a run-end
+# sweep can reclaim worker-orphaned shells (whose in-memory IDs the main
+# process never saw) WITHOUT touching a concurrent run's containers (different
+# id) or a user's interactive shell (no label). Fallback uuid keeps it working
+# when launched outside run_logicfuzz.
+_RUN_ID = os.environ.get('LOGICFUZZ_RUN_ID') or uuid.uuid4().hex[:16]
+_AGENT_LABEL = 'logicfuzz-agent=1'
+_RUN_LABEL = f'logicfuzz-run={_RUN_ID}'
 
 # Container reuse: keep one long-lived `docker run -d` per (image_name,
 # language) pair across all ProjectContainerTool instances. Each tool
@@ -61,6 +73,15 @@ def _cleanup_shared_containers() -> None:
                    image_name)
     except Exception as e:  # pylint: disable=broad-except
       logger.debug('atexit: failed to remove container %s: %s', cid, e)
+  # Belt-and-suspenders: sweep any agent shell carrying THIS run's label that
+  # the in-memory map missed — e.g. created in a forked Pool worker that was
+  # recycled (maxtasksperchild=1) before its own atexit could run, the exact
+  # leak observed on the lcms A/B. Label-scoped to this run, so it never touches
+  # a concurrent run's shells or a user's unlabelled interactive container.
+  try:
+    container_cleanup.force_remove_labeled_containers(_RUN_LABEL)
+  except Exception as e:  # pylint: disable=broad-except
+    logger.debug('atexit: label sweep failed: %s', e)
 
 
 atexit.register(_cleanup_shared_containers)
@@ -205,7 +226,13 @@ class ProjectContainerTool(BaseTool):
     """Runs the project's OSS-Fuzz image as a background container and returns
     the container ID."""
     run_container_command = [
-        'docker', 'run', '-d', '-t', '--entrypoint=/bin/bash', '-e',
+        'docker', 'run', '-d', '-t',
+        # Leak-prevention: a unique name + our labels so this shell is safely
+        # distinguishable from a user's (unlabelled) interactive container and
+        # reclaimable by the run-end label sweep. See _cleanup_shared_containers.
+        '--name', container_cleanup.make_container_name('agent'),
+        '--label', _AGENT_LABEL, '--label', _RUN_LABEL,
+        '--entrypoint=/bin/bash', '-e',
         f'FUZZING_LANGUAGE={self.benchmark.language}', self.image_name
     ]
     result = self._execute_command(run_container_command)

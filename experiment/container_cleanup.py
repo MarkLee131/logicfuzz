@@ -142,6 +142,40 @@ def force_remove_named_container(name: str, *, timeout: int = 30) -> int:
         return 0
 
 
+def force_remove_labeled_containers(label: str, *, timeout: int = 30) -> int:
+    """``docker rm -f`` every container carrying ``--label <label>`` (running OR
+    exited). For container_tool's shared ``-d`` agent shells, which run on the
+    BARE base image (same as a user's interactive shell) — so they can only be
+    swept by a label WE set (e.g. ``logicfuzz-run=<run-id>``), never by image.
+
+    ``label`` MUST be a specific ``key=value`` we control; an empty label is
+    REFUSED (it would match unrelated containers). Best-effort; never raises.
+    Returns the number of containers a remove was attempted for."""
+    if not label or "=" not in label or not _docker_available():
+        return 0
+    try:
+        result = sp.run(
+            ["docker", "ps", "-aq", "--filter", f"label={label}"],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — cleanup must never raise
+        logger.debug("labeled cleanup list failed for %s: %s", label, exc)
+        return 0
+    ids = [c for c in (result.stdout or "").split() if c]
+    n = 0
+    for cid in ids:
+        try:
+            sp.run(["docker", "rm", "-f", cid], capture_output=True,
+                   text=True, timeout=timeout, check=False)
+            n += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("docker rm -f %s failed: %s", cid, exc)
+            return 0
+    if n:
+        logger.info("cleaned up %d container(s) with label %s", n, label)
+    return n
+
+
 @contextlib.contextmanager
 def scoped_named_container(name: str, *, timeout: int = 30):
     """Context manager: ``docker rm -f <name>`` in ``finally`` — fires on

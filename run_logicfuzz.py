@@ -23,6 +23,14 @@ if (len(_orig) >= 2 and not _orig[1].startswith("-")
     _os.environ["PYTHONHASHSEED"] = "0"
     _os.execv(_sys.executable, list(_orig))
 
+# Per-run id, set BEFORE heavy imports so tool.container_tool's module-level read
+# sees it and every forked Pool worker inherits the SAME value. Lets the run-end
+# atexit sweep reclaim worker-orphaned agent containers by label without ever
+# touching a concurrent run's or a user's interactive shell. (Container-leak fix.)
+if "LOGICFUZZ_RUN_ID" not in _os.environ:
+    import uuid as _uuid
+    _os.environ["LOGICFUZZ_RUN_ID"] = _uuid.uuid4().hex[:16]
+
 import argparse
 import json
 import logging

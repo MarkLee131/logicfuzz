@@ -175,3 +175,40 @@ def test_make_container_name_unique_and_prefixed():
     assert a.startswith("lf-preflight-")
     # always uuid-scoped so it can never collide with a base/interactive name
     assert cc.looks_uuid_scoped(a)
+
+
+# ---- label-based cleanup: for container_tool's shared `-d` agent shells, which
+# share the bare base image with a user's interactive shell — so they MUST be
+# swept by a label WE set, never by image/ancestor --------------------------
+
+def test_force_remove_labeled_lists_by_label_then_rm_f(monkeypatch):
+    rec = _Rec(ps_stdout="cidA\ncidB\n")
+    _wire(monkeypatch, rec)
+    n = cc.force_remove_labeled_containers("logicfuzz-run=abc123")
+    assert n == 2
+    ps = rec.calls[0]
+    assert ps[:3] == ["docker", "ps", "-aq"]
+    assert "label=logicfuzz-run=abc123" in ps
+    rms = [c for c in rec.calls if c[:3] == ["docker", "rm", "-f"]]
+    assert [c[3] for c in rms] == ["cidA", "cidB"], rec.calls
+
+
+def test_force_remove_labeled_refuses_empty_label(monkeypatch):
+    # SAFETY: an empty/bare label could match unrelated containers — refuse.
+    rec = _Rec(ps_stdout="cidX\n")
+    _wire(monkeypatch, rec)
+    assert cc.force_remove_labeled_containers("") == 0
+    assert rec.calls == []
+
+
+def test_force_remove_labeled_noop_no_docker(monkeypatch):
+    rec = _Rec(ps_stdout="cidA\n")
+    _wire(monkeypatch, rec, docker=False)
+    assert cc.force_remove_labeled_containers("logicfuzz-run=x") == 0
+    assert rec.calls == []
+
+
+def test_force_remove_labeled_swallows_errors(monkeypatch):
+    rec = _Rec(ps_stdout="cidA\n", raise_on=("ps",))
+    _wire(monkeypatch, rec)
+    assert cc.force_remove_labeled_containers("logicfuzz-run=x") == 0
