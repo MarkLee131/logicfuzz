@@ -1105,6 +1105,30 @@ class SkeletonGenerator:
                 init_value=hole.get_placeholder()
             )
 
+        # ---- Lever A: handle-collection arg (LOGICFUZZ_POPULATE_COLLECTIONS) ----
+        # A CREATOR's array-of-handles arg (``cmsToneCurve* const []``) otherwise
+        # renders the degenerate ``{0}``/NULL → the deep constructor NULL-guards out
+        # → 0 edges. When gated AND same-type producers exist in the skeleton,
+        # declare a fixed-size array and populate it with their rets (reuse one K×
+        # if only one exists — a valid non-NULL array still runs the constructor).
+        # Measured +72% edges/driver vs PromeFuzz's build-and-chain pattern.
+        try:
+            from liberator_adapter.analysis.sequence_constructor import (
+                _populate_collections)
+            _pc_on = _populate_collections()
+        except Exception:
+            _pc_on = False
+        if _pc_on and _is_handle_collection_type(c_type):
+            base = c_type.replace("const", "").replace("*", "").strip()
+            prods = [v.name for v in skeleton.variables.values()
+                     if v.source_api and v.c_type.replace("*", "").strip() == base]
+            if prods:
+                K = 3
+                fill = (prods * K)[:K]   # reuse one K× when only one producer exists
+                return SkeletonVariable(
+                    name=name, c_type=f"{base} *", is_array=True, array_size=str(K),
+                    prepopulate=fill)
+
         ttype_norm = c_type.replace(' ', '')
         is_char_star = 'char*' in ttype_norm
 

@@ -57,3 +57,33 @@ def test_collection_emits_population_assignments():
     codes = [s.code for s in sk.statements]
     assert "curves_cmsCreateLinearizationDeviceLink[0] = ret_cmsBuildGamma;" in codes
     assert "curves_cmsCreateLinearizationDeviceLink[2] = ret_cmsBuildGamma;" in codes
+
+
+def _arg_info_collection():
+    return {"name": "Curves", "type": "cmsToneCurve * const *", "idx": 1,
+            "api_name": "cmsCreateLinearizationDeviceLink", "is_input": True,
+            "is_output": False, "is_callback": False, "varlen_target": None,
+            "role": "CONFIG", "pairs_with": None, "deep_fuzz_buffer": False}
+
+
+def test_creator_collection_populated_when_gated(monkeypatch):
+    monkeypatch.setenv("LOGICFUZZ_POPULATE_COLLECTIONS", "1")
+    gen = SkeletonGenerator()
+    sk = DriverSkeleton(name="t", target_apis=[])
+    sk.add_variable(SkeletonVariable(name="ret_cmsBuildGamma", c_type="cmsToneCurve *",
+                                     is_pointer=True, source_api="cmsBuildGamma"))
+    var = gen._create_variable_for_param(
+        "Curves_cmsCreateLinearizationDeviceLink", _arg_info_collection(), sk)
+    assert var.is_array is True
+    assert var.prepopulate and all(e == "ret_cmsBuildGamma" for e in var.prepopulate)
+
+
+def test_creator_collection_legacy_when_off(monkeypatch):
+    monkeypatch.delenv("LOGICFUZZ_POPULATE_COLLECTIONS", raising=False)
+    gen = SkeletonGenerator()
+    sk = DriverSkeleton(name="t", target_apis=[])
+    sk.add_variable(SkeletonVariable(name="ret_cmsBuildGamma", c_type="cmsToneCurve *",
+                                     is_pointer=True, source_api="cmsBuildGamma"))
+    var = gen._create_variable_for_param(
+        "Curves_cmsCreateLinearizationDeviceLink", _arg_info_collection(), sk)
+    assert not getattr(var, "prepopulate", None)   # unchanged legacy render
