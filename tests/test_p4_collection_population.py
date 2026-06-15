@@ -62,6 +62,89 @@ def test_collection_emits_population_assignments():
     assert "curves_cmsCreateLinearizationDeviceLink[2] = ret_cmsBuildGamma;" in codes
 
 
+from liberator_adapter.driver.synthesis.skeleton_generator import (  # noqa: E402
+    _fuzzable_scalar_buffer_base,
+)
+
+
+def test_fuzzable_scalar_buffer_base():
+    # single-pointer to a fuzz-friendly scalar number → the base type
+    assert _fuzzable_scalar_buffer_base("cmsUInt16Number *") == "cmsUInt16Number"
+    assert _fuzzable_scalar_buffer_base("cmsFloat32Number *") == "cmsFloat32Number"
+    assert _fuzzable_scalar_buffer_base("const cmsUInt16Number *") == "cmsUInt16Number"
+    # NOT a scalar buffer:
+    assert _fuzzable_scalar_buffer_base("cmsToneCurve *") is None   # opaque handle
+    assert _fuzzable_scalar_buffer_base("cmsHPROFILE") is None      # handle, no ptr
+    assert _fuzzable_scalar_buffer_base("void *") is None           # opaque
+    assert _fuzzable_scalar_buffer_base("char *") is None           # string
+    assert _fuzzable_scalar_buffer_base("unsigned int") is None     # not a pointer
+    assert _fuzzable_scalar_buffer_base("cmsUInt16Number **") is None  # double ptr
+
+
+from liberator_adapter.driver.synthesis.skeleton_generator import (  # noqa: E402
+    _scalar_buffer_pairs,
+)
+
+
+def test_scalar_buffer_pairs_finds_buffer_and_preceding_length():
+    # cmsBuildTabulatedToneCurve16(ctx, unsigned int nEntries, cmsUInt16Number* values)
+    types = ["void *", "unsigned int", "cmsUInt16Number *"]
+    pairs = _scalar_buffer_pairs(types)
+    assert pairs == {2: ("cmsUInt16Number", 1)}, pairs   # buf@2, length@1
+
+
+def test_scalar_buffer_pairs_skips_when_no_preceding_length():
+    # a scalar buffer with NO preceding integer length → not safe to fuzz → skip
+    types = ["cmsUInt16Number *", "void *"]
+    assert _scalar_buffer_pairs(types) == {}
+
+
+def test_scalar_buffer_pairs_ignores_handles_and_void():
+    types = ["void *", "cmsToneCurve *", "unsigned int"]
+    assert _scalar_buffer_pairs(types) == {}
+
+
+def _buf_arg_info(extra):
+    base = {"name": "Values", "type": "cmsUInt16Number *", "idx": 2,
+            "api_name": "cmsBuildTabulatedToneCurve16", "is_input": True,
+            "is_output": False, "is_callback": False, "varlen_target": None,
+            "role": "HANDLE_IN", "pairs_with": None, "deep_fuzz_buffer": False}
+    base.update(extra)
+    return base
+
+
+def test_scalar_buffer_renders_fuzz_data_when_flagged():
+    gen = SkeletonGenerator()
+    sk = DriverSkeleton(name="t", target_apis=[])
+    var = gen._create_variable_for_param(
+        "Values_cmsBuildTabulatedToneCurve16",
+        _buf_arg_info({"fuzz_scalar_buffer": "cmsUInt16Number"}), sk)
+    assert var.bound_expr == "(cmsUInt16Number*)data", var.bound_expr
+
+
+def test_buffer_length_renders_size_over_sizeof_when_flagged():
+    gen = SkeletonGenerator()
+    sk = DriverSkeleton(name="t", target_apis=[])
+    var = gen._create_variable_for_param(
+        "nEntries_cmsBuildTabulatedToneCurve16",
+        {"name": "nEntries", "type": "unsigned int", "idx": 1,
+         "api_name": "cmsBuildTabulatedToneCurve16", "is_input": True,
+         "is_output": False, "is_callback": False, "varlen_target": None,
+         "role": "CONFIG", "pairs_with": None, "deep_fuzz_buffer": False,
+         "buffer_length_sizeof": "cmsUInt16Number"}, sk)
+    assert var.init_value == (
+        "(unsigned int)((size/sizeof(cmsUInt16Number)) < 256 ? "
+        "(size/sizeof(cmsUInt16Number)) : 256)"), var.init_value
+
+
+def test_scalar_buffer_unchanged_without_flag():
+    gen = SkeletonGenerator()
+    sk = DriverSkeleton(name="t", target_apis=[])
+    var = gen._create_variable_for_param(
+        "Values_cmsBuildTabulatedToneCurve16", _buf_arg_info({}), sk)
+    assert var.bound_expr != "(cmsUInt16Number*)data"   # legacy render
+
+
 def _arg_info_collection():
     return {"name": "Curves", "type": "cmsToneCurve * const *", "idx": 1,
             "api_name": "cmsCreateLinearizationDeviceLink", "is_input": True,

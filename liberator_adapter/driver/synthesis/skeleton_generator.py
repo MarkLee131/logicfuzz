@@ -173,6 +173,56 @@ def _is_handle_collection_type(c_type: str) -> bool:
     return is_handle_type(base)
 
 
+# Scalar number typedefs that a builder reads as a fuzz-fillable data buffer
+# (lcms convention: ``cmsUInt16Number`` = uint16, ``cmsFloat32Number`` = float).
+# ``char`` is excluded (string-wrapped elsewhere); handles/structs are not scalars.
+_SCALAR_BUF_RE = __import__("re").compile(
+    r"^(cms)?(u?int(8|16|32|64)?number|float(32|64)?number|"
+    r"u?int(8|16|32|64)?|float|double|short|long|unsigned\b.*)$",
+    __import__("re").IGNORECASE)
+
+
+def _fuzzable_scalar_buffer_base(c_type: str) -> Optional[str]:
+    """If ``c_type`` is a SINGLE pointer to a fuzz-friendly scalar number type
+    (``cmsUInt16Number *`` / ``const cmsFloat32Number *``), return the bare base
+    type; else None. This is the caller-provided DATA buffer a builder reads —
+    rendered as ``(T*)data`` (raw fuzz bytes) by Lever B, NOT NULL. Excludes
+    handles (``cmsToneCurve *``), ``void *``, ``char *`` (string), and double
+    pointers. Lever B (``LOGICFUZZ_FUZZ_BUFFERS``); caller gates."""
+    t = (c_type or "").replace("const", "").strip()
+    if t.count("*") != 1:
+        return None
+    base = t.replace("*", "").strip()
+    if not base or "char" in base.lower():
+        return None
+    return base if _SCALAR_BUF_RE.match(base) else None
+
+
+def _scalar_buffer_pairs(arg_types: List[str]) -> Dict[int, tuple]:
+    """Map a builder's scalar-buffer arg index → ``(base_type, length_arg_idx)``.
+
+    A scalar buffer (``cmsUInt16Number *``) is only safe to fuzz-fill when a
+    preceding integer arg gives its element count (the ``func(.., n, T* buf)``
+    convention) — bind that length to ``size/sizeof(T)`` so the callee never reads
+    past ``data``. The nearest PRECEDING ``int``/``unsigned`` scalar is taken as the
+    length; if none exists the buffer is skipped (no safe bound). Lever B."""
+    out: Dict[int, tuple] = {}
+    for i, t in enumerate(arg_types):
+        base = _fuzzable_scalar_buffer_base(t)
+        if base is None:
+            continue
+        len_idx = None
+        for j in range(i - 1, -1, -1):
+            tj = (arg_types[j] or "").lower()
+            if "*" not in tj and ("int" in tj or "unsigned" in tj
+                                  or "size" in tj or "number" in tj):
+                len_idx = j
+                break
+        if len_idx is not None:
+            out[i] = (base, len_idx)
+    return out
+
+
 def _complete_value_struct(c_type: str) -> Optional[str]:
     """When ``c_type`` is a SINGLE pointer to a complete, non-opaque public
     value struct (``cmsCIELab *``, ``cmsCIEXYZ *`` — a struct whose layout the
@@ -911,6 +961,24 @@ class SkeletonGenerator:
             except Exception:
                 _deep_in_idx = -1
 
+            # Lever B (LOGICFUZZ_FUZZ_BUFFERS): for a builder (CREATOR/MUTATOR),
+            # map each scalar data-buffer arg → (base, length_idx) so the renderer
+            # feeds it ``(T*)data`` and binds its length to ``size/sizeof(T)``
+            # (memory-safe, seed-independent). Inert when off / no safe pair.
+            _fuzz_buf: Dict[int, tuple] = {}
+            _fuzz_len: Dict[int, str] = {}
+            try:
+                from liberator_adapter.analysis.sequence_constructor import (
+                    _fuzz_buffers)
+                _role_val = getattr(getattr(_sem, 'role', None), 'value', None)
+                if _fuzz_buffers() and _role_val in ('CREATOR', 'MUTATOR'):
+                    _types = [a.type for a in api.arguments_info]
+                    for _bi, (_base, _li) in _scalar_buffer_pairs(_types).items():
+                        _fuzz_buf[_bi] = _base
+                        _fuzz_len[_li] = _base
+            except Exception:
+                _fuzz_buf, _fuzz_len = {}, {}
+
             # Analyze parameters
             for idx, arg in enumerate(api.arguments_info):
                 _as = _arg_sem.get(idx)
@@ -932,6 +1000,8 @@ class SkeletonGenerator:
                     'role': _role,                          # ArgRole value or None
                     'pairs_with': _pairs,                   # LENGTH↔buffer idx or None
                     'deep_fuzz_buffer': (idx == _deep_in_idx),  # Lever B input void*
+                    'fuzz_scalar_buffer': _fuzz_buf.get(idx),   # Lever B: (T*)data
+                    'buffer_length_sizeof': _fuzz_len.get(idx),  # Lever B: size/sizeof
                 }
                 api_req['args'].append(arg_info)
 
@@ -1108,6 +1178,25 @@ class SkeletonGenerator:
                 c_type=c_type,
                 init_value=hole.get_placeholder()
             )
+
+        # ---- Lever B: scalar data buffer + its length (LOGICFUZZ_FUZZ_BUFFERS) --
+        # A builder's scalar buffer arg (``cmsUInt16Number *``) otherwise renders a
+        # single ``{0}`` and its length renders 0 → a 0-entry degenerate object.
+        # Render the buffer as ``(T*)data`` (raw fuzz bytes) and bind the length to
+        # ``size/sizeof(T)`` capped at 256 → memory-safe (reads within ``data``) and
+        # SEED-INDEPENDENT (any bytes build a real object — PromeFuzz's pattern).
+        _fb = arg_info.get("fuzz_scalar_buffer")
+        if _fb:
+            return SkeletonVariable(
+                name=name, c_type=f"{_fb} *", is_pointer=True,
+                allocation=AllocationType.FUZZ_INPUT,
+                bound_expr=f"({_fb}*)data")
+        _bl = arg_info.get("buffer_length_sizeof")
+        if _bl:
+            return SkeletonVariable(
+                name=name, c_type=c_type,
+                init_value=(f"(unsigned int)((size/sizeof({_bl})) < 256 ? "
+                            f"(size/sizeof({_bl})) : 256)"))
 
         # ---- Lever A: handle-collection arg (LOGICFUZZ_POPULATE_COLLECTIONS) ----
         # A CREATOR's array-of-handles arg (``cmsToneCurve* const []``) otherwise

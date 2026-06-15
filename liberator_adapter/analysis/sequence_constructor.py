@@ -151,6 +151,16 @@ def _populate_collections() -> bool:
         "1", "true", "yes", "on")
 
 
+def _fuzz_buffers() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_FUZZ_BUFFERS`` (Lever B) — render a
+    builder's scalar data-buffer arg (``cmsUInt16Number *``) as ``(T*)data`` (raw
+    fuzz bytes) with its paired length bound to ``size/sizeof(T)``, instead of the
+    degenerate ``nEntries=0`` / single ``{0}``. Makes drivers SEED-INDEPENDENT
+    (any bytes build a real object — PromeFuzz's pattern) and deepens them."""
+    return _os.environ.get("LOGICFUZZ_FUZZ_BUFFERS", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _recover_init_handles() -> bool:
     """Gate (default-off): ``LOGICFUZZ_RECOVER_INIT_HANDLES`` — recover a void*-
     returning ``*Init``/``*Alloc``/``*New`` initializer as an opaque producer
