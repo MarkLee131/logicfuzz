@@ -131,6 +131,16 @@ def _exercise_deep_buffer() -> bool:
         "1", "true", "yes", "on")
 
 
+def _cross_source() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_CROSS_SOURCE_BIND`` — for an eligible
+    CREATOR taking >=2 handles of one type (``_wants_cross_source``), inject a
+    SYNTHETIC alternate producer of that type and bind the args cross-source
+    (parsed + synthetic), so e.g. an lcms transform is CROSS-profile (real
+    conversion, +134% edges) instead of same-profile (identity)."""
+    return _os.environ.get("LOGICFUZZ_CROSS_SOURCE_BIND", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 # Deny-list for the deep-buffer predicate: a bare ``void*`` named/owned by one of
 # these is a user-data / context / callback slot, NOT a data buffer — fuzzing it
 # corrupts state or injects an invalid function pointer (the libpng/nghttp2
@@ -225,6 +235,46 @@ def _wants_cross_source(sem, idx) -> bool:
         if len(prods) >= 2 and any(_is_synthetic_producer(p) for p in prods):
             return True
     return False
+
+
+def _cross_source_producer(sem, idx):
+    """Name of a synthetic, NO-requires producer of ``sem``'s repeated handle
+    type, distinct from ``sem`` — the cross-source alternate (e.g.
+    cmsCreate_sRGBProfile for a transform's 2nd profile). None if none exists.
+    No-requires keeps the injected call standalone (valid by construction)."""
+    counts: Dict[str, int] = {}
+    for a in (getattr(sem, "args", ()) or ()):
+        t = _norm_handle(a.type_str)
+        if t:
+            counts[t] = counts.get(t, 0) + 1
+    for t, c in counts.items():
+        if c < 2:
+            continue
+        for p in _producers_for_type(idx, t):
+            if (p.name != sem.name and _is_synthetic_producer(p)
+                    and not (getattr(p, "requires", None) or ())):
+                return p.name
+    return None
+
+
+def _inject_cross_source(seq: Sequence[str], model, idx) -> List[str]:
+    """For each eligible cross-source CREATOR in ``seq`` (``_wants_cross_source``),
+    inject its SYNTHETIC alternate producer (``_cross_source_producer``) once,
+    immediately BEFORE the creator, so the creator's two same-type handles can
+    later bind to DIFFERENT producers (the cross-profile transform idiom). The
+    injected producer is no-requires (standalone) so it stays runnable. Already-
+    present / no-alternate ⇒ unchanged. Caller gates on ``_cross_source()``; this
+    helper is pure (no env read) so it is byte-identical when not called."""
+    out: List[str] = []
+    apis = getattr(model, "apis", {}) or {}
+    for name in seq:
+        sem = apis.get(name)
+        if sem is not None and _wants_cross_source(sem, idx):
+            xp = _cross_source_producer(sem, idx)
+            if xp and xp not in seq and xp not in out:
+                out.append(xp)
+        out.append(name)
+    return out
 
 
 def _append_exercisers(core: List[str], opened: Set[str], idx,
@@ -1034,6 +1084,13 @@ def construct_sequences(
         cleaned = [a for a in seq if a and a in model.apis]
         if not cleaned:
             return
+        if _cross_source():
+            # LOGICFUZZ_CROSS_SOURCE_BIND: inject a synthetic alternate producer
+            # before any eligible cross-source CREATOR so its two same-type
+            # handles can bind to DIFFERENT producers (cross-profile transform).
+            # Chokepoint that sees full sequences incl. prefix-resident creators.
+            cleaned = [a for a in _inject_cross_source(cleaned, model, idx)
+                       if a in model.apis]
         if _drop_unrunnable and not _runnable(cleaned):
             _n_unrunnable[0] += 1
             return

@@ -251,6 +251,38 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 predicate.py`. Narrow lcms-shaped idiom, SAFE +
 #                                 inert elsewhere; NOT a universal depth fix (zlib
 #                                 struct-field / cjson traversal idioms deferred).
+#   LOGICFUZZ_CROSS_SOURCE_BIND=1 cross-PROFILE transform depth lever (the real
+#                                 lcms depth win — handcrafted A/B: same-profile
+#                                 cmsDoTransform=150 br vs CROSS-profile=326, +134%).
+#                                 A CREATOR built from >=2 handles of one type
+#                                 (cmsCreateTransform's 2x cmsHPROFILE) is otherwise
+#                                 bound SAME-source (construction opens one producer;
+#                                 `_signature_handle_bindings` keeps only the LAST
+#                                 producer per type → both args collapse to it →
+#                                 ~identity transform that skips the gamma/matrix/LUT
+#                                 conversion code). TWO halves, both under this gate:
+#                                 (a) CONSTRUCTION — `sequence_constructor.
+#                                 _inject_cross_source` injects a SYNTHETIC alternate
+#                                 producer (no-INPUT_BUFFER creator, e.g.
+#                                 cmsCreate_sRGBProfile) before the creator; (b)
+#                                 BINDING — `CBFactory._distribute_cross_source` (wired
+#                                 in `_signature_handle_bindings`, the model_unchecked
+#                                 path that actually wires opaque void* handles; the
+#                                 RunningContext path REJECTS cmsCreateTransform)
+#                                 re-points the creator's 2nd same-type arg to a
+#                                 DISTINCT earlier producer (nearest-first = the
+#                                 injected one). CREATOR-scoped (`is_producer`) +
+#                                 name-deny (copy|clone|dup|detach) so it can't break
+#                                 copy/state (`deflateCopy` returns int → not a
+#                                 producer) or parent-child/detach APIs — locked by
+#                                 `tests/test_p3_cross_source_{predicate,construct,
+#                                 binding}.py` over cached lcms/zlib/cjson/c-ares/
+#                                 sqlite3 models. End-to-end verified on real lcms:
+#                                 gate-off renders cmsCreateTransform(sRGB,…,sRGB,…),
+#                                 gate-on renders cmsCreateTransform(sRGB,…,opened,…).
+#                                 Pair with EXERCISE_OBJECT+EXERCISE_DEEP_BUFFER to
+#                                 also RUN the cross transform (cmsDoTransform). Default
+#                                 -OFF, gate-off byte-identical (golden net green).
 #   LIBERATOR_SVF_TIMEOUT_SECS=N  SVF pointer-analysis WALL-TIME cap (default 1800s;
 #                                 raised from 600). Measured 2026-06: libtiff/libvpx
 #                                 are TIME-bound (timed out at 7200s, only 4.5/7.7GB

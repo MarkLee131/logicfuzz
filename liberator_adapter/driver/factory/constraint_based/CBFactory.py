@@ -64,6 +64,93 @@ Z3_GUIDED_AVAILABLE = True  # Z3 is now required
 logger = logging.getLogger(__name__)
 
 
+def _cross_source_bind_enabled() -> bool:
+    """Gate ``LOGICFUZZ_CROSS_SOURCE_BIND`` (default-off). When on, the binding
+    post-pass below re-points a CREATOR's repeated same-type handle arg to a
+    DIFFERENT earlier producer (cross-profile transform). See the construction
+    side in ``sequence_constructor._inject_cross_source``."""
+    import os as _os
+    return _os.environ.get("LOGICFUZZ_CROSS_SOURCE_BIND", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _distribute_cross_source(
+    bindings: Dict[Tuple[str, int], str],
+    ordered: List[Dict[str, Any]],
+) -> Dict[Tuple[str, int], str]:
+    """Re-point a CREATOR's repeated same-type handle args across DISTINCT
+    earlier producers so a transform built from two same-type handles uses two
+    DIFFERENT instances (the cross-profile idiom).
+
+    ``ordered`` is the sequence (in call order), one record per API::
+
+        {"name": str, "is_producer": bool, "ret_token": str|None,
+         "arg_tokens": {arg_pos: type_token}}   # only producer-bound args
+
+    Pure: gate-off the caller never invokes it, so behaviour is byte-identical.
+
+    Safety (mirrors ``sequence_constructor._wants_cross_source``):
+      * CREATOR-scoped via ``is_producer`` — a copy/state API like
+        ``deflateCopy`` returns ``int`` (not a handle) ⇒ ``is_producer`` False ⇒
+        skipped, so its (dest, src) relationship is never broken.
+      * name-deny (copy|clone|dup|detach) — belt-and-suspenders for handle-
+        returning parent-child/copy APIs (e.g. ``cJSON_DetachItemViaPointer``).
+      * only re-points when ALL of an API's same-type bound args currently share
+        ONE producer AND a DISTINCT earlier producer of that type exists; picks
+        the NEAREST earlier alternate first (= the construction-injected
+        synthetic producer placed right before the creator).
+    """
+    try:
+        from liberator_adapter.analysis.sequence_constructor import (
+            _CROSS_SRC_DENY as _deny,
+        )
+    except Exception:
+        _deny = ("copy", "clone", "dup", "detach")
+
+    out = dict(bindings)
+    # producers seen so far, in order: list of (name, ret_token).
+    seen_producers: List[Tuple[str, str]] = []
+    for rec in ordered:
+        name = rec.get("name")
+        if not name:
+            continue
+        is_producer = bool(rec.get("is_producer"))
+        ret_token = rec.get("ret_token")
+        nm_low = name.lower()
+        if is_producer and not any(k in nm_low for k in _deny):
+            # group this API's producer-bound args by type token.
+            by_token: Dict[str, List[int]] = {}
+            for j, tok in (rec.get("arg_tokens") or {}).items():
+                if (name, j) in out and tok:
+                    by_token.setdefault(tok, []).append(j)
+            for tok, positions in by_token.items():
+                if len(positions) < 2:
+                    continue
+                positions = sorted(positions)
+                bound = {out[(name, p)] for p in positions}
+                if len(bound) > 1:
+                    continue  # already cross-source — leave it
+                p0 = out[(name, positions[0])]
+                # alternates: distinct earlier producers of this token, nearest
+                # first, excluding the currently-bound one and self.
+                alts: List[str] = []
+                for pn, pt in reversed(seen_producers):
+                    if pt != tok:
+                        continue
+                    cand = f"ret_{pn}"
+                    if cand == p0 or pn == name or cand in alts:
+                        continue
+                    alts.append(cand)
+                if not alts:
+                    continue
+                ring = [p0] + alts
+                for i, p in enumerate(positions):
+                    out[(name, p)] = ring[i % len(ring)]
+        if is_producer and ret_token:
+            seen_producers.append((name, ret_token))
+    return out
+
+
 class CBFactory(Factory):
     """
     Constraint-Based Factory: Constraint-based driver generation
@@ -1391,17 +1478,35 @@ class CBFactory(Factory):
         from liberator_adapter.analysis.usedef import normalize_handle_type
         bindings: Dict[Tuple[str, int], str] = {}
         produced: Dict[str, str] = {}   # normalized handle type -> ret var
+        cross = _cross_source_bind_enabled()
+        ordered: List[Dict[str, Any]] = []   # for the cross-source post-pass
         for api in api_sequence:
+            arg_tokens: Dict[int, str] = {}
             for j, arg in enumerate(getattr(api, 'arguments_info', []) or []):
                 t = getattr(arg, 'type', '') or ''
                 if t.count('*') == 1:   # single-pointer ⇒ candidate input handle
                     key = normalize_handle_type(t)
                     if key and key in produced:
                         bindings[(api.function_name, j)] = produced[key]
+                    if cross and key:
+                        arg_tokens[j] = key
             ri = getattr(api, 'return_info', None)
             rt = getattr(ri, 'type', '') if ri else ''
-            if rt and rt not in ('void', '') and rt.count('*') == 1:
-                produced[normalize_handle_type(rt)] = f"ret_{api.function_name}"
+            is_prod = bool(rt and rt not in ('void', '') and rt.count('*') == 1)
+            ret_token = normalize_handle_type(rt) if is_prod else None
+            if is_prod:
+                produced[ret_token] = f"ret_{api.function_name}"
+            if cross:
+                ordered.append({
+                    "name": api.function_name, "is_producer": is_prod,
+                    "ret_token": ret_token, "arg_tokens": arg_tokens,
+                })
+        if cross:
+            # Re-point a CREATOR's repeated same-type handle arg to a DISTINCT
+            # earlier producer (cross-profile transform). Legacy ``produced``
+            # keeps only the LAST producer per type → both same-type args
+            # collapse to one; this restores the cross-source pairing.
+            bindings = _distribute_cross_source(bindings, ordered)
         return bindings
 
     def _create_skeleton_from_sequence(self, api_sequence: List[Api], dep_model=None) -> Optional['DriverSkeleton']:
@@ -1567,6 +1672,41 @@ class CBFactory(Factory):
                 if producer is None or producer == api.function_name:
                     continue
                 bindings[(api.function_name, j)] = f"ret_{producer}"
+
+        if _cross_source_bind_enabled():
+            # LOGICFUZZ_CROSS_SOURCE_BIND post-pass: a CREATOR's repeated same-
+            # type handle args were bound to ONE producer above (upstream defers
+            # context update until all args resolve). Re-point the 2nd to a
+            # DISTINCT earlier producer of that type — the construction-injected
+            # synthetic profile — so the transform is CROSS-profile, not same-
+            # profile (~identity). Built from the resolved Variable type tokens
+            # so it respects upstream's opaque-handle (i8*) typing.
+            ordered: List[Dict[str, Any]] = []
+            for api, call in drv_calls:
+                ret = call.ret_var
+                rbase = ret.get_variable() if isinstance(ret, Address) else ret
+                is_prod = isinstance(rbase, Variable)
+                ret_token = None
+                if is_prod:
+                    try:
+                        ret_token = rbase.get_type().get_token()
+                    except Exception:
+                        ret_token = None
+                arg_tokens: Dict[int, str] = {}
+                for j, av in enumerate(call.arg_vars):
+                    if av is None:
+                        continue
+                    ab = av.get_variable() if isinstance(av, Address) else av
+                    if isinstance(ab, Variable):
+                        try:
+                            arg_tokens[j] = ab.get_type().get_token()
+                        except Exception:
+                            pass
+                ordered.append({
+                    "name": api.function_name, "is_producer": is_prod,
+                    "ret_token": ret_token, "arg_tokens": arg_tokens,
+                })
+            bindings = _distribute_cross_source(bindings, ordered)
 
         return bindings
 
