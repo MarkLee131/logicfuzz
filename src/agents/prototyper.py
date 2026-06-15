@@ -753,8 +753,11 @@ A single <hole_fillings> JSON object mapping each placeholder to its fill text:
 <hole_fillings>
 {{"__HOLE_callback_1__": "int my_callback(void* data) {{ return 0; }}", "__BUFSIZE_bufsize_1__": "size"}}
 </hole_fillings>
-Only if a filling genuinely cannot be expressed as JSON, output the complete
-filled skeleton in <fuzz_target> tags — changing ONLY the holes, nothing else.
+Do NOT output a <fuzz_target> block: a rewritten driver is DISCARDED and the
+Z3-validated skeleton is used as-is, so a rewrite wastes your effort. Every value
+you want in the driver MUST go through a hole filling. If a hole has no good
+value, fill it with a minimal safe default (NULL / 0). Output ONLY the
+<hole_fillings> JSON.
 </skeleton_template_mode>
 """
             else:
@@ -890,11 +893,32 @@ Output your fuzz driver code inside <fuzz_target> tags.
                         trial=self.trial)
                     fuzz_target_code = ''
         else:
-            # Complete code mode: extract fuzz_target directly
-            fuzz_target_code = parsed_result.get('fuzz_target_code', '')
-            if not fuzz_target_code:
-                logger.error('No <fuzz_target> tag found in prototyper response',
-                             trial=self.trial)
+            # Complete code mode: the LLM returned a full <fuzz_target> rewrite.
+            # B-MODE (LOGICFUZZ_FORCE_HOLE_FILLING, default-on): when a skeleton
+            # was active, the LLM's job was to fill holes only — a full rewrite
+            # DISCARDS the symbolic structure (Z3-validated lifecycle wiring +
+            # the productivity levers: populate-collections / fuzz-buffers /
+            # struct-fill). Discard the rewrite and use the deterministic skeleton
+            # FLOOR (skeleton + default fills) so the symbolic optimizations are
+            # preserved — the "traditional method does what it does well; the LLM
+            # only fills holes" division. Opt out (=0) to let the LLM rewrite
+            # freely (the legacy / LLM-led design).
+            import os as _os_bmode
+            _skel_code, _, _ = self._get_active_skeleton(state)
+            _force_hf = _os_bmode.environ.get(
+                'LOGICFUZZ_FORCE_HOLE_FILLING', '1') != '0'
+            if _force_hf and _skel_code:
+                logger.info(
+                    'B-mode: LLM rewrote the driver in template mode → using the '
+                    'deterministic skeleton floor (symbolic structure + levers '
+                    'preserved; LLM rewrite discarded)', trial=self.trial)
+                fuzz_target_code = self._merge_holes_into_skeleton(_skel_code, {})
+            else:
+                fuzz_target_code = parsed_result.get('fuzz_target_code', '')
+                if not fuzz_target_code:
+                    logger.error(
+                        'No <fuzz_target> tag found in prototyper response',
+                        trial=self.trial)
 
         # Fix common header issues (FuzzedDataProvider, etc.)
         if fuzz_target_code:
