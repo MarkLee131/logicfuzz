@@ -124,6 +124,22 @@ def test_scalar_buffer_pairs_ignores_handles_and_void():
     assert _scalar_buffer_pairs(types) == {}
 
 
+def test_value_struct_fuzz_fill_emits_guarded_memcpy():
+    # a by-value struct CONFIG arg (cmsCIExyYTRIPLE) of a CREATOR: gate-on fills
+    # it from fuzz data via a size-guarded memcpy (seed-independent + non-degenerate)
+    gen = SkeletonGenerator()
+    sk = DriverSkeleton(name="t", target_apis=[])
+    sk.add_variable(SkeletonVariable(
+        name="primaries_cmsCreateRGBProfile", c_type="cmsCIExyYTRIPLE",
+        is_pointer=False, init_value="{0}", bound_expr="&primaries_cmsCreateRGBProfile",
+        fuzz_fill_struct="cmsCIExyYTRIPLE"))
+    gen._emit_struct_fuzz_fill(sk, "primaries_cmsCreateRGBProfile")
+    codes = [s.code for s in sk.statements]
+    assert any("memcpy(&primaries_cmsCreateRGBProfile, data," in c
+               and "sizeof(cmsCIExyYTRIPLE)" in c and "size >=" in c
+               for c in codes), codes
+
+
 def _buf_arg_info(extra):
     base = {"name": "Values", "type": "cmsUInt16Number *", "idx": 2,
             "api_name": "cmsBuildTabulatedToneCurve16", "is_input": True,

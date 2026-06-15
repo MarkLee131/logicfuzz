@@ -449,6 +449,12 @@ class SkeletonVariable:
     # ``bound_expr`` exists). Replaces the degenerate ``{0}`` for handle-collection
     # constructor args so the deep constructor runs.
     prepopulate: Optional[List[str]] = None
+    # Lever B (LOGICFUZZ_FUZZ_BUFFERS): when set on a by-value struct var, the
+    # renderer emits a size-guarded ``memcpy(&name, data, sizeof(T))`` before the
+    # consuming call, so the struct carries fuzz bytes instead of the degenerate
+    # ``{0}`` — seed-independent + non-degenerate (PromeFuzz's pattern for value
+    # structs like cmsCIExyYTRIPLE primaries).
+    fuzz_fill_struct: Optional[str] = None
 
     def get_declaration(self) -> str:
         """Generate declaration code"""
@@ -1239,10 +1245,24 @@ class SkeletonGenerator:
                 # DataLayout proved it's a struct → ``{0}`` is the only valid
                 # zero-init (a typedef'd struct name carries no ``struct``
                 # keyword, so _scalar_init_value would wrongly pick ``= 0``).
+                # Lever B: when gated AND the arg is an INPUT (role CONFIG/UNKNOWN/
+                # HANDLE_IN, NOT OUTPUT — the API writes OUTPUT), fill it from fuzz
+                # bytes via a guarded memcpy so it's non-degenerate + seed-
+                # independent (the cmsCIExyYTRIPLE primaries case) instead of {0}.
+                _fill = None
+                _r = arg_info.get('role')
+                if _r != 'OUTPUT':
+                    try:
+                        from liberator_adapter.analysis.sequence_constructor import (
+                            _fuzz_buffers)
+                        if _fuzz_buffers():
+                            _fill = _vstruct
+                    except Exception:
+                        _fill = None
                 return SkeletonVariable(
                     name=name, c_type=_vstruct, is_pointer=False,
                     allocation=AllocationType.STACK, init_value="{0}",
-                    bound_expr=f"&{name}",
+                    bound_expr=f"&{name}", fuzz_fill_struct=_fill,
                 )
 
         # ---- Role-first routing (the reconcile-model floor) ----------------
@@ -1598,6 +1618,23 @@ class SkeletonGenerator:
                 code=f"{var_name}[{i}] = {expr};",
                 variables=[var_name], indent=1))
 
+    def _emit_struct_fuzz_fill(self, skeleton: 'DriverSkeleton',
+                               var_name: str) -> None:
+        """Lever B: emit a size-guarded ``memcpy(&name, data, sizeof(T))`` for a
+        by-value struct var flagged ``fuzz_fill_struct``, immediately before the
+        consuming call — fills the struct from fuzz bytes (seed-independent +
+        non-degenerate) instead of the degenerate ``{0}``. Memory-safe: the
+        ``if (size >= sizeof(T))`` guard never reads past ``data``."""
+        var = skeleton.variables.get(var_name)
+        t = var and getattr(var, "fuzz_fill_struct", None)
+        if not t:
+            return
+        skeleton.add_statement(SkeletonStatement(
+            kind=StatementKind.ASSIGNMENT,
+            code=(f"if (size >= sizeof({t})) "
+                  f"memcpy(&{var_name}, data, sizeof({t}));"),
+            variables=[var_name], indent=1))
+
     def _generate_single_call(
         self,
         skeleton: DriverSkeleton,
@@ -1622,6 +1659,8 @@ class SkeletonGenerator:
             v = skeleton.variables.get(vn)
             if v is not None and getattr(v, "prepopulate", None):
                 self._emit_collection_population(skeleton, vn)
+            if v is not None and getattr(v, "fuzz_fill_struct", None):
+                self._emit_struct_fuzz_fill(skeleton, vn)
 
         # Build argument list
         args = []
