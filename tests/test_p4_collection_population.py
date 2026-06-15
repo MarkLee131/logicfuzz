@@ -35,6 +35,9 @@ def test_handle_collection_detect():
     assert _is_handle_collection_type("cmsHPROFILE *") is False     # single ptr
     assert _is_handle_collection_type("unsigned int") is False
     assert _is_handle_collection_type("char **") is False           # non-handle base
+    # function pointers must NOT be treated as handle collections
+    assert _is_handle_collection_type("int (*)(float*, float*, void*)") is False
+    assert _is_handle_collection_type("cmsSAMPLER16") is False
 
 
 from liberator_adapter.driver.synthesis.skeleton_generator import (  # noqa: E402

@@ -163,6 +163,10 @@ def _is_handle_collection_type(c_type: str) -> bool:
     (``char **``). Lever A (``LOGICFUZZ_POPULATE_COLLECTIONS``); caller gates."""
     from liberator_adapter.analysis.usedef import is_handle_type
     t = (c_type or "").replace("const", "").strip()
+    # Function pointers (callbacks) are NOT handle collections — a ``(`` in the
+    # type signals a function type; let the callback path own them.
+    if "(" in t:
+        return False
     if t.count("*") < 2:
         return False
     base = t.replace("*", "").strip()
