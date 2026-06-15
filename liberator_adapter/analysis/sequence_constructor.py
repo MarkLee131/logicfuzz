@@ -121,29 +121,89 @@ def _exercise_object() -> bool:
         "1", "true", "yes", "on")
 
 
-def _append_exercisers(core: List[str], opened: Set[str], idx) -> List[str]:
+def _exercise_deep_buffer() -> bool:
+    """Sub-gate (default-off) of EXERCISE_OBJECT: ``LOGICFUZZ_EXERCISE_DEEP_BUFFER``
+    makes the forward-exercise step PREFER a deep data-processing consumer whose
+    data buffer is a bare ``void*`` (the ``cmsDoTransform`` idiom, see
+    ``_has_deep_input_buffer``) over a shallow getter, and renders that buffer as
+    fuzz bytes. Guarded + cross-project test-locked so it can't mis-fire."""
+    return _os.environ.get("LOGICFUZZ_EXERCISE_DEEP_BUFFER", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+# Deny-list for the deep-buffer predicate: a bare ``void*`` named/owned by one of
+# these is a user-data / context / callback slot, NOT a data buffer — fuzzing it
+# corrupts state or injects an invalid function pointer (the libpng/nghttp2
+# false-positives the over-fit review found). Matched against the API NAME.
+_DEEP_BUF_DENY = ("user", "ctx", "context", "plugin", "closure", "opaque",
+                  "userdata", "callback", "register", "_fn")
+
+
+def _is_bare_void_ptr(type_str: str) -> bool:
+    """A bare ``void*`` / ``const void*`` data pointer — NOT a function pointer
+    (``void (*)(...)`` contains ``(*``, which would be a callback, not a buffer)."""
+    if not type_str or "(*" in type_str:
+        return False
+    t = type_str.replace(" ", "").lower()
+    return "void*" in t
+
+
+def _has_deep_input_buffer(sem) -> bool:
+    """True iff ``sem`` is the ``cmsDoTransform`` idiom: a CONSUMER that PROCESSES
+    a data buffer passed as a bare ``void*`` CONFIG arg, with a companion ``void*``
+    OUTPUT buffer AND a size/count scalar (read-buffer → write-buffer → count).
+
+    Heavily guarded so it cannot mis-fire across projects (the over-fit review:
+    naive matching hit 11 libpng fn-ptr callbacks + 5 nghttp2 user-data args):
+    rejects function pointers (``_is_bare_void_ptr``), user/context/plugin/callback
+    API names (``_DEEP_BUF_DENY``), and anything lacking the OUTPUT+scalar shape.
+    Lever B (``LOGICFUZZ_EXERCISE_DEEP_BUFFER``) only. Pure; no env read."""
+    if getattr(sem, "role", None) is not APIRole.CONSUMER:
+        return False
+    nm = (getattr(sem, "name", "") or "").lower()
+    if any(k in nm for k in _DEEP_BUF_DENY):
+        return False
+    args = getattr(sem, "args", ()) or ()
+    has_input = any(a.role is ArgRole.CONFIG and _is_bare_void_ptr(a.type_str)
+                    for a in args)
+    has_output = any(a.role is ArgRole.OUTPUT for a in args)
+    has_scalar = any(a.role in (ArgRole.CONFIG, ArgRole.LENGTH)
+                     and "*" not in (a.type_str or "")
+                     for a in args)
+    return has_input and has_output and has_scalar
+
+
+def _append_exercisers(core: List[str], opened: Set[str], idx,
+                       deep_buffer: bool = False) -> List[str]:
     """For each handle the chain PRODUCED, append ONE consumer that exercises it.
 
-    Prefers a consumer that ingests fuzz bytes (an ``INPUT_BUFFER`` arg — it runs
-    the object on fuzz data) and whose every *other* required handle is already
-    produced in-chain (so no arg becomes a NULL hole). Appends names only; pure
-    and order-stable. A consumer already in the chain is never duplicated."""
+    Ranks eligible consumers (``requires`` ⊆ ``opened`` so no NULL hole, not
+    already in-chain): fuzz (an ``INPUT_BUFFER`` arg) > deep void*-buffer
+    processor (only when ``deep_buffer``, the ``cmsDoTransform`` idiom) > plain.
+    Highest rank per handle wins; ties keep the first (order-stable). When
+    ``deep_buffer`` is False the deep tier is inert, so selection is byte-identical
+    to the legacy first-eligible/upgrade-to-fuzz behaviour. Appends names only."""
     in_core = set(core)
     extra: List[str] = []
     cbh = getattr(idx, "consumers_by_handle", None) or {}
     for h in sorted(opened):
-        best = None  # (sem, takes_fuzz)
+        best = None  # (sem, rank): 2=fuzz, 1=deep-buffer, 0=plain
         for c in cbh.get(h, ()):  # consumers whose ``requires`` includes h
             if c.name in in_core or c.name in extra:
                 continue
             req = set(getattr(c, "requires", ()) or ())
             if not req <= opened:
                 continue  # an unsatisfied handle would NULL-hole the call
-            takes_fuzz = any(a.role is ArgRole.INPUT_BUFFER
-                             for a in getattr(c, "args", ()) or ())
-            if best is None or (takes_fuzz and not best[1]):
-                best = (c, takes_fuzz)
-                if takes_fuzz:
+            if any(a.role is ArgRole.INPUT_BUFFER
+                   for a in getattr(c, "args", ()) or ()):
+                rank = 2
+            elif deep_buffer and _has_deep_input_buffer(c):
+                rank = 1
+            else:
+                rank = 0
+            if best is None or rank > best[1]:
+                best = (c, rank)
+                if rank == 2:
                     break  # a fuzz-data consumer is the deepest exercise
         if best is not None:
             extra.append(best[0].name)
@@ -1017,7 +1077,8 @@ def construct_sequences(
                 # Forward 'exercise the object' (per-driver DEPTH): append a
                 # fuzz-data consumer for each constructed handle so the object is
                 # RUN, not just built+freed. Gate-OFF leaves ``core`` unchanged.
-                core = _append_exercisers(core, opened, idx)
+                core = _append_exercisers(core, opened, idx,
+                                          deep_buffer=_exercise_deep_buffer())
             if _scoped_guards():
                 # D — reorder ``core`` so its dependency components are
                 # CONTIGUOUS (parser+consumers block first, independent producer
@@ -1042,7 +1103,8 @@ def construct_sequences(
             if _exercise_object():
                 # The shallowest chains (pure create→destroy) benefit most from
                 # the forward exercise step — these are 'build but never use'.
-                _core = _append_exercisers(_core, opened, idx)
+                _core = _append_exercisers(_core, opened, idx,
+                                           deep_buffer=_exercise_deep_buffer())
             _add(_core + _closing_destroyers(opened, idx,
                                              destroyer_rank=_destroyer_rank))
 

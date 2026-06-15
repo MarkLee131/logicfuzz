@@ -83,3 +83,60 @@ def test_gate_default_off():
         assert sc._exercise_object() is True
     finally:
         os.environ.pop("LOGICFUZZ_EXERCISE_OBJECT", None)
+
+
+# ---- Lever B: deep-buffer consumer preference (LOGICFUZZ_EXERCISE_DEEP_BUFFER) --
+from liberator_adapter.analysis.api_semantic_model import APIRole
+
+
+class _Arg2:
+    def __init__(self, role, type_str=""):
+        self.role = role
+        self.type_str = type_str
+
+
+class _Sem2:
+    def __init__(self, name, role, requires=(), args=()):
+        self.name = name
+        self.role = role
+        self.requires = requires
+        self.args = args
+
+
+def _do_transform():
+    # cmsDoTransform idiom: read void* + write void* + count scalar.
+    return _Sem2("cmsDoTransform", APIRole.CONSUMER, requires=("cmshtransform",),
+                 args=(_Arg2(ArgRole.HANDLE_IN, "cmsHTRANSFORM"),
+                       _Arg2(ArgRole.CONFIG, "void *"),
+                       _Arg2(ArgRole.OUTPUT, "void *"),
+                       _Arg2(ArgRole.CONFIG, "unsigned int")))
+
+
+def test_deep_buffer_consumer_preferred_over_getter():
+    getter = _Sem2("cmsGetTransformInputFormat", APIRole.CONSUMER,
+                   requires=("cmshtransform",), args=())
+    idx = _Idx({"cmshtransform": [getter, _do_transform()]})  # getter listed first
+    out = sc._append_exercisers(["cmsCreateTransform"], {"cmshtransform"}, idx,
+                                deep_buffer=True)
+    assert out[-1] == "cmsDoTransform", out
+
+
+def test_deep_buffer_off_keeps_legacy_first_choice():
+    getter = _Sem2("cmsGetTransformInputFormat", APIRole.CONSUMER,
+                   requires=("cmshtransform",), args=())
+    idx = _Idx({"cmshtransform": [getter, _do_transform()]})
+    # gate OFF: legacy behaviour — first eligible consumer (the getter), the deep
+    # data-processor is NOT preferred. Proves the lever is inert when off.
+    out = sc._append_exercisers(["cmsCreateTransform"], {"cmshtransform"}, idx,
+                                deep_buffer=False)
+    assert out[-1] == "cmsGetTransformInputFormat", out
+
+
+def test_exercise_deep_buffer_gate_default_off():
+    os.environ.pop("LOGICFUZZ_EXERCISE_DEEP_BUFFER", None)
+    assert sc._exercise_deep_buffer() is False
+    os.environ["LOGICFUZZ_EXERCISE_DEEP_BUFFER"] = "1"
+    try:
+        assert sc._exercise_deep_buffer() is True
+    finally:
+        os.environ.pop("LOGICFUZZ_EXERCISE_DEEP_BUFFER", None)

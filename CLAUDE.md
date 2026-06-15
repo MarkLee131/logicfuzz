@@ -225,6 +225,32 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #   disjointness (=union/total). The A/B oracle — lower jaccard / higher disjointness ⇒
 #   better-decoupled portfolio. D-1 (dynamic edge-set marginal) is DEFERRED (needs a
 #   preflight→selection feedback edge; see plan Phase 4).
+#   --- Driver DEPTH levers (2026-06; gated default-OFF, A/B pending) ---
+#   Addresses the ~79-edge plateau: drivers BUILD an object but never exercise it.
+#   Decoupling raised BREADTH (union APIs, generalizes) but merged coverage is
+#   depth-bound. Spec: docs/superpowers/specs/... ; plan: ~/.claude/plans/enumerated-purring-liskov.md
+#   LOGICFUZZ_EXERCISE_OBJECT=1   forward 'exercise the object' step: after the
+#                                 backward prefix builds a handle, append ONE
+#                                 consumer that RUNS it (prefers an INPUT_BUFFER
+#                                 fuzz-data consumer), so the object is exercised
+#                                 not just built+freed (`sequence_constructor.
+#                                 _append_exercisers`). Generalizes (cjson→
+#                                 cJSON_Print, c-ares→parse). Was never on.
+#   LOGICFUZZ_EXERCISE_DEEP_BUFFER=1  sub-gate of EXERCISE_OBJECT: PREFER a deep
+#                                 data-processing consumer whose input buffer is a
+#                                 bare `void*` CONFIG arg (the `cmsDoTransform`
+#                                 idiom) over a shallow getter, and RENDER that
+#                                 buffer as `(void*)data` fuzz bytes (else NULL).
+#                                 HEAVILY GUARDED (`_has_deep_input_buffer`): rejects
+#                                 function-pointer callbacks + user/ctx/plugin names +
+#                                 requires companion OUTPUT void* + size scalar. An
+#                                 over-fit review confirmed it matches ONLY lcms
+#                                 cmsDoTransform* (3) and 0-matches libpng (11 fn-ptr
+#                                 callbacks) / nghttp2 (user_data) / cjson / zlib /
+#                                 sqlite3 — locked by `tests/test_p3_deep_buffer_
+#                                 predicate.py`. Narrow lcms-shaped idiom, SAFE +
+#                                 inert elsewhere; NOT a universal depth fix (zlib
+#                                 struct-field / cjson traversal idioms deferred).
 #   LIBERATOR_SVF_TIMEOUT_SECS=N  SVF pointer-analysis WALL-TIME cap (default 1800s;
 #                                 raised from 600). Measured 2026-06: libtiff/libvpx
 #                                 are TIME-bound (timed out at 7200s, only 4.5/7.7GB

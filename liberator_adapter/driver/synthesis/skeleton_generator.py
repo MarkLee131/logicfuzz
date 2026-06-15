@@ -867,6 +867,27 @@ class SkeletonGenerator:
                         for i, a in enumerate(getattr(_sem, 'args', ()) or ())} \
                 if _sem is not None else {}
 
+            # Lever B (LOGICFUZZ_EXERCISE_DEEP_BUFFER): mark the deep consumer's
+            # INPUT data buffer (the first bare ``void*`` CONFIG arg of a
+            # _has_deep_input_buffer-matching consumer) so the renderer feeds it
+            # fuzz bytes instead of NULL. Gated + guarded; inert when the sub-gate
+            # is off (idx == -1 → no arg flagged → byte-identical render).
+            _deep_in_idx = -1
+            try:
+                from liberator_adapter.analysis.sequence_constructor import (
+                    _exercise_deep_buffer, _has_deep_input_buffer,
+                    _is_bare_void_ptr)
+                if (_sem is not None and _exercise_deep_buffer()
+                        and _has_deep_input_buffer(_sem)):
+                    for _a in getattr(_sem, 'args', ()) or ():
+                        if (getattr(getattr(_a, 'role', None), 'value', None)
+                                == 'CONFIG'
+                                and _is_bare_void_ptr(getattr(_a, 'type_str', ''))):
+                            _deep_in_idx = getattr(_a, 'index', -1)
+                            break
+            except Exception:
+                _deep_in_idx = -1
+
             # Analyze parameters
             for idx, arg in enumerate(api.arguments_info):
                 _as = _arg_sem.get(idx)
@@ -887,6 +908,7 @@ class SkeletonGenerator:
                     'varlen_target': varlen_map.get(idx),  # (len_idx, rel) or None
                     'role': _role,                          # ArgRole value or None
                     'pairs_with': _pairs,                   # LENGTH↔buffer idx or None
+                    'deep_fuzz_buffer': (idx == _deep_in_idx),  # Lever B input void*
                 }
                 api_req['args'].append(arg_info)
 
@@ -1120,6 +1142,17 @@ class SkeletonGenerator:
             return SkeletonVariable(
                 name=name, c_type=_public_pointer_type(c_type),
                 is_pointer=True, init_value="NULL")
+        if arg_info.get('deep_fuzz_buffer') and is_pointer:
+            # Lever B (LOGICFUZZ_EXERCISE_DEEP_BUFFER): the deep consumer's INPUT
+            # data buffer is a bare ``void*`` (the cmsDoTransform idiom). Feed it
+            # fuzz bytes so the exercised object RUNS on data, not NULL. The flag
+            # is set upstream ONLY when the sub-gate is on AND the API matched the
+            # guarded _has_deep_input_buffer — so this branch is inert by default
+            # (gate-off → flag never set → falls through to the NULL branch).
+            return SkeletonVariable(
+                name=name, c_type=_public_pointer_type(c_type),
+                allocation=AllocationType.FUZZ_INPUT, is_pointer=True,
+                init_value="(void*)data")
         if role == 'CONFIG' and is_pointer:
             # An optional/config pointer (e.g. cmsCreateContext's plugin /
             # userdata ``void*`` args) — NULL is the safe by-construction default
