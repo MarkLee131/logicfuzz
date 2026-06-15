@@ -581,6 +581,15 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
 
         skeleton_template_code, holes_description, has_skeleton_template = \
             self._format_skeleton_as_template(active_skeleton)
+        # DEFAULT = A-design (LLM WRITES the driver, skeleton as a synthesis-base
+        # REFERENCE). Strict HOLE-FILLING (B) is OPT-IN via
+        # LOGICFUZZ_FORCE_HOLE_FILLING=1. MEASURED 2026-06-16 (corrected snapshot
+        # reading): A (LLM writes freely) = 2071 br vs B (hole-fill, symbolic
+        # preserved) = 1555 — the LLM writes better drivers than our symbolic
+        # skeletons (PromeFuzz = pure LLM = 4560). So A is the default.
+        import os as _os_hf
+        if (_os_hf.environ.get('LOGICFUZZ_FORCE_HOLE_FILLING', '0') == '0'):
+            has_skeleton_template = False
         include_path_context = self._format_include_path_context(
             target_path, existing_fuzzer_headers)
         driver_knowledge_text = self._format_driver_knowledge(
@@ -915,19 +924,18 @@ Output your fuzz driver code inside <fuzz_target> tags.
                     fuzz_target_code = ''
         else:
             # Complete code mode: the LLM returned a full <fuzz_target> rewrite.
-            # B-MODE (LOGICFUZZ_FORCE_HOLE_FILLING, default-on): when a skeleton
-            # was active, the LLM's job was to fill holes only — a full rewrite
-            # DISCARDS the symbolic structure (Z3-validated lifecycle wiring +
-            # the productivity levers: populate-collections / fuzz-buffers /
-            # struct-fill). Discard the rewrite and use the deterministic skeleton
-            # FLOOR (skeleton + default fills) so the symbolic optimizations are
-            # preserved — the "traditional method does what it does well; the LLM
-            # only fills holes" division. Opt out (=0) to let the LLM rewrite
-            # freely (the legacy / LLM-led design).
+            # B-MODE (LOGICFUZZ_FORCE_HOLE_FILLING, default-OFF). When ON: a full
+            # LLM rewrite of a skeleton is DISCARDED and the deterministic skeleton
+            # FLOOR is used, preserving the symbolic structure + levers. MEASURED
+            # 2026-06-16 (corrected snapshot reading): B (force-hole-fill, symbolic
+            # preserved) = 1555 br vs control (LLM writes freely) = 2071 br — the
+            # LLM writes BETTER drivers than our symbolic skeletons (consistent
+            # with PromeFuzz = pure LLM = 4560). So default is OFF (A-design,
+            # LLM-led); set =1 only to force-preserve the symbolic skeleton.
             import os as _os_bmode
             _skel_code, _, _ = self._get_active_skeleton(state)
             _force_hf = _os_bmode.environ.get(
-                'LOGICFUZZ_FORCE_HOLE_FILLING', '1') != '0'
+                'LOGICFUZZ_FORCE_HOLE_FILLING', '0') != '0'
             if _force_hf and _skel_code:
                 logger.info(
                     'B-mode: LLM rewrote the driver in template mode → using the '
