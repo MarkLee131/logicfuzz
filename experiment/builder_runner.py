@@ -18,7 +18,7 @@ from typing import Any, Optional
 
 from google.cloud import storage
 
-from experiment import oss_fuzz_checkout, textcov
+from experiment import container_cleanup, oss_fuzz_checkout, textcov
 from experiment.benchmark import Benchmark
 from experiment.fuzz_target_error import SemanticCheckResult
 from experiment.workdir import WorkDirs
@@ -759,43 +759,48 @@ class BuilderRunner:
         generated_project, self.benchmark.target_name, '--'
     ] + self._libfuzzer_args()
 
-    with open(log_path, 'w') as f:
-      proc = sp.Popen(command,
-                      stdin=sp.DEVNULL,
-                      stdout=f,
-                      stderr=sp.STDOUT,
-                      cwd=oss_fuzz_checkout.OSS_FUZZ_DIR)
+    # Container-leak fix (NAME channel). helper.py's docker_run adds ``--rm``,
+    # but ``--rm`` does NOT fire when we kill the docker-run CLIENT (timeout /
+    # SIGKILL) — the container keeps running under dockerd. The generated image
+    # name here is NOT uuid-scoped (evaluator passes f'{benchmark.id}-{sample}')
+    # AND helper.py may run the shared base-runner image, so ancestor-scoping is
+    # both unreliable and unsafe. Instead: give the container a UNIQUE name via
+    # OSS_FUZZ_SAVE_CONTAINERS_NAME (helper.py then sets ``--name`` and drops
+    # ``--rm``) and force-remove BY NAME in a ``finally`` that fires on success,
+    # timeout, AND exception. (Setting the env also disables --rm — fine, the
+    # finally is what removes it.) Scoped to our unique name → never touches a
+    # base/interactive or other-user container.
+    ctr_name = container_cleanup.make_container_name('runfuzzer')
+    run_env = dict(os.environ, OSS_FUZZ_SAVE_CONTAINERS_NAME=ctr_name)
+    try:
+      with open(log_path, 'w') as f:
+        proc = sp.Popen(command,
+                        stdin=sp.DEVNULL,
+                        stdout=f,
+                        stderr=sp.STDOUT,
+                        cwd=oss_fuzz_checkout.OSS_FUZZ_DIR,
+                        env=run_env)
 
-      # TODO(ochang): Handle the timeout exception.
-      try:
-        proc.wait(timeout=self.run_timeout + 5)
-      except sp.TimeoutExpired:
-        logger.warning('%s timed out during fuzzing (timeout=%ds). Terminating process and cleaning up Docker containers.', 
-                      generated_project, self.run_timeout + 5)
-        
-        # Terminate the helper.py process
-        proc.terminate()
+        # TODO(ochang): Handle the timeout exception.
         try:
-          proc.wait(timeout=5)
+          proc.wait(timeout=self.run_timeout + 5)
         except sp.TimeoutExpired:
-          logger.warning('Process did not terminate gracefully, killing it.')
-          proc.kill()
-          proc.wait()
-        
-        # Clean up any lingering Docker containers for this project
-        try:
-          cleanup_cmd = ['docker', 'ps', '-q', '--filter', f'ancestor=gcr.io/oss-fuzz/{generated_project}']
-          result = sp.run(cleanup_cmd, capture_output=True, text=True, timeout=10)
-          container_ids = result.stdout.strip().split('\n')
-          
-          for container_id in container_ids:
-            if container_id:  # Skip empty strings
-              logger.info('Stopping timed-out Docker container: %s', container_id)
-              sp.run(['docker', 'stop', container_id], timeout=30, check=False)
-        except Exception as e:
-          logger.error('Failed to clean up Docker containers: %s', e)
-        
-        # Try continuing and parsing the logs even in case of timeout.
+          logger.warning('%s timed out during fuzzing (timeout=%ds). '
+                         'Terminating process and cleaning up Docker '
+                         'containers.', generated_project, self.run_timeout + 5)
+
+          # Terminate the helper.py process
+          proc.terminate()
+          try:
+            proc.wait(timeout=5)
+          except sp.TimeoutExpired:
+            logger.warning('Process did not terminate gracefully, killing it.')
+            proc.kill()
+            proc.wait()
+          # The finally below force-removes the lingering named container.
+          # Try continuing and parsing the logs even in case of timeout.
+    finally:
+      container_cleanup.force_remove_named_container(ctr_name)
 
     if proc.returncode != 0:
       logger.info('********** Failed to run %s. **********', generated_project)
@@ -863,10 +868,15 @@ class BuilderRunner:
 
     outdir = get_build_artifact_dir(generated_project, 'out')
     workdir = get_build_artifact_dir(generated_project, 'work')
+    # NAME channel: keep --rm (fires on normal exit) AND give a unique --name so
+    # we can force-remove on a killed-client path. See container_cleanup.
+    build_ctr = container_cleanup.make_container_name('build')
     command = [
         'docker',
         'run',
         '--rm',
+        '--name',
+        build_ctr,
         '--privileged',
         '--shm-size=2g',
         '--platform',
@@ -913,6 +923,9 @@ class BuilderRunner:
     build_command = pre_build_command + ['compile'] + post_build_command
     build_bash_command = ['-c', ' '.join(build_command)]
     command.extend(build_bash_command)
+    # The compile container is ``--rm``, but a killed docker-run client (e.g.
+    # external SIGKILL when the host is under container-leak pressure) orphans
+    # it. Force-remove the generated image's containers on every exit path.
     with open(log_path, 'w+') as log_file:
       try:
         sp.run(command,
@@ -925,6 +938,8 @@ class BuilderRunner:
         logger.info('Failed to build fuzzer for %s with %s', generated_project,
                     sanitizer)
         return False
+      finally:
+        container_cleanup.force_remove_named_container(build_ctr)
 
     logger.info('Successfully build fuzzer for %s with %s', generated_project,
                 sanitizer)
@@ -986,16 +1001,24 @@ class BuilderRunner:
         generated_project,
     ]
 
+    # NAME-channel container-leak fix (see run_target_local): name the helper.py
+    # coverage container uniquely and force-remove BY NAME on every exit path
+    # (success / CalledProcessError / killed client) so it can't orphan.
+    cov_ctr = container_cleanup.make_container_name('coverage')
+    cov_env = dict(os.environ, OSS_FUZZ_SAVE_CONTAINERS_NAME=cov_ctr)
     try:
       sp.run(command,
              capture_output=True,
              cwd=oss_fuzz_checkout.OSS_FUZZ_DIR,
              stdin=sp.DEVNULL,
+             env=cov_env,
              check=True)
     except sp.CalledProcessError as e:
       logger.info('Failed to generate coverage for %s:\n%s\n%s',
                   generated_project, e.stdout, e.stderr)
       return None, None
+    finally:
+      container_cleanup.force_remove_named_container(cov_ctr)
 
     # Get the local text coverage, which includes the specific lines
     # exercised in the target project.

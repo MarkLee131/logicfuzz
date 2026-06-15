@@ -166,8 +166,19 @@ def _smoke_one(
     # In-container command — used ONLY as an ABI fallback (see below). Mounts the
     # binary dir read-only at /o and the corpus read-only at /c; crash artifacts
     # go to a writable /tmp (not persisted — exit 77 is the crash signal).
+    # Runs on the SHARED base-runner image, so ancestor-scoped cleanup is unsafe
+    # (would match concurrent/other base-runner containers). Give it a UNIQUE
+    # --name and remove BY NAME in a finally — `--rm` does not fire if the
+    # docker-run client is killed on timeout.
+    try:
+        from experiment import container_cleanup as _cc
+        _ctr_name = _cc.make_container_name("preflight")
+    except Exception:  # standalone/test contexts without the package on path
+        _cc = None
+        _ctr_name = ""
     docker_cmd = [
         "docker", "run", "--rm",
+    ] + (["--name", _ctr_name] if _ctr_name else []) + [
         "-v", f"{fuzzer_binary.parent.resolve()}:/o:ro",
         "-v", f"{corpus_dir.resolve()}:/c:ro",
         "--entrypoint", f"/o/{fuzzer_binary.name}",
@@ -189,8 +200,16 @@ def _smoke_one(
     log_text = log_file.read_text(encoding="utf-8", errors="replace")
     if (not timed_out and _is_abi_failure(exit_code, log_text)
             and shutil.which("docker") and project):
-        exit_code, timed_out = _run_smoke_cmd(docker_cmd, log_file, timeout)
-        log_text = log_file.read_text(encoding="utf-8", errors="replace")
+        # The base-runner container is `--rm`, but `--rm` won't fire if the
+        # docker-run client is killed on timeout. We named it uniquely above;
+        # force-remove BY NAME in a finally (base-runner is a SHARED image →
+        # ancestor-scoping would be unsafe). See experiment.container_cleanup.
+        try:
+            exit_code, timed_out = _run_smoke_cmd(docker_cmd, log_file, timeout)
+            log_text = log_file.read_text(encoding="utf-8", errors="replace")
+        finally:
+            if _cc is not None and _ctr_name:
+                _cc.force_remove_named_container(_ctr_name)
 
     edges, execs = _parse_libfuzzer_log(log_text)
 

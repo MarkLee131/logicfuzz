@@ -216,8 +216,20 @@ def _run_container_validation(
     everything on a docker hiccup.
     """
     script = _VALIDATE_SH.replace('__PROJECT__', project)
+    # NAME channel container-leak fix: `image` is the BARE base
+    # gcr.io/oss-fuzz/<project> (shared / a user's interactive shell may run it),
+    # so ancestor-scoped cleanup would be unsafe. Give the container a UNIQUE
+    # --name and force-remove BY NAME in a finally — `--rm` does not fire if the
+    # docker-run client is killed on timeout. See experiment.container_cleanup.
+    try:
+        from experiment import container_cleanup as _cc
+        _ctr_name = _cc.make_container_name('compileval')
+    except Exception:  # standalone/test contexts without the package on path
+        _cc = None
+        _ctr_name = ''
     cmd = [
         'docker', 'run', '--rm',
+    ] + (['--name', _ctr_name] if _ctr_name else []) + [
         '-v', f'{candidates_dir.resolve()}:/candidates:ro',
         image, 'bash', '-c', script,
     ]
@@ -232,6 +244,9 @@ def _run_container_validation(
         logger.warning('compile_validate: container run failed (%s); '
                        'failing open', exc)
         return None
+    finally:
+        if _cc is not None and _ctr_name:
+            _cc.force_remove_named_container(_ctr_name)
 
     out = proc.stdout or ''
     if 'VALIDATE_DONE' not in out:

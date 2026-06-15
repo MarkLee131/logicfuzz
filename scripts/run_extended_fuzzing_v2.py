@@ -32,7 +32,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from experiment import oss_fuzz_checkout
+from experiment import container_cleanup, oss_fuzz_checkout
 
 logging.basicConfig(
     level=logging.INFO,
@@ -364,8 +364,11 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
         outdir.mkdir(parents=True, exist_ok=True)
         workdir.mkdir(parents=True, exist_ok=True)
 
+        # NAME channel: unique --name so a killed client can't orphan it.
+        build_ctr = container_cleanup.make_container_name('v2build')
         cmd = [
-            "docker", "run", "--rm", "--privileged", "--shm-size=2g",
+            "docker", "run", "--rm", "--name", build_ctr,
+            "--privileged", "--shm-size=2g",
             "--platform", "linux/amd64", "-i",
             "-e", "FUZZING_ENGINE=libfuzzer",
             "-e", "SANITIZER=address",
@@ -379,7 +382,10 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
             "-c", "rm -rf /out/* /work/* && compile && chmod 777 -R /out/*"
         ]
         with open(build_log, 'w') as f:
-            result = sp.run(cmd, cwd=oss_fuzz_dir, stdout=f, stderr=sp.STDOUT)
+            try:
+                result = sp.run(cmd, cwd=oss_fuzz_dir, stdout=f, stderr=sp.STDOUT)
+            finally:
+                container_cleanup.force_remove_named_container(build_ctr)
             if result.returncode != 0:
                 logger.error("Failed to build fuzzers. See %s", build_log)
                 return False
@@ -420,11 +426,18 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
         ]
 
         logger.info("Running: %s", " ".join(cmd))
+        # NAME channel: name the helper.py run_fuzzer container so it can be
+        # force-removed (helper.py drops --rm when this env is set; the long-
+        # running Popen would otherwise orphan it on kill).
+        self._fuzz_ctr = container_cleanup.make_container_name('v2fuzz')
+        fuzz_env = dict(os.environ,
+                        OSS_FUZZ_SAVE_CONTAINERS_NAME=self._fuzz_ctr)
         with open(fuzzer_log, 'w') as f:
             self.fuzzer_process = sp.Popen(
                 cmd, cwd=oss_fuzz_dir,
                 stdout=f, stderr=sp.STDOUT,
-                stdin=sp.DEVNULL
+                stdin=sp.DEVNULL,
+                env=fuzz_env,
             )
 
         # Take periodic snapshots
@@ -460,6 +473,12 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
                 break
 
             time.sleep(10)  # Check every 10 seconds
+
+        # Force-remove the named fuzzer container (NAME channel): helper.py
+        # dropped --rm because we set OSS_FUZZ_SAVE_CONTAINERS_NAME, and a
+        # terminated long-running fuzzer would otherwise orphan it.
+        container_cleanup.force_remove_named_container(
+            getattr(self, '_fuzz_ctr', ''))
 
         # Take final snapshot
         elapsed = int(time.time() - self.start_time)
@@ -559,8 +578,10 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
         workdir = Path(oss_fuzz_dir) / "build" / "work" / self.generated_project
 
         build_log = self.logs_dir / "build_coverage.log"
+        covbuild_ctr = container_cleanup.make_container_name('v2covbuild')
         cmd = [
-            "docker", "run", "--rm", "--privileged", "--shm-size=2g",
+            "docker", "run", "--rm", "--name", covbuild_ctr,
+            "--privileged", "--shm-size=2g",
             "--platform", "linux/amd64", "-i",
             "-e", "FUZZING_ENGINE=libfuzzer",
             "-e", "SANITIZER=coverage",
@@ -574,13 +595,18 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
             "-c", "rm -rf /out/* /work/* && compile && chmod 777 -R /out/*"
         ]
         with open(build_log, 'w') as f:
-            result = sp.run(cmd, cwd=oss_fuzz_dir, stdout=f, stderr=sp.STDOUT)
+            try:
+                result = sp.run(cmd, cwd=oss_fuzz_dir, stdout=f, stderr=sp.STDOUT)
+            finally:
+                container_cleanup.force_remove_named_container(covbuild_ctr)
             if result.returncode != 0:
                 logger.warning("Failed to build coverage version. See %s", build_log)
                 return False
 
         # Run coverage
         coverage_log = self.logs_dir / "coverage.log"
+        cov_ctr = container_cleanup.make_container_name('v2cov')
+        cov_env = dict(os.environ, OSS_FUZZ_SAVE_CONTAINERS_NAME=cov_ctr)
         cmd = [
             "python3", "infra/helper.py", "coverage",
             "--corpus-dir", str(self.corpus_dir),
@@ -589,7 +615,11 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
             self.generated_project
         ]
         with open(coverage_log, 'w') as f:
-            result = sp.run(cmd, cwd=oss_fuzz_dir, stdout=f, stderr=sp.STDOUT)
+            try:
+                result = sp.run(cmd, cwd=oss_fuzz_dir, stdout=f, stderr=sp.STDOUT,
+                                env=cov_env)
+            finally:
+                container_cleanup.force_remove_named_container(cov_ctr)
             if result.returncode != 0:
                 logger.warning("Failed to collect coverage. See %s", coverage_log)
                 return False

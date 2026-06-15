@@ -40,7 +40,7 @@ from typing import List, Dict, Any, Optional, Tuple
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from experiment import oss_fuzz_checkout
+from experiment import container_cleanup, oss_fuzz_checkout
 from tools.merge_drivers.merge import SynthesizedDriver  # for --fuzz-target-dir mode
 
 logging.basicConfig(
@@ -868,12 +868,19 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
         log_file = self.logs_dir / "fuzzer.log"
         log_file_handle = open(log_file, 'w')
 
+        # Container-leak fix (NAME channel): name the helper.py run_fuzzer
+        # container so _cleanup can force-remove it. helper.py drops --rm when
+        # OSS_FUZZ_SAVE_CONTAINERS_NAME is set, so removal is our job — but --rm
+        # would not fire anyway when this long-running Popen is killed.
+        fuzz_env = dict(os.environ,
+                        OSS_FUZZ_SAVE_CONTAINERS_NAME=self.container_name)
         proc = subprocess.Popen(
             run_cmd,
             stdout=log_file_handle,
             stderr=subprocess.STDOUT,
             text=True,
-            cwd=str(oss_fuzz_dir)
+            cwd=str(oss_fuzz_dir),
+            env=fuzz_env,
         )
 
         # Store file handle for cleanup
@@ -1003,17 +1010,26 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
                 self.coverage_project_name
             ]
 
-            result = subprocess.run(
-                coverage_cmd,
-                capture_output=True,
-                text=True,
-                # 300s was far too small for a 24h-corpus llvm-cov replay +
-                # profdata merge: on timeout this returns None and the snapshot
-                # silently CARRIES FORWARD a stale (hours-old, smaller-corpus)
-                # measurement as the FINAL headline number. 2026-06 review.
-                timeout=1800,
-                cwd=str(oss_fuzz_dir)
-            )
+            # NAME-channel leak fix: this coverage container is launched fresh
+            # per snapshot; name it uniquely and force-remove BY NAME in a
+            # finally so a killed client (timeout) can't orphan it.
+            cov_ctr = container_cleanup.make_container_name('extcov')
+            cov_env = dict(os.environ, OSS_FUZZ_SAVE_CONTAINERS_NAME=cov_ctr)
+            try:
+                result = subprocess.run(
+                    coverage_cmd,
+                    capture_output=True,
+                    text=True,
+                    # 300s was far too small for a 24h-corpus llvm-cov replay +
+                    # profdata merge: on timeout this returns None and the
+                    # snapshot silently CARRIES FORWARD a stale (hours-old,
+                    # smaller-corpus) measurement as the FINAL headline number.
+                    timeout=1800,
+                    cwd=str(oss_fuzz_dir),
+                    env=cov_env,
+                )
+            finally:
+                container_cleanup.force_remove_named_container(cov_ctr)
 
             if result.returncode != 0:
                 logger.warning(f"Coverage measurement failed: {result.stderr}")
@@ -1250,6 +1266,14 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
 
     def _cleanup(self):
         """Cleanup generated project and resources."""
+        # Force-remove the named fuzzer container (NAME channel): helper.py
+        # dropped --rm because we set OSS_FUZZ_SAVE_CONTAINERS_NAME, and a
+        # killed long-running fuzzer Popen would otherwise orphan it.
+        try:
+            container_cleanup.force_remove_named_container(self.container_name)
+        except Exception:
+            pass
+
         # Close fuzzer log file handle if open
         if hasattr(self, '_fuzzer_log_handle') and self._fuzzer_log_handle:
             try:
