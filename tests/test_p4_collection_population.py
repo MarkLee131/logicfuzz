@@ -24,6 +24,26 @@ def test_gate_on(monkeypatch):
     assert sc._populate_collections() is True
 
 
+class _A:
+    def __init__(self, type_str):
+        self.type_str = type_str
+
+
+class _S:
+    def __init__(self, args):
+        self.args = args
+
+
+def test_collection_elem_keys():
+    # cmsCreateLinearizationDeviceLink(sig, cmsToneCurve* const Curves[])
+    sem = _S([_A("cmsColorSpaceSignature"), _A("cmsToneCurve * *")])
+    assert sc._collection_elem_keys(sem) == ["cmstonecurve*"]
+    # no collection arg → empty
+    assert sc._collection_elem_keys(_S([_A("unsigned int"), _A("void *")])) == []
+    # char** is not a handle collection
+    assert sc._collection_elem_keys(_S([_A("char * *")])) == []
+
+
 from liberator_adapter.driver.synthesis.skeleton_generator import (  # noqa: E402
     _is_handle_collection_type,
 )

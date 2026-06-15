@@ -161,6 +161,28 @@ def _fuzz_buffers() -> bool:
         "1", "true", "yes", "on")
 
 
+def _collection_elem_keys(sem) -> List[str]:
+    """For a CREATOR with handle-collection args (``cmsToneCurve * *``), the
+    element handle-type producer keys (``cmstonecurve*``) — so ``_build_prefix``
+    chains a producer of the element (e.g. cmsBuildTabulatedToneCurve16) that
+    Lever A then populates the array with. The collection arg has role UNKNOWN
+    and is absent from ``requires`` (IR erases the inner handle), so without this
+    the deep constructor gets a degenerate ``{0}``. Lever A; caller gates."""
+    from liberator_adapter.analysis.usedef import is_handle_type
+    out: List[str] = []
+    for a in (getattr(sem, "args", ()) or ()):
+        t = (getattr(a, "type_str", "") or "").replace("const", "").strip()
+        if t.count("*") < 2:
+            continue
+        base = t.replace("*", "").strip()
+        if not base or "char" in base.lower() or not is_handle_type(base):
+            continue
+        key = (base + "*").lower().replace(" ", "")   # producer key: cmstonecurve*
+        if key not in out:
+            out.append(key)
+    return out
+
+
 def _recover_init_handles() -> bool:
     """Gate (default-off): ``LOGICFUZZ_RECOVER_INIT_HANDLES`` — recover a void*-
     returning ``*Init``/``*Alloc``/``*New`` initializer as an opaque producer
@@ -941,14 +963,19 @@ def _build_prefix(
     in_progress: Set[str] = set()
     _lib_prefix = _detect_lib_prefix(list(idx.by_name.keys()))
 
-    def resolve(t: str, depth: int) -> bool:
+    def resolve(t: str, depth: int, exclude: frozenset = frozenset()) -> bool:
         if t in satisfied:
             return True
         if depth > max_depth or t in in_progress:
             return False  # too deep or cyclic — leave unmet (hole)
         # Only real CREATORs build a prefix handle; getters/mutators would
         # drag in deep junk chains. No CREATOR ⇒ leave the type unmet.
-        cands = [p for p in idx.producers.get(t, []) if p.role is APIRole.CREATOR]
+        # ``exclude`` (gated collection-element path only; empty otherwise ⇒
+        # byte-identical) drops a producer that is the requesting target itself
+        # — a CREATOR that produces the element type it also collects would
+        # otherwise satisfy the requirement with itself (self-cycle, no builder).
+        cands = [p for p in idx.producers.get(t, [])
+                 if p.role is APIRole.CREATOR and p.name not in exclude]
         from_recovery = False
         if not cands and idx.recovered_producers:
             # Factory-chain recovery (LOGICFUZZ_FACTORY_CHAIN): the type is a
@@ -1043,6 +1070,21 @@ def _build_prefix(
 
     for t in target.requires:
         resolve(t, 0)   # best-effort; unmet requirements stay holes
+    # Lever A construction side: a CREATOR's handle-collection arg (cmsToneCurve**)
+    # is role UNKNOWN / absent from ``requires`` (IR erased the inner handle), so
+    # chain a producer of the ELEMENT type too. The render (Lever A) then
+    # populates the array with its ret. Gated; inert otherwise.
+    if _populate_collections() and target.role is APIRole.CREATOR:
+        for ek in _collection_elem_keys(target):
+            # Exclude producers that THEMSELVES collect this element (the target,
+            # its THR variant, other deep profile/stage constructors) — they are
+            # circular/deep; we want a LEAF builder of the element
+            # (cmsBuildTabulatedToneCurve16: a curve FROM a fuzz buffer, which
+            # Lever B then fills) to chain + populate.
+            _circ = frozenset(
+                p.name for p in idx.producers.get(ek, [])
+                if ek in _collection_elem_keys(p)) | frozenset({target.name})
+            resolve(ek, 0, exclude=_circ)
     return prefix, opened
 
 
