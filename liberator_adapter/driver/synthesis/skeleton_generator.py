@@ -389,6 +389,12 @@ class SkeletonVariable:
     # decl-time init snapshots NULL (declarations precede the producer call), so
     # the snapshot must NOT be used as the live argument. 2026-06 review.
     bound_expr: Optional[str] = None
+    # Lever A (LOGICFUZZ_POPULATE_COLLECTIONS): when set on an ``is_array`` var, the
+    # renderer emits ``name[i] = expr;`` for each expr right before the consuming
+    # call (call-time population — decl-time producer rets are NULL, same reason
+    # ``bound_expr`` exists). Replaces the degenerate ``{0}`` for handle-collection
+    # constructor args so the deep constructor runs.
+    prepopulate: Optional[List[str]] = None
 
     def get_declaration(self) -> str:
         """Generate declaration code"""
@@ -1461,6 +1467,20 @@ class SkeletonGenerator:
                 for dep in dependents:
                     _emit(dep, indent=1)
 
+    def _emit_collection_population(self, skeleton: 'DriverSkeleton',
+                                    var_name: str) -> None:
+        """Lever A: emit ``var[i] = producer_ret;`` assignments for a prepopulated
+        handle array, immediately before the consuming call (call-time population —
+        decl-time producer rets are NULL)."""
+        var = skeleton.variables.get(var_name)
+        if var is None or not getattr(var, "prepopulate", None):
+            return
+        for i, expr in enumerate(var.prepopulate):
+            skeleton.add_statement(SkeletonStatement(
+                kind=StatementKind.ASSIGNMENT,
+                code=f"{var_name}[{i}] = {expr};",
+                variables=[var_name], indent=1))
+
     def _generate_single_call(
         self,
         skeleton: DriverSkeleton,
@@ -1477,6 +1497,14 @@ class SkeletonGenerator:
         scoped-guard path disables it (component-scoped guards replace it) so an
         independent producer's failure never bails the whole driver.
         """
+
+        # Lever A: populate any handle-collection array arg with its producer
+        # handles immediately before this call (call-time — decl-time rets are NULL).
+        for idx, arg in enumerate(api.arguments_info):
+            vn = f"{arg.name or f'arg{idx}'}_{api.function_name}"
+            v = skeleton.variables.get(vn)
+            if v is not None and getattr(v, "prepopulate", None):
+                self._emit_collection_population(skeleton, vn)
 
         # Build argument list
         args = []

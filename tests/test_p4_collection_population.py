@@ -35,3 +35,25 @@ def test_handle_collection_detect():
     assert _is_handle_collection_type("cmsHPROFILE *") is False     # single ptr
     assert _is_handle_collection_type("unsigned int") is False
     assert _is_handle_collection_type("char **") is False           # non-handle base
+
+
+from liberator_adapter.driver.synthesis.skeleton_generator import (  # noqa: E402
+    SkeletonGenerator, DriverSkeleton, SkeletonVariable)
+
+
+def _skeleton_with_collection():
+    sk = DriverSkeleton(name="t", target_apis=[])
+    sk.add_variable(SkeletonVariable(
+        name="curves_cmsCreateLinearizationDeviceLink",
+        c_type="cmsToneCurve *", is_array=True, array_size="3",
+        prepopulate=["ret_cmsBuildGamma", "ret_cmsBuildGamma", "ret_cmsBuildGamma"]))
+    return sk
+
+
+def test_collection_emits_population_assignments():
+    gen = SkeletonGenerator()
+    sk = _skeleton_with_collection()
+    gen._emit_collection_population(sk, "curves_cmsCreateLinearizationDeviceLink")
+    codes = [s.code for s in sk.statements]
+    assert "curves_cmsCreateLinearizationDeviceLink[0] = ret_cmsBuildGamma;" in codes
+    assert "curves_cmsCreateLinearizationDeviceLink[2] = ret_cmsBuildGamma;" in codes
