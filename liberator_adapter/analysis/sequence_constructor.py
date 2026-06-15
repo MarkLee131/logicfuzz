@@ -141,6 +141,16 @@ def _cross_source() -> bool:
         "1", "true", "yes", "on")
 
 
+def _populate_collections() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_POPULATE_COLLECTIONS`` — render a CREATOR's
+    handle-collection arg (``cmsToneCurve* const []``) as a populated array of
+    built producer handles instead of degenerate ``{0}``/NULL, so the deep
+    constructor runs (measured +72% edges/driver vs PromeFuzz's build-and-chain
+    pattern: 334 vs 194 edges on instrumented lcms)."""
+    return _os.environ.get("LOGICFUZZ_POPULATE_COLLECTIONS", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _recover_init_handles() -> bool:
     """Gate (default-off): ``LOGICFUZZ_RECOVER_INIT_HANDLES`` — recover a void*-
     returning ``*Init``/``*Alloc``/``*New`` initializer as an opaque producer

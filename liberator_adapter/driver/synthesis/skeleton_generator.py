@@ -156,6 +156,19 @@ def _public_pointer_type(c_type: str) -> str:
     return c_type
 
 
+def _is_handle_collection_type(c_type: str) -> bool:
+    """True for an array/double-pointer of a HANDLE type (``cmsToneCurve **`` /
+    ``cmsToneCurve * const []`` → ``cmsToneCurve * const *``), the input-collection
+    arg a CREATOR reads. Excludes single-pointer (out/handle) and non-handle bases
+    (``char **``). Lever A (``LOGICFUZZ_POPULATE_COLLECTIONS``); caller gates."""
+    from liberator_adapter.analysis.usedef import is_handle_type
+    t = (c_type or "").replace("const", "").strip()
+    if t.count("*") < 2:
+        return False
+    base = t.replace("*", "").strip()
+    return is_handle_type(base)
+
+
 def _complete_value_struct(c_type: str) -> Optional[str]:
     """When ``c_type`` is a SINGLE pointer to a complete, non-opaque public
     value struct (``cmsCIELab *``, ``cmsCIEXYZ *`` — a struct whose layout the
