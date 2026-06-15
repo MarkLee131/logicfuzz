@@ -417,6 +417,10 @@ $CXX $CXXFLAGS $LIB_FUZZING_ENGINE \\
         fuzzer_log = self.logs_dir / "fuzzer.log"
         cmd = [
             "python3", "infra/helper.py", "run_fuzzer",
+            # LSan can't run under the ptrace-restricted runner (fatal error at
+            # exit → false crash artifact); the -detect_leaks=0 flag doesn't
+            # suppress the runtime atexit check, this env var does.
+            "-e", "ASAN_OPTIONS=detect_leaks=0",
             "--corpus-dir", str(self.corpus_dir),
             self.generated_project, self.target_name,
             "--",

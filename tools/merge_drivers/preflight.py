@@ -101,11 +101,21 @@ def _is_abi_failure(exit_code: int, log_text: str) -> bool:
 def _run_smoke_cmd(cmd, log_file: Path, timeout: int):
     """Run one smoke command, capturing combined stdout+stderr to ``log_file``.
     Returns ``(exit_code, timed_out)``."""
+    # LSan does not work under this ptrace-restricted host/container: it raises a
+    # fatal error at process exit and libFuzzer records the empty unit as a crash
+    # (crash-da39a3ee...), marking every driver crashed. The libFuzzer
+    # -detect_leaks=0 flag (also passed) does NOT suppress the runtime atexit LSan
+    # check; ASAN_OPTIONS=detect_leaks=0 does. See experiment.asan_env.
+    try:
+        from experiment.asan_env import fuzzing_subprocess_env
+        env = fuzzing_subprocess_env()
+    except Exception:
+        env = None
     try:
         with open(log_file, "wb") as out:
             proc = subprocess.run(
                 cmd, stdout=out, stderr=subprocess.STDOUT,
-                timeout=timeout, check=False,
+                timeout=timeout, check=False, env=env,
             )
         return proc.returncode, False
     except subprocess.TimeoutExpired:
@@ -179,6 +189,9 @@ def _smoke_one(
     docker_cmd = [
         "docker", "run", "--rm",
     ] + (["--name", _ctr_name] if _ctr_name else []) + [
+        # ASAN_OPTIONS=detect_leaks=0 (env doesn't cross into the container; must
+        # be passed via -e) so the in-container run doesn't LSan-abort at exit.
+        "-e", "ASAN_OPTIONS=detect_leaks=0",
         "-v", f"{fuzzer_binary.parent.resolve()}:/o:ro",
         "-v", f"{corpus_dir.resolve()}:/c:ro",
         "--entrypoint", f"/o/{fuzzer_binary.name}",

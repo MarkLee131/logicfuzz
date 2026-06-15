@@ -822,6 +822,12 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
             # over 4h/268M execs. Setting CORPUS_DIR makes run_fuzzer take the
             # else-branch (use the dir as-is, no rm).
             "-e", f"CORPUS_DIR=/tmp/{self.target_name}_corpus",
+            # LSan cannot run under the ptrace-restricted runner: at exit it
+            # raises a fatal error and (in -fork mode) each child aborts at its
+            # batch boundary, recording false crash-da39a3ee... artifacts and
+            # bleeding throughput. The -detect_leaks=0 libFuzzer flag below does
+            # NOT suppress the runtime atexit check; this env var does.
+            "-e", "ASAN_OPTIONS=detect_leaks=0",
             "--corpus-dir", corpus_dir_abs,
             self.generated_project_name,
             self.target_name,
