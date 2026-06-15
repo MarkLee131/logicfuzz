@@ -33,7 +33,7 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from liberator_adapter.analysis.api_semantic_model import (
     APIRole,
@@ -139,6 +139,35 @@ def _cross_source() -> bool:
     conversion, +134% edges) instead of same-profile (identity)."""
     return _os.environ.get("LOGICFUZZ_CROSS_SOURCE_BIND", "0").strip().lower() in (
         "1", "true", "yes", "on")
+
+
+def _recover_init_handles() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_RECOVER_INIT_HANDLES`` — recover a void*-
+    returning ``*Init``/``*Alloc``/``*New`` initializer as an opaque producer
+    EVEN when the IR role heuristic mis-labeled it CONSUMER/MUTATOR (void* return
+    erased → produces=[]). Unlocks whole deep subsystems (CIECAM02, gamut/GDB,
+    IT8) whose consumers otherwise get a NULL handle → 0 coverage → culled. The
+    same-subsystem gate in ``resolve()`` prevents cross-wiring."""
+    return _os.environ.get("LOGICFUZZ_RECOVER_INIT_HANDLES", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+# Strong producer-verb idioms: an API whose subsystem-stripped name STARTS or
+# ENDS with one of these allocates/opens a handle. Excludes mutator/accessor
+# verbs (Get/Set/Read/Write/Add) which never produce a fresh handle.
+_INIT_IDIOM_VERBS = ("init", "alloc", "new", "create", "open", "build", "load",
+                     "dup")
+
+
+def _is_init_idiom_name(name: str, lib_prefix: str) -> bool:
+    """True when ``name`` (minus the library prefix) is a producer-verb idiom —
+    e.g. ``cmsCIECAM02Init``, ``cmsGBDAlloc``, ``cmsMLUalloc``. Used to recover
+    void*-returning initializers the role heuristic missed."""
+    core = name
+    if lib_prefix and core.lower().startswith(lib_prefix.lower()):
+        core = core[len(lib_prefix):]
+    low = core.lstrip("_").lower()
+    return any(low.startswith(v) or low.endswith(v) for v in _INIT_IDIOM_VERBS)
 
 
 # Deny-list for the deep-buffer predicate: a bare ``void*`` named/owned by one of
@@ -489,6 +518,13 @@ class _Index:
     # it. Recovered by naming (see ``_recover_opaque_producers``). Empty unless the
     # flag is on → strictly additive, never regresses the default path.
     recovered_producers: Dict[str, List[APISemantics]] = field(default_factory=dict)
+    # Recovered opaque handle types whose producer bucket spans >1 subsystem (a
+    # generic ``void*`` typedef like cmsHANDLE shared by CIECAM02/GDB/IT8/…).
+    # Each consumer needs a SUBSYSTEM-SPECIFIC instance, so such a handle must
+    # NOT be treated as a freely-shareable open handle by density (that would
+    # cross-wire one subsystem's consumer to another's producer). Used only when
+    # LOGICFUZZ_RECOVER_INIT_HANDLES is on (keeps gate-off byte-identical).
+    generic_opaque_handles: FrozenSet[str] = frozenset()
 
 
 # =============================================================================
@@ -649,6 +685,21 @@ def _recover_opaque_producers(
     # the bucket spans >1 subsystem, so it binds Dict↔Dict / IT8↔IT8 and leaves
     # a hole (never cross-connects) when there is no same-subsystem builder.
     opaque_builders = [c for c in creators if not c.produces]
+    if _recover_init_handles():
+        # LOGICFUZZ_RECOVER_INIT_HANDLES: a void*-returning initializer
+        # (cmsCIECAM02Init returns cmsHANDLE=void*) that ALSO takes a config arg
+        # is mis-roled CONSUMER/MUTATOR by the IR heuristic (void* return erased
+        # → produces=[] → "requires and not produces" = CONSUMER), so it's absent
+        # from ``creators`` and its whole subsystem's consumers get a NULL handle
+        # → 0 coverage → culled. Recover name-idiom initializers with empty
+        # ``produces`` regardless of role. The same-subsystem gate in
+        # ``resolve()`` binds each ONLY to a same-subsystem consumer (CIECAM02↔
+        # CIECAM02), so a recovered non-producer can never cross-wire.
+        creator_names = {c.name for c in opaque_builders}
+        for s in model.apis.values():
+            if (s.name not in creator_names and not s.produces
+                    and _is_init_idiom_name(s.name, lib_prefix)):
+                opaque_builders.append(s)
     if opaque_builders:
         for t in unproduced:
             if t not in out:
@@ -716,10 +767,22 @@ def _build_index(model: APISemanticModel) -> _Index:
     # LOGICFUZZ_FACTORY_CHAIN gate was removed.
     recovered = _recover_opaque_producers(model, producers, creators)
 
+    # Recovered opaque handles whose producer bucket spans >1 subsystem token
+    # (a generic void* typedef like cmsHANDLE). Density must not freely share
+    # these (cross-wiring guard). Cheap; only consulted when the recovery gate
+    # is on, so gate-off is byte-identical.
+    _lib_prefix = _detect_lib_prefix(list(model.apis.keys()))
+    generic_opaque: Set[str] = set()
+    for _t, _cands in recovered.items():
+        _toks = {_subsystem_token(c.name, _lib_prefix) for c in _cands}
+        if len(_toks) > 1:
+            generic_opaque.add(_t)
+
     return _Index(producers, destroyers, mutators, entries, consumers, creators,
                   consumers_by_handle, getters,
                   {sem.name: sem for sem in model.apis.values()},
-                  recovered_producers=recovered)
+                  recovered_producers=recovered,
+                  generic_opaque_handles=frozenset(generic_opaque))
 
 
 def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
@@ -748,8 +811,17 @@ def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
     only hole what's genuinely unbindable → same density, lower FP."""
     in_seq = set(core_seq)
     cands: Dict[str, APISemantics] = {}
+    # Cross-wiring guard (LOGICFUZZ_RECOVER_INIT_HANDLES): a generic recovered
+    # opaque handle (cmsHANDLE, shared by CIECAM02/GDB/IT8/…) is satisfied for
+    # the TARGET via a SUBSYSTEM-SPECIFIC producer; another subsystem's consumer
+    # of the same generic handle must NOT reuse it (binding by void* type would
+    # cross-wire). So exclude such handles from density's free-sharing pool.
+    _skip_generic = (idx.generic_opaque_handles
+                     if _recover_init_handles() else frozenset())
     # (a) handle-sharing extenders
     for t in opened:
+        if t in _skip_generic:
+            continue
         for sem in idx.mutators.get(t, []) + idx.consumers_by_handle.get(t, []):
             if sem.name in in_seq or sem.name in cands:
                 continue
