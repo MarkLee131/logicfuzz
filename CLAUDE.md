@@ -294,6 +294,17 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 instead of OOM-ing a shared host. Validated on libucl
 #                                 (=48 → bad_alloc at ~37GB RSS/virtual>48GB, graceful;
 #                                 libucl is the pathological non-converging case).
+#   LOGICFUZZ_REUSE_SKELETONS=1   DEBUG: load the previously-saved skeletons
+#                                 (results/<project>/static_analysis/
+#                                 skeleton_drivers.json — persisted EVERY run by
+#                                 save_intermediate_results) and SKIP Z3 synthesis,
+#                                 so you can iterate on the LLM hole-filling / prompt
+#                                 side WITHOUT re-running construction+Z3, even under
+#                                 NO_CACHE. Opt-in, only when the file exists +
+#                                 non-degenerate (skeletons carry 'code'); falls
+#                                 through to fresh synthesis otherwise. Do NOT set it
+#                                 when you CHANGED a construction lever (regenerate).
+#                                 `data_context.py` Step-10 region.
 #   LOGICFUZZ_{Z3_MODE,CONSTRUCT_MODE,NO_CACHE,TRIAGE_INCONCLUSIVE,
 #              TRIAGE_PREFIX_LEN,DRIVERS_ROOT,FI_ENDPOINT,BINDING_TELEMETRY}   config values.
 LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 \

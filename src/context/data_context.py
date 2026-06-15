@@ -1880,15 +1880,46 @@ class FuzzingContext:
                     f"Path-aware planner failed (non-critical, falling back "
                     f"to L4 order): {exc}")
 
-            skeleton_drivers = _synthesize_skeletons_per_sequence(
-                generator=generator,
-                target_sequences=filtered_api_sequences,
-                driver_size=driver_size,
-                benchmark=benchmark,
-                log=log,
-                automaton_artifact=automaton_artifact,
-                api_semantic_model=api_semantic_model,
-            )
+            # DEBUG REUSE (LOGICFUZZ_REUSE_SKELETONS=1): load the previously-saved
+            # skeletons and SKIP Z3 synthesis (the slow LLM-free step). The
+            # skeletons are persisted every run to
+            # results/<project>/static_analysis/skeleton_drivers.json
+            # (save_intermediate_results); reusing them lets you iterate on the
+            # LLM hole-filling / prompt side without re-running construction +
+            # Z3, even under LOGICFUZZ_NO_CACHE. Opt-in: only when the file
+            # exists and is non-degenerate (skeletons carry 'code'); else falls
+            # through to a normal synthesis. When you CHANGE a construction lever,
+            # do NOT set this (regenerate instead).
+            _reuse_skel = os.environ.get(
+                "LOGICFUZZ_REUSE_SKELETONS", "").strip().lower() in (
+                    "1", "true", "yes", "on")
+            _skel_cache = Path(
+                f"./results/{project_name}/static_analysis/skeleton_drivers.json")
+            skeleton_drivers = []
+            if _reuse_skel and _skel_cache.exists():
+                try:
+                    with open(_skel_cache) as _sf:
+                        _loaded = json.load(_sf)
+                    if _loaded and any(d.get('code') for d in _loaded):
+                        skeleton_drivers = _loaded
+                        log.info(
+                            f'   ♻️  REUSE_SKELETONS: loaded {len(skeleton_drivers)} '
+                            f'saved skeletons (skipped Z3 synthesis) from '
+                            f'{_skel_cache}')
+                except Exception as _re:
+                    log.warning(
+                        f'REUSE_SKELETONS load failed ({_re}); synthesizing fresh')
+                    skeleton_drivers = []
+            if not skeleton_drivers:
+                skeleton_drivers = _synthesize_skeletons_per_sequence(
+                    generator=generator,
+                    target_sequences=filtered_api_sequences,
+                    driver_size=driver_size,
+                    benchmark=benchmark,
+                    log=log,
+                    automaton_artifact=automaton_artifact,
+                    api_semantic_model=api_semantic_model,
+                )
             if skeleton_drivers:
                 log.info(
                     f'   ✅ {len(skeleton_drivers)}/{len(filtered_api_sequences)} sequences passed Z3 → skeletons emitted')
