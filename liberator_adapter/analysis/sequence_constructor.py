@@ -173,6 +173,60 @@ def _has_deep_input_buffer(sem) -> bool:
     return has_input and has_output and has_scalar
 
 
+def _norm_handle(type_str: str) -> str:
+    """Normalize a handle type to the index key (lowercase, no spaces/star)."""
+    return (type_str or "").strip().lower().replace(" ", "").rstrip("*")
+
+
+def _producers_for_type(idx, key: str):
+    """All known producers of handle type ``key`` — opaque-recovered AND
+    by-``produces`` (which is keyed with/without the pointer star). Used to check
+    a cross-source alternate exists."""
+    out = {}
+    for k in (key, key + "*"):
+        for p in (getattr(idx, "producers", {}) or {}).get(k, []) or []:
+            out[p.name] = p
+    for p in (getattr(idx, "recovered_producers", {}) or {}).get(key, []) or []:
+        out[p.name] = p
+    return list(out.values())
+
+
+def _is_synthetic_producer(p) -> bool:
+    """A data-buildable producer (no INPUT_BUFFER arg) — a stable standalone
+    object, the safe cross-source alternate (e.g. cmsCreate_sRGBProfile)."""
+    return not any(a.role is ArgRole.INPUT_BUFFER
+                   for a in (getattr(p, "args", ()) or ()))
+
+
+_CROSS_SRC_DENY = ("copy", "clone", "dup", "detach")
+
+
+def _wants_cross_source(sem, idx) -> bool:
+    """True iff ``sem`` is a CREATOR that builds a NEW object from >=2 handles of
+    the SAME type T, where T has >=2 producers incl. a synthetic — the
+    ``cmsCreateTransform`` cross-profile idiom. CREATOR-scoped (excludes the
+    copy/state/mutator/parent-child hazards where the two handles need a specific
+    relationship, not two arbitrary instances) + name-deny. Cross-project
+    test-locked. Lever ``LOGICFUZZ_CROSS_SOURCE_BIND`` only; pure, no env read."""
+    if getattr(sem, "role", None) is not APIRole.CREATOR:
+        return False
+    nm = (getattr(sem, "name", "") or "").lower()
+    if any(k in nm for k in _CROSS_SRC_DENY):
+        return False
+    counts: Dict[str, int] = {}
+    for a in (getattr(sem, "args", ()) or ()):
+        t = _norm_handle(a.type_str)
+        if t:
+            counts[t] = counts.get(t, 0) + 1
+    for t, c in counts.items():
+        if c < 2:
+            continue
+        prods = _producers_for_type(idx, t)
+        if len(prods) >= 2 and any(_is_synthetic_producer(p) for p in prods):
+            return True
+    return False
+
+
 def _append_exercisers(core: List[str], opened: Set[str], idx,
                        deep_buffer: bool = False) -> List[str]:
     """For each handle the chain PRODUCED, append ONE consumer that exercises it.
