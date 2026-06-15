@@ -61,8 +61,6 @@ First provide a brief conclusion (max 3 sentences): errors found, root causes, f
 
 Then output your complete fixed code inside <fuzz_target> tags.
 
-If build script needs modification, output it inside <build_script> tags.
-
 CRITICAL:
 - Include complete, compilable code - NO placeholders like "// ... unchanged ..."
 - Only ONE code block containing the complete fuzz target

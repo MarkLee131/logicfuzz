@@ -23,13 +23,5 @@ Project bug indicators:
 - Prefer gdb_execute when unsure about crash state; fall back to bash_execute only when inspecting source/build artifacts will unblock the next hypothesis.
 </toolbox>
 
-<output_format>
-Use these XML tags for output:
-- <crash_type>: Type of crash (memory error, assertion, etc.)
-- <crash_details>: Specific details about the crash
-- <feasibility_indicators>: Evidence for driver bug vs project bug
-- <next_steps>: Recommended actions
-- <stacktrace_analysis>: Analysis of the stack trace
-
-No extra commentary outside XML tags.
-</output_format>
+(The exact output tags are defined by the user message — follow that format
+precisely; it is the single source of truth for the output schema.)

@@ -648,16 +648,6 @@ Without extern "C", the linker will fail with "undefined reference to LLVMFuzzer
 
         # Build the base prompt
         try:
-            base_prompt = prompt_manager.build_user_prompt(
-                "prototyper",
-                language=target_language,
-                project_name=benchmark.get('project', 'unknown'),
-                function_name="",
-                function_signature="",
-                srs_specification=srs_specification,
-                additional_context=additional_context,
-                skeleton_code=skeleton_code)
-            # Add explicit language guidance
             lang_guidance = ""
             if target_language == 'c':
                 lang_guidance = """
@@ -666,16 +656,51 @@ Without extern "C", the linker will fail with "undefined reference to LLVMFuzzer
 - Do NOT write C++ style: `type_name *ptr` (this will fail to compile!)
 - Example: `struct ares_mx_reply *mx = NULL;` (correct for C)
 """
+            if has_skeleton_template:
+                # HOLE-FILLING mode (the default). Build a CLEAN, minimal prompt —
+                # NO generation template (critical_rule "call MORE APIs" / bad+good
+                # example drivers / code_budget / <output_format> demanding a full
+                # <fuzz_target> rewrite) and NO step1-understand. Those describe a
+                # DIFFERENT task (writing a driver) and biased the model into
+                # rewriting — discarding the symbolic skeleton + levers (audit
+                # 2026-06-16; was 16/20 drivers rewritten). Keep ONLY what's needed
+                # to choose hole VALUES: the per-call signatures / CALLSPEC; the
+                # <skeleton_template_mode> block below carries the skeleton + holes
+                # + fill rules. No "override the above" needed — there is no
+                # contradictory content to override.
+                base_prompt = f"""<task>
+Fill the marked holes in the validated {target_language.upper()} fuzz-driver
+skeleton for the {benchmark.get('project', 'unknown')} project. Its structure,
+API sequence, types, and lifecycle are CORRECT BY CONSTRUCTION — choose a VALUE
+for each hole; do NOT rewrite, reorder, or add/remove API calls.{lang_guidance}
+</task>
 
-            base_prompt += f"""
+<sequence_api_signatures>
+{sequence_signatures_text}
+</sequence_api_signatures>
+{protocol_templates_text}
+{sequence_invariants_text}"""
+                if additional_context.strip():
+                    base_prompt += (f"\n\n<additional_context>\n"
+                                    f"{additional_context}\n</additional_context>")
+            else:
+                # GENERATION mode (no skeleton): full driver-authoring template.
+                base_prompt = prompt_manager.build_user_prompt(
+                    "prototyper",
+                    language=target_language,
+                    project_name=benchmark.get('project', 'unknown'),
+                    function_name="",
+                    function_signature="",
+                    srs_specification=srs_specification,
+                    additional_context=additional_context,
+                    skeleton_code=skeleton_code)
+                base_prompt += f"""
 
 <task>
 LibFuzzer fuzz driver for the {benchmark.get('project', 'unknown')} project.
 Target language: **{target_language.upper()}**
 {lang_guidance}
-Your EXACT task and output format are defined by the MODE block at the END of
-this message — read it; it is authoritative (skeleton hole-filling, or
-complete-driver generation only if no skeleton is given).
+Generate the complete driver in <fuzz_target> tags.
 </task>
 
 <step1_understand_project>
@@ -725,10 +750,6 @@ Before writing any code, think about:
                 base_prompt += f"""
 
 <skeleton_template_mode>
-**HOLE-FILLING MODE — your EXACT task. This OVERRIDES any "generate a complete
-driver / call more APIs / example-driver / line-budget" guidance earlier in this
-message; that guidance applies ONLY when no skeleton is given.**
-
 A lifecycle-complete, type-validated skeleton is provided. Its API sequence,
 structure, variable declarations, and lifecycle are CORRECT BY CONSTRUCTION
 (Z3 + typestate validated). Your ONLY job is to fill the marked leaf holes.
