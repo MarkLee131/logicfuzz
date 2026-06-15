@@ -890,11 +890,20 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     return None
 
   try:
-    # Edge-weighted CDF dispatch: give high-interaction sub-drivers (more
-    # edges_15s in preflight — Liberator's seed-producing = high-value signal) a
-    # larger share of the fuzzer's per-input dispatch budget. Falls back to
-    # UNIFORM when no preflight edge data exists (prior behaviour).
-    _w = _edges_weights_for(successful_sources, work_dirs)
+    # Dispatch mode. DEFAULT = UNIFORM (``selector % N``, PromeFuzz's mode) — the
+    # ONLY mode whose tail selector can be SEED-TAGGED, so real format seeds
+    # (.icc/.it8) reliably reach their parser sub-driver at run time
+    # (run_extended_fuzzing._parse_merged_dispatch tags UNIFORM, NOT CDF). The
+    # edge-weighted CDF dispatch (opt-in LOGICFUZZ_CDF_DISPATCH=1) gives
+    # high-interaction sub-drivers a larger budget share BUT makes the selector
+    # un-taggable → real seeds route ~1/N at random → the parser is rarely hit →
+    # merged coverage collapses + becomes a routing LOTTERY (measured: same
+    # drivers, CDF=416 br/7.89%@0s vs UNIFORM seed-routed control=1708/25.84%@0s).
+    # For seed-dependent parser drivers, correct seed routing dominates budget
+    # weighting, so UNIFORM is the right default.
+    _cdf = os.environ.get("LOGICFUZZ_CDF_DISPATCH", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+    _w = _edges_weights_for(successful_sources, work_dirs) if _cdf else None
     drv = SynthesizedDriver.from_paths(
         successful_sources,
         mode=DispatchMode.CDF if _w else DispatchMode.UNIFORM,
