@@ -702,7 +702,7 @@ class SkeletonGenerator:
             )
 
         # 5. Generate cleanup code
-        self._generate_cleanup(skeleton)
+        self._generate_cleanup(skeleton, dep_model)
 
         return skeleton
 
@@ -1770,7 +1770,7 @@ class SkeletonGenerator:
         )
         skeleton.add_statement(loop_end)
 
-    def _generate_cleanup(self, skeleton: DriverSkeleton) -> None:
+    def _generate_cleanup(self, skeleton: DriverSkeleton, dep_model=None) -> None:
         """Emit cleanup statements.
 
         Cleanup is paired-destroy by construction: every variable that
@@ -1804,10 +1804,24 @@ class SkeletonGenerator:
         # already in the sequence. 2026-06 review.
         seq_api_names = {a.function_name
                          for a in (skeleton.target_apis or [])}
+        # Real-API set for destroyer validation: a name-pattern-inferred destroyer
+        # that ISN'T a real project API (e.g. cmsCreateContext → 'cmsDestroy') is
+        # an undefined symbol → link failure → the driver is dropped by
+        # compile-validation (breadth loss). Validate against the model's API set
+        # (∪ the sequence's own APIs). Empty ⇒ legacy inference preserved.
+        _valid_apis = set(seq_api_names)
+        _model_apis = getattr(dep_model, 'apis', None) or {}
+        if isinstance(_model_apis, dict):
+            _valid_apis |= set(_model_apis.keys())
+            for _v in _model_apis.values():
+                _fn = getattr(_v, 'function_name', None) or (
+                    _v.get('function_name') if isinstance(_v, dict) else None)
+                if _fn:
+                    _valid_apis.add(_fn)
         for var_name, var in skeleton.variables.items():
             if not var.source_api:
                 continue
-            destroy_call = _infer_paired_destroy(var.source_api, var_name)
+            destroy_call = _real_destroy(var.source_api, var_name, _valid_apis)
             if destroy_call is None:
                 continue
             destroyer_name = destroy_call.split("(", 1)[0].strip()
@@ -2022,3 +2036,23 @@ def _infer_paired_destroy(producer_api: str, var_name: str) -> Optional[str]:
         return f"free({var_name})"
     # Could not infer — let the LLM (via prompt) decide if needed.
     return None
+
+
+def _real_destroy(producer_api: str, var_name: str, valid_apis: set):
+    """`_infer_paired_destroy` gated by REALITY: the name-pattern heuristic can
+    invent a non-existent symbol (``cmsCreateContext`` → ``cms``+``Destroy`` =
+    ``cmsDestroy``, which is not an lcms API; the real destroyer is
+    ``cmsDeleteContext``). Emitting it makes the TU fail to LINK and the whole
+    driver gets dropped by compile-validation — a breadth loss. Return the
+    inferred destroy call ONLY when its function name is a real project API; else
+    None (skip the destroy — a leak is harmless, LSan is off). An EMPTY
+    ``valid_apis`` (no model) preserves the legacy inference (don't suppress)."""
+    call = _infer_paired_destroy(producer_api, var_name)
+    if call is None:
+        return None
+    name = call.split("(", 1)[0].strip()
+    if name == "free":          # libc free is always valid
+        return call
+    if valid_apis and name not in valid_apis:
+        return None
+    return call
