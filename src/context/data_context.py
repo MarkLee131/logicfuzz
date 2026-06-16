@@ -2008,8 +2008,19 @@ class FuzzingContext:
                         # measured lcms root cause (8 drivers / 17 of 93 creators).
                         def _dcl(_d):
                             seq = _d.get('api_sequence') or []
-                            cs = [_clusters[a] for a in seq if a in _clusters]
-                            return cs[0] if cs else ('N:' + (seq[0] if seq else '?'))
+                            # Ignore producers the I2a validity-repair PREPENDED:
+                            # a generic injected creator (cmsCreateNULLProfile) at
+                            # seq[0] would otherwise collapse every repaired
+                            # sequence into one cluster. Cluster by the sequence's
+                            # real subsystem (its original consumer/target).
+                            _prep = set(
+                                (_d.get('synthesis_info') or {})
+                                .get('repaired_producers') or [])
+                            cs = [_clusters[a] for a in seq
+                                  if a in _clusters and a not in _prep]
+                            _first = next((a for a in seq if a not in _prep),
+                                          seq[0] if seq else '?')
+                            return cs[0] if cs else ('N:' + _first)
                         _covered: set = set()
                         _sel_ids: set = set()
                         # Phase 1 — cover: one driver per cluster, bucket-priority
@@ -3493,12 +3504,28 @@ def _synthesize_skeletons_per_sequence(
     _repaired_count = 0
     for i, target_seq in enumerate(target_sequences):
         try:
+            _prepended: List[str] = []   # producers the repair injected this seq
             if _repair_idx is not None and _repair_seq is not None:
                 _names = [a.function_name for a in target_seq]
                 _fixed = _repair_seq(_names, idx=_repair_idx)
                 if _fixed != _names and all(n in _name_to_api for n in _fixed):
+                    _orig = list(_names)
                     target_seq = [_name_to_api[n] for n in _fixed]
                     _repaired_count += 1
+                    # Record the injected producers so the portfolio's subsystem
+                    # clustering can IGNORE them — a prepended generic creator
+                    # (cmsCreateNULLProfile) sits at seq[0], and `_dcl` keys on
+                    # the first clustered API, so without this every repaired
+                    # sequence collapses into the one "profile" cluster (lcms
+                    # 41→21 clusters → 61→31 drivers = breadth loss).
+                    _oc = {}
+                    for n in _orig:
+                        _oc[n] = _oc.get(n, 0) + 1
+                    for n in _fixed:
+                        if _oc.get(n, 0) > 0:
+                            _oc[n] -= 1
+                        else:
+                            _prepended.append(n)
             if artifact_for_score is not None:
                 try:
                     score = float(
@@ -3578,6 +3605,7 @@ def _synthesize_skeletons_per_sequence(
                     'driver_size': driver_size,
                     'num_apis_used': len(api_seq),
                     'num_holes': len(holes_info),
+                    'repaired_producers': list(_prepended),
                 },
             })
         except Exception as e:
