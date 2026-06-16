@@ -143,6 +143,19 @@ class StateAdapter:
             # Set function_analysis as an attribute (not via __init__)
             analysis_result.function_analysis = StateAdapter._extract_function_analysis(
                 state)
+            # Propagate the trial's COMPILE status onto the AnalysisResult.
+            # AnalysisResult.__init__ takes no ``compiles`` param, so it would
+            # default to the Result default (False) — even though this is the
+            # crash analysis of a driver that COMPILED. ``best_result`` is
+            # ``result_history[-1]`` (this AnalysisResult on the crash path), and
+            # the merge filters candidates on ``best_result.compiles``. Without
+            # this, every compiled-but-crashed-during-optimization driver is
+            # dropped from the merge BEFORE preflight can vet it (lcms: 63 built →
+            # 83 crashes → only ~15 reach preflight → 14 merged → 883 edges vs
+            # fix1a 61 → 2092). Preflight + quarantine — not this build filter —
+            # decide whether a crashing driver poisons the fused harness.
+            # 2026-06-16 systematic-debugging root cause.
+            analysis_result.compiles = state.get("compile_success", False)
             result_history.append(analysis_result)
 
         return result_history
