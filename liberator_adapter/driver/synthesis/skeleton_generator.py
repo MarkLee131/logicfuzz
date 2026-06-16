@@ -1399,9 +1399,17 @@ class SkeletonGenerator:
             # role-blind output-branch render) and NOT ``(void*)data``. The
             # LLM/binding can override via the value-intent. (A CONFIG SCALAR
             # falls through to the scalar-init path + its FUZZABLE_HOLES intent.)
+            # Task 11 (validity contract): the model MIS-ROLES some required
+            # handles as CONFIG (cmsWriteTag's cmsHPROFILE, cmsCloseProfile's).
+            # A ``nullable=False`` CONFIG pointer is therefore a REQUIRED handle
+            # (the nullable flag distinguishes it from a truly-optional void*
+            # plugin which is nullable=True) — flag it so a still-unbound NULL
+            # render is wrapped in if(handle){} (no SEGV). Gated; off ⇒ unchanged.
+            _nonnull = (not arg_info.get('nullable', True)
+                        and _validity_contract_enabled())
             return SkeletonVariable(
                 name=name, c_type=_public_pointer_type(c_type),
-                is_pointer=True, init_value="NULL")
+                is_pointer=True, init_value="NULL", nonnull_handle=_nonnull)
         if role == 'CONFIG' and not is_pointer and _is_tunable_scalar(c_type):
             # L3a: header-fact literal fills (highest priority: INIT scalars
             # with a known compile-time constant from the project headers, e.g.
