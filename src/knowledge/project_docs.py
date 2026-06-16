@@ -378,6 +378,28 @@ def _param_role_from_text(text: str) -> Optional[str]:
     return None
 
 
+# §3.0 cue 1: per-arg nullability from doc @param prose (was extracted-but-discarded).
+_PARAM_NONNULL_CUES = re.compile(
+    r"must not be null|must be non-?null|non-?null|cannot be null|not null|"
+    r"required(?!\s+length)|valid pointer to", re.I)
+_PARAM_NULLABLE_CUES = re.compile(
+    r"may be null|can be null|or null|optional|null to |if null|"
+    r"\bnullable\b|pass null", re.I)
+
+
+def _param_nullability_from_text(text: Optional[str]):
+    """Return False (must be non-NULL), True (may be NULL), or None (unknown)
+    from a @param description. NULLABLE cue wins ties — never over-constrain."""
+    t = text or ""
+    if not t:
+        return None
+    if _PARAM_NULLABLE_CUES.search(t):
+        return True
+    if _PARAM_NONNULL_CUES.search(t):
+        return False
+    return None
+
+
 def _parse_doxygen_structured(raw: Optional[str]) -> Dict[str, Any]:
     """Split a raw doxygen block into brief + ordered @param + return.
 
@@ -404,6 +426,7 @@ def _parse_doxygen_structured(raw: Optional[str]) -> Dict[str, Any]:
         params.append({
             "index": ordinal, "name": pname, "text": ptext,
             "role": _param_role_from_text(ptext),
+            "nullable": _param_nullability_from_text(ptext),
         })
 
     brief = ""
@@ -632,6 +655,7 @@ def _params_from_signature(sig_line: str, api_name: str) -> List[Dict[str, Any]]
         params.append({
             "index": len(params), "name": name, "text": a,
             "role": _param_role_from_text(a),
+            "nullable": _param_nullability_from_text(a),
         })
     return params
 
