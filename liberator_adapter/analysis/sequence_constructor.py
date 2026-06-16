@@ -289,6 +289,44 @@ def _is_synthetic_producer(p) -> bool:
                    for a in (getattr(p, "args", ()) or ()))
 
 
+# I2b (Task 8): a required non-handle pointer arg the renderer CAN synthesize
+# non-NULL — a string (string-wrapped) or a complete public value-struct
+# (stack-alloc {0}, e.g. cmsCIELab / cmsCIEXYZ). Such args are NEVER an I2b
+# violation, so a consumer with only fillable required value args is kept.
+_FILLABLE_VALUE_STRUCT = re.compile(
+    r"cms(cie|jch|xyy|xyz|viewingconditions|curvesegment|lab|lch)", re.I)
+
+
+def _i2b_unfillable_consumer(sem, idx) -> bool:
+    """True iff ``sem`` has a ``nullable=False`` NON-handle required POINTER arg
+    that is GENUINELY unfillable: not a handle (no producer of its type), not a
+    string (char*), not a complete public value-struct, and not a fuzz-data
+    buffer (INPUT_BUFFER/OUTPUT/LENGTH role). Such an arg renders NULL → the
+    library asserts/derefs NULL (the FileName-style I2b violation). The layered
+    policy drops the consumer (a driver passing NULL there yields no coverage).
+    Pure; only consulted under the gate ⇒ gate-off byte-identical."""
+    for a in (getattr(sem, "args", ()) or ()):
+        if getattr(a, "nullable", True):
+            continue  # nullable → NULL is legal
+        ts = getattr(a, "type_str", "") or ""
+        if "*" not in ts and not re.search(r"cmsH[A-Z]", ts):
+            continue  # not a pointer → not an I2b pointer-NULL case
+        # a handle (has a real/recovered producer) is I2a, not I2b
+        key = _norm_handle(ts)
+        if key and _producers_for_type(idx, key):
+            continue
+        role = getattr(getattr(a, "role", None), "name", None)
+        if role in ("INPUT_BUFFER", "OUTPUT", "LENGTH"):
+            continue  # fuzz-data / caller-backing buffer (renderer fills)
+        low = ts.lower()
+        if "char" in low:
+            continue  # string → string-wrapped non-NULL
+        if _FILLABLE_VALUE_STRUCT.search(ts):
+            continue  # complete value-struct → stack-alloc {0}
+        return True   # unfillable required pointer → drop the consumer
+    return False
+
+
 _CROSS_SRC_DENY = ("copy", "clone", "dup", "detach")
 
 
@@ -1310,6 +1348,12 @@ def construct_sequences(
 
     def _add(seq: Sequence[str], source: str = "bottomup") -> None:
         cleaned = [a for a in seq if a and a in model.apis]
+        if _validity_contract():
+            # I2b (Task 8): drop a consumer whose required non-handle value arg
+            # the renderer cannot fill non-NULL (and has no producer) — it would
+            # render NULL and the library would assert/deref NULL.
+            cleaned = [a for a in cleaned
+                       if not _i2b_unfillable_consumer(idx.by_name.get(a), idx)]
         if not cleaned:
             return
         if _cross_source():
