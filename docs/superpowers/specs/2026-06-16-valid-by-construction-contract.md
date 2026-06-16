@@ -25,7 +25,7 @@ This session landed 4 pipeline-infra fixes (stock-binary build, no_progress gate
 
 This matches the crash evidence exactly: 33/38 preflight-dropped drivers crash on a NULL argument (23 SEGV-on-NULL-deref + 10 lcms `_cmsAssert(x!=NULL)` aborts), ~5 are type-confusion. **The dominant cause is #2a.**
 
-**The recurring meta-pattern (the real architectural defect):** the knowledge model is rich, but each downstream consumer reads only a subset. The `nullable` field EXISTS on `ArgSemantics` and is correctly `False` for non-NULL handles; `type_str` carries the real type (cmsHPROFILE vs cmsHTRANSFORM). But:
+**The recurring meta-pattern (the real architectural defect):** the knowledge model is rich, but each downstream consumer reads only a subset. The `nullable` field EXISTS on `ArgSemantics` and `type_str` carries the real type (cmsHPROFILE vs cmsHTRANSFORM). But `nullable` is populated by a **role HEURISTIC, not evidence** (`api_semantic_model.py:694`: `nullable = role in (NULLABLE_HANDLE, OUTPUT)`; HANDLE_IN defaults `False`) — and the doc `@param` text that says "must not be NULL" / "may be NULL" / "optional" **is extracted but discarded** (`project_docs.py:_param_role_from_text` maps to role only), while `NULLABLE_HANDLE` is **never assigned during reconciliation** (so a legally-nullable handle like `cmsContext`=global gets `nullable=False`, a false positive). The contract is only as accurate as `nullable`, so step 0 is to make `nullable` **evidence-based** (§3.0). Downstream, even this heuristic signal is then dropped:
 - `sequence_constructor.py` has **zero** references to `.nullable` — it resolves only the IR-derived `requires` frozenset, which is **lossy** ("IR erases the inner handle", `sequence_constructor.py:169`).
 - `skeleton_generator.py:1049-1070` reads `_role`/`_pairs` from `ArgSemantics` but **never reads `_as.nullable`**; line 1353-1359 unconditionally inits `HANDLE_IN` to `NULL`.
 - `CBFactory._signature_handle_bindings` collapses opaque handles to `void*` → binds a consumer's `cmsHPROFILE` arg to the nearest `void*` (a transform) → #3.
@@ -45,6 +45,20 @@ A constructed sequence S is VALID iff, reading the model's `args[i] = {nullable,
 `nullable=True` args (OUTPUT, NULLABLE_HANDLE like `cmsContext`) are EXEMPT — NULL is legal for them.
 
 ## 3. Design
+
+### 3.0 Nullability reconciliation — make `nullable` EVIDENCE-BASED (the foundation)
+The contract is only as accurate as `ArgSemantics.nullable`. Today it's a role guess. Populate it by **reconciling three evidence sources by priority** (mirrors the model's `reconcile(IR ⊕ doc ⊕ usage)` design, which nullability currently skips):
+
+1. **Doc `@param` cues (generalizes across projects, cheap).** Add `_param_nullability_from_text(text)` to `src/knowledge/project_docs.py` matching cues:
+   - non-null: `must not be NULL`, `non-?null`, `required`, `[in]` on a pointer, `valid <type>`;
+   - nullable: `may be NULL`, `can be NULL`, `optional`, `or NULL`, `NULL to <default>`, `[in,out]`/`[out]`.
+   The param text is ALREADY extracted (`project_docs.py:405-407`) — it's just never inspected for this. Surface as `params[i]['nullable']`.
+2. **IR non-null evidence (the high-value source for lcms).** Extend the condition extractor (`liberator_adapter/liberator/condition_extractor/`, `ProvenanceTracker.h`) to emit a per-arg `NON_NULL` provenance from: a library `_cmsAssert(arg != NULL)` / `assert(arg)`, `__attribute__((nonnull(i)))`, or an **unconditional dereference of arg i before any NULL check** in the callee. Persist into `conditions.json` per-arg (today `error_contracts.py` does this for RETURNS only — extend to ARGS).
+3. **Role heuristic (fallback only).** Keep `HANDLE_IN → nullable=False`, but **assign `NULLABLE_HANDLE`** (→ `nullable=True`) when doc/IR evidence OR the known global-context/optional pattern says so — removing the `cmsContext` false positive.
+
+Reconcile at `api_semantic_model.py` (`_reconcile_args`, ~597-700): **explicit doc/IR evidence OVERRIDES the role default**; conflicts resolve doc∧IR-non-null > role. Output: `ArgSemantics.nullable` is now evidence-backed, and `nullable=True` (legally optional) args are correctly EXEMPT from the contract (no wasted producer for `cmsContext`).
+
+This is "fully use the API doc" (cue 1) **and** the library's own contract (cue 2) — the two real sources of non-NULL truth — instead of guessing from role.
 
 ### 3.1 Single source of truth
 The model's per-arg `{nullable, type_str}` (`api_semantic_model.py` `ArgSemantics`) drives ALL four invariants. **Stop driving handle-resolution from the lossy `requires` frozenset; drive it from `nullable=False` + `type_str`.** `requires` becomes one input to producer-discovery, not the completeness oracle.
@@ -78,11 +92,14 @@ A render-time `if(handle) consumer(handle)` guard remains, but ONLY as a thin ne
 | `liberator_adapter/analysis/sequence_constructor.py` | `_build_prefix` resolution driven by model `nullable`+`type_str`; layered unsatisfiable policy (reuse `_synthetic_producer` / no-requires injection); I1 ordering |
 | `liberator_adapter/driver/factory/constraint_based/CBFactory.py` | `_signature_handle_bindings` typedef-name/handle-family type-correct binding (additive, void* fallback) — I3 |
 | `liberator_adapter/driver/synthesis/skeleton_generator.py` | consume `_as.nullable` (1049-1070); the render-time guard as defense-in-depth |
-| `liberator_adapter/analysis/api_semantic_model.py` | ensure `nullable` is populated for ALL handle args (assign NULLABLE_HANDLE where the model/IR says so; default HANDLE_IN→nullable=False) |
+| `src/knowledge/project_docs.py` | `_param_nullability_from_text()` — mine `@param` cues for nullable/non-null (currently the param text is extracted but only used for ranges) — §3.0 cue 1 |
+| `liberator_adapter/liberator/condition_extractor/` (`ProvenanceTracker.h`) | emit per-ARG `NON_NULL` provenance from `_cmsAssert(arg!=NULL)` / `nonnull` attr / unconditional deref-before-check — §3.0 cue 2 (C++ extractor change) |
+| `liberator_adapter/analysis/api_semantic_model.py` | `_reconcile_args` populates `nullable` by reconciling doc ⊕ IR ⊕ role (evidence overrides heuristic); assign `NULLABLE_HANDLE`→`nullable=True` for optional handles (kills the cmsContext false positive) — §3.0 |
 | telemetry | `contract_report.json` (violations before/after) — the A/B oracle |
 
 ## 5. Verification
 
+- **Nullability accuracy (§3.0):** on a cached model, doc-cue + IR evidence flips known optional handles to `nullable=True` (cmsContext no longer forces a producer) and confirms `nullable=False` for required ones; A/B the doc-cue source vs the IR source to see which carries lcms (expect IR `_cmsAssert` dominant for lcms, doc dominant for doc-rich libs like c-ares).
 - **Contract oracle (deterministic):** the validator reports **0 I1/I2a/I2b violations** on constructed lcms sequences post-fix (I3 → 0 where typedef info exists). Before/after counts in `contract_report.json`.
 - **Valid-driver yield:** clean lcms drivers rise from **17/63 → target ≥50/63**; merged-driver count from 19 → target ≥45.
 - **Coverage (the goal):** real `--merge-drivers` + 30-min measurement beats the fix1a 61-driver baseline (2092 edges) toward PromeFuzz (~3500). Per-driver depth preserved (EXERCISE/transform drivers now survive).
@@ -95,19 +112,22 @@ A render-time `if(handle) consumer(handle)` guard remains, but ONLY as a thin ne
 - **Breadth shrink from over-strict reject.** Mitigated by repair-not-reject + the layered unsatisfiable policy; the validator telemetry quantifies any drop, and a chain is dropped only as last resort.
 - **Synthetic-producer correctness.** Reuse the existing no-requires injection (already "valid by construction"); don't invent new producers.
 - **Over-fit.** The contract is driven by the generic model fields, not lcms names; multi-project validation is a gate.
+- **C++ condition-extractor change (§3.0 cue 2)** is the heaviest piece and the one that can regress extraction. Mitigate: ship doc-cue mining (cue 1) + the NULLABLE_HANDLE fix FIRST (cheap, no C++); add the IR `NON_NULL` provenance as an ADDITIVE pass behind the same gate, with the role heuristic as fallback if the extractor lacks it — so the contract still works (less accurately) without the C++ change.
 
 ## 7. Gating & A/B
 Behind `LOGICFUZZ_VALIDITY_CONTRACT=1` initially (default-off), like factory/diversity/density did, until a coverage A/B proves the gain on lcms AND no regression on cjson/c-ares/zlib; then default-on and the gate removed. `contract_report.json` is always-on (cheap telemetry) as the A/B oracle.
 
 ## 8. Implementation order (TDD; one invariant at a time, checker measures each)
 1. **Contract validator** (`validity_contract.py`) + tests over cached `api_semantic_model.json` + sample sequences. Productionize the checker; it is the oracle for all subsequent steps.
-2. **I2a orphan** (headline, 38 drivers) — constructor resolves all non-NULL handle args (bind→inject→drop-consumer). Validator: I2a → 0. Measure valid-driver yield.
+2. **Nullability reconciliation** (§3.0) — evidence-based `nullable`: (a) doc-cue mining in `project_docs.py` + assign NULLABLE_HANDLE (cheap, generalizes); (b) IR per-arg `NON_NULL` provenance in the condition extractor; (c) reconcile in `_reconcile_args`. Verify on a cached model: known optional handles (cmsContext) → `nullable=True`; known required handles → `nullable=False`. The contract steps below depend on this being accurate FIRST.
+3. **I2a orphan** (headline, 38 drivers) — constructor resolves all non-NULL handle args (bind→inject→drop-consumer). Validator: I2a → 0. Measure valid-driver yield.
 3. **I1 order** — producer-before-consumer ordering. Validator: I1 → 0.
 4. **I2b value** — fill non-handle required args; drop-consumer for unfillable strings. Validator: I2b → 0.
 5. **I3 type** — CBFactory typedef-name binding (additive, fallback). Validator: I3 → 0 where typedef info exists; cross-project no-op tests.
 6. **Defense-in-depth guard** (secondary) + CLAUDE.md gate doc + full suite + golden net + the real lcms merge coverage measurement.
 
 ## 9. Success criteria
+0. `ArgSemantics.nullable` is **evidence-based** (doc `@param` ⊕ IR `_cmsAssert`/nonnull ⊕ role fallback): optional handles (cmsContext) are `nullable=True`, required ones `nullable=False` — the doc is fully used, not discarded.
 1. Constructor emits sequences with **0 I1/I2a/I2b** contract violations (I3 → 0 where typedef info exists) on lcms — "valid by construction" is real, verified by the oracle.
 2. Valid-driver yield 17→≥50 / merged 19→≥45; ~63% wasted builds eliminated (the optimization).
 3. Real merged coverage beats 2092 toward ~3500.
