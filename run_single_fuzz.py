@@ -598,6 +598,20 @@ def _resolve_candidate_binary(src, work_dirs):
   return None
 
 
+def _preflight_rejection_set(results, drop_no_progress: bool):
+  """Compute the set of driver_paths to reject from preflight results.
+
+  Always drops crashers (``dead_on_empty``). Drops ``no_progress`` (15s edge-
+  growth = 0) ONLY when ``drop_no_progress`` — by default these are KEPT, since
+  a deterministic build+exercise driver contributes its construction edges to the
+  merged UNION regardless of 15s growth, and the lcms preflight binary was the
+  stock cms_gdb_fuzzer (phantom signal). Accepted drivers are never rejected.
+  """
+  reasons = ('dead_on_empty',) + (('no_progress',) if drop_no_progress else ())
+  return {r.driver_path for r in results
+          if not r.accepted and r.rejection_reason.startswith(reasons)}
+
+
 def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
   """Smoke-test candidate drivers and drop crash / no-progress ones.
 
@@ -643,14 +657,18 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
     write_report(results, Path(work_dirs.base) / 'merged' / 'preflight.json')
   except Exception:
     pass
-  # Drop ONLY genuine crash / no-progress; keep "couldn't vet" (binary missing
-  # or broken-to-run, which is infra, not a driver defect).
-  # NB: preflight emits ``dead_on_empty (...)`` for a crash-on-empty (see
-  # preflight.py:219) — matching ``crash_on_empty`` here was dead code, so
-  # crashing drivers were never dropped and poisoned the merged harness.
-  rejected = {r.driver_path for r in results
-              if not r.accepted
-              and r.rejection_reason.startswith(('dead_on_empty', 'no_progress'))}
+  # Drop crashers; keep no_progress by DEFAULT (opt-in to drop via
+  # LOGICFUZZ_DROP_NO_PROGRESS=1). The 15s edge-GROWTH gate is the wrong selector
+  # for a MERGED harness: a deterministic build+exercise driver adds its
+  # construction edges to the UNION regardless of whether it grows in 15s
+  # (PromeFuzz filters on COMPILE, not runtime growth). It was ALSO measured on
+  # the wrong binary — the lcms preflight build produced the stock cms_gdb_fuzzer
+  # (all 63 binaries collapsed to 2 hashes), so the gate culled 67% (105->20) on
+  # a phantom signal. Crashers (dead_on_empty) are still dropped; residual
+  # crash-poison is handled by the orphan filter + fork-mode -ignore_crashes.
+  _drop_np = os.environ.get('LOGICFUZZ_DROP_NO_PROGRESS', '0').strip().lower() \
+      in ('1', 'true', 'yes', 'on')
+  rejected = _preflight_rejection_set(results, drop_no_progress=_drop_np)
   if rejected:
     logger.info(
         f'merge_drivers: preflight dropped {len(rejected)} crashing/'
