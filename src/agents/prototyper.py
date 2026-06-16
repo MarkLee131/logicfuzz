@@ -581,14 +581,23 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
 
         skeleton_template_code, holes_description, has_skeleton_template = \
             self._format_skeleton_as_template(active_skeleton)
-        # DEFAULT = A-design (LLM WRITES the driver, skeleton as a synthesis-base
-        # REFERENCE). Strict HOLE-FILLING (B) is OPT-IN via
-        # LOGICFUZZ_FORCE_HOLE_FILLING=1. MEASURED 2026-06-16 (corrected snapshot
-        # reading): A (LLM writes freely) = 2071 br vs B (hole-fill, symbolic
-        # preserved) = 1555 — the LLM writes better drivers than our symbolic
-        # skeletons (PromeFuzz = pure LLM = 4560). So A is the default.
+        # DEFAULT = HOLE-FILLING (B-design): the LLM fills only leaf holes and
+        # PRESERVES the symbolic object-construction skeleton. A-design (LLM
+        # rewrites freely) is OPT-OUT via LOGICFUZZ_LLM_REWRITE=1.
+        #
+        # MEASURED 2026-06-16 (lcms, reliable metrics): A-design lets the LLM
+        # DISCARD the object-construction skeleton and revert to its parser-entry
+        # instinct (cmsOpenProfileFromMem, 50/69 drivers → dead on fuzz bytes);
+        # yield 14 drivers (2 object-construction), seed-baseline 881 br. B-design
+        # (hole-fill, + construction levers POPULATE_COLLECTIONS/FUZZ_BUFFERS)
+        # PRESERVES the skeleton: 0 parser-drift, yield 21 (17 object-construction),
+        # seed-baseline 1385 br (1.57x A), cumulative edges 2150 > prior-best
+        # merged27's 1952. The earlier "A=2071 vs B=1555" compared B WITHOUT the
+        # construction levers (degenerate NULL args); with levers, B wins decisively.
+        # This is the division-of-labor design: symbolic owns structure+construction,
+        # LLM fills leaf values only. See project_llm_reverts_objconstruct_to_parser.
         import os as _os_hf
-        if (_os_hf.environ.get('LOGICFUZZ_FORCE_HOLE_FILLING', '0') == '0'):
+        if (_os_hf.environ.get('LOGICFUZZ_LLM_REWRITE', '0') != '0'):
             has_skeleton_template = False
         include_path_context = self._format_include_path_context(
             target_path, existing_fuzzer_headers)
@@ -666,7 +675,9 @@ Without extern "C", the linker will fail with "undefined reference to LLVMFuzzer
 - Example: `struct ares_mx_reply *mx = NULL;` (correct for C)
 """
             if has_skeleton_template:
-                # HOLE-FILLING mode (the default). Build a CLEAN, minimal prompt —
+                # HOLE-FILLING mode (the DEFAULT; A-design LLM-rewrite is opt-out
+                # via LOGICFUZZ_LLM_REWRITE=1 — see line ~591). Build a
+                # CLEAN, minimal prompt —
                 # NO generation template (critical_rule "call MORE APIs" / bad+good
                 # example drivers / code_budget / <output_format> demanding a full
                 # <fuzz_target> rewrite) and NO step1-understand. Those describe a
@@ -924,23 +935,25 @@ Output your fuzz driver code inside <fuzz_target> tags.
                     fuzz_target_code = ''
         else:
             # Complete code mode: the LLM returned a full <fuzz_target> rewrite.
-            # B-MODE (LOGICFUZZ_FORCE_HOLE_FILLING, default-OFF). When ON: a full
-            # LLM rewrite of a skeleton is DISCARDED and the deterministic skeleton
-            # FLOOR is used, preserving the symbolic structure + levers. MEASURED
-            # 2026-06-16 (corrected snapshot reading): B (force-hole-fill, symbolic
-            # preserved) = 1555 br vs control (LLM writes freely) = 2071 br — the
-            # LLM writes BETTER drivers than our symbolic skeletons (consistent
-            # with PromeFuzz = pure LLM = 4560). So default is OFF (A-design,
-            # LLM-led); set =1 only to force-preserve the symbolic skeleton.
+            # DEFAULT (B-design): a full LLM rewrite of a skeleton is DISCARDED and
+            # the deterministic skeleton FLOOR is used, PRESERVING the symbolic
+            # object-construction structure + construction levers. The LLM, given
+            # freedom, reverts object-construction skeletons to its parser-entry
+            # instinct (lcms: 50/69 → cmsOpenProfileFromMem → dead on fuzz), so the
+            # rewrite is discarded. Opt OUT (let the LLM rewrite, A-design) via
+            # LOGICFUZZ_LLM_REWRITE=1. MEASURED 2026-06-16 (lcms): B+levers yield 21
+            # (17 object-construction) / seed-baseline 1385 br / edges 2150 vs
+            # A-design 14 (2 obj) / 881 br. See project_llm_reverts_objconstruct_to_parser.
             import os as _os_bmode
             _skel_code, _, _ = self._get_active_skeleton(state)
-            _force_hf = _os_bmode.environ.get(
-                'LOGICFUZZ_FORCE_HOLE_FILLING', '0') != '0'
-            if _force_hf and _skel_code:
+            _llm_rewrite = _os_bmode.environ.get(
+                'LOGICFUZZ_LLM_REWRITE', '0') != '0'
+            if (not _llm_rewrite) and _skel_code:
                 logger.info(
-                    'B-mode: LLM rewrote the driver in template mode → using the '
-                    'deterministic skeleton floor (symbolic structure + levers '
-                    'preserved; LLM rewrite discarded)', trial=self.trial)
+                    'B-design (default): LLM rewrote the driver in template mode → '
+                    'using the deterministic skeleton floor (symbolic structure + '
+                    'construction levers preserved; LLM rewrite discarded)',
+                    trial=self.trial)
                 fuzz_target_code = self._merge_holes_into_skeleton(_skel_code, {})
             else:
                 fuzz_target_code = parsed_result.get('fuzz_target_code', '')
