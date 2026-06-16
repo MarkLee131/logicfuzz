@@ -691,13 +691,34 @@ def _reconcile_args(
                 if resolved.get(j) is ArgRole.INPUT_BUFFER:
                     pairs_with = j
                     break
-        nullable = role in (ArgRole.NULLABLE_HANDLE, ArgRole.OUTPUT)
+        # §3.0: nullable is EVIDENCE-BASED (IR > doc cue > role/context default),
+        # not a pure role guess. doc cue from the @param text (Task 3); ir_nonnull
+        # from conditions.json per-arg NON_NULL (Task 9; None until then). A
+        # context-typed arg defaults nullable (global-context optional) unless
+        # doc/IR override — kills the cmsContext false positive.
+        from src.knowledge.project_docs import _param_nullability_from_text
+        _doc_null = _param_nullability_from_text(doc_texts.get(i))
+        _ir_nonnull = None  # Task 9 wires per-arg NON_NULL from conditions.json
+        _role_default = (role in (ArgRole.NULLABLE_HANDLE, ArgRole.OUTPUT)
+                         or "context" in atype.lower())
+        nullable = _reconcile_arg_nullable(_role_default, _doc_null, _ir_nonnull)
         out_args.append(ArgSemantics(
             index=i, role=role, type_str=atype.strip(),
             nullable=nullable, pairs_with=pairs_with,
             doc_text=doc_texts.get(i) or None,  # L6b: thread @param text
         ))
     return tuple(out_args), log
+
+
+def _reconcile_arg_nullable(role_default: bool, doc, ir_nonnull) -> bool:
+    """Reconcile per-arg nullability by evidence priority:
+    IR proof of non-null (assert/deref) > doc @param cue > role/context default.
+    ``doc`` is True/False/None; ``ir_nonnull`` is True/None."""
+    if ir_nonnull is True:
+        return False
+    if doc is not None:
+        return bool(doc)
+    return bool(role_default)
 
 
 def _parse_llm_roles(
