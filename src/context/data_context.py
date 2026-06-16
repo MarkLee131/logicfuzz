@@ -3463,8 +3463,42 @@ def _synthesize_skeletons_per_sequence(
     # many candidates would have been filtered under the old policy —
     # useful for re-evaluating whether to ever re-enable rejection.
     artifact_for_score = automaton_artifact if automaton_artifact is not None else None
+
+    # I2a universal validity-repair (LOGICFUZZ_VALIDITY_CONTRACT, gated): floor /
+    # densified sequences bypass _build_prefix and arrive here with handle
+    # consumers that have NO producer in the sequence → NULL handle → Task-11
+    # guard → dead driver (the 130/137 construction-gap orphans measured on
+    # lcms). Prepend the cheapest creator for each non-NULL handle arg lacking an
+    # earlier producer, then map back to Api objects. Gate-off ⇒ idx not built,
+    # sequences untouched (byte-identical).
+    _repair_idx = None
+    _repair_seq = None
+    _name_to_api: Dict[str, Any] = {}
+    _vc_on = os.environ.get(
+        "LOGICFUZZ_VALIDITY_CONTRACT", "").strip().lower() in (
+            "1", "true", "yes", "on")
+    if _vc_on and api_semantic_model is not None:
+        try:
+            from liberator_adapter.analysis.sequence_constructor import (
+                repair_sequence_validity as _rsv,
+                _build_index as _bld_idx)
+            _repair_seq = _rsv
+            _repair_idx = _bld_idx(api_semantic_model)
+            _name_to_api = {a.function_name: a for a in generator.all_apis}
+        except Exception as _re:
+            log.warning("validity-repair index build failed (%s); skipping "
+                        "repair.", _re)
+            _repair_idx = None
+
+    _repaired_count = 0
     for i, target_seq in enumerate(target_sequences):
         try:
+            if _repair_idx is not None and _repair_seq is not None:
+                _names = [a.function_name for a in target_seq]
+                _fixed = _repair_seq(_names, idx=_repair_idx)
+                if _fixed != _names and all(n in _name_to_api for n in _fixed):
+                    target_seq = [_name_to_api[n] for n in _fixed]
+                    _repaired_count += 1
             if artifact_for_score is not None:
                 try:
                     score = float(
@@ -3558,7 +3592,8 @@ def _synthesize_skeletons_per_sequence(
         f"automaton_low_score={automaton_low_score} (informational), "
         f"z3_rejected={z3_rejected} (truly unrenderable), "
         f"emitted={len(skeletons)} (of which {unchecked_emitted} via the "
-        f"no-Z3-gate model path = recovered gap candidates)")
+        f"no-Z3-gate model path = recovered gap candidates), "
+        f"validity_repaired={_repaired_count} (I2a producer-prepend)")
 
     return skeletons
 

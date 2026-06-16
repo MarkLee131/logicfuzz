@@ -289,6 +289,121 @@ def _is_synthetic_producer(p) -> bool:
                    for a in (getattr(p, "args", ()) or ()))
 
 
+def repair_sequence_validity(
+    names: Sequence[str],
+    model: Optional["APISemanticModel"] = None,
+    *,
+    idx: Optional["_Index"] = None,
+) -> List[str]:
+    """I2a universal repair (LOGICFUZZ_VALIDITY_CONTRACT): ensure every
+    ``nullable=False`` opaque-handle arg in ``names`` has an EARLIER same-type
+    producer, prepending the cheapest standalone creator when it doesn't.
+
+    ``_build_prefix`` only resolves producers for a constructed chain's ROOT
+    target; the DENSIFIED tail and the grammar-FLOOR sequences (random
+    type-walks merged at Step 5h) bypass it, so they reach render with NULL
+    handles → Task-11 guards them → the consumer never runs → ~0 coverage. This
+    is the post-construction net that makes the valid-by-construction contract
+    hold for EVERY sequence funnelled to skeleton synthesis, not just G2 roots.
+
+    For each consumer arg that is non-NULL and an opaque handle of family ``F``:
+      * if an earlier statement already produces ``F`` → leave it (binding wires
+        it; I3 fix);
+      * else if the model has a producer of ``F`` → PREPEND the cheapest
+        standalone creator (synthetic / no INPUT_BUFFER preferred, then fewest
+        own required handles, then name — deterministic);
+      * else (genuinely producer-less, e.g. cmsHANDLE) → leave it (the Task-11
+        non-NULL guard covers it).
+
+    Pure + deterministic; gated ⇒ gate-off returns ``names`` unchanged
+    (byte-identical). ``idx`` may be supplied (tests / reuse); otherwise built
+    from ``model``."""
+    if not _validity_contract() or not names:
+        return list(names)
+    if idx is None:
+        if model is None:
+            return list(names)
+        idx = _build_index(model)
+    by_name = getattr(idx, "by_name", {}) or {}
+
+    # An OPAQUE HANDLE type = one that some API ``requires`` or ``destroys`` (a
+    # lifecycle dependency). Value-structs (cmsCIExyY), strings (char*), version
+    # constants (zlibVersion's char*) and scalars are passed by value / filled by
+    # the renderer — they are NEVER ``requires``d, so they are correctly excluded.
+    # Without this, the repair mis-fires across projects (zlib zlibVersion,
+    # c-ares ares_library_initialized) and on lcms value-structs. Mirrors the
+    # oracle's ``validity_contract._handle_types``; generic, no project literals.
+    handle_types: Set[str] = set()
+    for sem in by_name.values():
+        for t in (getattr(sem, "requires", ()) or ()):
+            handle_types.add(_norm_handle(t))
+        for t in (getattr(sem, "destroys", ()) or ()):
+            handle_types.add(_norm_handle(t))
+
+    def _is_leaf_creator(p, key: str) -> bool:
+        """A creator that yields a LIVE handle from fillable inputs only — the
+        only safe prepend. Rejects: (1) INTERNAL APIs (``_cms*`` — won't link);
+        (2) creators with a ``nullable=False`` arg that is ITSELF an opaque
+        handle needing a producer (e.g. cmsCreateMultiprofileTransform's profile
+        array) — prepending one just moves the orphan up a level and the call
+        returns NULL anyway. Scalars / strings / value-structs / buffers are
+        fillable, so a leaf may still have those."""
+        nm = getattr(p, "name", "") or ""
+        if nm.startswith("_"):
+            return False  # internal symbol, not a public entry point
+        for a in (getattr(p, "args", ()) or ()):
+            if getattr(a, "nullable", True):
+                continue
+            ak = _norm_handle(getattr(a, "type_str", "") or "")
+            if ak and ak != key and _producers_for_type(idx, ak):
+                return False  # needs another handle → not standalone
+        return True
+
+    def _pick_producer(key: str) -> Optional[str]:
+        prods = [p for p in _producers_for_type(idx, key)
+                 if _is_leaf_creator(p, key)]
+        if not prods:
+            return None  # no standalone leaf → leave NULL (Task-11 guard covers)
+        prods = sorted(prods, key=lambda p: (
+            0 if _is_synthetic_producer(p) else 1,
+            len([a for a in (getattr(p, "args", ()) or ())
+                 if not getattr(a, "nullable", True)]),  # fewer must-fill args
+            getattr(p, "name", "")))
+        return getattr(prods[0], "name", None)
+
+    def _mark_produced(nm: str, produced: Set[str]) -> None:
+        sem = by_name.get(nm)
+        if sem is None:
+            return
+        for pt in (getattr(sem, "produces", ()) or ()):
+            produced.add(_norm_handle(pt))
+
+    result: List[str] = []
+    produced: Set[str] = set()
+    for nm in names:
+        sem = by_name.get(nm)
+        if sem is not None:
+            for a in (getattr(sem, "args", ()) or ()):
+                if getattr(a, "nullable", True):
+                    continue  # NULL is legal → no producer needed
+                key = _norm_handle(getattr(a, "type_str", "") or "")
+                if not key or key in produced:
+                    continue
+                if key not in handle_types:
+                    continue  # not a lifecycle handle (string/value/scalar) →
+                    # the renderer fills it; never an I2a producer-prepend case
+                if not _producers_for_type(idx, key):
+                    continue  # genuinely unconstructable → Task-11 guard
+                prod = _pick_producer(key)
+                if prod and prod != nm and prod not in result:
+                    result.append(prod)
+                    produced.add(key)            # this producer satisfies key
+                    _mark_produced(prod, produced)
+        result.append(nm)
+        _mark_produced(nm, produced)
+    return result
+
+
 # I2b (Task 8): a required non-handle pointer arg the renderer CAN synthesize
 # non-NULL — a string (string-wrapped) or a complete public value-struct
 # (stack-alloc {0}, e.g. cmsCIELab / cmsCIEXYZ). Such args are NEVER an I2b
