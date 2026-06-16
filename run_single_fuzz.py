@@ -599,15 +599,22 @@ def _resolve_candidate_binary(src, work_dirs):
 
 
 def _is_degenerate_binary_set(hashes) -> bool:
-  """True when preflight binaries collapse to <=2 distinct (among >=5 candidates)
-  — the stock-binary build-cache bug signature (instrumented vs not). It makes the
-  no_progress edge signal a PHANTOM (verified: lcms 63→2 hashes, c-ares 29→2, both
-  the stock fuzzer). Real per-driver builds (zlib 18→18, libucl 13→13) are NOT
-  degenerate, so their no_progress gate stays trustworthy. Cross-project-safe."""
+  """True when preflight binaries collapse to a tiny set of distinct hashes — the
+  stock-binary build-cache bug signature (instrumented vs not, ± a few sanitizer
+  variants). It makes the no_progress edge signal a PHANTOM (verified: lcms 63→2
+  hashes, c-ares 29→2, both the stock fuzzer). Real per-driver builds (zlib 18→18,
+  libucl 13→13) are NOT degenerate, so their no_progress gate stays trustworthy.
+
+  Threshold is RATIO-based (``distinct <= max(2, total//10)``), not a flat ``<=2``:
+  a partial collapse (e.g. 3 distinct among 60 — a handful of sanitizer variants of
+  the same stock binary) is still a phantom signal, and a flat ``<=2`` would miss
+  it. The ``max(2, …)`` floor preserves the original behaviour for small sets
+  (c-ares 29→2 still degenerate; zlib 18→18 / libucl 13→13 still real).
+  Cross-project-safe."""
   hashes = list(hashes or [])
   if len(hashes) < 5:
     return False
-  return len(set(hashes)) <= 2
+  return len(set(hashes)) <= max(2, len(hashes) // 10)
 
 
 def _binaries_degenerate(pairs) -> bool:

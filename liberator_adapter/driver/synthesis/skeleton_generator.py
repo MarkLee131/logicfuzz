@@ -1886,17 +1886,27 @@ class SkeletonGenerator:
         # Real-API set for destroyer validation: a name-pattern-inferred destroyer
         # that ISN'T a real project API (e.g. cmsCreateContext → 'cmsDestroy') is
         # an undefined symbol → link failure → the driver is dropped by
-        # compile-validation (breadth loss). Validate against the model's API set
-        # (∪ the sequence's own APIs). Empty ⇒ legacy inference preserved.
-        _valid_apis = set(seq_api_names)
-        _model_apis = getattr(dep_model, 'apis', None) or {}
-        if isinstance(_model_apis, dict):
-            _valid_apis |= set(_model_apis.keys())
-            for _v in _model_apis.values():
-                _fn = getattr(_v, 'function_name', None) or (
-                    _v.get('function_name') if isinstance(_v, dict) else None)
-                if _fn:
-                    _valid_apis.add(_fn)
+        # compile-validation (breadth loss). The validator is the MODEL's API
+        # universe — only it authoritatively knows which symbols exist. ARM the
+        # reality-gate ONLY when a model is present; with no model we cannot
+        # validate, so leave it OFF (empty set ⇒ _real_destroy keeps the legacy
+        # name-pattern inference, and any truly invalid symbol is still caught
+        # downstream by compile-validation). Seeding the gate from seq_api_names
+        # ALONE (the model-absent path) would WRONGLY suppress a real paired
+        # destroyer that isn't itself in the sequence (e.g. cJSON_Delete for an
+        # in-sequence cJSON_Parse) → leak. Production threads dep_model (CBFactory),
+        # so the gate is armed there. 2026-06 review.
+        _valid_apis: Set[str] = set()
+        if dep_model is not None:
+            _valid_apis = set(seq_api_names)
+            _model_apis = getattr(dep_model, 'apis', None) or {}
+            if isinstance(_model_apis, dict):
+                _valid_apis |= set(_model_apis.keys())
+                for _v in _model_apis.values():
+                    _fn = getattr(_v, 'function_name', None) or (
+                        _v.get('function_name') if isinstance(_v, dict) else None)
+                    if _fn:
+                        _valid_apis.add(_fn)
         for var_name, var in skeleton.variables.items():
             if not var.source_api:
                 continue

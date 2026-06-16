@@ -58,6 +58,54 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 }
 """
 
+# VALID (reviewer FP, lcms 09.c shape): `unlinked` is declared NULL then WRITTEN
+# by an OUT-PARAM (`&unlinked`), guarded, and freed. The address-of is production;
+# flagging this drops a valid driver.
+DRIVER_VALID_OUTPARAM = """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    cmsPipeline* pipe = cmsPipelineAlloc(NULL, 3, 3);
+    if (pipe == NULL) return 0;
+    cmsStage* unlinked = NULL;
+    cmsPipelineUnlinkStage(pipe, cmsAT_END, &unlinked);
+    if (unlinked) cmsStageFree(unlinked);
+    cmsPipelineFree(pipe);
+    return 0;
+}
+"""
+
+# ORPHAN with a `== NULL` comparison present: the comparison must NOT be mistaken
+# for production (else the real orphan is masked — false negative).
+DRIVER_ORPHAN_WITH_COMPARISON = """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    void * h = NULL;
+    if (h == NULL) {}
+    cmsColorSpaceSignature cs = cmsGetColorSpace(h);
+    return 0;
+}
+"""
+
+# Cross-project generic orphan (NON-cms): an un-produced NULL handle consumed by a
+# non-creator. The detector must not be vacuously cms-only.
+DRIVER_GENERIC_ORPHAN = """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    foo_handle_t *h = NULL;
+    foo_consume(h, data, size);
+    return 0;
+}
+"""
+
+# VALID cross-project generic: handle produced by a creator, then consumed + freed.
+DRIVER_GENERIC_VALID = """
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    foo_handle_t *h = NULL;
+    h = foo_create();
+    if (!h) return 0;
+    foo_consume(h, data, size);
+    foo_free(h);
+    return 0;
+}
+"""
+
 
 def test_detects_orphan_getter_chain_driver63():
     assert is_degenerate_orphan(DRIVER_63) is True
@@ -77,3 +125,21 @@ def test_valid_creator_consumer_not_flagged():
 
 def test_empty_or_trivial_not_flagged():
     assert is_degenerate_orphan("int LLVMFuzzerTestOneInput(const uint8_t*d,size_t s){return 0;}") is False
+
+
+def test_outparam_produced_handle_not_flagged():
+    # reviewer FP (09.c): &unlinked is production; the guarded free is valid.
+    assert is_degenerate_orphan(DRIVER_VALID_OUTPARAM) is False
+
+
+def test_comparison_not_mistaken_for_production():
+    # `if (h == NULL)` must not mark h produced → the real orphan stays detected.
+    assert is_degenerate_orphan(DRIVER_ORPHAN_WITH_COMPARISON) is True
+
+
+def test_generic_non_cms_orphan_flagged():
+    assert is_degenerate_orphan(DRIVER_GENERIC_ORPHAN) is True
+
+
+def test_generic_non_cms_valid_not_flagged():
+    assert is_degenerate_orphan(DRIVER_GENERIC_VALID) is False

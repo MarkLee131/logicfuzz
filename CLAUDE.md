@@ -30,13 +30,7 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml --closed-loop --closed-loop-it
 # A/B: disable G2 model-driven construction, fall back to random-walk grammar
 LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.yaml
 
-# Generation features now DEFAULT-ON (gates removed 2026-06 — flag cleanup):
-# factory chain (opaque void*-return producer recovery), density + hard NULL-guard
-# (coupled; density-only is ablation-proven harmful), max-coverage diversity
-# selection, real seed-corpus routing (*.icc/*.it8/… by parser-entry API + magic),
-# deterministic lean crash triage + skip per-driver optimize, typedef-handle
-# recovery. Measured lcms 30s (density+guard, now default): 66→206 br, FP 1→0.
-#
+
 # Remaining knobs — tuning values + A/B kill-switches (the only LOGICFUZZ_* left):
 #   LOGICFUZZ_TOP_K=N             skeleton/driver count = the UNION-breadth lever
 #                                 (default filter_top_k=10; needs NO_CACHE=1 to
@@ -283,6 +277,28 @@ LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.ya
 #                                 Pair with EXERCISE_OBJECT+EXERCISE_DEEP_BUFFER to
 #                                 also RUN the cross transform (cmsDoTransform). Default
 #                                 -OFF, gate-off byte-identical (golden net green).
+#   LOGICFUZZ_TAG_ROUNDTRIP=1     depth lever (gated default-OFF): after a profile
+#                                 PRODUCER (`_is_profile_producer` → cmsHPROFILE
+#                                 return, NOT context/transform handles), append a
+#                                 memory-safe `cmsSaveProfileToMem`→`cmsOpenProfile
+#                                 FromMem` round-trip on the LIVE `ret_<producer>`
+#                                 handle, so the tag SERIALIZE→reparse path (cmstypes.c,
+#                                 the biggest untapped lcms block ~4% covered) runs.
+#                                 Two-call sizing protocol (bounded malloc, every return
+#                                 checked, no leak/double-free); inert off-lcms
+#                                 (`skeleton_generator._append_tag_roundtrip`). Reviewed
+#                                 memory-safe (compiles -Wall -Wextra C+C++).
+#   LOGICFUZZ_LLM_REWRITE=1       opt OUT of B-design (hole-filling) back to A-design
+#                                 (LLM free-rewrite). DEFAULT is B-design: the Prototyper
+#                                 FILLS the skeleton's leaf holes and DISCARDS any
+#                                 whole-driver rewrite, preserving the constructed
+#                                 object-construction skeleton + symbolic levers. =1
+#                                 restores the legacy generation prompt + keep-rewrite
+#                                 (the A/B control). Replaced the inverted
+#                                 `LOGICFUZZ_FORCE_HOLE_FILLING` (now removed). Measured:
+#                                 A-design reverted object-construction skeletons to
+#                                 parser-entry → inert (881 br flat); B-design is the
+#                                 ship default. `src/agents/prototyper.py`.
 #   LIBERATOR_SVF_TIMEOUT_SECS=N  SVF pointer-analysis WALL-TIME cap (default 1800s;
 #                                 raised from 600). Measured 2026-06: libtiff/libvpx
 #                                 are TIME-bound (timed out at 7200s, only 4.5/7.7GB

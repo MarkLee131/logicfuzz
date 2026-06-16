@@ -54,3 +54,17 @@ def test_too_few_candidates_not_judged():
     # share a binary); don't suppress the gate.
     assert _is_degenerate_binary_set(["a", "a"]) is False
     assert _is_degenerate_binary_set([]) is False
+
+
+def test_partial_degeneracy_detected():
+    # The stock-binary collapse need not be TOTAL: a build that produces a few
+    # sanitizer variants (e.g. 3 distinct among 60) is still degenerate — the
+    # no_progress signal is still a phantom. A flat <=2 threshold misses this.
+    assert _is_degenerate_binary_set([f"h{i % 3}" for i in range(60)]) is True   # 3/60
+    assert _is_degenerate_binary_set([f"h{i % 4}" for i in range(50)]) is True   # 4/50
+
+
+def test_mostly_distinct_not_degenerate():
+    # A real per-driver build with a couple of incidental collisions is NOT
+    # degenerate (well above the 10%-distinct floor).
+    assert _is_degenerate_binary_set([f"z{i}" for i in range(58)] + ["z0", "z1"]) is False  # 58/60
