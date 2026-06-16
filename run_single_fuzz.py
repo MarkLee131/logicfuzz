@@ -856,6 +856,31 @@ def _maybe_merge_drivers(benchmark: Benchmark,
         f'candidate(s) survived preflight; need ≥2 to merge)', trial=0)
     return None
 
+  # === Orphan filter: drop lifecycle-incomplete crashers preflight missed ===
+  # A driver that calls a handle-CONSUMER on a handle declared `= NULL` and never
+  # produced (a constructor graceful-degradation orphan) derefs NULL inside the
+  # library → SEGV (lcms cmsGetColorSpace(NULL) @ 0x8c). These COMPILE and slipped
+  # past preflight (crashed=False), then poison the fused harness AND corrupt the
+  # coverage -merge replay (measured: 65 crashes / 37 -merge restarts; excluding
+  # them → 0 crashes, 1975 edges in 56s vs 2150 in 30min poisoned). Narrow scope
+  # (never-produced handle only) avoids dropping valid drivers; static, no LLM.
+  try:
+    from tools.merge_drivers.orphan_filter import filter_orphans
+    _kept, _orphans = filter_orphans(successful_sources)
+    if _orphans:
+      logger.info(
+          f'merge_drivers: orphan filter dropped {len(_orphans)} '
+          f'lifecycle-incomplete (getter-on-NULL) driver(s): '
+          f'{[str(o).split("/")[-1] for o in _orphans]}', trial=0)
+      successful_sources = _kept
+  except Exception as _ofe:  # never block a merge on the filter
+    logger.warning(f'merge_drivers: orphan filter skipped ({_ofe})', trial=0)
+  if len(successful_sources) < 2:
+    logger.info(
+        f'merge_drivers: skipping (only {len(successful_sources)} '
+        f'candidate(s) survived orphan filter; need ≥2 to merge)', trial=0)
+    return None
+
   # === Compile-validation: keep the MERGED harness VALID ===
   # First principle: the merge must ship only sub-drivers that COMPILE under the
   # real OSS-Fuzz build flags. Preflight (above) only drops crash/no-progress —
