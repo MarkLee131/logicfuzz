@@ -7,7 +7,9 @@ build+exercise drivers whose construction edges DO add to the union regardless o
 drops crashers (dead_on_empty) always but `no_progress` only when explicitly opted in.
 """
 from collections import namedtuple
-from run_single_fuzz import _preflight_rejection_set, _is_degenerate_binary_set
+from run_single_fuzz import (
+    _preflight_rejection_set, _is_degenerate_binary_set, _should_drop_no_progress,
+)
 
 _R = namedtuple("_R", "driver_path accepted rejection_reason")
 
@@ -68,3 +70,26 @@ def test_mostly_distinct_not_degenerate():
     # A real per-driver build with a couple of incidental collisions is NOT
     # degenerate (well above the 10%-distinct floor).
     assert _is_degenerate_binary_set([f"z{i}" for i in range(58)] + ["z0", "z1"]) is False  # 58/60
+
+
+# The DECISION of whether to drop no_progress for a MERGE. Regression (2026-06-16):
+# once the stock-binary build bug was fixed, preflight binaries became REAL
+# (non-degenerate), and the old `drop = not degenerate` rule RE-ENABLED the gate —
+# culling 10/13 merge-valuable drivers (lcms depth-lever run: 16→6 merged, 1411 vs
+# 2289 edges). The principle (Fix 1a) is universal: no_progress (15s solo
+# edge-growth=0) is the WRONG selector for a MERGED harness — a driver flat solo
+# still adds UNION edges. So the DEFAULT must KEEP no_progress regardless of binary
+# realness; only the explicit env override forces the drop (A/B).
+def test_default_keeps_no_progress_regardless_of_binary_realness():
+    assert _should_drop_no_progress("") is False        # default: keep (the fix)
+    assert _should_drop_no_progress(None) is False
+
+
+def test_env_override_forces_drop():
+    for v in ("1", "true", "yes", "on", "TRUE"):
+        assert _should_drop_no_progress(v) is True
+
+
+def test_env_override_forces_keep():
+    for v in ("0", "false", "no", "off"):
+        assert _should_drop_no_progress(v) is False

@@ -630,6 +630,29 @@ def _binaries_degenerate(pairs) -> bool:
   return _is_degenerate_binary_set(hashes)
 
 
+def _should_drop_no_progress(env_val) -> bool:
+  """Decide whether to drop ``no_progress`` drivers from a MERGE.
+
+  DEFAULT = False (KEEP). ``no_progress`` (15s solo edge-growth = 0) is the WRONG
+  selector for a MERGED harness: a driver that doesn't GROW in a 15s solo smoke
+  run still contributes its construction/exercise edges to the UNION, and a deep
+  build+exercise driver (the point of the depth levers) is exactly the kind that
+  reads as no_progress solo yet adds union breadth. PromeFuzz filters on COMPILE,
+  not 15s runtime growth (Fix 1a principle).
+
+  This used to be ``drop = not _binaries_degenerate(pairs)`` — keep only when the
+  preflight binaries collapsed (stock-binary build bug). That mis-fired once the
+  build bug was FIXED: real (non-degenerate) binaries RE-ENABLED the gate and it
+  culled 10/13 merge-valuable drivers (lcms 16→6 merged, 1411 vs 2289 edges,
+  2026-06-16). The realness of the binary does NOT make 15s-solo-growth a valid
+  merge selector. Only the explicit env override forces the drop (A/B control).
+  Crashers (``dead_on_empty``) are dropped UNCONDITIONALLY elsewhere. Binary
+  degeneracy is still detected + LOGGED at the call site as a build-health warning.
+  """
+  v = (env_val or '').strip().lower()
+  return v in ('1', 'true', 'yes', 'on')
+
+
 def _preflight_rejection_set(results, drop_no_progress: bool):
   """Compute the set of driver_paths to reject from preflight results.
 
@@ -689,24 +712,20 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
     write_report(results, Path(work_dirs.base) / 'merged' / 'preflight.json')
   except Exception:
     pass
-  # Drop crashers always; drop no_progress ADAPTIVELY. The 15s edge-GROWTH gate is
-  # only trustworthy when the preflight binaries are REAL per-driver builds. On
-  # projects hit by the stock-binary build-cache bug (lcms 63→2 hashes, c-ares
-  # 29→2 — both the stock fuzzer), the signal is a PHANTOM and culled 67%
-  # (lcms 105→20) on which build-variant a driver got. On projects with real
-  # binaries (zlib 18→18, libucl 13→13) the gate is valid, so we keep it. Env
-  # override LOGICFUZZ_DROP_NO_PROGRESS in {0,1} forces it. Cross-project-tested.
-  _env_np = os.environ.get('LOGICFUZZ_DROP_NO_PROGRESS', '').strip().lower()
-  if _env_np in ('1', 'true', 'yes', 'on'):
-    _drop_np = True
-  elif _env_np in ('0', 'false', 'no', 'off'):
-    _drop_np = False
-  else:
-    _drop_np = not _binaries_degenerate(pairs)
-    if not _drop_np:
-      logger.info('merge_drivers: preflight binaries degenerate (stock-binary '
-                  'build bug) → keeping no_progress drivers (signal unreliable)',
-                  trial=0)
+  # Drop crashers ALWAYS; KEEP no_progress by default. The 15s solo edge-GROWTH
+  # gate is the WRONG selector for a MERGE — a deep build+exercise driver that is
+  # flat solo still adds UNION edges (PromeFuzz filters on compile, not 15s growth,
+  # Fix 1a). The old `drop = not degenerate` rule mis-fired once the stock-binary
+  # build bug was fixed: real binaries re-enabled the gate → culled 10/13
+  # merge-valuable drivers (lcms 16→6, 1411 vs 2289 edges, 2026-06-16). Env
+  # override LOGICFUZZ_DROP_NO_PROGRESS in {0,1} forces it (A/B). Degeneracy is now
+  # a build-HEALTH warning only (it should be impossible post-fix).
+  _drop_np = _should_drop_no_progress(
+      os.environ.get('LOGICFUZZ_DROP_NO_PROGRESS', ''))
+  if _binaries_degenerate(pairs):
+    logger.info('merge_drivers: ⚠ preflight binaries DEGENERATE (stock-binary '
+                'build bug recurred? expected distinct per-driver builds)',
+                trial=0)
   rejected = _preflight_rejection_set(results, drop_no_progress=_drop_np)
   if rejected:
     logger.info(
