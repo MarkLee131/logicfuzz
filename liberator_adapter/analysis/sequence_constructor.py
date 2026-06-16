@@ -1111,6 +1111,77 @@ def _build_prefix(
     return prefix, opened
 
 
+def _enforce_producer_order(seq: Sequence[str], idx: _Index) -> List[str]:
+    """I1 (LOGICFUZZ_VALIDITY_CONTRACT): stable-reorder ``seq`` so every producer
+    of a handle type is emitted BEFORE any in-sequence consumer/destroyer that
+    requires/destroys that type (no use-before-produce / close-before-open).
+
+    ``_build_prefix`` already appends producers ahead of consumers via recursion,
+    but later passes (densify / cross-source injection / scoped-guard / error
+    variants) can interleave a consumer ahead of its producer. This is a thin
+    final net: a stable topological emit that keeps the relative order of every
+    other call. Pure; only invoked under the gate ⇒ gate-off byte-identical."""
+    names = list(seq)
+    if len(names) < 2:
+        return names
+
+    # For each statement, the handle types it requires (a producer must precede)
+    # and the handle types it produces.
+    def _req(nm: str) -> Set[str]:
+        sem = idx.by_name.get(nm)
+        if sem is None:
+            return set()
+        # destroyers/consumers both depend on a live handle of the type
+        return set(getattr(sem, "requires", ()) or ()) | \
+            set(getattr(sem, "destroys", ()) or ())
+
+    def _prod(nm: str) -> Set[str]:
+        sem = idx.by_name.get(nm)
+        if sem is None:
+            return set()
+        out = set(getattr(sem, "produces", ()) or ())
+        # recovered opaque producers carry their handle type in produces=[]; a
+        # CREATOR with no produces still opens its name-stem recovered type, but
+        # we only need the explicit-produces signal for ordering here.
+        return out
+
+    # Stable topological insertion: build the output incrementally; before
+    # emitting a consumer whose required type is produced LATER in the input,
+    # first emit those still-pending producers (in their original order).
+    remaining = list(names)
+    out: List[str] = []
+    emitted_types: Set[str] = set()
+    guard = 0
+    max_iter = len(remaining) * len(remaining) + len(remaining) + 1
+    while remaining and guard < max_iter:
+        guard += 1
+        head = remaining[0]
+        needed = _req(head)
+        # types this head needs that are NOT yet produced but ARE produced by a
+        # later statement still in `remaining`
+        pending = {t for t in needed
+                   if t not in emitted_types
+                   and any(t in _prod(later) for later in remaining[1:])}
+        if pending:
+            # pull the FIRST later producer of one pending type to the front
+            moved = False
+            for k in range(1, len(remaining)):
+                if _prod(remaining[k]) & pending:
+                    prod = remaining.pop(k)
+                    remaining.insert(0, prod)
+                    moved = True
+                    break
+            if moved:
+                continue  # re-evaluate with the producer now at the head
+        # emit head
+        out.append(head)
+        emitted_types |= _prod(head)
+        remaining.pop(0)
+    # safety: if the guard tripped (shouldn't for acyclic deps), append the rest
+    out.extend(remaining)
+    return out
+
+
 def _closing_destroyers(opened: Set[str], idx: _Index,
                         destroyer_rank: Optional[Dict[str, int]] = None) -> List[str]:
     """One destroyer per opened handle type.
@@ -1357,6 +1428,8 @@ def construct_sequences(
                         for a in comp]
             seq = core + _closing_destroyers(opened, idx,
                                              destroyer_rank=_destroyer_rank)
+            if _validity_contract():
+                seq = _enforce_producer_order(seq, idx)   # I1
             _add(seq)
 
         # 3. create→destroy coverage for creators no target reached.
@@ -1373,8 +1446,11 @@ def construct_sequences(
                 # the forward exercise step — these are 'build but never use'.
                 _core = _append_exercisers(_core, opened, idx,
                                            deep_buffer=_exercise_deep_buffer())
-            _add(_core + _closing_destroyers(opened, idx,
-                                             destroyer_rank=_destroyer_rank))
+            _seq = _core + _closing_destroyers(opened, idx,
+                                               destroyer_rank=_destroyer_rank)
+            if _validity_contract():
+                _seq = _enforce_producer_order(_seq, idx)   # I1
+            _add(_seq)
 
     if len(seqs) > max_sequences:
         seqs = seqs[:max_sequences]
