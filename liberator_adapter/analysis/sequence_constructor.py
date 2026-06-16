@@ -121,6 +121,16 @@ def _exercise_object() -> bool:
         "1", "true", "yes", "on")
 
 
+def _validity_contract() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_VALIDITY_CONTRACT`` makes construction satisfy
+    the Validity Contract — every ``nullable=False`` opaque-handle ARG the model
+    knows (not just the lossy IR ``requires``) gets a type-matching producer in the
+    prefix. Args with no producer (value-structs/buffers) stay holes for the renderer.
+    See docs/superpowers/specs/2026-06-16-valid-by-construction-contract.md."""
+    return _os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _exercise_deep_buffer() -> bool:
     """Sub-gate (default-off) of EXERCISE_OBJECT: ``LOGICFUZZ_EXERCISE_DEEP_BUFFER``
     makes the forward-exercise step PREFER a deep data-processing consumer whose
@@ -1070,6 +1080,19 @@ def _build_prefix(
 
     for t in target.requires:
         resolve(t, 0)   # best-effort; unmet requirements stay holes
+    # I2a (LOGICFUZZ_VALIDITY_CONTRACT): the IR ``requires`` is LOSSY — it erases
+    # some handle args (cmsCreateMultiprofileTransform's profile array; opaque
+    # void* args). Drive resolution from the MODEL's per-arg nullable+type instead:
+    # for every ``nullable=False`` arg whose type has a producer, ensure one in the
+    # prefix. Value-structs / buffers (no producer) resolve False → stay holes the
+    # renderer fills. Additive + gated (gate-off ⇒ byte-identical).
+    if _validity_contract():
+        for a in (getattr(target, "args", None) or ()):
+            if getattr(a, "nullable", True):
+                continue  # nullable arg → NULL is legal, no producer needed
+            key = _norm_handle(getattr(a, "type_str", "") or "")
+            if key and key not in satisfied and _producers_for_type(idx, key):
+                resolve(key, 0)
     # Lever A construction side: a CREATOR's handle-collection arg (cmsToneCurve**)
     # is role UNKNOWN / absent from ``requires`` (IR erased the inner handle), so
     # chain a producer of the ELEMENT type too. The render (Lever A) then
