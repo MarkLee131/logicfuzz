@@ -374,6 +374,32 @@ def is_image_cached(project_name: str, sanitizer: str) -> bool:
   except sp.CalledProcessError:
     return False
 
+def _invalidate_stale_cache_dockerfiles(generated_project_folder: str) -> None:
+  """Remove stale ``Dockerfile_original`` + ``Dockerfile_*_cached`` so the cache
+  rewrite REGENERATES them from the CURRENT (driver-injected) Dockerfile.
+
+  Keystone build bug: the extraction/cache-prep phase snapshots
+  ``Dockerfile_original`` + the cached Dockerfile BEFORE the generated driver is
+  COPY'd in. The trial build's ``rewrite_project_to_cached_project`` then hits the
+  'Already converted' early-return and reuses the stale, driver-less cached
+  Dockerfile, so the cached build compiles the STOCK fuzzer (lcms cms_gdb_fuzzer,
+  c-ares ares-test-fuzz) instead of our driver — silently reporting baseline
+  coverage. Invalidating after the driver COPY is appended forces a fresh rewrite
+  whose 'last 2 COPYs' include the appended ``COPY <driver> <target_path>`` (works
+  for both lcms ``COPY *.c`` and the c-ares repo-path layout). Keeps the live
+  ``Dockerfile`` (the rewrite's fresh source)."""
+  import glob as _glob
+  stale = [os.path.join(generated_project_folder, 'Dockerfile_original')]
+  stale += _glob.glob(
+      os.path.join(generated_project_folder, 'Dockerfile_*_cached'))
+  for p in stale:
+    try:
+      if os.path.isfile(p):
+        os.remove(p)
+    except OSError:
+      pass
+
+
 def rewrite_project_to_cached_project(project_name: str, generated_project: str,
                                       sanitizer: str) -> None:
   """Rewrites Dockerfile of a project to enable cached build scripts."""

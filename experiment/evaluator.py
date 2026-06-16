@@ -324,6 +324,15 @@ class Evaluator:
       f.write(f'\nCOPY {os.path.basename(target_file)} '
               f'{benchmark.target_path}\n')
 
+    # KEYSTONE FIX: the driver COPY just appended must reach the CACHED build.
+    # The extraction/cache-prep phase snapshots Dockerfile_original + the cached
+    # Dockerfile BEFORE this COPY exists; the rewrite's 'Already converted'
+    # early-return then reuses that driver-less snapshot, so cached-build projects
+    # (lcms, c-ares) compiled the STOCK fuzzer instead of our driver. Invalidate
+    # the stale snapshots so the rewrite regenerates them from THIS driver-injected
+    # Dockerfile (its appended COPY is the last COPY → kept by the rewrite).
+    oss_fuzz_checkout._invalidate_stale_cache_dockerfiles(generated_project_path)
+
     if not build_script_path or os.path.getsize(build_script_path) == 0:
       # Return the generated project path to the caller.
       return generated_project_path
