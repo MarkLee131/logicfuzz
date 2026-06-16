@@ -1520,18 +1520,20 @@ class CBFactory(Factory):
             arg_tokens: Dict[int, str] = {}
             for j, arg in enumerate(getattr(api, 'arguments_info', []) or []):
                 t = getattr(arg, 'type', '') or ''
-                if t.count('*') == 1:   # single-pointer ⇒ candidate input handle
+                # I3: an opaque handle TYPEDEF (cmsHPROFILE = void*, 0 stars) is
+                # missed by the *-count test — the dominant orphan source. Treat a
+                # model-known handle family as a binding candidate too.
+                fam = _arg_family(api.function_name, j) if i3 else None
+                if t.count('*') == 1 or fam:   # single-pointer OR typedef handle
                     key = normalize_handle_type(t)
                     bound = False
                     # I3: prefer a SAME-FAMILY producer over the collapsed-void*
                     # nearest match. Only overrides when the model knows the
                     # arg's family AND a same-family producer exists.
-                    if i3:
-                        fam = _arg_family(api.function_name, j)
-                        if fam and fam in produced_by_family:
-                            bindings[(api.function_name, j)] = \
-                                produced_by_family[fam]
-                            bound = True
+                    if i3 and fam and fam in produced_by_family:
+                        bindings[(api.function_name, j)] = \
+                            produced_by_family[fam]
+                        bound = True
                     if not bound and key and key in produced:
                         bindings[(api.function_name, j)] = produced[key]
                     if cross and key:
@@ -1542,13 +1544,22 @@ class CBFactory(Factory):
             ret_token = normalize_handle_type(rt) if is_prod else None
             if is_prod:
                 produced[ret_token] = f"ret_{api.function_name}"
-                if i3:
-                    # Producer family from its NAME (cmsOpenProfileFromMem →
-                    # profile, cmsCreateTransform → transform) — the model's
-                    # ``produces`` is empty for IR-erased opaque void* returns.
-                    pf = _family(api.function_name)
-                    if pf:
-                        produced_by_family[pf] = f"ret_{api.function_name}"
+            if i3:
+                # I3: register a typedef'd opaque-handle PRODUCER by family even
+                # when its return desugars to 0-star void* (cmsCreate_sRGBProfile
+                # → cmsHPROFILE, cmsOpenProfileFromMem → cmsHPROFILE) — the
+                # dominant producer source the *-count is_prod test MISSES, the
+                # mirror of the consumer-side typedef gap above. Family from the
+                # return TYPE (symmetric with the consumer's _arg_family), falling
+                # back to the producer NAME (cmsCreateTransform → transform) ONLY
+                # for genuine pointer returns (is_prod) — a destroyer like
+                # cmsCloseProfile returns cmsBool (family None) yet its NAME holds
+                # "profile", so the NAME fallback must stay is_prod-gated to avoid
+                # registering a destroyer as a profile producer. The model's
+                # ``produces`` is empty for IR-erased opaque void* returns.
+                pf = _family(rt) or (_family(api.function_name) if is_prod else None)
+                if pf:
+                    produced_by_family[pf] = f"ret_{api.function_name}"
             if cross:
                 ordered.append({
                     "name": api.function_name, "is_producer": is_prod,
