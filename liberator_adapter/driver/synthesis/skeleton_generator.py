@@ -578,6 +578,61 @@ class DriverSkeleton:
 
 
 # =============================================================================
+# Tag round-trip exerciser (LOGICFUZZ_TAG_ROUNDTRIP, default-off)
+# =============================================================================
+
+def _tag_roundtrip() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_TAG_ROUNDTRIP`` appends a save->reopen->read
+    block on a cmsHPROFILE-producing skeleton to exercise cmstypes.c — the tag-type
+    (de)serializers, the single biggest untapped lcms block (95/2270 = 4%). The
+    WRITE handlers (Type_X_Write) fire only on cmsSaveProfileToMem of a tag-rich
+    profile; the READ handlers (Type_X_Read) only on cmsReadTag of a SAVED+REOPENED
+    profile (an in-memory profile returns the live object without deserializing).
+    No generated driver did this round-trip (measured)."""
+    return os.environ.get("LOGICFUZZ_TAG_ROUNDTRIP", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _is_profile_producer(source_api: str) -> bool:
+    """True for an API that returns a cmsHPROFILE (profile or device-link)."""
+    sa = source_api or ""
+    return (sa.startswith("cmsCreate") or sa.startswith("cmsOpen")) and (
+        "Profile" in sa or "DeviceLink" in sa)
+
+
+# Fully-guarded, self-contained C block. {prof} = the live profile-handle var.
+# Exercises: cmsSaveProfileToMem (write handlers) -> cmsOpenProfileFromMem (parse)
+# -> cmsReadTag x14 distinct tag types (read handlers). Memory-safe: bounded
+# malloc, every return checked, no fuzz-controlled sizes.
+_TAG_ROUNDTRIP_TEMPLATE = """\
+/* TAG_ROUNDTRIP: exercise cmstypes (de)serializers via save->reopen->read */
+if (({prof}) != NULL) {{
+    cmsUInt32Number _rt_n = 0;
+    if (cmsSaveProfileToMem(({prof}), NULL, &_rt_n) && _rt_n > 0 && _rt_n < (1u << 22)) {{
+        void *_rt_buf = malloc(_rt_n);
+        if (_rt_buf != NULL) {{
+            if (cmsSaveProfileToMem(({prof}), _rt_buf, &_rt_n)) {{
+                cmsHPROFILE _rt_h2 = cmsOpenProfileFromMem(_rt_buf, _rt_n);
+                if (_rt_h2 != NULL) {{
+                    static const cmsTagSignature _rt_tags[] = {{
+                        cmsSigRedTRCTag, cmsSigGreenTRCTag, cmsSigBlueTRCTag,
+                        cmsSigRedColorantTag, cmsSigGreenColorantTag, cmsSigBlueColorantTag,
+                        cmsSigMediaWhitePointTag, cmsSigProfileDescriptionTag,
+                        cmsSigCopyrightTag, cmsSigChromaticAdaptationTag,
+                        cmsSigAToB0Tag, cmsSigBToA0Tag, cmsSigGamutTag, cmsSigCharTargetTag }};
+                    unsigned _rt_i;
+                    for (_rt_i = 0; _rt_i < sizeof(_rt_tags) / sizeof(_rt_tags[0]); _rt_i++)
+                        (void) cmsReadTag(_rt_h2, _rt_tags[_rt_i]);
+                    cmsCloseProfile(_rt_h2);
+                }}
+            }}
+            free(_rt_buf);
+        }}
+    }}
+}}"""
+
+
+# =============================================================================
 # Skeleton Generator
 # =============================================================================
 
@@ -700,6 +755,10 @@ class SkeletonGenerator:
                 loop_patterns or {},
                 callback_infos or {}
             )
+
+        # 4b. Tag round-trip exerciser (LOGICFUZZ_TAG_ROUNDTRIP) — before cleanup
+        # so the profile handle is still live.
+        self._append_tag_roundtrip(skeleton)
 
         # 5. Generate cleanup code
         self._generate_cleanup(skeleton, dep_model)
@@ -1769,6 +1828,26 @@ class SkeletonGenerator:
             indent=indent,
         )
         skeleton.add_statement(loop_end)
+
+    def _append_tag_roundtrip(self, skeleton: DriverSkeleton) -> None:
+        """LOGICFUZZ_TAG_ROUNDTRIP: append a guarded save->reopen->read block on a
+        cmsHPROFILE-producing skeleton to exercise cmstypes.c (de)serializers (the
+        4%-covered tag-type handlers). Picks the FIRST profile-handle variable (by
+        cmsHPROFILE c_type or a cms(Create|Open)*(Profile|DeviceLink) producer) and
+        emits the self-contained, fully-guarded round-trip. Default-off / inert."""
+        if not _tag_roundtrip():
+            return
+        prof = None
+        for v in skeleton.variables.values():
+            if 'cmsHPROFILE' in (v.c_type or '') or _is_profile_producer(
+                    v.source_api or ''):
+                prof = v.name
+                break
+        if not prof:
+            return
+        skeleton.add_statement(SkeletonStatement(
+            kind=StatementKind.RAW_CODE,
+            code=_TAG_ROUNDTRIP_TEMPLATE.format(prof=prof)))
 
     def _generate_cleanup(self, skeleton: DriverSkeleton, dep_model=None) -> None:
         """Emit cleanup statements.
