@@ -598,6 +598,31 @@ def _resolve_candidate_binary(src, work_dirs):
   return None
 
 
+def _is_degenerate_binary_set(hashes) -> bool:
+  """True when preflight binaries collapse to <=2 distinct (among >=5 candidates)
+  — the stock-binary build-cache bug signature (instrumented vs not). It makes the
+  no_progress edge signal a PHANTOM (verified: lcms 63→2 hashes, c-ares 29→2, both
+  the stock fuzzer). Real per-driver builds (zlib 18→18, libucl 13→13) are NOT
+  degenerate, so their no_progress gate stays trustworthy. Cross-project-safe."""
+  hashes = list(hashes or [])
+  if len(hashes) < 5:
+    return False
+  return len(set(hashes)) <= 2
+
+
+def _binaries_degenerate(pairs) -> bool:
+  """Hash the preflight binaries and test for the stock-binary collapse."""
+  import hashlib
+  from pathlib import Path as _P
+  hashes = []
+  for _src, b in pairs:
+    try:
+      hashes.append(hashlib.md5(_P(str(b)).read_bytes()).hexdigest())
+    except OSError:
+      continue
+  return _is_degenerate_binary_set(hashes)
+
+
 def _preflight_rejection_set(results, drop_no_progress: bool):
   """Compute the set of driver_paths to reject from preflight results.
 
@@ -657,17 +682,24 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
     write_report(results, Path(work_dirs.base) / 'merged' / 'preflight.json')
   except Exception:
     pass
-  # Drop crashers; keep no_progress by DEFAULT (opt-in to drop via
-  # LOGICFUZZ_DROP_NO_PROGRESS=1). The 15s edge-GROWTH gate is the wrong selector
-  # for a MERGED harness: a deterministic build+exercise driver adds its
-  # construction edges to the UNION regardless of whether it grows in 15s
-  # (PromeFuzz filters on COMPILE, not runtime growth). It was ALSO measured on
-  # the wrong binary — the lcms preflight build produced the stock cms_gdb_fuzzer
-  # (all 63 binaries collapsed to 2 hashes), so the gate culled 67% (105->20) on
-  # a phantom signal. Crashers (dead_on_empty) are still dropped; residual
-  # crash-poison is handled by the orphan filter + fork-mode -ignore_crashes.
-  _drop_np = os.environ.get('LOGICFUZZ_DROP_NO_PROGRESS', '0').strip().lower() \
-      in ('1', 'true', 'yes', 'on')
+  # Drop crashers always; drop no_progress ADAPTIVELY. The 15s edge-GROWTH gate is
+  # only trustworthy when the preflight binaries are REAL per-driver builds. On
+  # projects hit by the stock-binary build-cache bug (lcms 63→2 hashes, c-ares
+  # 29→2 — both the stock fuzzer), the signal is a PHANTOM and culled 67%
+  # (lcms 105→20) on which build-variant a driver got. On projects with real
+  # binaries (zlib 18→18, libucl 13→13) the gate is valid, so we keep it. Env
+  # override LOGICFUZZ_DROP_NO_PROGRESS in {0,1} forces it. Cross-project-tested.
+  _env_np = os.environ.get('LOGICFUZZ_DROP_NO_PROGRESS', '').strip().lower()
+  if _env_np in ('1', 'true', 'yes', 'on'):
+    _drop_np = True
+  elif _env_np in ('0', 'false', 'no', 'off'):
+    _drop_np = False
+  else:
+    _drop_np = not _binaries_degenerate(pairs)
+    if not _drop_np:
+      logger.info('merge_drivers: preflight binaries degenerate (stock-binary '
+                  'build bug) → keeping no_progress drivers (signal unreliable)',
+                  trial=0)
   rejected = _preflight_rejection_set(results, drop_no_progress=_drop_np)
   if rejected:
     logger.info(

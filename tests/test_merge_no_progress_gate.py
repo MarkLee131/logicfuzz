@@ -7,7 +7,7 @@ build+exercise drivers whose construction edges DO add to the union regardless o
 drops crashers (dead_on_empty) always but `no_progress` only when explicitly opted in.
 """
 from collections import namedtuple
-from run_single_fuzz import _preflight_rejection_set
+from run_single_fuzz import _preflight_rejection_set, _is_degenerate_binary_set
 
 _R = namedtuple("_R", "driver_path accepted rejection_reason")
 
@@ -34,3 +34,23 @@ def test_optin_drops_no_progress_too():
 def test_accepted_never_dropped():
     rej = _preflight_rejection_set(_mk(), drop_no_progress=True)
     assert "a" not in rej
+
+
+# Cross-project safety: the no_progress gate is only TRUSTWORTHY when the preflight
+# binaries are real per-driver builds. lcms+c-ares collapse to 2 hashes (stock-
+# binary bug) → phantom signal; zlib (18 distinct)/libucl (13 distinct) are real.
+def test_degenerate_lcms_cares_2_hashes():
+    assert _is_degenerate_binary_set(["h1"] * 42 + ["h2"] * 21) is True   # lcms 63→2
+    assert _is_degenerate_binary_set(["a"] * 14 + ["b"] * 15) is True     # c-ares 29→2
+
+
+def test_real_zlib_libucl_distinct():
+    assert _is_degenerate_binary_set([f"z{i}" for i in range(18)]) is False  # zlib 18→18
+    assert _is_degenerate_binary_set([f"u{i}" for i in range(13)]) is False  # libucl 13→13
+
+
+def test_too_few_candidates_not_judged():
+    # <5 candidates: can't conclude degeneracy (a tiny project may legitimately
+    # share a binary); don't suppress the gate.
+    assert _is_degenerate_binary_set(["a", "a"]) is False
+    assert _is_degenerate_binary_set([]) is False
