@@ -455,6 +455,11 @@ class SkeletonVariable:
     # ``{0}`` — seed-independent + non-degenerate (PromeFuzz's pattern for value
     # structs like cmsCIExyYTRIPLE primaries).
     fuzz_fill_struct: Optional[str] = None
+    # Task 11 (LOGICFUZZ_VALIDITY_CONTRACT): the model marked this HANDLE_IN arg
+    # ``nullable=False``. If it is still UNBOUND at render (no ``bound_expr`` → it
+    # passes a NULL-initialized var), the renderer wraps the call in
+    # ``if (handle) { ... }`` (defense-in-depth) instead of consuming a bare NULL.
+    nonnull_handle: bool = False
 
     def get_declaration(self) -> str:
         """Generate declaration code"""
@@ -590,6 +595,15 @@ def _tag_roundtrip() -> bool:
     profile (an in-memory profile returns the live object without deserializing).
     No generated driver did this round-trip (measured)."""
     return os.environ.get("LOGICFUZZ_TAG_ROUNDTRIP", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def _validity_contract_enabled() -> bool:
+    """Gate (default-off): ``LOGICFUZZ_VALIDITY_CONTRACT``. When on, the renderer
+    consumes the model's evidence-based ``nullable`` and wraps an UNBOUND
+    ``nullable=False`` handle consume in ``if (handle) { ... }`` (Task 11
+    defense-in-depth) instead of passing a bare NULL."""
+    return os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "0").strip().lower() in (
         "1", "true", "yes", "on")
 
 
@@ -1049,10 +1063,15 @@ class SkeletonGenerator:
                 _as = _arg_sem.get(idx)
                 _role = None
                 _pairs = None
+                _nullable = True   # default: NULL is legal (no model signal)
                 if _as is not None:
                     _r = getattr(_as, 'role', None)
                     _role = getattr(_r, 'value', _r) if _r is not None else None
                     _pairs = getattr(_as, 'pairs_with', None)
+                    # Task 11: the model's evidence-based nullability — read it
+                    # (was extracted on ArgSemantics but never consumed here) so
+                    # the renderer can guard an unbound nullable=False handle.
+                    _nullable = bool(getattr(_as, 'nullable', True))
                 arg_info = {
                     'name': arg.name or f"arg{idx}",
                     'type': arg.type,
@@ -1063,6 +1082,7 @@ class SkeletonGenerator:
                     'is_callback': self._is_callback_param(arg),
                     'varlen_target': varlen_map.get(idx),  # (len_idx, rel) or None
                     'role': _role,                          # ArgRole value or None
+                    'nullable': _nullable,                  # Task 11: render-guard
                     'pairs_with': _pairs,                   # LENGTH↔buffer idx or None
                     'deep_fuzz_buffer': (idx == _deep_in_idx),  # Lever B input void*
                     'fuzz_scalar_buffer': _fuzz_buf.get(idx),   # Lever B: (T*)data
@@ -1354,9 +1374,13 @@ class SkeletonGenerator:
             # NEVER the fuzz buffer: the producer→consumer wiring is applied by
             # _apply_arg_bindings (a prior producer's ret_<x>); absent that, a
             # NULL-guarded pointer. Kills the ``(void*)data``-on-handle bug.
+            # Task 11: when the model marks this handle nullable=False (gated),
+            # flag it so a still-unbound NULL render is wrapped in if(handle){}.
+            _nonnull = (not arg_info.get('nullable', True)
+                        and _validity_contract_enabled())
             return SkeletonVariable(
                 name=name, c_type=_public_pointer_type(c_type),
-                is_pointer=True, init_value="NULL")
+                is_pointer=True, init_value="NULL", nonnull_handle=_nonnull)
         if arg_info.get('deep_fuzz_buffer') and is_pointer:
             # Lever B (LOGICFUZZ_EXERCISE_DEEP_BUFFER): the deep consumer's INPUT
             # data buffer is a bare ``void*`` (the cmsDoTransform idiom). Feed it
@@ -1723,6 +1747,11 @@ class SkeletonGenerator:
 
         # Build argument list
         args = []
+        # Task 11 (defense-in-depth): handle vars the model marked nullable=False
+        # that are STILL unbound at render (no producer wired) → pass a NULL var.
+        # Collect them so the whole call is wrapped in ``if (handle) { ... }``
+        # instead of consuming a bare NULL (the library would assert/deref NULL).
+        guard_vars: List[str] = []
         for idx, arg in enumerate(api.arguments_info):
             var_name = f"{arg.name or f'arg{idx}'}_{api.function_name}"
             if var_name in skeleton.variables:
@@ -1735,6 +1764,9 @@ class SkeletonGenerator:
                 else:
                     # is_array / is_pointer / scalar all pass the var name.
                     args.append(var.name)
+                    if (getattr(var, 'nonnull_handle', False)
+                            and var.name not in guard_vars):
+                        guard_vars.append(var.name)
             else:
                 # Variable not declared, use placeholder
                 hole = InitValueHole(
@@ -1753,12 +1785,27 @@ class SkeletonGenerator:
         else:
             call_code = f"{api.function_name}({args_str});"
 
+        # Task 11 defense-in-depth: if this call consumes an unbound
+        # nullable=False handle, wrap it (+ its return check) in
+        # ``if (h1 && h2) { ... }`` so a NULL handle is never passed in. The
+        # call body indents one deeper inside the guard.
+        _guarded = bool(guard_vars) and _validity_contract_enabled()
+        _body_indent = indent + 1 if _guarded else indent
+        if _guarded:
+            cond = " && ".join(guard_vars)
+            skeleton.add_statement(SkeletonStatement(
+                kind=StatementKind.IF_CHECK,
+                code=f"if ({cond}) {{",
+                variables=list(guard_vars),
+                indent=indent,
+            ))
+
         stmt = SkeletonStatement(
             kind=StatementKind.API_CALL,
             code=call_code,
             api=api,
             variables=args,
-            indent=indent,
+            indent=_body_indent,
         )
         skeleton.add_statement(stmt)
 
@@ -1771,9 +1818,16 @@ class SkeletonGenerator:
                 kind=StatementKind.IF_CHECK,
                 code=check_code,
                 variables=[ret_name],
-                indent=indent,
+                indent=_body_indent,
             )
             skeleton.add_statement(check_stmt)
+
+        if _guarded:
+            skeleton.add_statement(SkeletonStatement(
+                kind=StatementKind.IF_CHECK,
+                code="}",
+                indent=indent,
+            ))
 
     def _generate_loop_call(
         self,
