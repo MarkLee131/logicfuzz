@@ -74,6 +74,15 @@ def _cross_source_bind_enabled() -> bool:
         "1", "true", "yes", "on")
 
 
+def _validity_contract_enabled() -> bool:
+    """Gate ``LOGICFUZZ_VALIDITY_CONTRACT`` (default-off). When on (and a model
+    is supplied), ``_signature_handle_bindings`` binds opaque handle args by
+    handle FAMILY (I3, Task 10) instead of the collapsed nearest-void* match."""
+    import os as _os
+    return _os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "0").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def _distribute_cross_source(
     bindings: Dict[Tuple[str, int], str],
     ordered: List[Dict[str, Any]],
@@ -1453,7 +1462,7 @@ class CBFactory(Factory):
         """
         if not SKELETON_AVAILABLE or not target_seq:
             return None
-        bindings = self._signature_handle_bindings(target_seq)
+        bindings = self._signature_handle_bindings(target_seq, dep_model=dep_model)
         varlen_relations = self._extract_varlen_relations(target_seq)
         generator = SkeletonGenerator()
         skeleton = generator.generate(
@@ -1469,24 +1478,61 @@ class CBFactory(Factory):
         return skeleton
 
     def _signature_handle_bindings(
-        self, api_sequence: List[Api]
+        self, api_sequence: List[Api], dep_model=None
     ) -> Dict[Tuple[str, int], str]:
         """Wire single-pointer handle args to a prior producer's ``ret_<api>``
         by normalized type-match. Never rejects; returns only the bindings it
         can make (the rest become holes). Out-pointers (``T**``) and fuzzer
-        buffers are left to SkeletonGenerator (output local / FUZZ_INPUT)."""
+        buffers are left to SkeletonGenerator (output local / FUZZ_INPUT).
+
+        I3 (Task 10, LOGICFUZZ_VALIDITY_CONTRACT + ``dep_model``): opaque handle
+        typedefs (cmsHPROFILE / cmsHTRANSFORM) both desugar to ``void *`` in the
+        IR, so the normalized-type match collapses them and a profile arg can
+        bind to the nearest void* producer (a transform). When the model is
+        threaded in, recover each consumer arg's handle FAMILY from the model's
+        real ``type_str`` and each producer's family from its NAME, and bind by
+        FAMILY first. ADDITIVE: the legacy void* match is the FALLBACK whenever
+        family info is absent (non-lcms / no model) ⇒ those libs are unchanged.
+        """
         from liberator_adapter.analysis.usedef import normalize_handle_type
+        from liberator_adapter.analysis.validity_contract import _family
+        i3 = bool(dep_model) and _validity_contract_enabled()
         bindings: Dict[Tuple[str, int], str] = {}
         produced: Dict[str, str] = {}   # normalized handle type -> ret var
+        # I3: family -> last producer ret var (family from the producer NAME).
+        produced_by_family: Dict[str, str] = {}
         cross = _cross_source_bind_enabled()
         ordered: List[Dict[str, Any]] = []   # for the cross-source post-pass
+
+        def _arg_family(api_name: str, j: int) -> Optional[str]:
+            """Handle family of (api, arg j) from the model's real type_str."""
+            if not i3:
+                return None
+            sem = dep_model.get(api_name) if hasattr(dep_model, "get") else None
+            if sem is None:
+                return None
+            for a in (getattr(sem, "args", ()) or ()):
+                if getattr(a, "index", None) == j:
+                    return _family(getattr(a, "type_str", "") or "")
+            return None
+
         for api in api_sequence:
             arg_tokens: Dict[int, str] = {}
             for j, arg in enumerate(getattr(api, 'arguments_info', []) or []):
                 t = getattr(arg, 'type', '') or ''
                 if t.count('*') == 1:   # single-pointer ⇒ candidate input handle
                     key = normalize_handle_type(t)
-                    if key and key in produced:
+                    bound = False
+                    # I3: prefer a SAME-FAMILY producer over the collapsed-void*
+                    # nearest match. Only overrides when the model knows the
+                    # arg's family AND a same-family producer exists.
+                    if i3:
+                        fam = _arg_family(api.function_name, j)
+                        if fam and fam in produced_by_family:
+                            bindings[(api.function_name, j)] = \
+                                produced_by_family[fam]
+                            bound = True
+                    if not bound and key and key in produced:
                         bindings[(api.function_name, j)] = produced[key]
                     if cross and key:
                         arg_tokens[j] = key
@@ -1496,6 +1542,13 @@ class CBFactory(Factory):
             ret_token = normalize_handle_type(rt) if is_prod else None
             if is_prod:
                 produced[ret_token] = f"ret_{api.function_name}"
+                if i3:
+                    # Producer family from its NAME (cmsOpenProfileFromMem →
+                    # profile, cmsCreateTransform → transform) — the model's
+                    # ``produces`` is empty for IR-erased opaque void* returns.
+                    pf = _family(api.function_name)
+                    if pf:
+                        produced_by_family[pf] = f"ret_{api.function_name}"
             if cross:
                 ordered.append({
                     "name": api.function_name, "is_producer": is_prod,
