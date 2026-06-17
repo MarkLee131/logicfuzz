@@ -1910,6 +1910,29 @@ class FuzzingContext:
                     log.warning(
                         f'REUSE_SKELETONS load failed ({_re}); synthesizing fresh')
                     skeleton_drivers = []
+            # Residual all-cover (LOGICFUZZ_RESIDUAL_ALLCOVER): PromeFuzz-style
+            # breadth lever. The symbolic constructor only emits sequences for
+            # APIs it can build a producer→consumer CHAIN for; APIs with no
+            # recoverable chain never enter the pool, so they're unreachable at
+            # ANY fuzz time (the measured breadth ceiling: 149/358 APIs linked).
+            # For every public API not yet in any sequence, append a single-API
+            # sequence — the validity-repair then PREPENDS creators for its handle
+            # args (making it LIVE), and the LLM fills the rest. Raises the API
+            # surface toward the extraction limit. Gated; off ⇒ unchanged.
+            if os.environ.get("LOGICFUZZ_RESIDUAL_ALLCOVER", "").strip().lower() \
+                    in ("1", "true", "yes", "on"):
+                _covered_api = {a.function_name
+                                for s in filtered_api_sequences for a in s}
+                _residual = [a for a in generator.all_apis
+                             if not a.function_name.startswith("_")
+                             and a.function_name not in _covered_api]
+                for _a in _residual:
+                    filtered_api_sequences.append([_a])
+                log.info(
+                    "   🟦 residual all-cover: +%d single-API sequences "
+                    "(API breadth %d → %d)",
+                    len(_residual), len(_covered_api),
+                    len(_covered_api) + len(_residual))
             if not skeleton_drivers:
                 skeleton_drivers = _synthesize_skeletons_per_sequence(
                     generator=generator,
