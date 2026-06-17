@@ -1001,7 +1001,27 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
             if not corpus_files:
                 logger.warning("Corpus directory is empty, skipping coverage measurement")
                 return None
-            logger.info("Measuring coverage over %d corpus inputs", len(corpus_files))
+            # llvm-cov over the FULL merged corpus on a 44-driver binary blows up
+            # (a single hanging/slow input → 1800s timeout → 0%). Cap the corpus
+            # to a sample for the coverage replay: branch coverage SATURATES, so
+            # ~250 inputs ≈ the full set, while bounding replay time + hang risk.
+            _COV_SAMPLE_CAP = int(os.environ.get("LF_COV_SAMPLE_CAP", "250"))
+            if len(corpus_files) > _COV_SAMPLE_CAP:
+                import tempfile as _tf
+                _samp = Path(_tf.mkdtemp(prefix="covsample_"))
+                # deterministic stride sample (no RNG — reproducible)
+                step = len(corpus_files) / _COV_SAMPLE_CAP
+                picked = [corpus_files[int(i * step)] for i in range(_COV_SAMPLE_CAP)]
+                for f in picked:
+                    try:
+                        shutil.copy(f, _samp / f.name)
+                    except OSError:
+                        continue
+                corpus_dir_abs = str(_samp.resolve())
+                logger.info("Coverage over SAMPLED %d/%d corpus inputs (cap=%d)",
+                            _COV_SAMPLE_CAP, len(corpus_files), _COV_SAMPLE_CAP)
+            else:
+                logger.info("Measuring coverage over %d corpus inputs", len(corpus_files))
 
             # Run coverage measurement
             coverage_cmd = [
@@ -1030,7 +1050,7 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
                     # profdata merge: on timeout this returns None and the
                     # snapshot silently CARRIES FORWARD a stale (hours-old,
                     # smaller-corpus) measurement as the FINAL headline number.
-                    timeout=1800,
+                    timeout=2400,
                     cwd=str(oss_fuzz_dir),
                     env=cov_env,
                 )
@@ -1356,9 +1376,13 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
             # Start fuzzer
             proc = self._run_fuzzer()
 
-            # Take initial snapshot
+            # Take initial snapshot — EDGES ONLY. A full llvm-cov at t=0 over the
+            # merged 44-driver binary × 528 seeds runs ~30min and TIMES OUT
+            # (1800s), recording 0% and stalling the campaign. The libFuzzer
+            # ``cov:`` edge count is the live, reliable metric; llvm-cov branch %
+            # is deferred to the FINAL snapshot (over a sampled corpus).
             time.sleep(5)  # Let fuzzer start
-            self._take_snapshot(0, measure_full_coverage=has_coverage_build)
+            self._take_snapshot(0, measure_full_coverage=False)
             result.initial_coverage_percent = (
                 self.initial_coverage.line_coverage_percent if self.initial_coverage else 0.0
             )
@@ -1372,9 +1396,10 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
 
                 # Take snapshot at intervals
                 if time.time() - last_snapshot >= self.snapshot_interval:
-                    # Full coverage measurement every 3rd snapshot to save time
-                    full_coverage = has_coverage_build and (len(self.snapshots) % 3 == 0)
-                    self._take_snapshot(elapsed, measure_full_coverage=full_coverage)
+                    # Intermediate snapshots: EDGES ONLY (libFuzzer cov:). Per-
+                    # snapshot llvm-cov on the merged binary times out (1800s) and
+                    # blocks the loop; the branch % is measured ONCE at the end.
+                    self._take_snapshot(elapsed, measure_full_coverage=False)
                     last_snapshot = time.time()
 
                 # Check if duration exceeded
