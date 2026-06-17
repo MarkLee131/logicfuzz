@@ -2099,6 +2099,37 @@ class FuzzingContext:
                                             break
                                     if not _moved:
                                         break
+                        # API-floor (RESIDUAL_ALLCOVER): the cover pass keys on
+                        # CLUSTER, so APIs sharing a cluster get only one driver and
+                        # the residual single-API drivers for them are dropped. Pull
+                        # the smallest driver covering each still-uncovered pool API
+                        # so EVERY extracted API is fuzzed (the breadth the lever
+                        # built must reach the merged harness). Gated ⇒ off-path
+                        # unchanged.
+                        if os.environ.get("LOGICFUZZ_RESIDUAL_ALLCOVER", "") \
+                                .strip().lower() in ("1", "true", "yes", "on"):
+                            _all_pool = [_d for _b in _buckets for _d in _b]
+                            _sel_apis = {a for _d in _portfolio
+                                         for a in (_d.get('api_sequence') or [])}
+                            _pool_apis = {a for _d in _all_pool
+                                          for a in (_d.get('api_sequence') or [])}
+                            _floor_n = 0
+                            for _api in sorted(_pool_apis - _sel_apis):
+                                _cand = min(
+                                    (_d for _d in _all_pool
+                                     if _api in (_d.get('api_sequence') or [])
+                                     and id(_d) not in _sel_ids),
+                                    key=lambda _d: len(_d.get('api_sequence') or []),
+                                    default=None)
+                                if _cand is not None:
+                                    _portfolio.append(_cand)
+                                    _sel_ids.add(id(_cand))
+                                    _sel_apis.update(_cand.get('api_sequence') or [])
+                                    _floor_n += 1
+                            if _floor_n:
+                                log.info(
+                                    "   🟦 API-floor: +%d drivers → all %d pool "
+                                    "APIs covered", _floor_n, len(_pool_apis))
                         log.info(
                             '   🎯 portfolio (coverage-complete %s): %d clusters '
                             'covered → %d cover + %d depth = %d of %d drivers',
