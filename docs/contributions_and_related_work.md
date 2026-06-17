@@ -445,6 +445,78 @@ partitioned by the dependency graph; the LLM still owns only the leaf values.
 are *synergistic* (neither alone helps — density-only = 0). The 24h `--merge`
 union vs PromeFuzz Table 2 (lcms ~13k, c-ares 6,106) is the pending headline test.
 
+### Which advantage dimensions to compete on — and why NOT raw 24h coverage (2026-06-17)
+
+Systematic debugging (superpowers) settled *where* we can beat PromeFuzz and where
+we structurally cannot. **PromeFuzz's published Table 2 numbers are 24h-AFL++/GCOV
+and SATURATED on small libraries** (cjson 924/944 GCOV branches ≈ 98%). Exceeding a
+saturated 24h baseline requires comparable fuzz time — arithmetic, not a tooling
+gap — so we must NOT lead the evaluation with raw 24h merged coverage. We lead with
+the dimensions where correct-by-construction structurally wins:
+
+**Gap decomposition (lcms, llvm-cov on the merged profdata).** The us-vs-PromeFuzz
+gap is **time + breadth**, not purely time:
+- our drivers LINK only **443** liblcms2 functions (from the 149 APIs they call) —
+  the static reachability ceiling; the linker drops functions only reachable via
+  the 209 APIs we never call (unreachable at ANY fuzz time);
+- we COVER **197/443 (44%)** → ~246 functions are reachable-but-unexplored (TIME,
+  closed by a longer fuzz);
+- breadth ceiling: 149/358 APIs. PromeFuzz reaches 358 because its scheduler seeds
+  each driver from an UNCOVERED function and lets the LLM construct it (no symbolic
+  chain required). **Metrics agree** (our gcov-taken 48.7% ≈ llvm-cov 49.9% on
+  cjson) — no measurement illusion.
+
+**Breadth levers that close the structural half** (gated, this session): the
+`RESIDUAL_ALLCOVER` pass appends a single-API skeleton for every public API the
+symbolic constructor can't chain (the validity-repair then prepends its handle
+creators), and an **API-floor** in the portfolio pulls every pool API into the
+merged harness. Measured: cjson **75→78 APIs (= PromeFuzz's exact count)**,
+c-ares **96→138 (≥ PromeFuzz's 136)**, lcms 149→297. Plus a merge-include fix
+(symlink project headers so a driver's `#include "../cJSON.h"` idiom resolves in
+the compile-validation/merged-build dirs) — without it cjson dropped **0/41**
+candidates and never built a harness.
+
+**Table A — driver validity (valid-by-construction; cheap, no long fuzz needed).**
+Pure-LLM baselines (PromeFuzz, PromptFuzz) depend on a *compilation-fix loop*; ours
+compile + run + cover by construction.
+
+| project | portfolio | compiled | live (edges>0) | crashed/FP | live-rate | FP-rate |
+|---|---|---|---|---|---|---|
+| cjson | 79 | 53 | 52 | **0** | **67%** | **0%** |
+| lcms (61-drv) | 61 | — | 34 | low | 56% | low |
+
+**Table B — complementary breadth (cjson; our 72 covered functions by API role).**
+A single parse-fuzzer (stock `cjson_read_fuzzer`, or a PromptFuzz-style single
+driver) only walks Parse→Print→Delete; our producer→consumer portfolio additionally
+reaches the object-construction + manipulation API a single-path fuzzer
+*structurally cannot*:
+
+| API role | our covered fns | single parse-fuzzer reaches? |
+|---|---|---|
+| Create | 11 | ✗ |
+| Add (attach children) | 9 | ✗ |
+| Get/Has | 5 | ✗ |
+| Replace/Detach/Insert | 5 | ✗ |
+| Parse | 10 | ✓ |
+| Print/Serialize | 11 | ✓ |
+| Delete/Free | 2 | ✓ |
+| Compare/Duplicate + internal | 19 | partial |
+| **total** | **72** | parse-fuzzer ≈ Parse+Print path only |
+
+→ ~30 construct/manipulate functions are reachable **only** via our multi-API
+construction — the complementary contribution over single-path generation.
+
+**Recommended evaluation framing** (lead with structural wins, not wall-clock):
+quality (live-rate / FP / hallucination), efficiency (coverage per LLM-token,
+coverage-vs-time curve — comparable coverage at ≪24h), complementarity (functions
+we uniquely cover; UNION(ours,PF) > PF), reproducibility (cross-run variance).
+Raw 24h coverage is contested **only** on the unsaturated, breadth-matched libs
+(**c-ares 138≥136, libpng 263≥256, sqlite3 258≈270** — all with large unsaturated
+branch space). *Honest caveat:* the exact per-function diff vs PromeFuzz needs
+their coverage set (not available in-session); Table B uses our role breakdown,
+and the small saturated libs (cjson, ngiflib, …) and extraction-capped lcms
+(297<358) are NOT where we claim a raw-coverage win.
+
 ---
 
 ## 4. Comparison vs Liberator (symbolic baseline)
