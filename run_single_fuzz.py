@@ -769,7 +769,9 @@ def _compile_validate_candidates(sources, benchmark, work_dirs):
                    f'merging unvetted', trial=0)
     return sources
 
-  valid, excluded = validate_compilable([Path(s) for s in sources], project)
+  valid, excluded = validate_compilable(
+      [Path(s) for s in sources], project,
+      iquote_dirs=_iquote_dirs_for_target(benchmark))
   if excluded:
     # Visible, not silent: log every excluded driver + the first error line so
     # the loss is auditable (and confirm it drops the known-invalid ones).
@@ -838,6 +840,29 @@ def _edges_weights_for(sources, work_dirs):
   if len(set(weights)) <= 1:
     return None
   return weights
+
+
+def _iquote_dirs_for_target(benchmark: Benchmark) -> List[str]:
+  """In-image ``-iquote`` dirs so a RELOCATED synthesized driver resolves the
+  stock fuzzer's relative include (``#include "../cJSON.h"``) — which resolves
+  relative to the including file's directory, not -I/CWD.
+
+  Derived from the benchmark's ``target_path`` (the stock fuzzer's in-image path,
+  e.g. ``/src/cjson/fuzzing/cjson_read_fuzzer.c``): the fuzzer's own directory
+  (handles ``../X.h``) plus the project root (handles ``X.h``). This reconstructs
+  the exact quote-search base the per-driver build has, so the driver's original
+  oss-fuzz include resolves identically from ``$SRC/synthesized`` / ``/candidates``.
+  Empty when target_path is absent or not an absolute in-image path."""
+  tp = (getattr(benchmark, 'target_path', '') or '').strip()
+  if not tp.startswith('/'):
+    return []
+  fuzzer_dir = os.path.dirname(tp)        # e.g. /src/cjson/fuzzing
+  proj_root = os.path.dirname(fuzzer_dir)  # e.g. /src/cjson
+  dirs: List[str] = []
+  for d in (fuzzer_dir, proj_root):
+    if d and d not in dirs and d not in ('/', '/src'):
+      dirs.append(d)
+  return dirs
 
 
 def _maybe_merge_drivers(benchmark: Benchmark,
@@ -1015,8 +1040,15 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     out_dir.mkdir(parents=True, exist_ok=True)
     drv.save(out_dir)
     snippet_path = out_dir / 'oss_fuzz_build_snippet.sh'
+    # Relocated synthesized drivers keep the stock fuzzer's relative include
+    # idiom (``#include "../cJSON.h"``), which resolves relative to the driver's
+    # own directory. Give the compile the stock fuzzer's directory (and the
+    # project root) as -iquote bases so that include resolves from $SRC/synthesized
+    # exactly as it does in the per-driver build at target_path. (See
+    # tools/merge_drivers/merge.emit_oss_fuzz_build_snippet docstring.)
     snippet_path.write_text(drv.emit_oss_fuzz_build_snippet(
-        target_name='merged_fuzzer'))
+        target_name='merged_fuzzer',
+        iquote_dirs=_iquote_dirs_for_target(benchmark)))
     logger.info(
         f'merge_drivers: synthesized {drv.driver_count} drivers '
         f'(lang={"C++" if drv.is_cpp else "C"}, '

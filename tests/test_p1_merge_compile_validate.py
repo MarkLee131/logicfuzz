@@ -56,7 +56,7 @@ def test_splits_valid_and_invalid(monkeypatch, tmp_path):
     # reference those staged names; build them from the real staging mapping by
     # intercepting _run_container_validation with a function that reads the
     # staged dir.
-    def fake_run(image, candidates_dir, project, timeout_sec):
+    def fake_run(image, candidates_dir, project, timeout_sec, iquote_dirs=None):
         verdicts = []
         for staged in sorted(Path(candidates_dir).iterdir()):
             ok = "03." not in staged.name  # 03 is the "invalid" one
@@ -112,7 +112,7 @@ def test_keep_unreported_tu(monkeypatch, tmp_path):
     monkeypatch.setattr(cv, "_ensure_project_image",
                         lambda project: "gcr.io/oss-fuzz/lcms")
 
-    def fake_run(image, candidates_dir, project, timeout_sec):
+    def fake_run(image, candidates_dir, project, timeout_sec, iquote_dirs=None):
         # Report on ONLY the first staged candidate.
         staged = sorted(Path(candidates_dir).iterdir())[0]
         return [cv._TuVerdict(name=staged.name, ok=True, error_tail="")]
@@ -177,7 +177,7 @@ def test_validates_in_merge_target_language(monkeypatch, tmp_path):
 
     captured = {}
 
-    def fake_run(image, candidates_dir, project, timeout_sec):
+    def fake_run(image, candidates_dir, project, timeout_sec, iquote_dirs=None):
         captured["langs"] = (Path(candidates_dir) / ".langs").read_text()
         staged = sorted(s for s in Path(candidates_dir).iterdir()
                         if s.name != ".langs")[0]

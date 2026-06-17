@@ -2641,15 +2641,14 @@ def _extract_existing_fuzzer_headers(
             if delim == '<':
                 standard.add(f'<{header}>')
             else:
-                # Reduce quote-form project includes to their BASENAME. The
-                # stock fuzzer's path is relative to ITS directory (e.g. cjson's
-                # ``"../cJSON.h"`` from ``$SRC/cjson/fuzzing/``); generated
-                # drivers live elsewhere (``$SRC/synthesized/``) where that
-                # ``../`` resolves wrong. The basename is location-independent
-                # and is what the prototyper surfaces as an include-name hint
-                # and re-emits (``#include <name>``), so the same include
-                # resolves in the per-driver AND merged builds.
-                project.add(header.replace('\\', '/').rsplit('/', 1)[-1])
+                # Keep the include EXACTLY as the stock fuzzer wrote it (incl. a
+                # relative ``../cJSON.h``). It is the legitimate oss-fuzz idiom and
+                # resolves relative to the including file's directory; the merge /
+                # compile-validate builds pass the stock fuzzer's dir as ``-iquote``
+                # (run_single_fuzz._iquote_dirs_for_target) so the SAME include
+                # resolves from a relocated $SRC/synthesized just as it does in the
+                # per-driver build. No basename rewriting → drivers stay byte-faithful.
+                project.add(header)
 
     headers = {
         'standard_headers': sorted(standard),

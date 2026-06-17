@@ -2092,22 +2092,20 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if not project_headers:
             return code
 
-        # Check which project headers are already included. Compare by BASENAME
-        # on both sides: a driver may carry the header under a path form
-        # (``#include "../cJSON.h"`` copied from a stock fuzzer), and
-        # ``project_headers`` are basenames — so ``cJSON.h`` must count as
-        # already-present and not get a duplicate ``#include <cJSON.h>``.
-        existing_basenames = set()
+        # Check which project headers are already included
+        existing_includes = set()
         for match in re.finditer(r'#include\s*[<"]([^>"]+)[>"]', code):
-            inc = match.group(1)
-            existing_basenames.add(inc.replace('\\', '/').rsplit('/', 1)[-1])
+            existing_includes.add(match.group(1))
 
         # Find missing project headers
         missing_headers = []
         for header in project_headers:
-            header_basename = header.replace('\\', '/').rsplit('/', 1)[-1]
-            if header_basename not in existing_basenames:
-                missing_headers.append(header)
+            # Check both bare name and common variations
+            if header not in existing_includes:
+                # Also check if it's included with a path
+                header_basename = header.split('/')[-1] if '/' in header else header
+                if header_basename not in existing_includes:
+                    missing_headers.append(header)
 
         if not missing_headers:
             return code

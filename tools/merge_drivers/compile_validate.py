@@ -156,25 +156,19 @@ EXT_INC=""
 for d in /src/$PROJ/include /src/$PROJ /src/$PROJ/src /src/include /src; do
   [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
 done
+# -iquote bases so a candidate that kept the stock fuzzer's relative include
+# (``#include "../cJSON.h"``) resolves from /candidates/. A quote-include is
+# searched relative to the INCLUDING FILE's dir, so plain -I/src/$PROJ does NOT
+# fix ``../X.h`` (that would need /src/$PROJ/../X.h). The reference fuzzer's own
+# directory (dirname(target_path), e.g. /src/cjson/fuzzing) IS the right base:
+# /src/cjson/fuzzing/../cJSON.h = /src/cjson/cJSON.h. Supplied by the caller.
+IQUOTE="__IQUOTE__"
 # Populate configure/cmake-generated headers (e.g. c-ares ares_build.h) so the
 # syntax check sees the SAME tree the real merged coverage build compiles (A≡B).
 # Best-effort + fail-open: a failing/absent build must never drop candidates.
 ( compile >/dev/null 2>&1 || bash /src/build.sh >/dev/null 2>&1 || true )
 for g in $(find /src/$PROJ /work \( -name '*_build.h' -o -name '*_config.h' \) 2>/dev/null); do
   EXT_INC="$EXT_INC -I$(dirname "$g")"
-done
-# Defense-in-depth for project-header resolution; the ROOT fix is upstream
-# (``_extract_existing_fuzzer_headers`` reduces includes to basenames so drivers
-# emit location-independent ``#include <X.h>``). Belt-and-suspenders: a stray
-# driver that still copied a stock-fuzzer ``#include "../cJSON.h"`` resolves the
-# ``../`` relative to the SOURCE file's dir (/candidates/ → /X.h), which -I cannot
-# fix. Symlink every project header to the ``../`` target (/) so that relative
-# include resolves here too (A≡B). Best-effort; never fails the gate.
-for d in /src/$PROJ /src/$PROJ/include /src/$PROJ/src; do
-  [ -d "$d" ] || continue
-  for h in "$d"/*.h "$d"/*.hpp; do
-    [ -e "$h" ] && ln -sf "$h" "/$(basename "$h")" 2>/dev/null || true
-  done
 done
 COV_FLAGS="${SANITIZER_FLAGS_coverage:-} ${COVERAGE_FLAGS_coverage:-}"
 # The project $CFLAGS carries ``-Wno-error=implicit-function-declaration`` and
@@ -193,9 +187,9 @@ while read -r b lang; do
   [ -f "$src" ] || continue
   err=$(mktemp)
   if [ "$lang" = "cpp" ]; then
-    cc_ok=1; $CXX $CXXFLAGS $COV_FLAGS $EXT_INC -x c++ -fsyntax-only "$src" 2>"$err" || cc_ok=0
+    cc_ok=1; $CXX $CXXFLAGS $COV_FLAGS $IQUOTE $EXT_INC -x c++ -fsyntax-only "$src" 2>"$err" || cc_ok=0
   else
-    cc_ok=1; $CC $CFLAGS $COV_FLAGS $STRICT_C $EXT_INC -x c -fsyntax-only "$src" 2>"$err" || cc_ok=0
+    cc_ok=1; $CC $CFLAGS $COV_FLAGS $IQUOTE $STRICT_C $EXT_INC -x c -fsyntax-only "$src" 2>"$err" || cc_ok=0
   fi
   if [ "$cc_ok" = "1" ]; then
     echo "RESULT ok $b"
@@ -221,6 +215,7 @@ def _run_container_validation(
     candidates_dir: Path,
     project: str,
     timeout_sec: int,
+    iquote_dirs: Optional[Sequence[str]] = None,
 ) -> Optional[List[_TuVerdict]]:
     """Compile every file in ``candidates_dir`` inside ``image``; parse verdicts.
 
@@ -228,7 +223,10 @@ def _run_container_validation(
     so the caller can fail OPEN (keep the unvetted set) rather than dropping
     everything on a docker hiccup.
     """
-    script = _VALIDATE_SH.replace('__PROJECT__', project)
+    iquote_flags = ' '.join(f'-iquote "{d}"' for d in (iquote_dirs or []))
+    script = (_VALIDATE_SH
+              .replace('__PROJECT__', project)
+              .replace('__IQUOTE__', iquote_flags))
     # NAME channel container-leak fix: `image` is the BARE base
     # gcr.io/oss-fuzz/<project> (shared / a user's interactive shell may run it),
     # so ancestor-scoped cleanup would be unsafe. Give the container a UNIQUE
@@ -298,6 +296,7 @@ def validate_compilable(
     sources: Sequence[Path],
     project: str,
     timeout_sec: int = _DEFAULT_TIMEOUT_SEC,
+    iquote_dirs: Optional[Sequence[str]] = None,
 ) -> Tuple[List[Path], List[Tuple[Path, str]]]:
     """Compile each candidate TU in the project's OSS-Fuzz container and split
     them into (valid, excluded).
@@ -345,7 +344,7 @@ def validate_compilable(
         (staging / '.langs').write_text('\n'.join(manifest_lines) + '\n')
 
         verdicts = _run_container_validation(image, staging, project,
-                                             timeout_sec)
+                                             timeout_sec, iquote_dirs)
         if verdicts is None:
             # Infra failure → fail open.
             return list(sources), []

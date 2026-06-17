@@ -477,6 +477,7 @@ class SynthesizedDriver:
         extra_libs: str = "",
         extra_includes: str = "",
         synth_dir_var: str = "$SRC/synthesized",
+        iquote_dirs: Optional[List[str]] = None,
     ) -> str:
         """A bash snippet to append to the OSS-Fuzz project's ``build.sh``.
 
@@ -487,35 +488,33 @@ class SynthesizedDriver:
 
         ``extra_libs`` and ``extra_includes`` are passed verbatim — caller
         is responsible for matching the project's existing link line.
+
+        ``iquote_dirs`` are added as ``-iquote`` include-search bases. A quote
+        include like ``#include "../cJSON.h"`` resolves relative to the directory
+        of the INCLUDING FILE; OFG's per-driver build places the driver at the
+        stock fuzzer's path (``/src/cjson/fuzzing/``) so ``../cJSON.h`` resolves
+        and compiles. Here we relocate drivers to ``$SRC/synthesized/`` where the
+        same ``../`` points nowhere. Passing the stock fuzzer's directory
+        (``dirname(target_path)``) as ``-iquote`` restores the exact quote-search
+        base the per-driver build had, so the driver's original oss-fuzz relative
+        include resolves identically — no symlink farm, no source rewriting.
         """
+        iq = ""
+        if iquote_dirs:
+            iq = "".join(f'-iquote "{d}" ' for d in iquote_dirs)
         # A non-compiling sub-driver must NOT kill the whole merged build:
         # skip it (produce no .o, continue the loop). Its symbol is still
         # provided by the weak stub in entry.{c,cpp}, so the link succeeds
         # and the slot becomes a harmless no-op.
         c_compile = (
-            f'  $CC $CFLAGS {extra_includes} -c "$src" -o "$obj" '
+            f'  $CC $CFLAGS {iq}{extra_includes} -c "$src" -o "$obj" '
             f'|| {{ echo "merged: skip non-compiling $src"; continue; }}\n'
         )
         cpp_compile = (
-            f'  $CXX $CXXFLAGS {extra_includes} -c "$src" -o "$obj" '
+            f'  $CXX $CXXFLAGS {iq}{extra_includes} -c "$src" -o "$obj" '
             f'|| {{ echo "merged: skip non-compiling $src"; continue; }}\n'
         )
-        # Defense-in-depth for project-header resolution. The ROOT fix is
-        # upstream: ``_extract_existing_fuzzer_headers`` now reduces quote-form
-        # project includes to their BASENAME, so generated drivers emit
-        # location-independent includes (``#include <cJSON.h>``) instead of the
-        # stock fuzzer's ``"../cJSON.h"``. This symlink remains as belt-and-
-        # suspenders for any stray driver that still copied a relative path from
-        # a stock-fuzzer source body: it symlinks every project header to
-        # ``$SRC`` so a ``../<header>`` from ``$SRC/synthesized`` still resolves
-        # (A≡B). Fail-open; never breaks the build.
-        header_links = (
-            'for _h in $(find "$SRC" -maxdepth 3 '
-            '\\( -name "*.h" -o -name "*.hpp" \\) 2>/dev/null); do '
-            'ln -sf "$_h" "$SRC/$(basename "$_h")" 2>/dev/null || true; done\n'
-        )
         per_file = (
-            f'{header_links}'
             f'for src in {synth_dir_var}/*.c {synth_dir_var}/*.cpp '
             f'{synth_dir_var}/*.cc {synth_dir_var}/*.cxx; do\n'
             f'  [ -e "$src" ] || continue\n'
