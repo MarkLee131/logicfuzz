@@ -325,6 +325,11 @@ def repair_sequence_validity(
             return list(names)
         idx = _build_index(model)
     by_name = getattr(idx, "by_name", {}) or {}
+    try:
+        from liberator_adapter.analysis.validity_contract import _family as _vc_family
+    except Exception:
+        def _vc_family(_s):  # pragma: no cover - fallback if oracle absent
+            return None
 
     # An OPAQUE HANDLE type = one that some API ``requires`` or ``destroys`` (a
     # lifecycle dependency). Value-structs (cmsCIExyY), strings (char*), version
@@ -360,10 +365,22 @@ def repair_sequence_validity(
         return True
 
     def _pick_producer(key: str) -> Optional[str]:
+        # The void* index POOLS wrong-type producers for collapsed opaque handles
+        # (lcms: _producers_for_type('cmshprofile') returns cmsCreateExtended*
+        # Transform; 'cmshandle' returns math fns like cmsBFDdeltaE). Pick a
+        # TYPE-CORRECT producer by NAME family: cmsCreateNULLProfile is family
+        # "profile", cmsCreate*Transform is "transform". A family-LESS generic
+        # (cmsHANDLE: gamut/IT8/… share one void* typedef) has no type-safe
+        # producer determinable here — binding one cross-wires (cmsGBDFree on a
+        # profile → heap corruption → crash), so leave it NULL+guarded instead.
+        kf = _vc_family(key)
+        if kf is None:
+            return None  # generic void* (cmsHANDLE) — no type-safe pick
         prods = [p for p in _producers_for_type(idx, key)
-                 if _is_leaf_creator(p, key)]
+                 if _is_leaf_creator(p, key)
+                 and _vc_family(getattr(p, "name", "") or "") == kf]
         if not prods:
-            return None  # no standalone leaf → leave NULL (Task-11 guard covers)
+            return None  # no standalone same-family leaf → Task-11 guard covers
         prods = sorted(prods, key=lambda p: (
             0 if _is_synthetic_producer(p) else 1,
             len([a for a in (getattr(p, "args", ()) or ())

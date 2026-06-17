@@ -1534,7 +1534,16 @@ class CBFactory(Factory):
                         bindings[(api.function_name, j)] = \
                             produced_by_family[fam]
                         bound = True
-                    if not bound and key and key in produced:
+                    # Legacy void* fallback (nearest same-normalized-type producer).
+                    # Under the contract, typed handles bind via FAMILY above; a
+                    # family-LESS arg (cmsHANDLE — gamut/IT8/… collapse to one void*
+                    # typedef) has NO type-safe producer, and the collapsed-void*
+                    # index pools wrong-type producers, so binding it here
+                    # cross-wires (cmsGBDFree on a profile → heap corruption →
+                    # crash). Require a resolved family under i3; gate-off keeps the
+                    # legacy fallback unchanged.
+                    if (not bound and key and key in produced
+                            and not (i3 and fam is None)):
                         bindings[(api.function_name, j)] = produced[key]
                     if cross and key:
                         arg_tokens[j] = key
