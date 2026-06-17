@@ -460,6 +460,13 @@ class SkeletonVariable:
     # passes a NULL-initialized var), the renderer wraps the call in
     # ``if (handle) { ... }`` (defense-in-depth) instead of consuming a bare NULL.
     nonnull_handle: bool = False
+    # Structural opaque handle: a single pointer to an INCOMPLETE type (from the
+    # IR's ``is_type_incomplete``). It is a HANDLE by construction — must come
+    # from a producer (``bound_expr``) or render NULL. When NULL and unbound the
+    # consuming call is ALWAYS guarded (``if (handle) { ... }``) regardless of the
+    # validity-contract gate, because passing fuzz-bytes or NULL as a required
+    # opaque handle is never intended (the c-ares ``(ares_dns_rr_t*)data`` SEGV).
+    opaque_handle: bool = False
 
     def get_declaration(self) -> str:
         """Generate declaration code"""
@@ -1080,6 +1087,10 @@ class SkeletonGenerator:
                     'is_input': self._is_input_param(arg),
                     'is_output': self._is_output_param(arg),
                     'is_callback': self._is_callback_param(arg),
+                    # Structural opaque-handle signal from the IR (a single
+                    # pointer to an incomplete type is a handle, never fuzz data).
+                    'is_type_incomplete': getattr(
+                        arg, 'is_type_incomplete', False),
                     'varlen_target': varlen_map.get(idx),  # (len_idx, rel) or None
                     'role': _role,                          # ArgRole value or None
                     'nullable': _nullable,                  # Task 11: render-guard
@@ -1118,17 +1129,38 @@ class SkeletonGenerator:
         return False
 
     def _is_callback_param(self, arg: Arg) -> bool:
-        """Determine if parameter is callback"""
-        type_str = arg.type
-        # Function pointer characteristics
+        """Determine if a parameter is a callback (function pointer).
+
+        Structural-first, so no name heuristic can misfire on a non-callback:
+          1. function-pointer syntax (``(*)``) → callback (authoritative);
+          2. an opaque/incomplete struct pointer (``is_type_incomplete``) is a
+             HANDLE, never a callback → excluded definitively;
+          3. last-resort: explicit callback TOKENS in the name/type.
+
+        ``_t`` is intentionally NOT a token: it is the standard C typedef suffix
+        (``size_t``, ``uint8_t``, opaque handles like ``ares_dns_rr_t``, enums
+        like ``ares_dns_rr_key_t``) — matching it as a substring mis-tagged every
+        ``_t`` type as a callback. For a pointer handle that became a CALLBACK_IMPL
+        hole the LLM filled it with ``(ares_dns_rr_t*)data`` → deref of fuzz bytes
+        → SEGV (c-ares merged harness, 38k crashes). The structural opaque-handle
+        guard in ``_create_variable_for_param`` is the defense-in-depth backstop.
+        """
+        type_str = arg.type or ""
+        # 1. Function-pointer structure — the only authoritative callback signal.
         if '(*)' in type_str or '(*' in type_str:
             return True
-        # Common callback typedefs
-        callback_suffixes = ['_func', '_callback', '_handler', '_t']
-        for suffix in callback_suffixes:
-            if arg.name and suffix in arg.name.lower():
-                return True
-            if suffix in type_str.lower():
+        # 2. Opaque/incomplete struct pointer = handle, never a callback.
+        if getattr(arg, 'is_type_incomplete', False):
+            return False
+        # 3. Last-resort explicit callback tokens. All are UNDERSCORE-DELIMITED so
+        #    they match a typedef token, not an arbitrary substring — ``_handler``
+        #    (not bare ``handler``, which is a substring of the opaque handle
+        #    ``cmsIOHANDLER``); ``_t`` is intentionally absent (typedef suffix).
+        callback_tokens = ['_func', '_callback', '_handler']
+        name = (arg.name or "").lower()
+        tl = type_str.lower()
+        for tok in callback_tokens:
+            if tok in name or tok in tl:
                 return True
         return False
 
@@ -1249,6 +1281,25 @@ class SkeletonGenerator:
         """
         c_type = arg_info['type']
         is_pointer = '*' in c_type
+
+        # ---- Structural opaque-handle guard (heuristic-proof, ungated) -------
+        # A single pointer to an INCOMPLETE/opaque type is a HANDLE by
+        # construction (the IR's ``is_type_incomplete``) — it must come from a
+        # producer (wired later by ``_apply_arg_bindings`` via ``bound_expr``) or
+        # render NULL with the consuming call GUARDED. It is NEVER fuzz data and
+        # NEVER a callback. This intercepts the arg BEFORE the callback / Lever-B /
+        # legacy ``(void*)data`` branches, so no name heuristic (callback-tag,
+        # is_input guess) can route an opaque handle into a fuzz-data cast — the
+        # root of the c-ares ``(ares_dns_rr_t*)data`` deref-of-garbage SEGV.
+        # OUTPUT handles (the API allocates them, usually ``T**``) and multi-star
+        # types are excluded; a real producer still overrides via bound_expr.
+        if (arg_info.get('is_type_incomplete') and is_pointer
+                and c_type.count('*') == 1
+                and arg_info.get('role') != 'OUTPUT'):
+            return SkeletonVariable(
+                name=name, c_type=_public_pointer_type(c_type),
+                is_pointer=True, init_value="NULL",
+                nonnull_handle=True, opaque_handle=True)
 
         # Callback parameter - create Hole
         if arg_info['is_callback']:
@@ -1797,7 +1848,16 @@ class SkeletonGenerator:
         # nullable=False handle, wrap it (+ its return check) in
         # ``if (h1 && h2) { ... }`` so a NULL handle is never passed in. The
         # call body indents one deeper inside the guard.
-        _guarded = bool(guard_vars) and _validity_contract_enabled()
+        # The Task-11 nullable-handle guard stays gated on the validity contract
+        # (byte-identical when off). A STRUCTURAL opaque handle (is_type_incomplete)
+        # rendered NULL is ALWAYS guarded regardless of the gate — passing a NULL or
+        # fuzz-bytes required opaque handle is never intended (heuristic-proof
+        # backstop for the c-ares deref-of-garbage SEGV).
+        _any_opaque = any(
+            getattr(skeleton.variables.get(v), 'opaque_handle', False)
+            for v in guard_vars)
+        _guarded = bool(guard_vars) and (
+            _validity_contract_enabled() or _any_opaque)
         _body_indent = indent + 1 if _guarded else indent
         if _guarded:
             cond = " && ".join(guard_vars)
