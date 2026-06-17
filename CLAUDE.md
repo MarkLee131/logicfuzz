@@ -303,68 +303,26 @@ Step 12   Existing-driver knowledge extraction + Phase B idiom distillation
 # Post-merge: Phase C IterationSnapshot persisted by run_single_fuzz.py
 ```
 
-## Recent Keystone Fixes (merge / preflight pipeline)
+## Recent Keystone Fixes
 
-- **Stock-binary build bug FIXED** (`oss_fuzz_checkout._invalidate_stale_cache_dockerfiles`): cached builds compiled the project's STOCK fuzzer, not the generated driver. Invalidating the pre-driver Dockerfile snapshot makes it compile the real driver (preflight bins went 2-distinct → N-distinct).
-- **no_progress merge gate KEPT by default** (`run_single_fuzz._should_drop_no_progress`): the 15s solo edge-growth gate is wrong for a MERGED harness; only crashers (`dead_on_empty`) are dropped. `LOGICFUZZ_DROP_NO_PROGRESS=1` to drop.
-- **crash-path merge exclusion FIXED** (`StateAdapter.state_to_result_history`): a compiled-but-crashed-during-optimization driver got an AnalysisResult tail with `compiles=False` and was wrongly excluded from the merge; `compiles` is now propagated.
+**Merge/preflight (operational):** stock-binary build bug (`oss_fuzz_checkout._invalidate_stale_cache_dockerfiles` — cached builds compiled the STOCK fuzzer); no_progress gate KEPT for the MERGED harness, only `dead_on_empty` crashers dropped (`LOGICFUZZ_DROP_NO_PROGRESS=1` to drop; `run_single_fuzz._should_drop_no_progress`); crash-path merge exclusion (`StateAdapter` now propagates `compiles`).
+
+**Valid-by-construction + breadth (2026-06, gated `LOGICFUZZ_VALIDITY_CONTRACT`):** Z3-path opaque-handle binding made drivers dead→live (lcms merged ~0→21%; a single driver covers ~1000 liblcms2 br, was 0); `RESIDUAL_ALLCOVER` + portfolio API-floor lift breadth to the extraction ceiling (cjson 78/78 = PromeFuzz count, c-ares 138≥136, lcms 149→297); merge-include fix symlinks project headers so a driver's `#include "../cJSON.h"` idiom resolves in compile-validation + merged build (cjson harness 0→53 drivers); ext-fuzz measurement uses libFuzzer-edge snapshots + sampled llvm-cov, and the merged-coverage number is recovered via `llvm-cov` on the surviving `dumps/merged.profdata` (the live replay hangs). Gap decomposition (time + breadth) + eval framing: `contributions_and_related_work.md §3`.
 
 ## Open TODOs
 
-Generation (G1–G5) has landed; the live frontier is **below** it. Start new work
-from `docs/generation.md` (open bottleneck + roadmap).
+Live frontier = **coverage vs PromeFuzz** on unsaturated, breadth-matched libs
+(c-ares/libpng/sqlite3); lead the eval on quality/efficiency/complementarity, NOT
+raw 24h (PromeFuzz saturates small libs). Start from `docs/generation.md`.
 
-- **✅ RESOLVED — orphaned optimize subsystem REMOVED.** The per-driver
-  coverage-optimize loop (`coverage_analyzer`→`improver`) + §10B
-  `baseline_diff_analyzer` (3 nodes + 3 agents + their state keys) were deleted:
-  *per-driver* LLM refinement (N× cost), mismatched with breadth-via-merge, and
-  addressed none of the real bottlenecks. The crash LLM path is untouched. If
-  cross-round feedback is wanted, build it fresh as the Phase C CEGAR loop
-  (`generation.md` F6, prereq WorkingMemory): portfolio/union-level, gap-directed,
-  cross-round — NOT per-trial. No CEGAR loop today; only Phase G closed-loop remains.
-- **Input/seed layer (#1 below binding) — real-seed routing landed (default-on).**
-  Random bytes never form a valid ICC profile → `cmsCreateTransform` NULL → guard →
-  `cmsDoTransform` never runs. Real-seed routing routes the project's REAL
-  format-matching seeds (`*.icc`/`*.it8`, by parser-entry API + magic) into each
-  driver's corpus + the merged harness (`scripts/seed_discovery.py
-  seed_corpus_for_driver` → `builder_runner._seed_corpus_dir`). Remaining: measure
-  the cmsxform.c gain end-to-end; synthetic seed gen from format analysis. `generation.md` §6.
-- **build-cache × llvm14 — RESOLVED by A1 (additive canonical base).** Cached runs
-  used to degrade to Z3-OFF. Fix: `ensure_llvm14_base_builder()` builds the additive
-  llvm14 image (clang-14 at /usr/lib/llvm-14; default clang+libc++ untouched) and
-  retags onto `gcr.io/oss-fuzz-base/base-builder`. One-time deploy: rebuild+re-push
-  the `*-ofg-cached-*` images on the additive base (or `OFG_USE_CACHING=0`). `generation.md` §4.
-- **Binding layer (#14) — construction lifted, tail remains.** Factory chain
-  recovers `cmsCreate*`-named opaque producers; remaining: residual
-  non-`Create*`-named / no-in-project-producer tail + caller-alloc-init args beyond
-  the SVF-INIT channel. `generation.md` §5/§6.
-- **Feedback / input layers — T10/T11/T12 landed (gated, A/B pending):** T11
-  error-shape variants (`LOGICFUZZ_ERROR_VARIANTS`), T10 synthetic seed
-  (`LOGICFUZZ_FORMAT_INFER`), T12 dynamic value feedback (`LOGICFUZZ_VALUE_FEEDBACK`
-  — precursor to F6, NOT the loop). Still open: F6 Phase C CEGAR loop (prereq
-  WorkingMemory), F7 L2 LLM idioms. `generation.md` §6.
-- **T7 cross-project driver retrieval — ✅ MVP (gated `LOGICFUZZ_CROSS_PROJECT`).**
-  `cross_project_retrieval.py` + data_context attach + prototyper render; 11 tests.
-  Structure-signature retrieval (API set / lifecycle-role + entry-type / call
-  bigrams); same-project first, cross-project only when own is thin; score ≥ τ +
-  best-1 fallback. Embedding fallback (`text-embedding-3-large`) unwired. Corpus:
-  MVP local `extracted_fuzz_drivers/`; scale-up = all OSS-Fuzz drivers via FI API.
-  Open before default-on: coverage A/B; FI-corpus scale-up; info-budget scheduling.
-- LLM equivalence oracle production throttling (`enable_llm_oracle=False`, data_context Step 5e2).
-- libaom path resolution — `src_ossfuzz/libaom/` layout vs the consumer-paths probe.
-- Batch evaluation aggregator — auto-aggregate `scripts/batch_extended_fuzzing.sh` → PromeFuzz Table 2 format.
-- TLV-aware seed generation. Done in part (`scripts/seed_discovery.py` real seeds + T10 synthetic front-gate seed); full structural generation (a valid DEEP file) still TODO.
-- Cross-phase information flow (write-only JSON state; WorkingMemory prereq for F6) — `generation.md`.
-- SVF big-lib cap — **LANDED + measured.** Both knobs in place
-  (`LIBERATOR_SVF_TIMEOUT_SECS` + `LIBERATOR_SVF_MEM_GB`). libtiff (4.5GB) + libvpx
-  (7.7GB) are TIME-bound (need ≥4h timeout, not more RAM); libucl is
-  MEMORY-pathological (non-converging → clang-only). Open: a ≥4h re-run of
-  libtiff/libvpx would land their conditions.json.
-- Skeleton-rendering validity fix — **LANDED** (`skeleton_generator.py`, `777cef0c`):
-  renders valid C/C++ by construction (void/`void*` array → byte buffer; opaque
-  types → pointers; struct `{0}`-init; internal typenames → `void*`; `*_internal.h`
-  filtered; cleanup destroys only declared `ret_<api>`). lcms: void-arrays 6→0,
-  opaque value-arrays 8→0, internal typenames 6→0, undeclared `ret_*` 8→0.
+- **The headline test**: a 24h `--merge` run on a breadth-matched config (`VALIDITY_CONTRACT + RESIDUAL_ALLCOVER + API_FLOOR + PORTFOLIO_DEPTH=2`) vs PromeFuzz Table 2 — on the breadth-matched libs only.
+- Verify residual single-API drivers compile+run end-to-end (a `nullable=True`-handle residual driver may be shallow; lcms-style `nullable=False` gets a creator prepended).
+- F6 Phase C CEGAR loop (post-merge, gap-directed, cross-round; prereq WorkingMemory) + F7 L2 LLM idioms.
+- T7 cross-project retrieval (`LOGICFUZZ_CROSS_PROJECT`): coverage A/B + FI-corpus scale-up before default-on.
+- Synthetic/structural (TLV) seed gen — real-seed routing + T10 front-gate seed landed; a valid DEEP file still TODO.
+- libaom path resolution; batch eval aggregator → Table 2; SVF ≥4h re-run for libtiff/libvpx `conditions.json`.
+
+(Resolved/landed — orphaned optimize-loop removed, build-cache×llvm14 `ensure_llvm14_base_builder`, SVF caps `LIBERATOR_SVF_{TIMEOUT_SECS,MEM_GB}`, skeleton-rendering validity, real-seed routing — are in git history / `generation.md`.)
 
 ## Failed Attempts / Lessons
 
@@ -382,3 +340,15 @@ Guardrails — read before re-litigating. Full detail in git history.
   (`BaselineDiffAnalyzer`, REMOVED). Per-trial granularity wasted LLM calls; if
   revived, it belongs in the Phase C CEGAR loop (`generation.md` F6) — post-merge,
   cross-round, NOT a per-trial node.
+- **Don't chase raw 24h coverage vs PromeFuzz on SATURATED libs** (2026-06-17
+  systematic-debug). PromeFuzz Table 2 = 24h-AFL++/GCOV, ~98% on small libs;
+  exceeding a saturated baseline needs comparable fuzz time (arithmetic). Our
+  metric (llvm-cov) AGREES with gcov (cjson 48.7%≈49.9%) — no measurement win to
+  find. Compete on quality/efficiency/complementarity, and on raw coverage only
+  where PromeFuzz is unsaturated AND our breadth ≥ theirs. Don't burn a 24h run on
+  a 149-API config — it hits a link-time reachability wall (lcms 443 fns); run it
+  only breadth-matched.
+- **Merged-coverage llvm-cov replay HANGS on the dispatcher binary** (slow/looping
+  input, no per-input timeout → 1800-2400s timeout → 0%). Don't trust a 0%/stale
+  snapshot as final. Measure from the surviving `dumps/merged.profdata` via
+  `llvm-cov export`, or sample the corpus (`run_extended_fuzzing._measure_coverage`).

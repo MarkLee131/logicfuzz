@@ -19,3 +19,12 @@ logs/ab_*/
 extracted_fuzz_drivers/
 .claude/
 reference/promefuzz_api_hints/
+
+# session/experiment temp watcher scripts + stray fuzz outputs
+scripts/_*.sh
+*.profraw
+FUZZ.IT8
+results/*_signal.log
+results/*_run.log
+results/*_chain.log
+results/*_queue.log
