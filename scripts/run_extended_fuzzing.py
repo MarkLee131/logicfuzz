@@ -534,6 +534,14 @@ EXT_INC=""
 for d in /src/{self.project}/include /src/{self.project} /src/{self.project}/src /src/include /src; do
   [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
 done
+# GENERATED config headers (emitted by the project's build.sh into a build subdir
+# NOT on the fixed list above) — e.g. libpng's pnglibconf.h, c-ares ares_build.h.
+# This prelude runs AFTER the original build.sh, so the headers already exist;
+# locate them and add their dirs (dedup) so a sub-driver's ``#include "png.h"``
+# (which transitively includes pnglibconf.h) resolves like the stock fuzzer build.
+for _gd in $(find /src/{self.project} /work \\( -name 'pnglibconf.h' -o -name '*_build.h' -o -name '*_config.h' -o -name '*conf.h' -o -name 'config.h' \\) 2>/dev/null | xargs -r -n1 dirname | sort -u); do
+  EXT_INC="$EXT_INC -I$_gd"
+done
 EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
 '''
         with open(build_sh, 'a') as f:

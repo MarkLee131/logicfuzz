@@ -167,7 +167,7 @@ IQUOTE="__IQUOTE__"
 # syntax check sees the SAME tree the real merged coverage build compiles (A≡B).
 # Best-effort + fail-open: a failing/absent build must never drop candidates.
 ( compile >/dev/null 2>&1 || bash /src/build.sh >/dev/null 2>&1 || true )
-for g in $(find /src/$PROJ /work \( -name '*_build.h' -o -name '*_config.h' \) 2>/dev/null); do
+for g in $(find /src/$PROJ /work \( -name '*_build.h' -o -name '*_config.h' -o -name '*conf.h' -o -name 'config.h' \) 2>/dev/null); do
   EXT_INC="$EXT_INC -I$(dirname "$g")"
 done
 COV_FLAGS="${SANITIZER_FLAGS_coverage:-} ${COVERAGE_FLAGS_coverage:-}"
