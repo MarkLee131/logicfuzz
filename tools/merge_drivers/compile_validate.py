@@ -163,12 +163,13 @@ done
 for g in $(find /src/$PROJ /work \( -name '*_build.h' -o -name '*_config.h' \) 2>/dev/null); do
   EXT_INC="$EXT_INC -I$(dirname "$g")"
 done
-# Generated drivers may carry the project's own fuzzer include idiom, e.g. cjson's
-# stock harness lives in /src/cjson/fuzzing/ and does ``#include "../cJSON.h"``.
-# Such an explicit ``../`` path resolves relative to the SOURCE file's dir
-# (/candidates/ here → /X.h), which -I cannot fix. Symlink every project header to
-# the ``../`` target (/) so the same relative include the real per-driver build
-# accepts also resolves here (A≡B). Best-effort; never fails the gate.
+# Defense-in-depth for project-header resolution; the ROOT fix is upstream
+# (``_extract_existing_fuzzer_headers`` reduces includes to basenames so drivers
+# emit location-independent ``#include <X.h>``). Belt-and-suspenders: a stray
+# driver that still copied a stock-fuzzer ``#include "../cJSON.h"`` resolves the
+# ``../`` relative to the SOURCE file's dir (/candidates/ → /X.h), which -I cannot
+# fix. Symlink every project header to the ``../`` target (/) so that relative
+# include resolves here too (A≡B). Best-effort; never fails the gate.
 for d in /src/$PROJ /src/$PROJ/include /src/$PROJ/src; do
   [ -d "$d" ] || continue
   for h in "$d"/*.h "$d"/*.hpp; do

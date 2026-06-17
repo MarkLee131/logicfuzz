@@ -500,12 +500,15 @@ class SynthesizedDriver:
             f'  $CXX $CXXFLAGS {extra_includes} -c "$src" -o "$obj" '
             f'|| {{ echo "merged: skip non-compiling $src"; continue; }}\n'
         )
-        # Sub-drivers may carry the project's own fuzzer include idiom (e.g.
-        # cjson's ``#include "../cJSON.h"``). From ``$SRC/synthesized`` that ``../``
-        # resolves to ``$SRC/<header>`` which doesn't exist (header is under
-        # ``$SRC/<proj>/``). Symlink every project header to ``$SRC`` so the same
-        # relative include the per-driver build accepts resolves in the merged
-        # build too (A≡B). Fail-open; never breaks the build.
+        # Defense-in-depth for project-header resolution. The ROOT fix is
+        # upstream: ``_extract_existing_fuzzer_headers`` now reduces quote-form
+        # project includes to their BASENAME, so generated drivers emit
+        # location-independent includes (``#include <cJSON.h>``) instead of the
+        # stock fuzzer's ``"../cJSON.h"``. This symlink remains as belt-and-
+        # suspenders for any stray driver that still copied a relative path from
+        # a stock-fuzzer source body: it symlinks every project header to
+        # ``$SRC`` so a ``../<header>`` from ``$SRC/synthesized`` still resolves
+        # (A≡B). Fail-open; never breaks the build.
         header_links = (
             'for _h in $(find "$SRC" -maxdepth 3 '
             '\\( -name "*.h" -o -name "*.hpp" \\) 2>/dev/null); do '

@@ -2638,13 +2638,18 @@ def _extract_existing_fuzzer_headers(
             header = header.strip()
             if not header:
                 continue
-            # Strip leading ./ or directory components for the quote-form
-            # references — the prototyper uses these as include name hints,
-            # not literal paths.
             if delim == '<':
                 standard.add(f'<{header}>')
             else:
-                project.add(header)
+                # Reduce quote-form project includes to their BASENAME. The
+                # stock fuzzer's path is relative to ITS directory (e.g. cjson's
+                # ``"../cJSON.h"`` from ``$SRC/cjson/fuzzing/``); generated
+                # drivers live elsewhere (``$SRC/synthesized/``) where that
+                # ``../`` resolves wrong. The basename is location-independent
+                # and is what the prototyper surfaces as an include-name hint
+                # and re-emits (``#include <name>``), so the same include
+                # resolves in the per-driver AND merged builds.
+                project.add(header.replace('\\', '/').rsplit('/', 1)[-1])
 
     headers = {
         'standard_headers': sorted(standard),
