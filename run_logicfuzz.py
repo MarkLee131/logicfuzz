@@ -251,7 +251,30 @@ def visualize_dependency_graph(project: str, dep_graph: dict, output_dir: str,
   all_apis = set(dep_graph.keys())
   for deps in dep_graph.values():
     all_apis.update(deps)
-  
+
+  # Graphviz ``dot`` layout is super-linear and HANGS on large dense graphs
+  # (lcms: 297 nodes ran `dot` 11+ h CPU-bound, stalling the whole pipeline).
+  # A 297-node PNG is an unreadable hairball anyway — for big graphs skip the
+  # render and dump the instant .dot text instead. Debug viz must never block.
+  _n_edges = sum(len(v) for v in dep_graph.values())
+  _MAX_VIZ_NODES, _MAX_VIZ_EDGES = 80, 400
+  if len(all_apis) > _MAX_VIZ_NODES or _n_edges > _MAX_VIZ_EDGES:
+    output_path = os.path.join(output_dir, f'{project}_dependency_graph')
+    try:
+      from graphviz import Digraph
+      dot = Digraph(name=f'{project}_dependency_graph', format='png')
+      for api_a, deps in dep_graph.items():
+        for api_b in deps:
+          dot.edge(api_a, api_b)
+      dot.save(f'{output_path}.dot')
+      logger.info('Dep graph too large for PNG (%d nodes/%d edges); saved .dot '
+                  'only (render skipped to avoid dot hang)',
+                  len(all_apis), _n_edges)
+    except Exception:
+      logger.info('Dep graph too large (%d nodes); skipping visualization',
+                  len(all_apis))
+    return ''
+
   if entry_points is None:
     entry_points, _ = find_entry_points(dep_graph)
   

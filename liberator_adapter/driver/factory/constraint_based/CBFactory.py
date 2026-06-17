@@ -1607,6 +1607,25 @@ class CBFactory(Factory):
         if bindings is None:
             return None
 
+        # I3 (LOGICFUZZ_VALIDITY_CONTRACT): RunningContext / try_to_get_var CANNOT
+        # wire a typedef'd opaque void* handle (cmsHPROFILE) — it leaves the arg
+        # NULL, so Task-11 guards it and the consumer never runs (measured: 21/30
+        # Z3-path lcms drivers had a guarded-NULL handle consumer → edges=0). The
+        # unchecked path already fills these via the family-based signature
+        # bindings; apply the SAME map here to fill the gaps RunningContext left,
+        # so a repaired sequence's prepended producer (cmsCreateNULLProfile)
+        # actually reaches cmsLinkTag/cmsSetColorSpace/… RunningContext's own
+        # bindings win where both exist (Z3-validated). Additive + gated ⇒
+        # gate-off byte-identical.
+        if dep_model is not None and _validity_contract_enabled():
+            try:
+                fam = self._signature_handle_bindings(
+                    api_sequence, dep_model=dep_model)
+                for _k, _v in fam.items():
+                    bindings.setdefault(_k, _v)
+            except Exception:
+                pass
+
         # Step 2: SkeletonGenerator owns the rendering layer. It receives
         # the upstream-computed bindings and applies them to consumer-arg
         # init_value, leaving Holes for callbacks / buffer sizes etc.
