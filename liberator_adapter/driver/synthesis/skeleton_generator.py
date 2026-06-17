@@ -1146,13 +1146,19 @@ class SkeletonGenerator:
         guard in ``_create_variable_for_param`` is the defense-in-depth backstop.
         """
         type_str = arg.type or ""
-        # 1. Function-pointer structure — the only authoritative callback signal.
-        if '(*)' in type_str or '(*' in type_str:
+        # 1. Function-pointer structure — the authoritative callback signal, read
+        #    from the first-class ``Arg.is_function_pointer`` flag (extractor AST
+        #    truth, else auto-derived from the ``(*`` declarator in api.py). One
+        #    structural source of truth, not an inline string re-derivation.
+        if getattr(arg, 'is_function_pointer', False):
             return True
         # 2. Opaque/incomplete struct pointer = handle, never a callback.
         if getattr(arg, 'is_type_incomplete', False):
             return False
-        # 3. Last-resort explicit callback tokens. All are UNDERSCORE-DELIMITED so
+        # 3. Last-resort explicit callback tokens (only for a typedef'd function
+        #    pointer the structural flag could not desugar, e.g. ``ares_callback``;
+        #    shrinks as the extractor populates is_function_pointer directly).
+        #    All are UNDERSCORE-DELIMITED so
         #    they match a typedef token, not an arbitrary substring — ``_handler``
         #    (not bare ``handler``, which is a substring of the opaque handle
         #    ``cmsIOHANDLER``); ``_t`` is intentionally absent (typedef suffix).

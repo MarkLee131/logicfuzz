@@ -8,8 +8,16 @@ class Arg:
     is_const: List[bool]
     # Whether the type is incomplete (opaque struct pointer)
     is_type_incomplete: bool
+    # Whether the type is a function pointer (a callback). Structural: a callback
+    # is a function pointer, never an opaque handle or scalar. Consumed by the
+    # renderer's ``_is_callback_param`` so classification reads a flag instead of
+    # re-matching name substrings (the ``_t`` callback false-positive that cast an
+    # opaque handle to fuzz data → SEGV).
+    is_function_pointer: bool
 
-    def __init__(self, name, flag, size, type, is_const, is_type_incomplete: bool = False):
+    def __init__(self, name, flag, size, type, is_const,
+                 is_type_incomplete: bool = False,
+                 is_function_pointer: bool = False):
         self.name = name
         self.flag = flag
         self.size = size
@@ -24,6 +32,16 @@ class Arg:
             self.is_type_incomplete = (
                 flag == "struct" or
                 (isinstance(type, str) and "%struct." in type and type.endswith("*"))
+            )
+        # Function-pointer = the C declarator ``(*`` in the type string
+        # (``void (*)(void *)``, ``int (*cmp)(...)``). The extractor may set this
+        # explicitly (AST truth, e.g. a desugared typedef); otherwise auto-derive
+        # structurally from the declarator. NOT a name heuristic.
+        if is_function_pointer:
+            self.is_function_pointer = True
+        else:
+            self.is_function_pointer = (
+                isinstance(type, str) and "(*" in type.replace(" ", "")
             )
 
     def __str__(self):
