@@ -500,7 +500,19 @@ class SynthesizedDriver:
             f'  $CXX $CXXFLAGS {extra_includes} -c "$src" -o "$obj" '
             f'|| {{ echo "merged: skip non-compiling $src"; continue; }}\n'
         )
+        # Sub-drivers may carry the project's own fuzzer include idiom (e.g.
+        # cjson's ``#include "../cJSON.h"``). From ``$SRC/synthesized`` that ``../``
+        # resolves to ``$SRC/<header>`` which doesn't exist (header is under
+        # ``$SRC/<proj>/``). Symlink every project header to ``$SRC`` so the same
+        # relative include the per-driver build accepts resolves in the merged
+        # build too (A≡B). Fail-open; never breaks the build.
+        header_links = (
+            'for _h in $(find "$SRC" -maxdepth 3 '
+            '\\( -name "*.h" -o -name "*.hpp" \\) 2>/dev/null); do '
+            'ln -sf "$_h" "$SRC/$(basename "$_h")" 2>/dev/null || true; done\n'
+        )
         per_file = (
+            f'{header_links}'
             f'for src in {synth_dir_var}/*.c {synth_dir_var}/*.cpp '
             f'{synth_dir_var}/*.cc {synth_dir_var}/*.cxx; do\n'
             f'  [ -e "$src" ] || continue\n'

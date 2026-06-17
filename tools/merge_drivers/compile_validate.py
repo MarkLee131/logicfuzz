@@ -163,6 +163,18 @@ done
 for g in $(find /src/$PROJ /work \( -name '*_build.h' -o -name '*_config.h' \) 2>/dev/null); do
   EXT_INC="$EXT_INC -I$(dirname "$g")"
 done
+# Generated drivers may carry the project's own fuzzer include idiom, e.g. cjson's
+# stock harness lives in /src/cjson/fuzzing/ and does ``#include "../cJSON.h"``.
+# Such an explicit ``../`` path resolves relative to the SOURCE file's dir
+# (/candidates/ here → /X.h), which -I cannot fix. Symlink every project header to
+# the ``../`` target (/) so the same relative include the real per-driver build
+# accepts also resolves here (A≡B). Best-effort; never fails the gate.
+for d in /src/$PROJ /src/$PROJ/include /src/$PROJ/src; do
+  [ -d "$d" ] || continue
+  for h in "$d"/*.h "$d"/*.hpp; do
+    [ -e "$h" ] && ln -sf "$h" "/$(basename "$h")" 2>/dev/null || true
+  done
+done
 COV_FLAGS="${SANITIZER_FLAGS_coverage:-} ${COVERAGE_FLAGS_coverage:-}"
 # The project $CFLAGS carries ``-Wno-error=implicit-function-declaration`` and
 # ``-Wno-error=implicit-int`` — so a C driver that CALLS a real library function
