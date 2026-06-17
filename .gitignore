@@ -18,3 +18,4 @@ logs/ab_*/
 # Downloaded OSS-Fuzz baseline drivers (data, not source)
 extracted_fuzz_drivers/
 .claude/
+reference/promefuzz_api_hints/
