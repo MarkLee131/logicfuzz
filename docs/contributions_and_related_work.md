@@ -471,10 +471,37 @@ gap is **time + breadth**, not purely time:
 symbolic constructor can't chain (the validity-repair then prepends its handle
 creators), and an **API-floor** in the portfolio pulls every pool API into the
 merged harness. Measured: cjson **75→78 APIs (= PromeFuzz's exact count)**,
-c-ares **96→138 (≥ PromeFuzz's 136)**, lcms 149→297. Plus a merge-include fix
-(symlink project headers so a driver's `#include "../cJSON.h"` idiom resolves in
-the compile-validation/merged-build dirs) — without it cjson dropped **0/41**
-candidates and never built a harness.
+c-ares **96→138 (≥ PromeFuzz's 136)**, lcms 149→297. Plus a merge-include root-fix
+(`-iquote dirname(target_path)`: a relocated synthesized driver keeps the stock
+fuzzer's relative `#include "../cJSON.h"` idiom — which resolves relative to the
+including file's dir — and we hand the merged/compile-validate build the stock
+fuzzer's directory as the quote-search base, exactly as OFG's per-driver build has
+it) — without it cjson dropped **0/41** candidates and never built a harness.
+
+**Measured: valid-by-construction / low-FP is a coverage MULTIPLIER, not just a
+quality metric (c-ares, 2026-06-18).** Systematic debugging (superpowers) found the
+dominant c-ares crash class via a symbolized stack: `_is_callback_param` matched the
+`_t` typedef suffix *as a substring*, so opaque handles (`ares_dns_rr_t*`) and `T**`
+output params (`ares_dns_record_t**`) were misclassified as callbacks and the LLM
+filled them with garbage (`(handle*)data`, `&self`) → deref → SEGV (driver 55,
+`ares_dns_record_rr_get`→`ares_array_at`). Fix = classify from STRUCTURE, not name
+substrings: a first-class `Arg.is_function_pointer` IR flag + an *ungated* opaque-
+handle NULL-guard render. On the regenerated merged harness:
+
+| c-ares merged harness | before (FP-poisoned) | after (structural fix) |
+|---|---|---|
+| dominant SEGV (`0x45e03626`) | 19,678 | **0** |
+| total crashes | ~22,765 | 250 |
+| **edges** (same or less time) | 902 @2h | **1,842 @10min (+104%)** |
+| exec/s | ~0 (crash-throttled) | 39,334 |
+
+The crash-poison was *halving* coverage by burning fuzz cycles, so our precision is
+directly an **efficiency + coverage** win. Verified clean (0 of `&self` /
+`(void*)data` / `(T_t*)data` / callback-hole patterns) across **43 c-ares skeletons +
+20 LLM-filled drivers**, and at the driver level on cjson (0 crashes) and libpng
+(**77/77 compile**, 0 garbage). This is the headline reframed result: pure-LLM
+baselines pay for FP drivers in *both* a compilation-fix loop *and* wasted fuzz
+cycles; valid-by-construction avoids both.
 
 **Table A — driver validity (valid-by-construction; cheap, no long fuzz needed).**
 Pure-LLM baselines (PromeFuzz, PromptFuzz) depend on a *compilation-fix loop*; ours
