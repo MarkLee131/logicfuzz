@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import subprocess as sp
 import tempfile
 import uuid
@@ -73,14 +74,18 @@ def ensure_custom_base_image_exists():
   logger.info('Successfully built custom base image %s', CUSTOM_BASE_BUILDER)
   return True
 
-def _image_has_clang14(tag: str) -> bool:
-  """True iff the image carries clang-14 at the path the extractor probes
-  (/usr/lib/llvm-14/bin/clang). Used to decide if the base is already additive."""
-  probe = sp.run(
-      ['docker', 'run', '--rm', '--entrypoint', '/bin/bash', tag, '-c',
-       'test -x /usr/lib/llvm-14/bin/clang'],
-      stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-  return probe.returncode == 0
+def _image_has_clang14(image_name: str) -> bool:
+  """True iff the image carries the pinned clang-14 used for bitcode extraction.
+
+  Runs `docker run --rm --entrypoint test <image> -x /usr/lib/llvm-14/bin/clang`
+  and returns True iff the exit code is 0.  Intentionally calls
+  ``subprocess.run`` (module attribute, not the ``sp`` alias) so that tests can
+  monkeypatch ``ofc.subprocess`` without touching the real module."""
+  res = subprocess.run(
+      ['docker', 'run', '--rm', '--entrypoint', 'test', image_name,
+       '-x', '/usr/lib/llvm-14/bin/clang'],
+      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  return res.returncode == 0
 
 def ensure_llvm14_base_builder() -> bool:
   """A1: make the *canonical* base-builder (BASE_BUILDER) carry clang-14, ADDITIVELY.
@@ -640,7 +645,26 @@ def prepare_project_image(benchmark: benchmarklib.Benchmark,
   else:
     logger.warning('Unable to find cached project image for %s', project)
 
-  return _build_image(generated_oss_fuzz_project)
+  result_image = _build_image(generated_oss_fuzz_project)
+
+  # Fix C (image-side stale clang-14): if the resolved project image pre-dates
+  # the clang-14 base augmentation (e.g. liblouis was built before
+  # ensure_llvm14_base_builder ran), /usr/lib/llvm-14/bin/clang will be absent
+  # → wllvm fails → silent clang-only extraction.  Detect this HERE and
+  # invalidate the cached Dockerfiles so the next build picks up the augmented
+  # base rather than the stale snapshot.
+  if result_image and not _image_has_clang14(result_image):
+    logger.warning(
+        'Project image %s is missing clang-14 (stale — built before base '
+        'augmentation). Invalidating cached Dockerfiles for %s so the next '
+        'build uses the clang-14-augmented base. Re-run with LOGICFUZZ_NO_CACHE=1 '
+        'or ensure ensure_llvm14_base_builder() ran before building this image.',
+        result_image, project)
+    generated_project_folder = os.path.join(
+        OSS_FUZZ_DIR, 'projects', generated_oss_fuzz_project)
+    _invalidate_stale_cache_dockerfiles(generated_project_folder)
+
+  return result_image
 
 def create_ossfuzz_project_by_name(original_name: str,
                                    generated_oss_fuzz_project: str) -> str:

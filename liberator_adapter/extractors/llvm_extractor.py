@@ -310,12 +310,20 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         if result.returncode == 0 and 'ok' in result.stdout:
             return
 
-        # clang-14 not found - this should not happen with our custom base-builder
+        # clang-14 not found — the project image was built before the additive
+        # base augmentation (ensure_llvm14_base_builder).  Do NOT apt-install at
+        # runtime (non-reproducible; breaks the SVF cache fingerprint).  Force
+        # the caller to rebuild from the augmented base instead.
+        project = getattr(self.benchmark, 'project', '<unknown>')
+        image = getattr(self.container, 'image_name',
+                        f'gcr.io/oss-fuzz/{project}')
         raise RuntimeError(
-            "clang-14 not found in container. "
-            "Please ensure the container is built using 'logicfuzz/base-builder-llvm14' image. "
-            "Run 'docker/build_custom_image.sh' to build the custom image, "
-            "and use --enable-llvm-extraction flag to use it."
+            f"clang-14 missing in container for project '{project}' "
+            f"(stale image: {image}). "
+            f"Rebuild: docker rmi {image} && "
+            f"re-run with LOGICFUZZ_NO_CACHE=1 so prepare_project_image "
+            f"rebuilds FROM the clang-14-augmented base "
+            f"(ensure_llvm14_base_builder)."
         )
 
     def _ensure_wllvm_installed(self):

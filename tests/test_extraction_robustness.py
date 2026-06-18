@@ -126,3 +126,21 @@ def test_build_svf_cmd_lite_omits_indirect_jumps():
 def test_svf_resources_libucl_is_lite():
     assert svf_resources_for("libucl")["lite"] is True
     assert svf_resources_for("cjson")["lite"] is False
+
+
+# ---------------------------------------------------------------------------
+# Task 7: _image_has_clang14 predicate (Fix C — image-side stale detection)
+# Tests monkeypatch ofc.subprocess (not sp) so the predicate is mockable.
+# ---------------------------------------------------------------------------
+from experiment import oss_fuzz_checkout as ofc
+
+class _R:
+    def __init__(self, rc): self.returncode = rc
+
+def test_image_has_clang14_true(monkeypatch):
+    monkeypatch.setattr(ofc, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: _R(0)), "PIPE": -1}))
+    assert ofc._image_has_clang14("img") is True
+
+def test_image_has_clang14_false(monkeypatch):
+    monkeypatch.setattr(ofc, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: _R(1)), "PIPE": -1}))
+    assert ofc._image_has_clang14("img") is False
