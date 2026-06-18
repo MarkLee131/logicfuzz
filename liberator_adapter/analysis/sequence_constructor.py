@@ -131,16 +131,6 @@ def _validity_contract() -> bool:
         "1", "true", "yes", "on")
 
 
-def _cross_source() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_CROSS_SOURCE_BIND`` — for an eligible
-    CREATOR taking >=2 handles of one type (``_wants_cross_source``), inject a
-    SYNTHETIC alternate producer of that type and bind the args cross-source
-    (parsed + synthetic), so e.g. an lcms transform is CROSS-profile (real
-    conversion, +134% edges) instead of same-profile (identity)."""
-    return _os.environ.get("LOGICFUZZ_CROSS_SOURCE_BIND", "0").strip().lower() in (
-        "1", "true", "yes", "on")
-
-
 def _populate_collections() -> bool:
     """Gate (default-off): ``LOGICFUZZ_POPULATE_COLLECTIONS`` — render a CREATOR's
     handle-collection arg (``cmsToneCurve* const []``) as a populated array of
@@ -1388,13 +1378,14 @@ def construct_sequences(
                        if not _i2b_unfillable_consumer(idx.by_name.get(a), idx)]
         if not cleaned:
             return
-        if _cross_source():
-            # LOGICFUZZ_CROSS_SOURCE_BIND: inject a synthetic alternate producer
-            # before any eligible cross-source CREATOR so its two same-type
-            # handles can bind to DIFFERENT producers (cross-profile transform).
-            # Chokepoint that sees full sequences incl. prefix-resident creators.
-            cleaned = [a for a in _inject_cross_source(cleaned, model, idx)
-                       if a in model.apis]
+        # Cross-source profile binding (always-on): inject a synthetic alternate
+        # producer before any eligible cross-source CREATOR so its two same-type
+        # handles can bind to DIFFERENT producers (cross-profile transform).
+        # CREATOR-scoped + name-deny via ``_wants_cross_source`` → a NO-OP on libs
+        # without an eligible multi-same-type-handle creator. Chokepoint that sees
+        # full sequences incl. prefix-resident creators.
+        cleaned = [a for a in _inject_cross_source(cleaned, model, idx)
+                   if a in model.apis]
         if _drop_unrunnable and not _runnable(cleaned):
             _n_unrunnable[0] += 1
             return

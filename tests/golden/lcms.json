@@ -17,6 +17,7 @@
     ],
     [
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
       "cmsChangeBuffersFormat",
@@ -38,6 +39,7 @@
     [
       "cmsCreate_sRGBProfile",
       "cmsDeleteTransform",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsDeleteTransform",
       "cmsCreateTransform",
@@ -60,6 +62,7 @@
     ],
     [
       "cmsCreateXYZProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
       "cmsDoTransform",
@@ -77,6 +80,7 @@
       "cmsCloseProfile"
     ],
     [
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
       "cmsCloseProfile",
@@ -98,6 +102,7 @@
     ],
     [
       "cmsCreateXYZProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
       "cmsDoTransform",
@@ -122,6 +127,7 @@
     ],
     [
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCreateTransform",
       "cmsDoTransform",
@@ -154,6 +160,7 @@
     [
       "cmsCreate_sRGBProfile",
       "cmsOpenProfileFromFile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsDoTransformStride",
       "cmsDeleteTransform",
@@ -163,6 +170,7 @@
     [
       "cmsCreate_sRGBProfile",
       "cmsOpenProfileFromFile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsDoTransformLineStride",
       "cmsDeleteTransform",
@@ -187,6 +195,7 @@
     ],
     [
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsDeleteTransform",
       "cmsCloseProfile",
@@ -194,12 +203,14 @@
     ],
     [
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsDeleteTransform",
       "cmsCloseProfile"
     ],
     [
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
       "cmsCloseProfile",
@@ -220,6 +231,7 @@
     ],
     [
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
@@ -229,6 +241,7 @@
     ],
     [
       "cmsOpenProfileFromFile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
@@ -238,6 +251,7 @@
     ],
     [
       "cmsCreateXYZProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCreateTransform",
       "cmsDoTransform",
@@ -262,6 +276,7 @@
     [
       "cmsCreate_sRGBProfile",
       "cmsWriteRawTag",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsDeleteTransform",
       "cmsCloseProfile",
@@ -269,6 +284,7 @@
     ],
     [
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
       "cmsCloseProfile",
@@ -288,6 +304,7 @@
     [
       "cmsCreateNULLProfile",
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateProofingTransform",
       "cmsCloseProfile",
       "cmsCloseProfile",
@@ -1265,6 +1282,7 @@
       "cmsStageFree"
     ],
     [
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsGetTransformOutputFormat",
       "cmsGetNamedColorList",
@@ -1731,6 +1749,7 @@
     ],
     [
       "cmsCreateContext",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransformTHR",
       "cmsBuildGamma",
       "cmsGetTransformInputFormat",
@@ -1938,7 +1957,7 @@
   ],
   "n_apis": 297,
   "n_constructed": 183,
-  "n_selected": 48,
+  "n_selected": 45,
   "project": "lcms",
   "selected": [
     [
@@ -2005,6 +2024,22 @@
       "cmsDeleteContext",
       "cmsStageFree",
       "cmsFreeToneCurveTriple"
+    ],
+    [
+      "cmsCreateContext",
+      "cmsCreateMultiprofileTransform",
+      "cmsCreateTransformTHR",
+      "cmsBuildGamma",
+      "cmsGetTransformInputFormat",
+      "cmsGetNamedColorList",
+      "cmsGetTransformContextID",
+      "cmsOpenIOhandlerFromFile",
+      "cmsGetTransformGamutCheckPipeline",
+      "cmsGetTransformInputColorants",
+      "cmsGetTransformOutputColorants",
+      "cmsGetTransformPipeline",
+      "cmsDeleteContext",
+      "cmsDeleteTransform"
     ],
     [
       "cmsCreateContext",
@@ -2098,36 +2133,6 @@
     ],
     [
       "cmsCreateContext",
-      "cmsAllocNamedColorList",
-      "cmsDupNamedColorList",
-      "cmsBuildGamma",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsSetLogErrorHandlerTHR",
-      "cmsDupContext",
-      "cmsGetContextUserData",
-      "cmsIT8LoadFromFile",
-      "cmsDeleteContext",
-      "cmsFreeNamedColorList"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsPipelineAlloc",
-      "cmsPipelineEvalReverseFloat",
-      "cmsBuildGamma",
-      "cmsGetPipelineContextID",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsPipelineGetPtrToFirstStage",
-      "cmsPipelineGetPtrToLastStage",
-      "cmsPipelineUnlinkStage",
-      "cmsDeleteContext",
-      "cmsPipelineFree"
-    ],
-    [
-      "cmsCreateContext",
       "cmsPipelineAlloc",
       "cmsPipelineStageCount",
       "cmsCloseProfile",
@@ -2170,21 +2175,6 @@
       "cmsGetColorSpace",
       "cmsDeleteContext",
       "cmsFreeProfileSequenceDescription"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsCreateTransformTHR",
-      "cmsBuildGamma",
-      "cmsGetTransformInputFormat",
-      "cmsGetNamedColorList",
-      "cmsGetTransformContextID",
-      "cmsOpenIOhandlerFromFile",
-      "cmsGetTransformGamutCheckPipeline",
-      "cmsGetTransformInputColorants",
-      "cmsGetTransformOutputColorants",
-      "cmsGetTransformPipeline",
-      "cmsDeleteContext",
-      "cmsDeleteTransform"
     ],
     [
       "cmsCreateContext",
@@ -2301,6 +2291,7 @@
     ],
     [
       "cmsCreateXYZProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsCloseProfile",
       "cmsDoTransform",
@@ -2334,6 +2325,7 @@
     [
       "cmsCreateNULLProfile",
       "cmsCreate_sRGBProfile",
+      "cmsCreateMultiprofileTransform",
       "cmsCreateProofingTransform",
       "cmsCloseProfile",
       "cmsCloseProfile",
@@ -2402,6 +2394,21 @@
     ],
     [
       "cmsCreateContext",
+      "cmsPipelineAlloc",
+      "cmsPipelineEvalReverseFloat",
+      "cmsBuildGamma",
+      "cmsGetPipelineContextID",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsPipelineGetPtrToFirstStage",
+      "cmsPipelineGetPtrToLastStage",
+      "cmsPipelineUnlinkStage",
+      "cmsDeleteContext",
+      "cmsPipelineFree"
+    ],
+    [
+      "cmsCreateContext",
       "cmsStageAllocMatrix",
       "cmsStageData",
       "cmsSetAdaptationStateTHR",
@@ -2431,6 +2438,21 @@
       "cmsIT8Free"
     ],
     [
+      "cmsCreateContext",
+      "cmsAllocNamedColorList",
+      "cmsNamedColorCount",
+      "cmsIT8LoadFromFile",
+      "cmsIT8LoadFromMem",
+      "cmsNamedColorIndex",
+      "cmsOpenProfileFromFileTHR",
+      "cmsOpenProfileFromMemTHR",
+      "cmsPluginTHR",
+      "cmsSetAdaptationStateTHR",
+      "cmsUnregisterPluginsTHR",
+      "cmsDeleteContext",
+      "cmsFreeNamedColorList"
+    ],
+    [
       "cmsD50_xyY",
       "cmsCreateRGBProfile",
       "cmsIsToneCurveDescending",
@@ -2453,21 +2475,7 @@
       "cmsUnregisterPlugins"
     ],
     [
-      "cmsCreateContext",
-      "cmsAllocNamedColorList",
-      "cmsNamedColorCount",
-      "cmsIT8LoadFromFile",
-      "cmsIT8LoadFromMem",
-      "cmsNamedColorIndex",
-      "cmsOpenProfileFromFileTHR",
-      "cmsOpenProfileFromMemTHR",
-      "cmsPluginTHR",
-      "cmsSetAdaptationStateTHR",
-      "cmsUnregisterPluginsTHR",
-      "cmsDeleteContext",
-      "cmsFreeNamedColorList"
-    ],
-    [
+      "cmsCreateMultiprofileTransform",
       "cmsCreateTransform",
       "cmsGetTransformOutputFormat",
       "cmsGetNamedColorList",
@@ -2524,36 +2532,6 @@
       "cmsStageSampleCLutFloat",
       "cmsDeleteContext",
       "cmsStageFree"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsMLUalloc",
-      "cmsMLUsetWide",
-      "cmsBuildGamma",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsSetLogErrorHandlerTHR",
-      "cmsDupContext",
-      "cmsGetContextUserData",
-      "cmsIT8LoadFromFile",
-      "cmsDeleteContext",
-      "cmsMLUfree"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsCreateLinearizationDeviceLinkTHR",
-      "cmsEvalToneCurve16",
-      "cmsBuildGamma",
-      "cmsGetToneCurveEstimatedTable",
-      "cmsGetToneCurveSegment",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsSetLogErrorHandlerTHR",
-      "cmsDupContext",
-      "cmsDeleteContext",
-      "cmsFreeToneCurveTriple"
     ]
   ]
 }

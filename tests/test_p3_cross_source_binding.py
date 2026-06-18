@@ -10,8 +10,10 @@ that executes the conversion code (+134% edges, handcrafted A/B).
 
 It is CREATOR-scoped (``is_producer``) + name-deny so it can't mis-fire on
 copy/state APIs (``deflateCopy`` returns int → not a producer) or
-parent-child/detach APIs (name-deny). Pure function, no env read — the caller
-gates on ``LOGICFUZZ_CROSS_SOURCE_BIND`` so gate-off is byte-identical.
+parent-child/detach APIs (name-deny). Pure function, no env read; the caller
+applies it unconditionally (cross-source profile binding is always-on, but
+CREATOR-scoped + name-deny so it is a NO-OP on libs without an eligible
+multi-same-type-handle creator).
 """
 import os
 import sys
@@ -128,26 +130,16 @@ def _xform_seq():
     ]
 
 
-def test_signature_bindings_legacy_binds_both_args_to_last_producer(monkeypatch):
-    monkeypatch.delenv("LOGICFUZZ_CROSS_SOURCE_BIND", raising=False)
+def test_signature_bindings_cross_source_distributes():
+    # always-on: the two same-type handle args bind to DIFFERENT producers
     sig = CBFactory._signature_handle_bindings.__get__(types.SimpleNamespace())
     out = sig(_xform_seq())
-    # legacy: produced[type]=last → both profile args bind to ret_makeP
-    assert out[("xform", 0)] == out[("xform", 2)] == "ret_makeP", out
-
-
-def test_signature_bindings_cross_source_distributes(monkeypatch):
-    monkeypatch.setenv("LOGICFUZZ_CROSS_SOURCE_BIND", "1")
-    sig = CBFactory._signature_handle_bindings.__get__(types.SimpleNamespace())
-    out = sig(_xform_seq())
-    # gate-on: the two same-type handle args bind to DIFFERENT producers
     assert out[("xform", 0)] != out[("xform", 2)], out
     assert {out[("xform", 0)], out[("xform", 2)]} == {"ret_makeP", "ret_openP"}, out
 
 
-def test_signature_bindings_cross_source_noop_single_arg(monkeypatch):
+def test_signature_bindings_cross_source_noop_single_arg():
     # a CREATOR with only ONE handle arg is unaffected (no same-type pair).
-    monkeypatch.setenv("LOGICFUZZ_CROSS_SOURCE_BIND", "1")
     sig = CBFactory._signature_handle_bindings.__get__(types.SimpleNamespace())
     seq = [
         _api("openP", [], "void *"),

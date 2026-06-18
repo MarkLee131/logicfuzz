@@ -84,7 +84,6 @@ existing Comprehender Stage-B verdict (no new LLM calls).
 ### Driver DEPTH levers (gated default-OFF, A/B pending)
 Addresses the ~79-edge plateau: drivers BUILD an object but never exercise it.
 - `LOGICFUZZ_EXERCISE_OBJECT=1` — forward "exercise the object" step: after the backward prefix builds a handle, append ONE consumer that RUNS it (prefers an INPUT_BUFFER fuzz-data consumer). `sequence_constructor._append_exercisers`.
-- `LOGICFUZZ_CROSS_SOURCE_BIND=1` — cross-PROFILE transform depth (real lcms win, +134% edges measured). Two halves: (a) construction `sequence_constructor._inject_cross_source` injects a synthetic alternate producer before a multi-same-type-arg creator; (b) binding `CBFactory._distribute_cross_source` (in `_signature_handle_bindings`) re-points the creator's 2nd same-type arg to a distinct earlier producer. CREATOR-scoped + name-deny (copy|clone|dup|detach). Locked by `tests/test_p3_cross_source_{predicate,construct,binding}.py`. Gate-off byte-identical.
 
 ### LLM / debug / SVF config
 - `LOGICFUZZ_LLM_REWRITE=1` — opt OUT of B-design (hole-filling) back to A-design (LLM free-rewrite). DEFAULT B-design: Prototyper fills leaf holes, discards whole-driver rewrites, preserving constructed object-construction skeletons. (A-design = the A/B control; measured inert.) `src/agents/prototyper.py`.

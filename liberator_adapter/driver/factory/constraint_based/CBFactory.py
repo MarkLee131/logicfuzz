@@ -64,16 +64,6 @@ Z3_GUIDED_AVAILABLE = True  # Z3 is now required
 logger = logging.getLogger(__name__)
 
 
-def _cross_source_bind_enabled() -> bool:
-    """Gate ``LOGICFUZZ_CROSS_SOURCE_BIND`` (default-off). When on, the binding
-    post-pass below re-points a CREATOR's repeated same-type handle arg to a
-    DIFFERENT earlier producer (cross-profile transform). See the construction
-    side in ``sequence_constructor._inject_cross_source``."""
-    import os as _os
-    return _os.environ.get("LOGICFUZZ_CROSS_SOURCE_BIND", "0").strip().lower() in (
-        "1", "true", "yes", "on")
-
-
 def _validity_contract_enabled() -> bool:
     """Gate ``LOGICFUZZ_VALIDITY_CONTRACT`` (default-off). When on (and a model
     is supplied), ``_signature_handle_bindings`` binds opaque handle args by
@@ -1501,7 +1491,7 @@ class CBFactory(Factory):
         produced: Dict[str, str] = {}   # normalized handle type -> ret var
         # I3: family -> last producer ret var (family from the producer NAME).
         produced_by_family: Dict[str, str] = {}
-        cross = _cross_source_bind_enabled()
+        cross = True   # cross-source profile binding always-on (CREATOR-scoped)
         ordered: List[Dict[str, Any]] = []   # for the cross-source post-pass
 
         def _arg_family(api_name: str, j: int) -> Optional[str]:
@@ -1765,8 +1755,8 @@ class CBFactory(Factory):
                     continue
                 bindings[(api.function_name, j)] = f"ret_{producer}"
 
-        if _cross_source_bind_enabled():
-            # LOGICFUZZ_CROSS_SOURCE_BIND post-pass: a CREATOR's repeated same-
+        if True:
+            # Cross-source post-pass (always-on): a CREATOR's repeated same-
             # type handle args were bound to ONE producer above (upstream defers
             # context update until all args resolve). Re-point the 2nd to a
             # DISTINCT earlier producer of that type — the construction-injected
