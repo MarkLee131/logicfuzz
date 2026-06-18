@@ -2346,6 +2346,16 @@ class FuzzingContext:
         results_dir = f"./results/{project_name}"
         log.info(
             f'📁 Saving intermediate results to {results_dir}/static_analysis/')
+        # Derive extraction status from the extractor metadata that flows via
+        # generator.extract_metadata (set in Step 2 from adapter.last_metadata).
+        # extraction_mode and degraded_reason are stamped by hybrid_extractor
+        # into last_metadata; fall back to "full"/null if absent (e.g. cache hit).
+        _ext_meta = getattr(generator, 'extract_metadata', None) or {}
+        _extraction_status = {
+            k: _ext_meta[k]
+            for k in ('extraction_mode', 'degraded_reason')
+            if k in _ext_meta
+        } or None
         save_intermediate_results(project_name=project_name,
                                   results_dir=results_dir,
                                   dependency_graph=dep_graph_dict,
@@ -2356,7 +2366,8 @@ class FuzzingContext:
                                   grammar_info=grammar_info,
                                   condition_info=condition_info,
                                   skeleton_drivers=skeleton_drivers,
-                                  log=log)
+                                  log=log,
+                                  extraction_status=_extraction_status)
 
         return cls(project_name=project_name,
                    project_apis=project_apis,
@@ -3921,7 +3932,8 @@ def save_intermediate_results(project_name: str,
                               grammar_info: Dict[str, Any],
                               condition_info: Dict[str, Any],
                               skeleton_drivers: List[Dict[str, Any]] = None,
-                              log: logging.Logger = None) -> None:
+                              log: logging.Logger = None,
+                              extraction_status: Dict[str, Any] = None) -> None:
     """
     Save all intermediate static analysis results to the results folder.
 
@@ -4053,7 +4065,8 @@ def save_intermediate_results(project_name: str,
             },
             'grammar_info': grammar_info,
             'condition_info': condition_info,
-            'pattern_summary': pattern_analysis.get('summary', {})
+            'pattern_summary': pattern_analysis.get('summary', {}),
+            **(extraction_status or {"extraction_mode": "full", "degraded_reason": None}),
         }
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=2)

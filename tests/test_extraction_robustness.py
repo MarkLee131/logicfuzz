@@ -26,3 +26,12 @@ def test_sanitize_noop_when_clean():
     cleaned, stripped = sanitize_extraction_flags("-O1 -g -std=gnu99")
     assert cleaned == "-O1 -g -std=gnu99"
     assert stripped == []
+
+from liberator_adapter.extractors.base_extractor import extraction_status_fields
+
+def test_summary_carries_extraction_status(tmp_path):
+    # mimic the summary-dict assembly contract: status fields are merged in
+    status = extraction_status_fields(True, "svf_timeout")
+    summary = {"project_name": "x", "statistics": {}, **status}
+    assert summary["extraction_mode"] == "clang_only"
+    assert summary["degraded_reason"] == "svf_timeout"

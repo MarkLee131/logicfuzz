@@ -10,7 +10,8 @@ from typing import Dict, List, Optional
 from tool.container_tool import ProjectContainerTool
 from experiment.benchmark import Benchmark
 
-from liberator_adapter.extractors.base_extractor import BaseAPIExtractor
+from liberator_adapter.extractors.base_extractor import (
+    BaseAPIExtractor, DegradedReason, extraction_status_fields)
 from liberator_adapter.extractors.clang_extractor import ClangAPIExtractor
 from liberator_adapter.extractors.llvm_extractor import LLVMAPIExtractor
 from liberator_adapter.common.api import Api
@@ -84,11 +85,21 @@ class HybridAPIExtractor(BaseAPIExtractor):
         # 1. Compile project first (generates headers for amalgamation projects like sqlite3)
         logger.info("Step 1: Compiling project to bitcode...")
         llvm_extraction_failed = False
+        self._degraded_reason = None
         if not bc_file:
             if compile_project:
                 try:
                     bc_file = self.llvm_extractor.compile_to_bitcode()
                 except Exception as e:
+                    msg = str(e)
+                    if "timed out" in msg:
+                        self._degraded_reason = DegradedReason.SVF_TIMEOUT.value
+                    elif "bad_alloc" in msg or "MemoryError" in msg:
+                        self._degraded_reason = DegradedReason.SVF_OOM.value
+                    elif "Could not find library" in msg or "compile" in msg.lower():
+                        self._degraded_reason = DegradedReason.COMPILE_FAILED.value
+                    else:
+                        self._degraded_reason = msg[:200]
                     logger.warning(f"LLVM compilation failed, falling back to clang-only mode: {e}")
                     llvm_extraction_failed = True
             else:
@@ -126,6 +137,15 @@ class HybridAPIExtractor(BaseAPIExtractor):
                     output_dir=self.local_temp_dir  # Use HOST temp dir, not container path
                 )
             except Exception as e:
+                msg = str(e)
+                if "timed out" in msg:
+                    self._degraded_reason = DegradedReason.SVF_TIMEOUT.value
+                elif "bad_alloc" in msg or "MemoryError" in msg:
+                    self._degraded_reason = DegradedReason.SVF_OOM.value
+                elif "Could not find library" in msg or "compile" in msg.lower():
+                    self._degraded_reason = DegradedReason.COMPILE_FAILED.value
+                else:
+                    self._degraded_reason = msg[:200]
                 logger.warning(f"LLVM extraction failed, falling back to clang-only mode: {e}")
                 llvm_extraction_failed = True
 
@@ -266,6 +286,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
                     "enum_types": local_paths.get('enum_types.txt'),  # For DataLayout.is_enum_type()
                 },
                 "llvm_output_dir": llvm_output_dir,
+                **extraction_status_fields(False, None),
             }
             
             return apis_dict
@@ -364,7 +385,8 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 "enum_types": local_enum_types,
             },
             "llvm_output_dir": self.local_temp_dir,
-            "clang_only_mode": True,  # Flag to indicate clang-only mode
+            "clang_only_mode": True,  # Flag to indicate clang-only mode (back-compat)
+            **extraction_status_fields(True, getattr(self, "_degraded_reason", None)),
         }
 
         logger.info(f"Clang-only extraction completed: {len(apis_dict)} APIs extracted")
