@@ -15,7 +15,7 @@ from langchain_core.runnables import Runnable
 logger = logging.getLogger(__name__)
 
 # Default parameters
-MAX_TOKENS: int = 4096
+MAX_TOKENS: int = 8192
 TEMPERATURE: float = 0.4
 DEFAULT_MODEL = "gpt-5.2"
 
@@ -59,14 +59,15 @@ MODEL_REGISTRY: Dict[str, Callable[..., BaseChatModel]] = {
     "gpt-4o-mini":
     lambda **kw: _create_openai_model("gpt-4o-mini", **kw),
 
-    # DeepSeek models (OpenAI-compatible, support tool calling).
-    # deepseek-chat IS DeepSeek V3. Override max_tokens to 8192 (the API maximum
-    # for deepseek-chat; default is 4096) so the Prototyper doesn't truncate large
-    # multi-API drivers. 8192 is the hard output ceiling — higher is rejected.
-    # NOTE: there is no DeepSeek "V4" — the API exposes only deepseek-chat (V3)
-    # and deepseek-reasoner (R1); add deepseek-reasoner here if R1 is wanted.
-    "deepseek-V3":
-    lambda **kw: _create_deepseek_model("deepseek-chat", **{**kw, "max_tokens": 8192}),
+    # DeepSeek V4 (current generation; OpenAI-compatible; both support tool calling).
+    # Verified against the live /models API (2026-06-18): DeepSeek deprecated V3/R1 —
+    # the legacy aliases deepseek-chat AND deepseek-reasoner now BOTH back to
+    # deepseek-v4-flash. The two distinct served models are v4-flash and v4-pro.
+    # Output range is [1, 393216]; max_tokens comes from the global MAX_TOKENS (8192).
+    "deepseek-v4-flash":
+    lambda **kw: _create_deepseek_model("deepseek-v4-flash", **kw),
+    "deepseek-v4-pro":
+    lambda **kw: _create_deepseek_model("deepseek-v4-pro", **kw),
 }
 
 
@@ -78,7 +79,7 @@ def get_chat_model(name: str,
     Get a LangChain chat model by name.
 
     Args:
-        name: Model name (e.g., "gpt-5.2", "gpt-4o", "deepseek-chat", "claude-3-5-sonnet")
+        name: Model name (e.g., "gpt-5.2", "gpt-4o", "deepseek-chat")
         temperature: Sampling temperature (default: 0.4)
         max_tokens: Maximum tokens for response (default: 4096)
         **kwargs: Additional arguments passed to the model constructor
