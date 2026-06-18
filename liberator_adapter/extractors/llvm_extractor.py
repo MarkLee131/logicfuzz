@@ -53,7 +53,7 @@ _SVF_LITE_PROJECTS: set = set(filter(
 # projects not listed here.
 _SVF_PROJECT_RESOURCES: dict = {
     "sqlite3": {"timeout_secs": 14400, "mem_gb": 0},    # time-bound amalgamation
-    "libucl":  {"timeout_secs": 21600, "mem_gb": 140},  # big flow-sensitive budget
+    "libucl":  {"timeout_secs": 14400, "mem_gb": 140},  # lite SVF ~2.5-3h observed; 4h cap
 }
 
 
