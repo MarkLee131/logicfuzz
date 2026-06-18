@@ -2197,16 +2197,16 @@ class FuzzingContext:
                 log.warning('G4 hole annotation failed (non-critical): %s', _he)
 
         # Semantic guard (always-on): the set of Comprehender Stage-B VALID
-        # sequences. Subset-elim (B-3) and pairwise-dedup (B-2) NEVER drop a
-        # skeleton whose api_sequence is VALID — it is the safety for the drop.
+        # sequences. Subset-elim (B-3) NEVER drops a skeleton whose api_sequence
+        # is VALID — it is the safety for the drop.
         _valid_seqs = {
             tuple(s.get("sequence") or [])
             for s in (sequence_semantics_dicts or [])
             if str(s.get("semantic_status", "")).upper() == "VALID"} or None
 
         # B-3: drop skeletons whose fingerprint is a strict same-value-domain
-        # subset of another's (always-on). Runs BEFORE B-2 so it removes only
-        # true subsets (never near-twins → that is B-2's job). Semantic-guarded.
+        # subset of another's (always-on). Removes only true subsets (never
+        # near-twins). Semantic-guarded.
         if skeleton_drivers and api_semantic_model is not None:
             try:
                 from liberator_adapter.analysis.driver_dedup import (
@@ -2220,30 +2220,6 @@ class FuzzingContext:
                                  for s in skeleton_drivers]
             except Exception as _se:
                 log.warning("subset elim failed (non-critical): %s", _se)
-
-        # B-2 (LOGICFUZZ_PAIRWISE_DEDUP): drop near-twin skeletons by fingerprint
-        # similarity over the FULL Layer-C fingerprint (incl. value-domain), so
-        # value-distinct variants survive. The Stage-B VALID guard (always-on,
-        # _valid_seqs above) protects semantically-VALID sequences.
-        if (os.environ.get("LOGICFUZZ_PAIRWISE_DEDUP", "").strip().lower()
-                in ("1", "true", "yes", "on")) and skeleton_drivers \
-                and api_semantic_model is not None:
-            try:
-                from liberator_adapter.analysis.driver_dedup import (
-                    pairwise_dedup_skeletons)
-                try:
-                    _tau = float(os.environ.get("LOGICFUZZ_PAIRWISE_TAU", "0.8"))
-                except ValueError:
-                    _tau = 0.8
-                _before = len(skeleton_drivers)
-                skeleton_drivers = pairwise_dedup_skeletons(
-                    skeleton_drivers, api_semantic_model, _tau, _valid_seqs)
-                log.info("   🧬 pairwise dedup: %d → %d (tau=%.2f)",
-                         _before, len(skeleton_drivers), _tau)
-                api_sequences = [s.get('api_sequence', [])
-                                 for s in skeleton_drivers]
-            except Exception as _de:
-                log.warning("pairwise dedup failed (non-critical): %s", _de)
 
         # T12: pin proven hole values from a PRIOR run. DEFAULT-ON (opt-out
         # LOGICFUZZ_VALUE_FEEDBACK=0): read the persisted coverage_memory and

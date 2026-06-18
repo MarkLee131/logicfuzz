@@ -2,7 +2,6 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from liberator_adapter.analysis.api_semantic_model import reconcile
-from liberator_adapter.analysis.driver_dedup import pairwise_dedup_skeletons
 
 
 def _api(name, args=None, ret="void"):
@@ -21,41 +20,6 @@ def _model():
         _api("h_b", [_arg("H *")], ret="int"),
         _api("h_free", [_arg("H *")]),
     ])
-
-
-def test_near_twins_are_dropped():
-    m = _model()
-    sks = [
-        {"api_sequence": ["h_create", "h_a", "h_free"], "value_intents": []},
-        {"api_sequence": ["h_create", "h_a", "h_free"], "value_intents": []},  # twin
-        {"api_sequence": ["h_create", "h_b", "h_free"], "value_intents": []},  # distinct-ish
-    ]
-    kept = pairwise_dedup_skeletons(sks, m, tau=0.99)
-    seqs = [k["api_sequence"] for k in kept]
-    assert seqs.count(["h_create", "h_a", "h_free"]) == 1   # exact twin removed
-
-
-def test_value_domain_distinct_twins_survive():
-    m = _model()
-    sks = [
-        {"api_sequence": ["h_create", "h_a"], "value_intents":
-            [{"api": "h_a", "args": [{"index": 0, "role": "CONFIG", "intent": "FUZZ_DERIVE gamma"}]}]},
-        {"api_sequence": ["h_create", "h_a"], "value_intents":
-            [{"api": "h_a", "args": [{"index": 0, "role": "CONFIG", "intent": "FUZZ_DERIVE enum"}]}]},
-    ]
-    kept = pairwise_dedup_skeletons(sks, m, tau=0.5)
-    assert len(kept) == 2          # different value domains → both kept
-
-
-def test_valid_guard_protects_valid_seq():
-    m = _model()
-    sks = [
-        {"api_sequence": ["h_create", "h_a", "h_free"], "value_intents": []},
-        {"api_sequence": ["h_create", "h_a", "h_free"], "value_intents": []},  # twin, but VALID
-    ]
-    valid = {("h_create", "h_a", "h_free")}
-    kept = pairwise_dedup_skeletons(sks, m, tau=0.5, valid_seqs=valid)
-    assert len(kept) == 2          # VALID twin not dropped
 
 
 def test_subset_eliminate_drops_strict_subset():

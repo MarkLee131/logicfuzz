@@ -19,8 +19,7 @@ from liberator_adapter.analysis.api_semantic_model import reconcile
 from liberator_adapter.analysis.sequence_constructor import construct_sequences
 from liberator_adapter.analysis.subsystem_clusters import subsystem_clusters
 from liberator_adapter.analysis.hole_semantics import value_intents_for_sequence
-from liberator_adapter.analysis.driver_dedup import (
-    pairwise_dedup_skeletons, subset_eliminate_skeletons)
+from liberator_adapter.analysis.driver_dedup import subset_eliminate_skeletons
 from liberator_adapter.analysis.portfolio_redundancy import portfolio_redundancy
 from liberator_adapter.constraints.coverage_ranker import CoverageRanker
 
@@ -30,10 +29,9 @@ GATES_ON = {
     "LOGICFUZZ_DENSE_PARTITION": "1",
     "LOGICFUZZ_DIVERSIFY_PRODUCERS": "1",
     "LOGICFUZZ_MARGINAL_DEPTH": "1",
-    "LOGICFUZZ_PAIRWISE_DEDUP": "1",
     "LOGICFUZZ_SUBSET_ELIM": "1",
 }
-DEDUP_GATES = ("LOGICFUZZ_PAIRWISE_DEDUP", "LOGICFUZZ_SUBSET_ELIM",
+DEDUP_GATES = ("LOGICFUZZ_SUBSET_ELIM",
                "LOGICFUZZ_DENSE_PARTITION",
                "LOGICFUZZ_DIVERSIFY_PRODUCERS", "LOGICFUZZ_MARGINAL_DEPTH")
 
@@ -80,7 +78,6 @@ def _run(apis, model, acc, gates_on):
             for s in selected]
     if gates_on:
         skel = subset_eliminate_skeletons(skel, model)
-        skel = pairwise_dedup_skeletons(skel, model, tau=0.8)
     shipped = [d["api_sequence"] for d in skel]
     _clear()
     return constructed, selected, shipped

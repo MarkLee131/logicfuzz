@@ -65,25 +65,6 @@ def sequence_fingerprint(
                        _value_domain_signature(value_intents))
 
 
-def _jaccard(a: FrozenSet[str], b: FrozenSet[str]) -> float:
-    if not a and not b:
-        return 1.0
-    u = a | b
-    return len(a & b) / len(u) if u else 1.0
-
-
-def fingerprint_similarity(a: Fingerprint, b: Fingerprint) -> float:
-    """Pairwise similarity in [0,1] for the B-2 dedup gate.
-
-    Value-domain-distinct drivers are NEVER redundant (return 0.0) — this is the
-    doc-integration guard that prevents dropping a doc-meaningful value variant.
-    Otherwise similarity is the API-set Jaccard.
-    """
-    if a.value_domain_sig != b.value_domain_sig:
-        return 0.0
-    return _jaccard(a.api_set, b.api_set)
-
-
 def fingerprint_is_subset(a: Fingerprint, b: Fingerprint) -> bool:
     """True iff ``a`` is a strict, same-value-domain, same-or-fewer-roots subset
     of ``b`` (B-3 subset elimination). A value-distinct or root-distinct subset
