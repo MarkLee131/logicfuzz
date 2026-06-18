@@ -156,6 +156,26 @@ def _public_pointer_type(c_type: str) -> str:
     return c_type
 
 
+def const_qualified_type(c_type: str, is_const) -> str:
+    """Reconstruct a const-qualified C type from the bare type string + per-level
+    const flags. The extractor stores e.g. cJSON_ParseWithOpts's return_parse_end
+    as type='char * *', is_const=[True, False, False] (= const char **) — the bare
+    type string drops the const, which is a *warning* under $CC but a hard *error*
+    under $CXX (OSS-Fuzz compiles C fuzzers as clang++). is_const[0] = const on the
+    base type; is_const[i>0] = const on the (i-1)-th pointer level. No-op when
+    is_const is empty/falsy."""
+    if not is_const or not any(is_const):
+        return c_type
+    stars = c_type.count('*')
+    base = c_type.replace('*', '').strip()
+    out = ("const " + base) if is_const[0] else base
+    for i in range(stars):
+        out += " *"
+        if i + 1 < len(is_const) and is_const[i + 1]:
+            out += " const"
+    return out
+
+
 def _is_handle_collection_type(c_type: str) -> bool:
     """True for an array/double-pointer of a HANDLE type (``cmsToneCurve **`` /
     ``cmsToneCurve * const []`` → ``cmsToneCurve * const *``), the input-collection
@@ -1003,6 +1023,7 @@ class SkeletonGenerator:
                 arg_info = {
                     'name': arg.name or f"arg{idx}",
                     'type': arg.type,
+                    'is_const': getattr(arg, 'is_const', None),  # C1: per-level const flags
                     'idx': idx,
                     'api_name': api.function_name,           # FIX D: usage lookup
                     'is_input': self._is_input_param(arg),
@@ -1205,7 +1226,9 @@ class SkeletonGenerator:
              for direct-generate callers that supply no model; the construct path
              always supplies one, so the model drives every constructed driver.
         """
-        c_type = arg_info['type']
+        # C1: reconstruct const-qualified type ($CXX compiles C fuzzers; a const
+        # mismatch is a hard error under clang++). No-op when no const flags.
+        c_type = const_qualified_type(arg_info['type'], arg_info.get('is_const'))
         is_pointer = '*' in c_type
 
         # ---- Structural opaque-handle guard (heuristic-proof, ungated) -------
