@@ -7,11 +7,34 @@ import logging
 import subprocess
 from typing import Optional
 from pathlib import Path
+from enum import Enum
 
 from tool.container_tool import ProjectContainerTool
 from experiment.benchmark import Benchmark
 
 logger = logging.getLogger(__name__)
+
+
+class DegradedReason(str, Enum):
+    NONE = "none"
+    COMPILE_FAILED = "compile_failed"
+    EXTRACT_BC_FAILED = "extract_bc_failed"
+    SVF_TIMEOUT = "svf_timeout"
+    SVF_OOM = "svf_oom"
+    CONDITIONS_EMPTY = "conditions_empty"
+    CONDITIONS_MISSING = "conditions_missing"
+    HOST_EXTRACTOR_MISSING = "host_extractor_missing"
+    CONDITION_MANAGER_ERROR = "condition_manager_error"
+
+
+def extraction_status_fields(clang_only, reason):
+    """Single source of truth for the persisted extraction-status fields."""
+    if not clang_only:
+        return {"extraction_mode": "full", "degraded_reason": None}
+    if isinstance(reason, DegradedReason):
+        reason = reason.value
+    return {"extraction_mode": "clang_only",
+            "degraded_reason": reason or DegradedReason.COMPILE_FAILED.value}
 
 
 class BaseAPIExtractor:
