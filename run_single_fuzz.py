@@ -567,6 +567,31 @@ def _is_immediate_crash_fp(br) -> bool:
   return cov_pcs == 0 and cov_frac <= 0.001
 
 
+def _quarantine_fp_crashers_enabled() -> bool:
+  """``LOGICFUZZ_QUARANTINE_FP_CRASHERS``: also drop **cov>0** driver-FP crashers
+  from the merge. ``_is_immediate_crash_fp`` only catches cov==0 crashers, but a
+  deterministic DRIVER-bug crasher that covers a few edges before aborting (e.g.
+  libpng driver 116's ``png_color`` output array sized [1] for an API that writes
+  up to 256 entries → stack-overflow on ~every input) still poisons the fused
+  harness and throttles throughput. Real LIBRARY bugs are protected by
+  ``_trial_confirms_real_bug`` (still never dropped). Default-OFF — cross-project
+  A/B; gate-off is byte-identical."""
+  return os.environ.get('LOGICFUZZ_QUARANTINE_FP_CRASHERS', '').strip().lower() \
+      in ('1', 'true', 'yes', 'on')
+
+
+def _should_quarantine_from_merge(br, tr) -> bool:
+  """Drop a compiled driver from the merge iff it's a driver-FP crasher — it
+  crashed AND its triage did NOT confirm a real (feasible) library bug — AND
+  either it covered 0 edges (always quarantined) or ``QUARANTINE_FP_CRASHERS`` is
+  set (also quarantine cov>0 deterministic driver-FP crashers). A confirmed real
+  library bug is NEVER dropped. Gate-off is byte-identical to the prior
+  cov==0-only rule."""
+  if not (getattr(br, 'crashes', False) and not _trial_confirms_real_bug(tr)):
+    return False
+  return _is_immediate_crash_fp(br) or _quarantine_fp_crashers_enabled()
+
+
 def _trial_confirms_real_bug(tr) -> bool:
   """True iff this trial's crash triage CONFIRMED a real (feasible) bug — a
   library-frame crash kept by lean, or an LLM-feasible verdict. Such a driver is
@@ -916,11 +941,14 @@ def _maybe_merge_drivers(benchmark: Benchmark,
     # BUT never drop a crash the triage CONFIRMED feasible (a real library bug
     # can abort at 0 coverage): gate the quarantine on the crash verdict so the
     # low-FP classifier's "real bug" decision is honored, not just coverage.
-    if _is_immediate_crash_fp(br) and not _trial_confirms_real_bug(tr):
+    # Default: only cov==0 immediate-crash FPs. Gated (QUARANTINE_FP_CRASHERS):
+    # ALSO drop cov>0 deterministic driver-FP crashers (libpng driver-116 class).
+    if _should_quarantine_from_merge(br, tr):
       quarantined += 1
+      _cov = getattr(br, 'cov_pcs', 0) or 0
       logger.info(
-          f'merge: quarantined trial {tr.trial:02d} (immediate-crash FP, '
-          f'cov_pcs=0) — would poison the fused harness', trial=0)
+          f'merge: quarantined trial {tr.trial:02d} (driver-FP crash, '
+          f'cov_pcs={_cov}) — would poison the fused harness', trial=0)
       continue
     src = Path(work_dirs.fuzz_targets) / f'{tr.trial:02d}.fuzz_target'
     if src.exists():
