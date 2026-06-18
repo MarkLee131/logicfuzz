@@ -67,3 +67,17 @@ def test_subset_eliminate_drops_strict_subset():
     from liberator_adapter.analysis.driver_dedup import subset_eliminate_skeletons
     kept = subset_eliminate_skeletons(sks, m)
     assert [k["api_sequence"] for k in kept] == [["h_create", "h_a", "h_free"]]
+
+
+def test_subset_eliminate_semantic_guard_protects_valid_subset():
+    # The semantic guard (always-on) prevents a Comprehender-VALID subset
+    # skeleton from being eliminated even though its fingerprint is a subset.
+    m = _model()
+    sks = [
+        {"api_sequence": ["h_create", "h_a", "h_free"], "value_intents": []},
+        {"api_sequence": ["h_create", "h_free"], "value_intents": []},  # subset, VALID
+    ]
+    from liberator_adapter.analysis.driver_dedup import subset_eliminate_skeletons
+    valid = {("h_create", "h_free")}
+    kept = subset_eliminate_skeletons(sks, m, valid_seqs=valid)
+    assert len(kept) == 2          # VALID subset not dropped

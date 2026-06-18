@@ -2196,18 +2196,24 @@ class FuzzingContext:
             except Exception as _he:
                 log.warning('G4 hole annotation failed (non-critical): %s', _he)
 
-        # B-3 (LOGICFUZZ_SUBSET_ELIM): drop skeletons whose fingerprint is a
-        # strict same-value-domain subset of another's. Runs BEFORE B-2 so it
-        # removes only true subsets (never near-twins → that is B-2's job).
-        if (os.environ.get("LOGICFUZZ_SUBSET_ELIM", "").strip().lower()
-                in ("1", "true", "yes", "on")) and skeleton_drivers \
-                and api_semantic_model is not None:
+        # Semantic guard (always-on): the set of Comprehender Stage-B VALID
+        # sequences. Subset-elim (B-3) and pairwise-dedup (B-2) NEVER drop a
+        # skeleton whose api_sequence is VALID — it is the safety for the drop.
+        _valid_seqs = {
+            tuple(s.get("sequence") or [])
+            for s in (sequence_semantics_dicts or [])
+            if str(s.get("semantic_status", "")).upper() == "VALID"} or None
+
+        # B-3: drop skeletons whose fingerprint is a strict same-value-domain
+        # subset of another's (always-on). Runs BEFORE B-2 so it removes only
+        # true subsets (never near-twins → that is B-2's job). Semantic-guarded.
+        if skeleton_drivers and api_semantic_model is not None:
             try:
                 from liberator_adapter.analysis.driver_dedup import (
                     subset_eliminate_skeletons)
                 _before_se = len(skeleton_drivers)
                 skeleton_drivers = subset_eliminate_skeletons(
-                    skeleton_drivers, api_semantic_model)
+                    skeleton_drivers, api_semantic_model, _valid_seqs)
                 log.info("   🧬 subset elim: %d → %d",
                          _before_se, len(skeleton_drivers))
                 api_sequences = [s.get('api_sequence', [])
@@ -2217,8 +2223,8 @@ class FuzzingContext:
 
         # B-2 (LOGICFUZZ_PAIRWISE_DEDUP): drop near-twin skeletons by fingerprint
         # similarity over the FULL Layer-C fingerprint (incl. value-domain), so
-        # value-distinct variants survive. Optional Stage-B VALID guard
-        # (LOGICFUZZ_DEDUP_SEMANTIC_GUARD) protects semantically-VALID sequences.
+        # value-distinct variants survive. The Stage-B VALID guard (always-on,
+        # _valid_seqs above) protects semantically-VALID sequences.
         if (os.environ.get("LOGICFUZZ_PAIRWISE_DEDUP", "").strip().lower()
                 in ("1", "true", "yes", "on")) and skeleton_drivers \
                 and api_semantic_model is not None:
@@ -2229,13 +2235,6 @@ class FuzzingContext:
                     _tau = float(os.environ.get("LOGICFUZZ_PAIRWISE_TAU", "0.8"))
                 except ValueError:
                     _tau = 0.8
-                _valid_seqs = None
-                if (os.environ.get("LOGICFUZZ_DEDUP_SEMANTIC_GUARD", "")
-                        .strip().lower() in ("1", "true", "yes", "on")):
-                    _valid_seqs = {
-                        tuple(s.get("sequence") or [])
-                        for s in (sequence_semantics_dicts or [])
-                        if str(s.get("semantic_status", "")).upper() == "VALID"}
                 _before = len(skeleton_drivers)
                 skeleton_drivers = pairwise_dedup_skeletons(
                     skeleton_drivers, api_semantic_model, _tau, _valid_seqs)

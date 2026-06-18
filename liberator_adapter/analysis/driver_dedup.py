@@ -39,14 +39,21 @@ def pairwise_dedup_skeletons(
 
 def subset_eliminate_skeletons(
         skeletons: Sequence[Dict[str, Any]],
-        model) -> List[Dict[str, Any]]:
+        model,
+        valid_seqs: Optional[Set[Tuple[str, ...]]] = None) -> List[Dict[str, Any]]:
     """Drop any skeleton whose fingerprint is a strict same-value-domain subset
     of another's (B-3). Order-preserving; keeps the superset.
+
+    The semantic guard (``valid_seqs``, a set of Comprehender Stage-B VALID
+    sequences) is the safety for the drop: a skeleton whose api_sequence is
+    VALID is never eliminated even if its fingerprint is a subset of another's.
     """
     fps = [sequence_fingerprint(sk.get("api_sequence") or [], model,
                                 sk.get("value_intents")) for sk in skeletons]
     drop = set()
     for i, fi in enumerate(fps):
+        if _is_valid(skeletons[i], valid_seqs):
+            continue
         for j, fj in enumerate(fps):
             if i != j and fingerprint_is_subset(fi, fj):
                 drop.add(i)
