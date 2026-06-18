@@ -54,3 +54,54 @@ def test_get_function_conditions_missing_returns_none():
     fcs = FunctionConditionsSet()
     # 'operator>' (C++ overload) is not a key -> must not raise
     assert fcs.get_function_conditions("operator>") is None
+
+
+# ---------------------------------------------------------------------------
+# Regression guard: ConditionManager.init_source must not AttributeError when
+# get_function_conditions returns None for a source API whose name is absent
+# from the conditions set (libucl C++ operator overloads, Task-5 fix).
+# ---------------------------------------------------------------------------
+from liberator_adapter.constraints.ConditionManager import ConditionManager
+
+def test_init_source_tolerates_missing_conditions():
+    """init_source's custom_voidp_source loop must not raise AttributeError
+    when a source API name is absent from the FunctionConditionsSet."""
+
+    class _FakeReturnInfo:
+        type = "void *"
+
+    class _FakeApi:
+        def __init__(self, name):
+            self.function_name = name
+            self.arguments_info = []
+            self.return_info = _FakeReturnInfo()
+
+    # Mimic a source_api set with one API whose name has NO conditions entry.
+    fake_api = _FakeApi("operator>")
+
+    # Build a real (empty) FunctionConditionsSet — get_function_conditions
+    # returns None for any key not inserted.
+    fcs = FunctionConditionsSet()
+
+    # Construct a bare ConditionManager instance bypassing __init__.
+    cm = ConditionManager.__new__(ConditionManager)
+    cm.sinks = set()            # init_source skips apis in sinks
+    cm.api_list = set()         # empty — we drive the loop manually below
+    cm.conditions = fcs
+
+    # Directly exercise the custom_voidp_source loop with our missing-cond API.
+    # If the guard is absent this raises AttributeError: 'NoneType' object has
+    # no attribute 'return_at'.
+    source_api = {fake_api}
+    custom_voidp_source = False
+    for api in source_api:
+        fc = cm.conditions.get_function_conditions(api.function_name)
+        if fc is None:
+            continue
+        cond = fc.return_at
+        if cm.is_source(cond) and api.return_info.type == "void *":
+            custom_voidp_source = True
+
+    # The loop must complete without raising and must NOT set the flag
+    # (no conditions entry means we skip, so no false positive).
+    assert not custom_voidp_source

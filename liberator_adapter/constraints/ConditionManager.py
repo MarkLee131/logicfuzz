@@ -223,7 +223,10 @@ class ConditionManager:
         # FLAVIO: this is supposed to handle cases where a type T is alias of void* AND a function allocates new T
         custom_voidp_source = False
         for api in source_api:
-            cond = self.conditions.get_function_conditions(api.function_name).return_at
+            fc = self.conditions.get_function_conditions(api.function_name)
+            if fc is None:
+                continue
+            cond = fc.return_at
             if self.is_source(cond) and api.return_info.type == "void *":
                 custom_voidp_source = True
 
