@@ -543,6 +543,12 @@ for _gd in $(find /src/{self.project} /work \\( -name 'pnglibconf.h' -o -name '*
   EXT_INC="$EXT_INC -I$_gd"
 done
 EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
+# Link flags (-lz -lm …) the PROJECT's own build.sh uses for its stock fuzzers.
+# The host-side lflags autodetect greps projects/<p>/build.sh, which for some
+# projects (libpng) is only a stub that ``cp``s the real build.sh in the
+# Dockerfile — so it misses ``-lz``. Grep the EFFECTIVE $SRC/build.sh here (in
+# the image, after the real build.sh is in place) to recover them.
+EXT_LFLAGS=$(grep -hoE -- '[[:space:]]-l[A-Za-z0-9_]+' $SRC/build.sh 2>/dev/null | sed 's/^[[:space:]]*//' | grep -vx -- '-lFuzzingEngine' | sort -u | tr '\\n' ' ')
 '''
         with open(build_sh, 'a') as f:
             f.write(prelude)
@@ -551,12 +557,28 @@ EXT_LIBS=$(find /src/{self.project} -name 'lib*.a' 2>/dev/null | tr '\\n' ' ')
             target_name=target_name,
             # static lib(s) first, then any -l flags; both after the objects
             # in the link line so symbols resolve.
-            extra_libs=f'$EXT_LIBS {lflags}'.strip(),
+            extra_libs=f'$EXT_LIBS $EXT_LFLAGS {lflags}'.strip(),
             extra_includes=f'{self.merged_build_includes or ""} $EXT_INC'.strip(),
             synth_dir_var="/src/synthesized",
         )
         with open(build_sh, 'a') as f:
             f.write(snippet)
+
+        # Some projects' Dockerfiles OVERWRITE $SRC/build.sh during the image
+        # build (e.g. libpng: ``RUN cp libpng/contrib/oss-fuzz/build.sh $SRC``),
+        # which wipes the append above. Re-attach our prelude+snippet via a
+        # Dockerfile step that runs AFTER the project finalizes build.sh, made
+        # IDEMPOTENT by a marker so projects whose Dockerfile only COPYs the
+        # already-appended build.sh (e.g. c-ares) are NOT double-appended.
+        merged_snippet_file = dst_project / "lf_merged_snippet.sh"
+        merged_snippet_file.write_text(prelude + snippet)
+        with open(dockerfile, 'a') as f:
+            f.write(
+                "\nCOPY lf_merged_snippet.sh $SRC/lf_merged_snippet.sh\n"
+                "RUN grep -q 'LogicFuzz merged-harness' $SRC/build.sh "
+                "|| cat $SRC/lf_merged_snippet.sh >> $SRC/build.sh\n"
+            )
+
         logger.info(
             f"Created merged project {self.generated_project_name} "
             f"({drv.driver_count} sub-drivers, "
