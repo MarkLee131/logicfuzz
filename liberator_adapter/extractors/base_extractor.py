@@ -27,6 +27,33 @@ class DegradedReason(str, Enum):
     CONDITION_MANAGER_ERROR = "condition_manager_error"
 
 
+def classify_degraded_reason(msg: str) -> str:
+    """Map an exception message to the most-specific DegradedReason value string.
+
+    Checks patterns most-specific-first so that e.g. an extract-bc error that
+    happens to mention 'compiler' does NOT fall into COMPILE_FAILED.
+
+    Returns a DegradedReason.*.value string, or up to the first 200 chars of
+    *msg* when no pattern matches (raw fallback).
+    """
+    # Most specific first
+    if "timed out" in msg or "timeout" in msg:
+        return DegradedReason.SVF_TIMEOUT.value
+    if "bad_alloc" in msg or "MemoryError" in msg or "out of memory" in msg:
+        return DegradedReason.SVF_OOM.value
+    if "extract bitcode" in msg or "extract-bc" in msg:
+        return DegradedReason.EXTRACT_BC_FAILED.value
+    if "conditions.json was not generated" in msg or "conditions.json" in msg:
+        return DegradedReason.CONDITIONS_MISSING.value
+    if ("Extractor binary not found" in msg
+            or "clang-14" in msg
+            or "Path to compiler" in msg):
+        return DegradedReason.HOST_EXTRACTOR_MISSING.value
+    if "Could not find library" in msg or "compile script" in msg:
+        return DegradedReason.COMPILE_FAILED.value
+    return msg[:200]
+
+
 def extraction_status_fields(clang_only, reason):
     """Single source of truth for the persisted extraction-status fields."""
     if not clang_only:

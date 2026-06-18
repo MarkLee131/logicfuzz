@@ -11,7 +11,8 @@ from tool.container_tool import ProjectContainerTool
 from experiment.benchmark import Benchmark
 
 from liberator_adapter.extractors.base_extractor import (
-    BaseAPIExtractor, DegradedReason, extraction_status_fields)
+    BaseAPIExtractor, DegradedReason, extraction_status_fields,
+    classify_degraded_reason)
 from liberator_adapter.extractors.clang_extractor import ClangAPIExtractor
 from liberator_adapter.extractors.llvm_extractor import LLVMAPIExtractor
 from liberator_adapter.common.api import Api
@@ -91,15 +92,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
                 try:
                     bc_file = self.llvm_extractor.compile_to_bitcode()
                 except Exception as e:
-                    msg = str(e)
-                    if "timed out" in msg:
-                        self._degraded_reason = DegradedReason.SVF_TIMEOUT.value
-                    elif "bad_alloc" in msg or "MemoryError" in msg:
-                        self._degraded_reason = DegradedReason.SVF_OOM.value
-                    elif "Could not find library" in msg or "compile" in msg.lower():
-                        self._degraded_reason = DegradedReason.COMPILE_FAILED.value
-                    else:
-                        self._degraded_reason = msg[:200]
+                    self._degraded_reason = classify_degraded_reason(str(e))
                     logger.warning(f"LLVM compilation failed, falling back to clang-only mode: {e}")
                     llvm_extraction_failed = True
             else:
@@ -137,15 +130,7 @@ class HybridAPIExtractor(BaseAPIExtractor):
                     output_dir=self.local_temp_dir  # Use HOST temp dir, not container path
                 )
             except Exception as e:
-                msg = str(e)
-                if "timed out" in msg:
-                    self._degraded_reason = DegradedReason.SVF_TIMEOUT.value
-                elif "bad_alloc" in msg or "MemoryError" in msg:
-                    self._degraded_reason = DegradedReason.SVF_OOM.value
-                elif "Could not find library" in msg or "compile" in msg.lower():
-                    self._degraded_reason = DegradedReason.COMPILE_FAILED.value
-                else:
-                    self._degraded_reason = msg[:200]
+                self._degraded_reason = classify_degraded_reason(str(e))
                 logger.warning(f"LLVM extraction failed, falling back to clang-only mode: {e}")
                 llvm_extraction_failed = True
 

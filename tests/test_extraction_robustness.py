@@ -158,3 +158,149 @@ def test_require_z3_default_off(monkeypatch):
 def test_require_z3_on(monkeypatch):
     monkeypatch.setenv("LOGICFUZZ_REQUIRE_Z3", "1")
     assert require_z3_enabled() is True
+
+
+# ---------------------------------------------------------------------------
+# FIX 1 — classify_degraded_reason: correct mapping from exception message
+# ---------------------------------------------------------------------------
+from liberator_adapter.extractors.base_extractor import classify_degraded_reason, DegradedReason
+
+def test_classify_timeout():
+    assert classify_degraded_reason("Extractor timed out after 1800s") == DegradedReason.SVF_TIMEOUT.value
+
+def test_classify_timeout_keyword():
+    assert classify_degraded_reason("operation timeout in SVF") == DegradedReason.SVF_TIMEOUT.value
+
+def test_classify_oom_bad_alloc():
+    assert classify_degraded_reason("std::bad_alloc deep in ucl_parse") == DegradedReason.SVF_OOM.value
+
+def test_classify_oom_memory_error():
+    assert classify_degraded_reason("MemoryError: cannot allocate") == DegradedReason.SVF_OOM.value
+
+def test_classify_oom_out_of_memory():
+    assert classify_degraded_reason("out of memory at address 0x0") == DegradedReason.SVF_OOM.value
+
+def test_classify_extract_bc():
+    assert classify_degraded_reason("Failed to extract bitcode: tool error") == DegradedReason.EXTRACT_BC_FAILED.value
+
+def test_classify_extract_bc_keyword():
+    assert classify_degraded_reason("extract-bc returned non-zero") == DegradedReason.EXTRACT_BC_FAILED.value
+
+def test_classify_conditions_missing_full():
+    assert classify_degraded_reason("conditions.json was not generated") == DegradedReason.CONDITIONS_MISSING.value
+
+def test_classify_conditions_missing_short():
+    assert classify_degraded_reason("conditions.json not found") == DegradedReason.CONDITIONS_MISSING.value
+
+def test_classify_host_extractor_missing_binary():
+    assert classify_degraded_reason("Extractor binary not found at /some/path") == DegradedReason.HOST_EXTRACTOR_MISSING.value
+
+def test_classify_host_extractor_missing_clang14():
+    assert classify_degraded_reason("clang-14 missing in container for project foo") == DegradedReason.HOST_EXTRACTOR_MISSING.value
+
+def test_classify_host_extractor_missing_path_to_compiler():
+    assert classify_degraded_reason("Path to compiler is invalid") == DegradedReason.HOST_EXTRACTOR_MISSING.value
+
+def test_classify_compile_failed_library():
+    assert classify_degraded_reason("Could not find library file for project cjson") == DegradedReason.COMPILE_FAILED.value
+
+def test_classify_compile_failed_script():
+    assert classify_degraded_reason("compile script returned error 1") == DegradedReason.COMPILE_FAILED.value
+
+def test_classify_fallback_raw():
+    msg = "some totally unknown error"
+    result = classify_degraded_reason(msg)
+    assert result == msg[:200]
+    assert result != DegradedReason.COMPILE_FAILED.value
+
+def test_classify_extract_bc_with_compiler_word_not_compile_failed():
+    """extract-bc error mentioning 'compiler' must map to EXTRACT_BC_FAILED, not COMPILE_FAILED."""
+    msg = "Failed to extract bitcode: Path to compiler missing"
+    result = classify_degraded_reason(msg)
+    assert result == DegradedReason.EXTRACT_BC_FAILED.value
+    assert result != DegradedReason.COMPILE_FAILED.value
+
+
+# ---------------------------------------------------------------------------
+# FIX 2 — refine_status_for_empty_conditions helper
+# ---------------------------------------------------------------------------
+from src.context.data_context import refine_status_for_empty_conditions
+
+def test_refine_no_override_when_full_mode():
+    """When extraction_mode is full, no override even if conditions are empty."""
+    status = {"extraction_mode": "full", "degraded_reason": None}
+    result = refine_status_for_empty_conditions(status, has_conditions=False)
+    assert result["degraded_reason"] is None
+
+def test_refine_no_override_when_already_degraded():
+    """When degraded_reason is already set (non-NONE), do not override."""
+    status = {"extraction_mode": "clang_only", "degraded_reason": "svf_timeout"}
+    result = refine_status_for_empty_conditions(status, has_conditions=False)
+    assert result["degraded_reason"] == "svf_timeout"
+
+def test_refine_sets_conditions_empty_when_none_reason_and_no_conditions():
+    """When degraded_reason is NONE/falsy and conditions are absent, set CONDITIONS_EMPTY."""
+    status = {"extraction_mode": "clang_only", "degraded_reason": "none"}
+    result = refine_status_for_empty_conditions(status, has_conditions=False)
+    assert result["degraded_reason"] == DegradedReason.CONDITIONS_EMPTY.value
+
+def test_refine_no_override_when_has_conditions():
+    """When conditions are present, do not override even if reason is NONE."""
+    status = {"extraction_mode": "clang_only", "degraded_reason": "none"}
+    result = refine_status_for_empty_conditions(status, has_conditions=True)
+    assert result["degraded_reason"] == "none"
+
+def test_refine_sets_conditions_empty_when_reason_is_falsy_none():
+    """None (Python None) degraded_reason + no conditions => CONDITIONS_EMPTY."""
+    status = {"extraction_mode": "clang_only", "degraded_reason": None}
+    result = refine_status_for_empty_conditions(status, has_conditions=False)
+    assert result["degraded_reason"] == DegradedReason.CONDITIONS_EMPTY.value
+
+
+# ---------------------------------------------------------------------------
+# FIX 3 — _make_svf_preexec factory: returns callable, captures distinct values
+# ---------------------------------------------------------------------------
+from liberator_adapter.extractors.llvm_extractor import _make_svf_preexec
+
+def test_make_svf_preexec_returns_callable():
+    fn = _make_svf_preexec(140)
+    assert callable(fn)
+
+def test_make_svf_preexec_distinct_closures():
+    fn1 = _make_svf_preexec(32)
+    fn2 = _make_svf_preexec(64)
+    # The two closures capture different mem_gb values
+    assert fn1.__closure__[0].cell_contents != fn2.__closure__[0].cell_contents
+
+def test_make_svf_preexec_zero_returns_none():
+    """_make_svf_preexec(0) should return None (no cap desired)."""
+    result = _make_svf_preexec(0)
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# FIX 4 — REQUIRE_Z3 raises at the third degradation site (no condition_manager)
+# ---------------------------------------------------------------------------
+
+def test_require_z3_raises_at_cbfactory_no_condition_manager(monkeypatch):
+    """When LOGICFUZZ_REQUIRE_Z3=1 and condition_manager is None, must raise RuntimeError."""
+    from src.context.data_context import _generate_cbfactory_drivers
+    import logging
+    import pytest
+
+    monkeypatch.setenv("LOGICFUZZ_REQUIRE_Z3", "1")
+
+    class _FakeGenerator:
+        condition_manager = None
+        function_conditions = None
+        all_apis = {}
+        dependency_graph = {}
+
+    with pytest.raises(RuntimeError, match="LOGICFUZZ_REQUIRE_Z3"):
+        _generate_cbfactory_drivers(
+            generator=_FakeGenerator(),
+            num_drivers=1,
+            driver_size=3,
+            project_name="test_proj",
+            log=logging.getLogger("test"),
+        )

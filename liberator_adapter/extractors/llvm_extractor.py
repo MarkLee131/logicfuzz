@@ -111,17 +111,26 @@ def sanitize_extraction_flags(flags, deny=_CLANG14_INCOMPATIBLE_FLAGS):
     return " ".join(kept), stripped
 
 
-def _svf_preexec():
-    """preexec_fn for the extractor subprocess: apply RLIMIT_AS (Unix). No-op
-    when uncapped or `resource` is unavailable; best-effort (never raises)."""
-    if _SVF_MEM_GB <= 0:
-        return
-    try:
-        import resource
-        nbytes = _SVF_MEM_GB * 1024 ** 3
-        resource.setrlimit(resource.RLIMIT_AS, (nbytes, nbytes))
-    except Exception:
-        pass
+def _make_svf_preexec(mem_gb_limit: int):
+    """Factory for a preexec_fn that caps the SVF child's RLIMIT_AS.
+
+    Returns None when *mem_gb_limit* is 0 (no cap desired), otherwise returns
+    a callable that each child process executes before exec(), capturing the
+    given *mem_gb_limit* in its closure so distinct invocations are independent.
+    """
+    if mem_gb_limit <= 0:
+        return None
+
+    def _pre():
+        """Apply RLIMIT_AS inside the child process (best-effort, never raises)."""
+        try:
+            import resource
+            nbytes = mem_gb_limit * 1024 ** 3
+            resource.setrlimit(resource.RLIMIT_AS, (nbytes, nbytes))
+        except Exception:
+            pass
+
+    return _pre
 
 # Disk cache for SVF outputs keyed by bitcode hash. SVF is deterministic
 # given a fixed binary version + same .bc input, so re-extraction is
@@ -425,7 +434,7 @@ class LLVMAPIExtractor(BaseAPIExtractor):
                 # Per-project mem cap: use the project-specific value when
                 # > 0; otherwise fall back to the module-level _SVF_MEM_GB.
                 _mem_gb = _res["mem_gb"] if _res["mem_gb"] > 0 else _SVF_MEM_GB
-                _preexec = _svf_preexec if _mem_gb > 0 else None
+                _preexec = _make_svf_preexec(_mem_gb)
 
                 logger.info(
                     f'Running extractor on host (timeout {_timeout}s, '

@@ -18,6 +18,37 @@ import re
 logger = logging.getLogger(__name__)
 
 
+# Import DegradedReason for use in status helpers; imported lazily to avoid
+# circular imports — only used at module function scope, not at class level.
+from liberator_adapter.extractors.base_extractor import DegradedReason
+
+
+def refine_status_for_empty_conditions(
+        status: Dict[str, Any], has_conditions: bool) -> Dict[str, Any]:
+    """Upgrade a NONE/falsy degraded_reason to CONDITIONS_EMPTY when conditions absent.
+
+    Called after the extraction_status dict is assembled.  Handles the re2 case
+    where SVF ran successfully (so degraded_reason is None / "none") but the
+    extractor produced no conditions.json entries — the downstream Z3 path is
+    just as degraded as a hard failure, and the status should reflect that.
+
+    Only overrides when ALL of:
+      - status.get("degraded_reason") is falsy OR equal to DegradedReason.NONE.value
+      - has_conditions is False
+      - extraction_mode is "clang_only" (degraded mode — full mode means no SVF ran)
+
+    Returns the (possibly mutated) dict.
+    """
+    reason = status.get("degraded_reason")
+    reason_is_none = (not reason) or (reason == DegradedReason.NONE.value)
+    # Only refine when already in degraded (clang_only) mode; in full-extraction
+    # mode missing conditions is expected (no SVF ran) and not a degradation.
+    in_degraded_mode = status.get("extraction_mode") == "clang_only"
+    if in_degraded_mode and reason_is_none and not has_conditions:
+        status["degraded_reason"] = DegradedReason.CONDITIONS_EMPTY.value
+    return status
+
+
 def require_z3_enabled() -> bool:
     """Return True when LOGICFUZZ_REQUIRE_Z3 is set to 1/true/yes.
 
@@ -2371,6 +2402,14 @@ class FuzzingContext:
             for k in ('extraction_mode', 'degraded_reason')
             if k in _ext_meta
         } or None
+        # FIX 2: surface CONDITIONS_EMPTY when SVF produced no conditions at all
+        # (re2 scenario: full SVF run succeeds structurally but generates zero
+        # function conditions, leaving degraded_reason as NONE even though Z3
+        # synthesis is just as dead).
+        if _extraction_status is not None:
+            _has_cond = bool(getattr(generator, 'function_conditions', None))
+            _extraction_status = refine_status_for_empty_conditions(
+                _extraction_status, has_conditions=_has_cond)
         save_intermediate_results(project_name=project_name,
                                   results_dir=results_dir,
                                   dependency_graph=dep_graph_dict,
@@ -3683,6 +3722,11 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
         log.warning(
             "Ensure LLVM extraction is enabled (not --disable-llvm-extraction)"
         )
+        if require_z3_enabled():
+            raise RuntimeError(
+                "LOGICFUZZ_REQUIRE_Z3 set but CBFactory degraded "
+                "(no condition manager) — refusing to proceed without Z3 validation"
+            )
         return []
 
     if not generator.function_conditions:
