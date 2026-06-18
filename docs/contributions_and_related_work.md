@@ -181,10 +181,30 @@ The schema is instantiated at the **two** generation-stage LLM decision points.
 | per-API `role` | creator / consumer / mutator / destroyer? | `APISemanticModel` reconcile (IR ⊕ doc ⊕ usage) | symbolic |
 | per-API `ret_contract` | does the return need a NULL/error guard? | conditions.json return-provenance + doxygen `@return` (`error_contracts.py`) | symbolic |
 | per-API `handle_provenance` | which producer makes a required handle — or none, so construct/NULL? | use-def `produces`/`requires` index | symbolic |
-| per-arg `role` (`ArgRole`) | input-buffer / length / output / handle / config? | reconcile + **SVF read/write veto** | symbolic |
+| per-arg `role` (`ArgRole`) | input-buffer / length / output / handle / config? | reconcile + **SVF read/write veto** + **producer-gated write+array → OUTPUT** (below) | symbolic |
 | per-arg `pairs_with` | which length pairs with which buffer? | reconcile LENGTH pairing | symbolic |
 | per-arg `populated_from` | which args carry the data that fills this one? | SVF `set_by` (conditions.json) | symbolic |
 | per-arg `intent` | the value constraint (in/out-of-range, format-shape, enum set …) | derived from role + type + vocabulary | symbolic → LLM |
+
+***Output-array role recovery (a sound use of SVF value-flow).*** The IR
+type-pattern reads *every* struct pointer as a handle, so a **written output
+value-array** — e.g. libpng `png_build_grayscale_palette(int bit_depth,
+png_color* palette)`, which fills up to `2^bit_depth` entries — is mislabelled
+`HANDLE_IN` (rendered as a live handle instead of an output buffer). We recover
+the correct `OUTPUT` role from SVF value-flow under a **dual gate that is sound
+where neither predicate alone is**: an argument is reclassified `HANDLE_IN →
+OUTPUT` iff SVF observed **(i) a write to it as an array** (`is_array`) **and (ii)
+its element type is produced by no creator in the project** (∪ of every API's IR
+`produces`). Each gate alone is unsound and the failure modes are *complementary*:
+`is_array` alone mis-promotes a managed handle that is merely array-/link-accessed
+(`cJSON*`'s linked nodes, `gzFile` both carry `is_array` yet are inputs); producer
+membership alone mis-promotes an in-out scalar. The conjunction admits exactly the
+producer-less written value-arrays. This is an instance of the paper's thesis —
+*use every analysis signal for what it can witness* — turning SVF read/write +
+array shape + the project-global producer set into a per-argument role the
+type-pattern cannot recover, with no LLM. (`usedef.annotate_svf_writes` +
+`api_semantic_model._reconcile_args`; verified across cjson/c-ares/zlib/lcms/libpng
+to promote the genuine output arrays and never the handle look-alikes.)
 
 **B. Sequence-legality context** — per candidate sequence → Comprehender-B (`knowledge/comprehender.py`):
 
