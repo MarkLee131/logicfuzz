@@ -338,7 +338,7 @@ def _is_internal_header(header: str) -> bool:
 
 
 # =============================================================================
-# Signature-derived model for component partition (B+D, LOGICFUZZ_SCOPED_GUARDS)
+# Signature-derived model for component partition (B+D scoped guards)
 # =============================================================================
 # ``_dependency_components`` (in sequence_constructor) needs a ``.apis`` mapping
 # name → object with ``produces`` / ``requires`` handle-type sets. The skeleton
@@ -702,12 +702,11 @@ class SkeletonGenerator:
             if applied:
                 skeleton.metadata['wired_args'] = applied
 
-        # 4. Generate API call sequence. Under LOGICFUZZ_SCOPED_GUARDS (B),
-        # group calls into dependency components and emit component-scoped
-        # NULL guards (a producer's failure only skips ITS dependents, not the
-        # whole driver) so an INDEPENDENT param-rich producer runs regardless of
-        # a sibling parser's failure. Gate-OFF keeps the legacy whole-driver
-        # ``return 0`` guard (byte-identical).
+        # 4. Generate API call sequence. Scoped guards (B, always-on): group
+        # calls into dependency components and emit component-scoped NULL guards
+        # (a producer's failure only skips ITS dependents, not the whole driver)
+        # so an INDEPENDENT param-rich producer runs regardless of a sibling
+        # parser's failure.
         if _scoped_guards():
             self._generate_api_calls_scoped(
                 skeleton, api_sequence,
@@ -1592,7 +1591,7 @@ class SkeletonGenerator:
         callback_infos: Dict[str, List[Dict]],
         dep_model=None,
     ) -> None:
-        """Component-scoped call generation (B, LOGICFUZZ_SCOPED_GUARDS).
+        """Component-scoped call generation (B scoped guards, always-on).
 
         Partition the sequence into dependency components (a parser + the calls
         that consume its handle = one component; an INDEPENDENT producer = a new

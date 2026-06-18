@@ -147,13 +147,12 @@ def test_dependency_components_handles_unknown_and_empty():
 
 # --------------------------------------------------------------------------- _scoped_guards gate
 
-def test_scoped_guards_gate_default_off():
+def test_scoped_guards_always_on():
+    # B+D graduated to always-on (gate removed): _scoped_guards() is True
+    # regardless of env.
     os.environ.pop("LOGICFUZZ_SCOPED_GUARDS", None)
-    assert _scoped_guards() is False
-
-
-def test_scoped_guards_gate_on():
-    os.environ["LOGICFUZZ_SCOPED_GUARDS"] = "1"
+    assert _scoped_guards() is True
+    os.environ["LOGICFUZZ_SCOPED_GUARDS"] = "0"
     try:
         assert _scoped_guards() is True
     finally:
@@ -234,14 +233,14 @@ def test_scoped_render_independent_call_outside_parser_guard():
         "independent producer must render after the parser guard block closes")
 
 
-def test_gate_off_keeps_legacy_whole_driver_bail():
-    """Gate-OFF: byte-identical legacy behavior — the parser emits the
-    whole-driver ``if (ret == NULL) return 0;`` and there is NO component-scoped
-    ``!= NULL`` block. This is the bug the fix targets, preserved off-gate."""
+def test_scoped_render_is_default_with_no_env():
+    """Always-on (gate removed): even with NO env set, the parser renders a
+    component-scoped ``!= NULL`` block (NOT the legacy whole-driver ``return 0``
+    bail) so an independent producer is not gated behind the parser's failure."""
     os.environ.pop("LOGICFUZZ_SCOPED_GUARDS", None)
     code = _render(_archetype_apis())
-    assert "if (ret_cmsOpenProfileFromMem == NULL) return 0;" in code
-    assert "if (ret_cmsOpenProfileFromMem != NULL) {" not in code
+    assert "if (ret_cmsOpenProfileFromMem == NULL) return 0;" not in code
+    assert "if (ret_cmsOpenProfileFromMem != NULL) {" in code
 
 
 def test_scoped_render_uses_threaded_dep_model_over_signature_heuristic():

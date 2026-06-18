@@ -558,15 +558,13 @@ def error_shape_variants(
 
 
 def _scoped_guards() -> bool:
-    """B+D gate (LOGICFUZZ_SCOPED_GUARDS, default-OFF).
+    """B+D, always-on (gate removed).
 
-    When ON: ``construct_sequences`` reorders a constructed ``core`` so its
-    dependency components are contiguous (D), and ``skeleton_generator`` renders
+    ``construct_sequences`` reorders a constructed ``core`` so its dependency
+    components are contiguous (D), and ``skeleton_generator`` renders
     component-scoped NULL guards (B) — an INDEPENDENT param-rich producer no
-    longer sits behind a failing input-parser's whole-driver NULL bail. Gate-OFF
-    ⇒ byte-identical to the legacy path (the existing regression suite pins
-    this)."""
-    return os.environ.get("LOGICFUZZ_SCOPED_GUARDS") == "1"
+    longer sits behind a failing input-parser's whole-driver NULL bail."""
+    return True
 
 
 def _dependency_components(

@@ -852,10 +852,10 @@
       "ares_dns_record_query_set_name",
       "ares_dns_record_set_id",
       "ares_dns_write",
-      "ares_inet_pton",
       "ares_dns_rcode_tostr",
       "ares_dns_record_duplicate",
       "ares_dns_record_get_flags",
+      "ares_inet_pton",
       "ares_dns_record_destroy"
     ],
     [
@@ -891,10 +891,10 @@
       "ares_dns_record_query_set_name",
       "ares_dns_record_set_id",
       "ares_dns_write",
-      "ares_inet_pton",
       "ares_dns_opcode_tostr",
       "ares_dns_record_duplicate",
       "ares_dns_record_get_flags",
+      "ares_inet_pton",
       "ares_dns_record_destroy"
     ],
     [
@@ -1123,10 +1123,10 @@
       "ares_dns_record_query_set_name",
       "ares_dns_record_set_id",
       "ares_dns_write",
-      "ares_inet_pton",
       "ares_dns_rcode_tostr",
       "ares_dns_record_duplicate",
       "ares_dns_record_get_flags",
+      "ares_inet_pton",
       "ares_dns_record_destroy"
     ],
     [
@@ -1283,10 +1283,10 @@
       "ares_dns_record_query_set_name",
       "ares_dns_record_set_id",
       "ares_dns_write",
-      "ares_inet_pton",
       "ares_dns_opcode_tostr",
       "ares_dns_record_duplicate",
       "ares_dns_record_get_flags",
+      "ares_inet_pton",
       "ares_dns_record_destroy"
     ],
     [
