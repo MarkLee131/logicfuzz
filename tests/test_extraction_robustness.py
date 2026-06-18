@@ -226,11 +226,11 @@ def test_classify_extract_bc_with_compiler_word_not_compile_failed():
 # ---------------------------------------------------------------------------
 from src.context.data_context import refine_status_for_empty_conditions
 
-def test_refine_no_override_when_full_mode():
-    """When extraction_mode is full, no override even if conditions are empty."""
+def test_refine_surfaces_conditions_empty_full_mode_re2():
+    """re2 case: SVF ran (extraction_mode=full) but produced no conditions → CONDITIONS_EMPTY."""
     status = {"extraction_mode": "full", "degraded_reason": None}
     result = refine_status_for_empty_conditions(status, has_conditions=False)
-    assert result["degraded_reason"] is None
+    assert result["degraded_reason"] == DegradedReason.CONDITIONS_EMPTY.value
 
 def test_refine_no_override_when_already_degraded():
     """When degraded_reason is already set (non-NONE), do not override."""

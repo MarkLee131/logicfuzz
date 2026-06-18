@@ -28,23 +28,24 @@ def refine_status_for_empty_conditions(
     """Upgrade a NONE/falsy degraded_reason to CONDITIONS_EMPTY when conditions absent.
 
     Called after the extraction_status dict is assembled.  Handles the re2 case
-    where SVF ran successfully (so degraded_reason is None / "none") but the
-    extractor produced no conditions.json entries — the downstream Z3 path is
-    just as degraded as a hard failure, and the status should reflect that.
+    where SVF ran successfully (extraction_mode == "full", meaning LLVM/SVF
+    extraction DID run) but produced no conditions.json entries — the downstream
+    Z3 path is just as degraded as a hard failure, and the status should reflect
+    that.  "full" means SVF ran; "clang_only" means SVF was skipped.
 
-    Only overrides when ALL of:
+    Overrides when ALL of:
       - status.get("degraded_reason") is falsy OR equal to DegradedReason.NONE.value
+        (never clobbers a real reason such as "svf_timeout")
       - has_conditions is False
-      - extraction_mode is "clang_only" (degraded mode — full mode means no SVF ran)
+
+    extraction_mode is intentionally ignored: empty conditions with no prior
+    reason is a degradation regardless of which extractor ran.
 
     Returns the (possibly mutated) dict.
     """
     reason = status.get("degraded_reason")
     reason_is_none = (not reason) or (reason == DegradedReason.NONE.value)
-    # Only refine when already in degraded (clang_only) mode; in full-extraction
-    # mode missing conditions is expected (no SVF ran) and not a degradation.
-    in_degraded_mode = status.get("extraction_mode") == "clang_only"
-    if in_degraded_mode and reason_is_none and not has_conditions:
+    if reason_is_none and not has_conditions:
         status["degraded_reason"] = DegradedReason.CONDITIONS_EMPTY.value
     return status
 
