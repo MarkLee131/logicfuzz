@@ -62,3 +62,24 @@ def test_balance_noop_when_balanced():
 def test_balance_noop_without_extern_c():
     plain = 'int LLVMFuzzerTestOneInput(const uint8_t *d, size_t s){return 0;}\n'
     assert balance_extern_c(plain) == plain
+
+
+# ---- C3a: C++ error triage routing ----
+
+from src.utils.compilation_error_triage import (
+    CompilationErrorTriage, ErrorCategory, FixStrategy)
+
+_INCLUDE_STRATEGIES = (FixStrategy.ADD_INCLUDE, FixStrategy.FIX_INCLUDE_PATH)
+
+
+def test_no_matching_function_is_type_error_not_include():
+    t = CompilationErrorTriage().triage(
+        ["error: no matching function for call to 'cJSON_ParseWithOpts'"])
+    assert t.primary_category == ErrorCategory.TYPE_ERROR
+    assert t.recommended_strategy not in _INCLUDE_STRATEGIES
+
+
+def test_unterminated_extern_c_not_routed_to_include():
+    t = CompilationErrorTriage().triage(
+        ["error: expected '}'", "note: to match this '{'  extern \"C\" {"])
+    assert t.recommended_strategy not in _INCLUDE_STRATEGIES
