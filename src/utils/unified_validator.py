@@ -264,24 +264,9 @@ class UnifiedCodeValidator:
         'LLVMFuzzerTestOneInput', 'LLVMFuzzerInitialize',
     }
 
-    def __init__(self, cgprocessor_path: Optional[Path] = None):
-        """
-        Initialize the unified validator.
-
-        Args:
-            cgprocessor_path: Kept for backward compatibility with
-                existing callers (e.g. ``execution.py`` still passes
-                the kwarg) but ignored — AST-based target-API
-                validation now goes through
-                ``FunctionBodyWalker`` (Python libclang). The CGProcessor
-                external-binary path was retired in the 2026-05 refactor.
-        """
-        # The cgprocessor_path argument is intentionally ignored.
-        # Eat the parameter so existing callers don't break, but document
-        # that the AST path is libclang-Python now.
-        _ = cgprocessor_path
-
-        # Compile regex patterns
+    def __init__(self):
+        """Initialize the unified validator. AST-based target-API validation
+        runs in-process via ``FunctionBodyWalker`` (Python libclang)."""
         self._compile_patterns()
 
     def _compile_patterns(self):

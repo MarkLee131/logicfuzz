@@ -167,10 +167,6 @@ class Utils:
                 arguments_info = api["arguments_info"]
                 return_info = api["return_info"]
 
-                # if function_name == "GetX86Info":
-                #     print("handle ret arg 2")
-                #     from IPython import embed; embed(); exit(1)
-
                 ret_args = [a for a in arguments_info if a["flag"] == "ret"]
 
                 if len(ret_args) > 1 and return_info["type"] == "void":
@@ -330,10 +326,6 @@ class Utils:
             return_info = r
             return_info["size"] = -1
 
-        # if function_name == "TIFFGetCloseProc":
-        #     print(f"normalize_coerce_args 1 {function_name}")
-        #     from IPython import embed; embed(); exit(1)
-
         if function_name in coerce_info:
             coerce_arguments = coerce_info[function_name].arguments
 
@@ -411,13 +403,6 @@ class Utils:
                     if (arg_info.type.endswith("char const*") and
                         "const" in arg_info.type):
                         arg_info.type = arg_info.type.replace(" const", "").strip()
-                        # print("clean?")
-                        # print(arg_info.type)
-                        # exit(1)
-
-        # if return_info.type == "void*":
-        #     print("VOID*?")
-        #     from IPython import embed; embed(); exit(1)
 
         return Api(function_name, is_vararg, return_info,
                    arguments_info, namespace)
