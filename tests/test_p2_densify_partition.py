@@ -22,8 +22,9 @@ def _wide_lib():
     return apis
 
 
-def test_sibling_slices_are_disjoint_when_gated(monkeypatch):
-    monkeypatch.setenv("LOGICFUZZ_DENSE_PARTITION", "1")
+def test_sibling_slices_are_disjoint():
+    # A-2a is now ALWAYS-ON (gate removed): sibling chains sharing a handle set get
+    # DISJOINT densifier slices, so two near-twins exercise different APIs.
     idx = SC._build_index(reconcile(_wide_lib()))
     opened = set(idx.consumers_by_handle.keys())   # normalized handle key
     s0 = SC._densify(["h_create"], opened, idx, max_extra=4, repeat=False,
@@ -36,12 +37,13 @@ def test_sibling_slices_are_disjoint_when_gated(monkeypatch):
     assert extra0.isdisjoint(extra1)        # siblings exercise different slices
 
 
-def test_gate_off_is_unchanged(monkeypatch):
-    monkeypatch.delenv("LOGICFUZZ_DENSE_PARTITION", raising=False)
+def test_rank_changes_slice():
+    # sibling_rank now ALWAYS shifts the slice (no env gate). Different ranks ⇒
+    # different densifier suffix; this is the breadth/diversity lever.
     idx = SC._build_index(reconcile(_wide_lib()))
-    opened = set(idx.consumers_by_handle.keys())   # normalized handle key
+    opened = set(idx.consumers_by_handle.keys())
     a = SC._densify(["h_create"], opened, idx, max_extra=4, repeat=False,
                     sibling_rank=0)
     b = SC._densify(["h_create"], opened, idx, max_extra=4, repeat=False,
-                    sibling_rank=3)
-    assert a == b                            # rank ignored when gate off
+                    sibling_rank=1)
+    assert a != b                            # rank now always honored

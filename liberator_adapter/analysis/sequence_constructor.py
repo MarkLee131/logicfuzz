@@ -1088,17 +1088,19 @@ def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
         return (sat, waff, 2 if is_getter else 1, sem.name)
 
     _ranked = sorted(cands.values(), key=_rank)
-    # A-2a (LOGICFUZZ_DENSE_PARTITION): sibling chains sharing this handle set
-    # take DISJOINT slices of the ranked candidate pool, so two near-twin chains
-    # get DIFFERENT densifier suffixes (raises portfolio breadth, cuts overlap).
-    # Deterministic: slice offset = sibling_rank * max_extra, wrap when exhausted.
-    if (max_extra > 0 and os.environ.get("LOGICFUZZ_DENSE_PARTITION", "")
-            .strip().lower() in ("1", "true", "yes", "on")):
+    # A-2a (always-on; was LOGICFUZZ_DENSE_PARTITION): sibling chains sharing this
+    # handle set take DISJOINT slices of the ranked candidate pool, so two near-twin
+    # chains get DIFFERENT densifier suffixes — raises portfolio breadth and cuts
+    # overlap. Deterministic: slice offset = sibling_rank * max_extra, wrap when
+    # exhausted. Offline-measured (cjson+lcms): fewer selected drivers covering MORE
+    # APIs with far lower pairwise redundancy (lcms 60→54 drivers / 154→213 APIs /
+    # mean Jaccard 0.15→0.06; cjson 33→23 / 58→74 / 0.43→0.09).
+    if max_extra > 0:
         start = (sibling_rank * max_extra) % max(1, len(_ranked))
         rotated = _ranked[start:] + _ranked[:start]
-        ordered = rotated[:max(0, max_extra)]
+        ordered = rotated[:max_extra]
     else:
-        ordered = _ranked[:max(0, max_extra)]
+        ordered = []
     extra = [s.name for s in ordered]
     if repeat:   # PF-style: re-call one CONFIG-bearing consumer/getter in a 2nd state
         for s in ordered:
