@@ -1,12 +1,12 @@
 """Merge quarantine: drop driver-FP crashers, keep real library bugs.
 
-`_is_immediate_crash_fp` only catches cov==0 crashers. A deterministic DRIVER-bug
-crasher that covers a few edges before aborting (libpng driver 116: a `png_color`
-output array sized [1] for `png_build_grayscale_palette`, which writes up to 256
-entries → stack-overflow on ~every input) escapes it with cov>0 and poisons the
-fused merge harness. `LOGICFUZZ_QUARANTINE_FP_CRASHERS` extends the quarantine to
-cov>0 driver-FP crashers; a CONFIRMED real library bug is never dropped, and
-gate-off is byte-identical to the prior cov==0-only rule.
+`_should_quarantine_from_merge` unconditionally drops ANY driver-FP crasher (it
+crashed AND the triage did NOT confirm a real bug), covering both cov==0
+immediate-SEGV FPs and cov>0 deterministic driver-FP crashers (libpng driver 116:
+a `png_color` output array sized [1] for `png_build_grayscale_palette`, which
+writes up to 256 entries → stack-overflow on ~every input — covers a few edges
+then poisons the fused merge harness). A CONFIRMED real library bug is NEVER
+dropped, regardless of coverage.
 """
 
 import os
@@ -36,21 +36,16 @@ def _q(br, tr):
     return rsf._should_quarantine_from_merge(br, tr)
 
 
-def test_gate_off_is_cov0_only(monkeypatch):
-    monkeypatch.delenv('LOGICFUZZ_QUARANTINE_FP_CRASHERS', raising=False)
-    assert _q(_br(True, 0), _tr(False)) is True       # cov0 FP → dropped
-    assert _q(_br(True, 50), _tr(False)) is False      # cov>0 FP → KEPT (legacy)
-    assert _q(_br(True, 0), _tr(True)) is False         # real bug → never dropped
-    assert _q(_br(False, 50), _tr(False)) is False      # no crash → kept
-
-
-def test_gate_on_drops_cov_positive_fp_crashers(monkeypatch):
-    monkeypatch.setenv('LOGICFUZZ_QUARANTINE_FP_CRASHERS', '1')
+def test_drops_all_driver_fp_crashers():
+    # Unconditional: any driver-FP crasher is dropped regardless of coverage.
+    assert _q(_br(True, 0), _tr(False)) is True        # cov0 FP → dropped
     # The libpng driver-116 class: crashes deterministically with cov>0, not a
     # confirmed real bug → now quarantined.
-    assert _q(_br(True, 50), _tr(False)) is True
-    # A CONFIRMED real library bug with cov>0 is still KEPT.
-    assert _q(_br(True, 50), _tr(True)) is False
-    # cov0 FP still dropped; no-crash still kept.
-    assert _q(_br(True, 0), _tr(False)) is True
-    assert _q(_br(False, 99), _tr(False)) is False
+    assert _q(_br(True, 50), _tr(False)) is True       # cov>0 FP → dropped
+    assert _q(_br(False, 50), _tr(False)) is False     # no crash → kept
+
+
+def test_real_library_bug_never_dropped():
+    # A CONFIRMED real library bug is NEVER dropped, regardless of coverage.
+    assert _q(_br(True, 0), _tr(True)) is False        # real bug, cov0 → kept
+    assert _q(_br(True, 50), _tr(True)) is False       # real bug, cov>0 → kept
