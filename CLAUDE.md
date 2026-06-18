@@ -57,11 +57,28 @@ live in git history + `docs/superpowers/specs/`.
 - `LOGICFUZZ_STRICT_ORDERING=1` — revert B graceful degradation (drop orphan USE_BEFORE_INIT instead of keeping as a hole).
 - `LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES}=1` — A/B kill-switch for that default-on stage. (BASELINE_RECOVERY + TYPEDEF_RECOVERY gates removed: baseline recovery is a permanently-empty slot; typedef recovery is unconditionally always-on, data_context Step 5g.)
 
+### Graduated to default (gates removed — now unconditional)
+Design-confirmed / A-B-validated levers that are now DEFAULT behavior; the
+`LOGICFUZZ_*` switch was deleted (rationale + per-lever measurements in git
+history). Net effect on the construct+select default: fewer selected drivers
+covering MORE APIs at far lower redundancy (cjson 33→19 drivers / 58→77 APIs /
+Jaccard 0.43→0.05; lcms 60→45 / 154→212 / 0.15→0.06).
+- **DENSE_PARTITION** (A-2a) — sibling chains take DISJOINT densifier slices (`sequence_constructor._densify`).
+- **DIVERSIFY_PRODUCERS** (A-1/A-3) — rotate among >1 valid producers/destroyers per sibling (`_build_prefix`/`_closing_destroyers`).
+- **MARGINAL_DEPTH** (B-1) — Step-10 depth picks by MAX marginal new-API coverage (`coverage_ranker.select_marginal`), not round-robin.
+- **SUBSET_ELIM + semantic guard** (B-3) — drop strict same-value-domain fingerprint subsets; never drop a Comprehender-VALID sequence (`driver_dedup`).
+- **SCOPED_GUARDS** (B+D) — per-dependency-component nested NULL-guards so an independent API runs when the parser returns NULL (`sequence_constructor._dependency_components` + `skeleton_generator`); construct reorders components contiguous.
+- **CROSS_SOURCE_BIND** — cross-profile transform binding (CREATOR-scoped + name-deny; byte-identical off-lcms; +134% lcms edges) (`sequence_constructor._inject_cross_source` + `CBFactory._distribute_cross_source`).
+- **QUARANTINE_FP_CRASHERS** — drop driver-FP crashers from the merge regardless of coverage; confirmed real library bugs never dropped (`run_single_fuzz._should_quarantine_from_merge`).
+- **VALUE_DOMAINS** — knowledge dictates leaf values: 4cc signature #defines + forbid `(Enum)(data%N)` arithmetic + carry @param ranges; compatible with FUZZABLE_HOLES enum-sweep (`hole_semantics`/`named_constants`).
+
+### Pruned (removed — redundant / over-fit / niche)
+TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT / XPROJ_CORPUS (unvalidated resource-thin fallback); DEDUP_WORKFLOW_PARTITION (⊂ DENSE_PARTITION); PAIRWISE_DEDUP / PAIRWISE_TAU (⊂ SUBSET_ELIM + construction decoupling); ORDERSETS (⊂ coverage-complete selection).
+
 ### Construction / depth / dedup levers
 - `LOGICFUZZ_ERROR_VARIANTS=1` / `_MAX=N` — T11: emit error-shape skeleton variants (double-free / use-after-destroy / skip-init) so library error branches become reachable (gated, A/B pending).
 - `LOGICFUZZ_VALUE_FEEDBACK` — T12: capture filled hole values → coverage_memory, pin deepest-coverage into the same skeleton next run (cross-run). DEFAULT-ON (opt-out =0); no-op on a fresh project.
 - `LOGICFUZZ_FORMAT_INFER=1` — T10: synthesize front-gate-passing seed(s) from inferred magic when no real seed matches (opt-in; emits a diverse k≥3 corpus).
-- B+D scoped per-component NULL-guards — **GRADUATED to always-on (gate removed):** render creator NULL-guard PER dependency component (nested-if) so an independent API renders OUTSIDE the guard and runs even when the parser returns NULL; `construct_sequences` reorders so dependency components are contiguous (D). `sequence_constructor._scoped_guards/_dependency_components` + `skeleton_generator`. Golden re-baselined (D-reorder changes sequence ORDER only; counts identical). Was `LOGICFUZZ_SCOPED_GUARDS`.
 - `LOGICFUZZ_FUZZABLE_HOLES=1` — Tier 1: render tunable CONFIG holes (enum/scalar/float) as FUZZ_DERIVE directives so the fuzzer SWEEPS the param (handles/magic/length stay fixed). C → index `data[N]`; C++ → FuzzedDataProvider. DEFAULT-ON (opt-out =0). `hole_semantics._arg_intent`.
 - `LOGICFUZZ_OBJCONSTRUCT_FIRST=1` — L1: prefer object-construction (data_buildable) chain roots over parser-entry (keeps ≥1 parser-rooted per parser-only cluster). The top coverage lever. `sequence_constructor._root_kind` + data_context strand/bucket order. (gated, A/B pending)
 - `LOGICFUZZ_API_FLOOR=1` — L7: ALL-COVER floor — greedy set-cover guarantees every constructable API appears in ≥1 selected sequence; surfaces `api_floor_residual_count`. `coverage_ranker._coverage_complete_select`. (gated)
@@ -69,19 +86,18 @@ live in git history + `docs/superpowers/specs/`.
 - `LOGICFUZZ_VALIDITY_CONTRACT=1` — valid-by-construction contract: the constructor satisfies a Validity Contract — every `nullable=False` opaque-handle arg gets a type-matching producer [I2a], producer-before-consumer order [I1], non-NULL value args filled [I2b], type-correct binding [I3] — driven by the model's evidence-based per-arg nullable (doc @param ⊕ IR ⊕ role). Three enforcement layers: (1) I3 binding (`CBFactory._signature_handle_bindings`) wires consumers to producers by handle FAMILY incl. typedef'd opaque void* handles (cmsHPROFILE, 0-star) on BOTH consumer + producer sides; (2) **universal I2a repair** (`sequence_constructor.repair_sequence_validity`, wired at data_context `_synthesize_skeletons_per_sequence`) — floor/densified sequences bypass `_build_prefix`, so for EVERY sequence prepend the cheapest LEAF creator (public, no INPUT_BUFFER/own-handle args) for each non-NULL handle arg lacking an earlier producer; restricted to lifecycle-handle types (union of `requires`/`destroys`, excludes string/value/scalar); (3) Task-11 render guard. Measured lcms: construction-gap 98→0, binding-gap 96→7. Oracle `analysis/validity_contract.py`. Gate-off byte-identical; gate-on no-op on cjson. (gated default-OFF)
 - `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1` — opt OUT of the merge compile-validation gate (default-on, fail-open: ships only drivers that compile under real cov-build flags). `tools/merge_drivers/compile_validate.py`.
 
-### Driver DECOUPLING / DE-DUP levers (gated default-OFF, A/B pending)
-Motivation: generated drivers overlapped too much → merge gained little. Two
-channels — API-SET overlap (shared prefix/densifier/destroyer) and VALUE/PATH
-overlap. Fixes deterministic/symbolic; the one doc touch (B-2 guard) consumes an
-existing Comprehender Stage-B verdict (no new LLM calls).
+### Driver DECOUPLING / DE-DUP levers
+The construct-time decouplers (DENSE_PARTITION, DIVERSIFY_PRODUCERS) and the
+select-time SUBSET_ELIM graduated to default (see the Graduated block above);
+they used to overlap-reduce two channels — API-SET overlap (shared
+prefix/densifier/destroyer) and VALUE/PATH overlap. The remaining slots:
 - `LOGICFUZZ_DEDUP_FINGERPRINT_VALUE_DOMAIN` — (reserved) Layer-C slot; value-domain signature is ALWAYS in the fingerprint (`driver_fingerprint.py`).
-- A-2a sibling densifier partition — **GRADUATED to always-on (gate removed):** sibling chains sharing a handle set take DISJOINT ranked slices of the densifier pool (rotate by sibling_rank), so near-twin chains get different densifier suffixes. `sequence_constructor._densify`. Offline-measured win (fewer selected drivers covering MORE APIs at far lower pairwise redundancy: lcms 60→54 drivers / 154→213 APIs / mean Jaccard 0.15→0.06; cjson 33→23 / 58→74 / 0.43→0.09). Was `LOGICFUZZ_DENSE_PARTITION`.
-- B-3 subset-elimination + semantic guard — **GRADUATED to always-on (gates removed):** subset-elim drops a skeleton whose fingerprint is a strict same-value-domain subset of another's; the semantic guard never drops a Comprehender Stage-B VALID sequence (it is the safety for the B-3 drop). `driver_dedup.subset_eliminate_skeletons`; wired at data_context post-G4. Measured drops 0/0/0 on cjson/c-ares/lcms (coverage-complete portfolios contain no strict same-domain subsets). Was `LOGICFUZZ_SUBSET_ELIM` + `LOGICFUZZ_DEDUP_SEMANTIC_GUARD`.
 - (Always-on, cheap) Layer E redundancy telemetry → `results/<project>/static_analysis/redundancy_telemetry.json` (`portfolio_redundancy`): mean pairwise API Jaccard + disjointness — the A/B oracle. D-1 (dynamic edge-set marginal) DEFERRED.
 
-### Driver DEPTH levers (gated default-OFF, A/B pending)
+### Driver DEPTH levers
 Addresses the ~79-edge plateau: drivers BUILD an object but never exercise it.
-- `LOGICFUZZ_EXERCISE_OBJECT=1` — forward "exercise the object" step: after the backward prefix builds a handle, append ONE consumer that RUNS it (prefers an INPUT_BUFFER fuzz-data consumer). `sequence_constructor._append_exercisers`.
+CROSS_SOURCE_BIND graduated to default (see the Graduated block); EXERCISE_DEEP_BUFFER was removed (lcms over-fit).
+- `LOGICFUZZ_EXERCISE_OBJECT=1` — forward "exercise the object" step: after the backward prefix builds a handle, append ONE consumer that RUNS it (prefers an INPUT_BUFFER fuzz-data consumer). `sequence_constructor._append_exercisers`. (gated, A/B pending)
 
 ### LLM / debug / SVF config
 - `LOGICFUZZ_LLM_REWRITE=1` — opt OUT of B-design (hole-filling) back to A-design (LLM free-rewrite). DEFAULT B-design: Prototyper fills leaf holes, discards whole-driver rewrites, preserving constructed object-construction skeletons. (A-design = the A/B control; measured inert.) `src/agents/prototyper.py`.

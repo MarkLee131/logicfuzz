@@ -56,8 +56,11 @@ Closed-loop (Phase G) grows the automaton from Z3-viable sequences each round
 
 **Default-on (gates removed):** factory chain, density + hard NULL-guard,
 max-coverage diversity selection, real seed-corpus routing, lean crash triage +
-skip per-driver optimize, typedef-handle recovery. Lean crash triage falls back
-to the LLM crash path on an `unknown` ASan frame.
+skip per-driver optimize, typedef-handle recovery, sibling densifier partition +
+producer/destroyer diversification, marginal-depth selection, subset-elimination,
+scoped per-component NULL-guards, cross-source profile binding, FP-crasher merge
+quarantine, value-domain leaf constraints. Lean crash triage falls back to the
+LLM crash path on an `unknown` ASan frame.
 
 ---
 
@@ -264,7 +267,7 @@ pending — start gated like factory/diversity/lean did):**
   (`sequence_key`), NOT the positional `cbfactory_skeleton_{i}` name (would mis-pin
   onto an unrelated chain). Cross-run; the "read" side of Phase C. 13 unit tests
   incl. the no-mis-pin regression.
-- **B+D scoped NULL-guards** (`LOGICFUZZ_SCOPED_GUARDS`, default-OFF;
+- **B+D scoped NULL-guards** (always-on; gate removed;
   `sequence_constructor._dependency_components` + `skeleton_generator`): partition a
   sequence into dependency components and render the creator NULL-guard **per
   component** (B1 nested-if) instead of the whole-driver `if(!parser)return0`. A
