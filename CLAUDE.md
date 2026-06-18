@@ -61,7 +61,6 @@ live in git history + `docs/superpowers/specs/`.
 - `LOGICFUZZ_ERROR_VARIANTS=1` / `_MAX=N` — T11: emit error-shape skeleton variants (double-free / use-after-destroy / skip-init) so library error branches become reachable (gated, A/B pending).
 - `LOGICFUZZ_VALUE_FEEDBACK` — T12: capture filled hole values → coverage_memory, pin deepest-coverage into the same skeleton next run (cross-run). DEFAULT-ON (opt-out =0); no-op on a fresh project.
 - `LOGICFUZZ_FORMAT_INFER=1` — T10: synthesize front-gate-passing seed(s) from inferred magic when no real seed matches (opt-in; emits a diverse k≥3 corpus).
-- `LOGICFUZZ_CROSS_PROJECT=1` / `LOGICFUZZ_XPROJ_CORPUS` — T7: retrieve structurally-similar drivers for a resource-thin library (same-project first; corpus default `extracted_fuzz_drivers/`) and inject compressed CALLSPEC hints. `cross_project_retrieval.py`.
 - `LOGICFUZZ_SCOPED_GUARDS=1` — B+D: render creator NULL-guard PER dependency component (nested-if) so an independent API renders OUTSIDE the guard and runs even when the parser returns NULL. `sequence_constructor._dependency_components`.
 - `LOGICFUZZ_FUZZABLE_HOLES=1` — Tier 1: render tunable CONFIG holes (enum/scalar/float) as FUZZ_DERIVE directives so the fuzzer SWEEPS the param (handles/magic/length stay fixed). C → index `data[N]`; C++ → FuzzedDataProvider. DEFAULT-ON (opt-out =0). `hole_semantics._arg_intent`.
 - `LOGICFUZZ_OBJCONSTRUCT_FIRST=1` — L1: prefer object-construction (data_buildable) chain roots over parser-entry (keeps ≥1 parser-rooted per parser-only cluster). The top coverage lever. `sequence_constructor._root_kind` + data_context strand/bucket order. (gated, A/B pending)
@@ -91,9 +90,7 @@ existing Comprehender Stage-B verdict (no new LLM calls).
 ### Driver DEPTH levers (gated default-OFF, A/B pending)
 Addresses the ~79-edge plateau: drivers BUILD an object but never exercise it.
 - `LOGICFUZZ_EXERCISE_OBJECT=1` — forward "exercise the object" step: after the backward prefix builds a handle, append ONE consumer that RUNS it (prefers an INPUT_BUFFER fuzz-data consumer). `sequence_constructor._append_exercisers`.
-- `LOGICFUZZ_EXERCISE_DEEP_BUFFER=1` — sub-gate of EXERCISE_OBJECT: prefer a deep data-processing consumer whose input buffer is a bare `void*` CONFIG arg (cmsDoTransform idiom), render it as `(void*)data`. HEAVILY GUARDED (`_has_deep_input_buffer`): rejects fn-ptr callbacks + user/ctx/plugin names, requires companion OUTPUT void* + size scalar. Matches ONLY lcms cmsDoTransform*; locked by `tests/test_p3_deep_buffer_predicate.py`.
 - `LOGICFUZZ_CROSS_SOURCE_BIND=1` — cross-PROFILE transform depth (real lcms win, +134% edges measured). Two halves: (a) construction `sequence_constructor._inject_cross_source` injects a synthetic alternate producer before a multi-same-type-arg creator; (b) binding `CBFactory._distribute_cross_source` (in `_signature_handle_bindings`) re-points the creator's 2nd same-type arg to a distinct earlier producer. CREATOR-scoped + name-deny (copy|clone|dup|detach). Locked by `tests/test_p3_cross_source_{predicate,construct,binding}.py`. Gate-off byte-identical.
-- `LOGICFUZZ_TAG_ROUNDTRIP=1` — after a profile PRODUCER (`_is_profile_producer`), append a memory-safe `cmsSaveProfileToMem`→`cmsOpenProfileFromMem` round-trip so the tag serialize→reparse path (cmstypes.c) runs. Two-call sizing, no leak/double-free; inert off-lcms. `skeleton_generator._append_tag_roundtrip`.
 
 ### LLM / debug / SVF config
 - `LOGICFUZZ_LLM_REWRITE=1` — opt OUT of B-design (hole-filling) back to A-design (LLM free-rewrite). DEFAULT B-design: Prototyper fills leaf holes, discards whole-driver rewrites, preserving constructed object-construction skeletons. (A-design = the A/B control; measured inert.) `src/agents/prototyper.py`.
@@ -319,7 +316,6 @@ raw 24h (PromeFuzz saturates small libs). Start from `docs/generation.md`.
 - **The headline test**: a 24h `--merge` run on a breadth-matched config (`VALIDITY_CONTRACT + RESIDUAL_ALLCOVER + API_FLOOR + PORTFOLIO_DEPTH=2`) vs PromeFuzz Table 2 — on the breadth-matched libs only.
 - Verify residual single-API drivers compile+run end-to-end (a `nullable=True`-handle residual driver may be shallow; lcms-style `nullable=False` gets a creator prepended).
 - F6 Phase C CEGAR loop (post-merge, gap-directed, cross-round; prereq WorkingMemory) + F7 L2 LLM idioms.
-- T7 cross-project retrieval (`LOGICFUZZ_CROSS_PROJECT`): coverage A/B + FI-corpus scale-up before default-on.
 - Synthetic/structural (TLV) seed gen — real-seed routing + T10 front-gate seed landed; a valid DEEP file still TODO.
 - libaom path resolution; batch eval aggregator → Table 2; SVF ≥4h re-run for libtiff/libvpx `conditions.json`.
 

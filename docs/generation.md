@@ -284,10 +284,9 @@ pending — start gated like factory/diversity/lean did):**
   budget).
 
 Still open: **F6 Phase C CEGAR loop** (prereq WorkingMemory — T12 is a precursor,
-not the principled loop), **T7** cross-project driver retrieval (corpus + embedding
-index BUILT — see below; dedup wired via `load_corpus`/`dedup_keep.json`, corpus
-4757→2217; re-rank wiring of the template embedding into `cross_project_retrieval`
-+ coverage A/B remain). **Rejected (do not re-litigate):** T9 static CFG
+not the principled loop). The T7 cross-project driver-retrieval runtime path was
+removed (judged not-a-fit); the corpus/embedding dataset facts below are retained
+for the paper's data-section. **Rejected (do not re-litigate):** T9 static CFG
 reachability weighting — dependency graphs are too flat (max depth 1–3) and planner
 blind spots are depth-independent, so reranking can't recover them; root cause is
 the binding layer, not ranking.

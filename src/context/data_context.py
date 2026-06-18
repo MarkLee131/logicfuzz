@@ -2295,33 +2295,6 @@ class FuzzingContext:
                 log.warning('T12 value-feedback attach failed '
                             '(non-critical): %s', _ve)
 
-        # T7: cross-project driver retrieval (LOGICFUZZ_CROSS_PROJECT, gated
-        # optional). For a resource-thin library, retrieve structurally-similar
-        # drivers from the corpus (local extracted_fuzz_drivers/; scale-up = all
-        # OSS-Fuzz via FI API) — same-project first, cross-project only when own
-        # is thin — and attach compressed CALLSPEC-style hints to each skeleton
-        # for the Prototyper. Structure-signature retrieval (embedding fallback
-        # unwired). A/B candidate.
-        if skeleton_drivers and os.environ.get('LOGICFUZZ_CROSS_PROJECT'):
-            try:
-                from pathlib import Path as _P7
-                from liberator_adapter.analysis.cross_project_retrieval import (
-                    retrieve_hints_for_apis)
-                _tgt_apis = [a.get('function_name') for a in (project_apis or [])
-                             if a.get('function_name')]
-                _root = _P7(os.environ.get('LOGICFUZZ_XPROJ_CORPUS',
-                                           'extracted_fuzz_drivers'))
-                _hints = retrieve_hints_for_apis(
-                    _tgt_apis, project=project_name, corpus_root=_root)
-                if _hints:
-                    for _sk in skeleton_drivers:
-                        _sk['cross_project_hints'] = _hints
-                    log.info('  10b/12 ✅ T7 cross-project: attached retrieval '
-                             'hints to %d skeletons', len(skeleton_drivers))
-            except Exception as _xe:
-                log.warning('T7 cross-project retrieval failed '
-                            '(non-critical): %s', _xe)
-
         # === Step 11 (Phase G): Closed-loop automaton feedback ===
         # When ``closed_loop_iters > 0`` and the project has a learned
         # automaton, run N feedback iterations. Each iteration feeds the

@@ -589,22 +589,6 @@ class DriverSkeleton:
         }
 
 
-# =============================================================================
-# Tag round-trip exerciser (LOGICFUZZ_TAG_ROUNDTRIP, default-off)
-# =============================================================================
-
-def _tag_roundtrip() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_TAG_ROUNDTRIP`` appends a save->reopen->read
-    block on a cmsHPROFILE-producing skeleton to exercise cmstypes.c — the tag-type
-    (de)serializers, the single biggest untapped lcms block (95/2270 = 4%). The
-    WRITE handlers (Type_X_Write) fire only on cmsSaveProfileToMem of a tag-rich
-    profile; the READ handlers (Type_X_Read) only on cmsReadTag of a SAVED+REOPENED
-    profile (an in-memory profile returns the live object without deserializing).
-    No generated driver did this round-trip (measured)."""
-    return os.environ.get("LOGICFUZZ_TAG_ROUNDTRIP", "0").strip().lower() in (
-        "1", "true", "yes", "on")
-
-
 def _validity_contract_enabled() -> bool:
     """Gate (default-off): ``LOGICFUZZ_VALIDITY_CONTRACT``. When on, the renderer
     consumes the model's evidence-based ``nullable`` and wraps an UNBOUND
@@ -614,43 +598,6 @@ def _validity_contract_enabled() -> bool:
         "1", "true", "yes", "on")
 
 
-def _is_profile_producer(source_api: str) -> bool:
-    """True for an API that returns a cmsHPROFILE (profile or device-link)."""
-    sa = source_api or ""
-    return (sa.startswith("cmsCreate") or sa.startswith("cmsOpen")) and (
-        "Profile" in sa or "DeviceLink" in sa)
-
-
-# Fully-guarded, self-contained C block. {prof} = the live profile-handle var.
-# Exercises: cmsSaveProfileToMem (write handlers) -> cmsOpenProfileFromMem (parse)
-# -> cmsReadTag x14 distinct tag types (read handlers). Memory-safe: bounded
-# malloc, every return checked, no fuzz-controlled sizes.
-_TAG_ROUNDTRIP_TEMPLATE = """\
-/* TAG_ROUNDTRIP: exercise cmstypes (de)serializers via save->reopen->read */
-if (({prof}) != NULL) {{
-    cmsUInt32Number _rt_n = 0;
-    if (cmsSaveProfileToMem(({prof}), NULL, &_rt_n) && _rt_n > 0 && _rt_n < (1u << 22)) {{
-        void *_rt_buf = malloc(_rt_n);
-        if (_rt_buf != NULL) {{
-            if (cmsSaveProfileToMem(({prof}), _rt_buf, &_rt_n)) {{
-                cmsHPROFILE _rt_h2 = cmsOpenProfileFromMem(_rt_buf, _rt_n);
-                if (_rt_h2 != NULL) {{
-                    static const cmsTagSignature _rt_tags[] = {{
-                        cmsSigRedTRCTag, cmsSigGreenTRCTag, cmsSigBlueTRCTag,
-                        cmsSigRedColorantTag, cmsSigGreenColorantTag, cmsSigBlueColorantTag,
-                        cmsSigMediaWhitePointTag, cmsSigProfileDescriptionTag,
-                        cmsSigCopyrightTag, cmsSigChromaticAdaptationTag,
-                        cmsSigAToB0Tag, cmsSigBToA0Tag, cmsSigGamutTag, cmsSigCharTargetTag }};
-                    unsigned _rt_i;
-                    for (_rt_i = 0; _rt_i < sizeof(_rt_tags) / sizeof(_rt_tags[0]); _rt_i++)
-                        (void) cmsReadTag(_rt_h2, _rt_tags[_rt_i]);
-                    cmsCloseProfile(_rt_h2);
-                }}
-            }}
-            free(_rt_buf);
-        }}
-    }}
-}}"""
 
 
 # =============================================================================
@@ -776,10 +723,6 @@ class SkeletonGenerator:
                 loop_patterns or {},
                 callback_infos or {}
             )
-
-        # 4b. Tag round-trip exerciser (LOGICFUZZ_TAG_ROUNDTRIP) — before cleanup
-        # so the profile handle is still live.
-        self._append_tag_roundtrip(skeleton)
 
         # 5. Generate cleanup code
         self._generate_cleanup(skeleton, dep_model)
@@ -1026,27 +969,6 @@ class SkeletonGenerator:
                         for i, a in enumerate(getattr(_sem, 'args', ()) or ())} \
                 if _sem is not None else {}
 
-            # Lever B (LOGICFUZZ_EXERCISE_DEEP_BUFFER): mark the deep consumer's
-            # INPUT data buffer (the first bare ``void*`` CONFIG arg of a
-            # _has_deep_input_buffer-matching consumer) so the renderer feeds it
-            # fuzz bytes instead of NULL. Gated + guarded; inert when the sub-gate
-            # is off (idx == -1 → no arg flagged → byte-identical render).
-            _deep_in_idx = -1
-            try:
-                from liberator_adapter.analysis.sequence_constructor import (
-                    _exercise_deep_buffer, _has_deep_input_buffer,
-                    _is_bare_void_ptr)
-                if (_sem is not None and _exercise_deep_buffer()
-                        and _has_deep_input_buffer(_sem)):
-                    for _a in getattr(_sem, 'args', ()) or ():
-                        if (getattr(getattr(_a, 'role', None), 'value', None)
-                                == 'CONFIG'
-                                and _is_bare_void_ptr(getattr(_a, 'type_str', ''))):
-                            _deep_in_idx = getattr(_a, 'index', -1)
-                            break
-            except Exception:
-                _deep_in_idx = -1
-
             # Lever B (LOGICFUZZ_FUZZ_BUFFERS): for a builder (CREATOR/MUTATOR),
             # map each scalar data-buffer arg → (base, length_idx) so the renderer
             # feeds it ``(T*)data`` and binds its length to ``size/sizeof(T)``
@@ -1095,7 +1017,6 @@ class SkeletonGenerator:
                     'role': _role,                          # ArgRole value or None
                     'nullable': _nullable,                  # Task 11: render-guard
                     'pairs_with': _pairs,                   # LENGTH↔buffer idx or None
-                    'deep_fuzz_buffer': (idx == _deep_in_idx),  # Lever B input void*
                     'fuzz_scalar_buffer': _fuzz_buf.get(idx),   # Lever B: (T*)data
                     'buffer_length_sizeof': _fuzz_len.get(idx),  # Lever B: size/sizeof
                 }
@@ -1438,17 +1359,6 @@ class SkeletonGenerator:
             return SkeletonVariable(
                 name=name, c_type=_public_pointer_type(c_type),
                 is_pointer=True, init_value="NULL", nonnull_handle=_nonnull)
-        if arg_info.get('deep_fuzz_buffer') and is_pointer:
-            # Lever B (LOGICFUZZ_EXERCISE_DEEP_BUFFER): the deep consumer's INPUT
-            # data buffer is a bare ``void*`` (the cmsDoTransform idiom). Feed it
-            # fuzz bytes so the exercised object RUNS on data, not NULL. The flag
-            # is set upstream ONLY when the sub-gate is on AND the API matched the
-            # guarded _has_deep_input_buffer — so this branch is inert by default
-            # (gate-off → flag never set → falls through to the NULL branch).
-            return SkeletonVariable(
-                name=name, c_type=_public_pointer_type(c_type),
-                allocation=AllocationType.FUZZ_INPUT, is_pointer=True,
-                init_value="(void*)data")
         if role == 'CONFIG' and is_pointer:
             # An optional/config pointer (e.g. cmsCreateContext's plugin /
             # userdata ``void*`` args) — NULL is the safe by-construction default
@@ -1956,26 +1866,6 @@ class SkeletonGenerator:
             indent=indent,
         )
         skeleton.add_statement(loop_end)
-
-    def _append_tag_roundtrip(self, skeleton: DriverSkeleton) -> None:
-        """LOGICFUZZ_TAG_ROUNDTRIP: append a guarded save->reopen->read block on a
-        cmsHPROFILE-producing skeleton to exercise cmstypes.c (de)serializers (the
-        4%-covered tag-type handlers). Picks the FIRST profile-handle variable (by
-        cmsHPROFILE c_type or a cms(Create|Open)*(Profile|DeviceLink) producer) and
-        emits the self-contained, fully-guarded round-trip. Default-off / inert."""
-        if not _tag_roundtrip():
-            return
-        prof = None
-        for v in skeleton.variables.values():
-            if 'cmsHPROFILE' in (v.c_type or '') or _is_profile_producer(
-                    v.source_api or ''):
-                prof = v.name
-                break
-        if not prof:
-            return
-        skeleton.add_statement(SkeletonStatement(
-            kind=StatementKind.RAW_CODE,
-            code=_TAG_ROUNDTRIP_TEMPLATE.format(prof=prof)))
 
     def _generate_cleanup(self, skeleton: DriverSkeleton, dep_model=None) -> None:
         """Emit cleanup statements.

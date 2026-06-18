@@ -1622,14 +1622,6 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 "  (No explicit holes - review code and fill any __HOLE_*__ placeholders)"
             )
 
-        # T7: cross-project structurally-similar driver examples (gated;
-        # attached upstream by data_context for resource-thin libraries).
-        # Compressed CALLSPEC-style — the LLM adapts the SHAPE, not literal names.
-        _xproj = skeleton.get('cross_project_hints')
-        if _xproj:
-            holes_desc_lines.append("")
-            holes_desc_lines.append(_xproj)
-
         # G4: per-arg value intent from APISemanticModel (in-range/out-of-range
         # for scalars, structured-input for parser buffers, length pairing,
         # output, live-handle). Tells the LLM how to choose hole *values*, not
