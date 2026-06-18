@@ -1,25 +1,23 @@
-"""L6a + L6b: value-domain tests for VALUE_DOMAINS gate.
+"""L6a + L6b: value-domain leaf-constraint tests (always-on, no gate).
 
-L6a: 4cc constant mine + forbid enum arithmetic when LOGICFUZZ_VALUE_DOMAINS=1.
-L6b: @param.text -> doc_text -> range-mined intent when LOGICFUZZ_VALUE_DOMAINS=1.
+L6a: 4cc constant mine + forbid enum arithmetic for enum/signature-typed holes.
+L6b: @param.text -> doc_text -> range-mined intent.
 
 Tests:
 L6a:
 1. Enum-typed CONFIG arg with empty enum members (signature typedef) -> forbids
-   `% N` / `%256` when VALUE_DOMAINS gate is on.
+   `% N` / `%256` (still FUZZABLE_HOLES-gated, emits a FUZZ_DERIVE sweep).
 2. 4cc hex defines (8 hex digits) are captured in the vocab WITHOUT _MIN_GROUP
    filtering (even a single such define is captured).
-3. Gate-off: old behavior unchanged (no FUZZ_DERIVE with forbidden-modulo warning).
 
 L6b:
-4. test_param_text_survives_into_doc_text: collect_doc_evidence captures p["text"]
+3. test_param_text_survives_into_doc_text: collect_doc_evidence captures p["text"]
    into _DocEvidence.arg_texts (was discarded).
-5. test_param_text_survives_into_doc_text_reconcile: reconcile threads arg_texts
+4. test_param_text_survives_into_doc_text_reconcile: reconcile threads arg_texts
    into ArgSemantics.doc_text.
-6. test_documented_range_reaches_intent_when_gated: with gate on, an arg with
-   doc_text "value between 0 and 1" yields an intent mentioning that range; gate
-   off -> legacy intent without doc annotation.
-7. test_missing_doc_text_is_safe: arg without doc_text -> no crash, legacy intent.
+5. test_documented_range_reaches_intent: an arg with doc_text "value between 0
+   and 1" yields an intent mentioning that range.
+6. test_missing_doc_text_is_safe: arg without doc_text -> no crash, generic intent.
 """
 import os
 import sys
@@ -104,34 +102,12 @@ def test_render_4cc_only_vocab_not_empty():
 
 
 # ---------------------------------------------------------------------------
-# Gate-OFF: old behavior unchanged  (L6a)
-# ---------------------------------------------------------------------------
-
-def test_gate_off_enum_typed_no_forbid(monkeypatch):
-    """With VALUE_DOMAINS=0, enum-typed CONFIG arg with empty members -> None (old path)."""
-    monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "1")
-    monkeypatch.setenv("LOGICFUZZ_VALUE_DOMAINS", "0")
-
-    class A:
-        role = ArgRole.CONFIG
-        type_str = "cmsColorSpaceSignature"
-        pairs_with = None
-        index = 0
-        name = "cs"
-        doc_text = ""
-
-    intent = _arg_intent(A(), "cmsCreateTransform", {})
-    assert intent is None
-
-
-# ---------------------------------------------------------------------------
-# Gate-ON: enum-typed arg -> forbids modulo arithmetic  (L6a)
+# Always-on: enum-typed arg -> forbids modulo arithmetic  (L6a)
 # ---------------------------------------------------------------------------
 
 def test_enum_typed_config_forbids_modulo(monkeypatch):
-    """Enum/signature-typed CONFIG arg -> intent forbids % N when gate on."""
+    """Enum/signature-typed CONFIG arg -> intent forbids % N (always-on)."""
     monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "1")
-    monkeypatch.setenv("LOGICFUZZ_VALUE_DOMAINS", "1")
 
     class A:
         role = ArgRole.CONFIG
@@ -142,7 +118,7 @@ def test_enum_typed_config_forbids_modulo(monkeypatch):
         doc_text = ""
 
     intent = _arg_intent(A(), "cmsCreateTransform", {})
-    assert intent is not None, "Expected an intent for enum-typed arg when VALUE_DOMAINS=1"
+    assert intent is not None, "Expected an intent for enum-typed arg"
     assert "% N" not in intent, f"'% N' should not appear; got: {intent}"
     assert "%256" not in intent.replace(" ", ""), f"'%256' should not appear; got: {intent}"
     assert ("LEGAL" in intent) or ("arithmetic" in intent.lower()), (
@@ -150,10 +126,30 @@ def test_enum_typed_config_forbids_modulo(monkeypatch):
     )
 
 
+def test_enum_config_still_fuzz_derives_sweep(monkeypatch):
+    """FUZZABLE_HOLES compat: the enum/signature hole is still rendered as a
+    FUZZ_DERIVE sweep (index a byte into the legal set), NOT a fixed constant —
+    VALUE_DOMAINS only constrains the legal SET, it must not disable fuzzing."""
+    monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "1")
+
+    class A:
+        role = ArgRole.CONFIG
+        type_str = "cmsColorSpaceSignature"
+        pairs_with = None
+        index = 0
+        name = "cs"
+        doc_text = ""
+
+    intent = _arg_intent(A(), "cmsCreateTransform", {})
+    assert intent is not None
+    assert "FUZZ_DERIVE" in intent, f"enum hole should still sweep; got: {intent}"
+    assert "index" in intent.lower(), (
+        f"sweep should index a fuzz byte into the legal set; got: {intent}")
+
+
 def test_enum_typed_with_4cc_vocab(monkeypatch):
     """When 4cc vocab has the type's names, intent cites them."""
     monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "1")
-    monkeypatch.setenv("LOGICFUZZ_VALUE_DOMAINS", "1")
 
     v = _vocab_from_text(_4CC_HEADER)
 
@@ -225,13 +221,12 @@ def test_param_text_survives_into_doc_text_reconcile():
 
 
 # ---------------------------------------------------------------------------
-# L6b: documented range -> intent when gate is on; gate-off unchanged
+# L6b: documented range -> intent (always-on)
 # ---------------------------------------------------------------------------
 
-def test_documented_range_reaches_intent_when_gated(monkeypatch):
-    """Gate ON: doc_text 'value between 2.5 and 99.7' yields an intent citing range.
-    Gate OFF: doc_text range NOT injected into the legacy intent.
-    """
+def test_documented_range_reaches_intent(monkeypatch):
+    """Always-on: doc_text 'value between 2.5 and 99.7' yields an intent citing
+    the range."""
     from types import SimpleNamespace
 
     a = SimpleNamespace(
@@ -243,25 +238,12 @@ def test_documented_range_reaches_intent_when_gated(monkeypatch):
         doc_text="value between 2.5 and 99.7",
     )
 
-    # Gate ON
     monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "1")
-    monkeypatch.setenv("LOGICFUZZ_VALUE_DOMAINS", "1")
     intent_on = _arg_intent(a, "someApiFunc", {})
-    assert intent_on is not None, "Expected intent when gate ON"
+    assert intent_on is not None, "Expected intent"
     assert "2.5" in intent_on and "99.7" in intent_on, (
-        f"Documented range not in gate-ON intent; got: {intent_on!r}"
+        f"Documented range not in intent; got: {intent_on!r}"
     )
-
-    # Gate OFF
-    monkeypatch.setenv("LOGICFUZZ_VALUE_DOMAINS", "0")
-    intent_off = _arg_intent(a, "someApiFunc", {})
-    # The generic FUZZ_DERIVE scalar float intent must NOT reference the doc_text
-    # range. (Both bounds absent — an OR of disjuncts was a tautology that could
-    # not catch a leak; require BOTH bounds to be absent.)
-    if intent_off is not None:
-        assert "2.5" not in intent_off and "99.7" not in intent_off, (
-            f"doc_text range leaked into gate-OFF intent; got: {intent_off!r}"
-        )
 
 
 def test_missing_doc_text_is_safe(monkeypatch):
@@ -269,7 +251,6 @@ def test_missing_doc_text_is_safe(monkeypatch):
     from types import SimpleNamespace
 
     monkeypatch.setenv("LOGICFUZZ_FUZZABLE_HOLES", "1")
-    monkeypatch.setenv("LOGICFUZZ_VALUE_DOMAINS", "1")
 
     # Case 1: doc_text field present but empty
     a1 = SimpleNamespace(

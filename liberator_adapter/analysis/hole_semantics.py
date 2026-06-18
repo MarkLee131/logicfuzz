@@ -60,18 +60,6 @@ def _is_scalar_float(type_str: str) -> bool:
     return any(t in low for t in _FLOAT_TYPES)
 
 
-def _value_domains() -> bool:
-    """L6a (DEFAULT-OFF): when on, enum/signature-typed CONFIG args with no known
-    enum members get an intent that explicitly FORBIDS ``(T)(data[i] % N)``
-    arithmetic and demands legal-set indexing from <library_constants>.
-
-    Gate: ``LOGICFUZZ_VALUE_DOMAINS=1`` (or ``true``/``yes``/``on``).
-    Default OFF so the baseline run is unchanged.
-    """
-    return os.environ.get("LOGICFUZZ_VALUE_DOMAINS", "0").strip().lower() in (
-        "1", "true", "yes", "on")
-
-
 def _fuzzable_holes() -> bool:
     """Tier 1 (DEFAULT-ON; opt-out via `LOGICFUZZ_FUZZABLE_HOLES=0`): render
     fuzzable scalar/enum/flag CONFIG holes as 'DERIVE from the fuzz input'
@@ -209,12 +197,11 @@ def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
             kind = "float" if _is_scalar_float(arg.type_str) else "integral"
             nm = (getattr(arg, "name", "") or "").strip()
             named = f" (parameter '{nm}')" if nm else ""
-            # L6b: if the @param doc text carries an explicit range and the
-            # VALUE_DOMAINS gate is on, fold it into the FUZZ_DERIVE directive
-            # as a documented range hint — more reliable than asking the LLM to
-            # recall the semantics from training memory.
+            # L6b: if the @param doc text carries an explicit range, fold it into
+            # the FUZZ_DERIVE directive as a documented range hint — more reliable
+            # than asking the LLM to recall the semantics from training memory.
             doc_text = (getattr(arg, "doc_text", "") or "").strip()
-            if _value_domains() and doc_text:
+            if doc_text:
                 rng = _extract_range_from_text(doc_text)
                 if rng is not None:
                     lo, hi = rng
@@ -243,14 +230,15 @@ def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
                     f"from the fuzz input, so the fuzzer sweeps real + boundary "
                     f"values the API ACCEPTS — not mostly-rejected garbage that "
                     f"bounces off the entry check before reaching deep code.")
-        # L6a (LOGICFUZZ_VALUE_DOMAINS gate): enum/signature-typed CONFIG arg with
-        # no matched true-enum members → forbid (T)(data%N) arithmetic and demand
-        # legal-set indexing.  Only fires when the type LOOKS like an enum/signature
-        # (keyword heuristic) so plain ``int`` args are unaffected by the gate.
+        # L6a: enum/signature-typed CONFIG arg with no matched true-enum members
+        # → forbid (T)(data%N) arithmetic and demand legal-set indexing. Only
+        # fires when the type LOOKS like an enum/signature (keyword heuristic) so
+        # plain ``int`` args are unaffected. Still FUZZABLE_HOLES-gated and emits a
+        # FUZZ_DERIVE directive (sweep the LEGAL set), so the enum is still fuzzed
+        # — VALUE_DOMAINS only constrains the legal value SET, not the sweep.
         _ENUM_KEYWORDS = ("signature", "enum", "flag", "format", "kind", "type",
                           "intent", "colorspace", "space")
         if (_fuzzable_holes() and not members
-                and _value_domains()
                 and any(k in (arg.type_str or "").lower() for k in _ENUM_KEYWORDS)):
             type_name = (arg.type_str or "").strip()
             return (
