@@ -79,18 +79,14 @@ and handle *production* (the latter via two channels):
    - **(b) Naming-based opaque-return producer recovery**
      (`analysis/sequence_constructor.py`, `_recover_opaque_producers`; always-on,
      monotone): when an opaque handle is *required* but its producer's **return
-     type was desugared to `void*`** by the IR (`typedef void* cmsHTRANSFORM` — the
-     param keeps the typedef so `requires` is right, but the return collapses →
-     `extract_produced_handles` misses it → empty producer index → empty prefix →
-     NULL hole), the required *non-pointer* opaque type is mapped to its creator by
-     handle naming (`cmsHTRANSFORM` → strip `cms` + `h` → `transform` → match
-     `cmsCreate*Transform*`). Three correctness levers keep it sound: a
-     **non-pointer test** (a `*`-typed param is a caller-alloc leaf; a `void*`
-     typedef handle has no `*`), a **camelCase word-boundary match** (rejects
-     `handle ⊄ ErrorHandler`), and **producer preference** for a factory that
-     itself requires another recoverable opaque handle. Without it 29/52 lcms
-     creators have an empty `produces` set and every `cmsDoTransform`-class API
-     resolves to a NULL hole.
+     type was desugared to `void*`** by the IR (`typedef void* cmsHTRANSFORM`), so
+     the producer index misses it and the prefix collapses to a NULL hole, the
+     required *non-pointer* opaque type is mapped to its creator by handle naming
+     (`cmsHTRANSFORM` → `transform` → `cmsCreate*Transform*`). Kept sound by a
+     non-pointer test, a camelCase word-boundary match, and producer preference for
+     a factory that itself requires another recoverable opaque handle. Without it
+     29/52 lcms creators have an empty `produces` set and every `cmsDoTransform`-class
+     API resolves to a NULL hole.
 
 All of these passes are deterministic — zero LLM, zero token cost.
 

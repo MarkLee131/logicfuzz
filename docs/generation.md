@@ -56,11 +56,11 @@ Closed-loop (Phase G) grows the automaton from Z3-viable sequences each round
 
 **Default-on (gates removed):** factory chain, density + hard NULL-guard,
 max-coverage diversity selection, real seed-corpus routing, lean crash triage +
-skip per-driver optimize, typedef-handle recovery, sibling densifier partition +
+skip per-driver optimize, typedef-handle recovery, densifier partition +
 producer/destroyer diversification, marginal-depth selection, subset-elimination,
 scoped per-component NULL-guards, cross-source profile binding, FP-crasher merge
-quarantine, value-domain leaf constraints. Lean crash triage falls back to the
-LLM crash path on an `unknown` ASan frame.
+quarantine, value-domain leaf constraints. (Full per-lever rationale: `CLAUDE.md`
+flag reference + git history.)
 
 ---
 
@@ -139,47 +139,29 @@ cleared — a 56-driver lcms run did ~57 full configure+make of liblcms2.
 Parallelism (`LLM_NUM_EXP=6`) was *not* the bottleneck.
 
 **Fix = one gate file, zero new code.** pub-llm already wires the OSS-Fuzz
-`ofg-cache` (`prepare_cached_images` in `run_logicfuzz.py`; `build_target_local`
-→ `is_image_cached → rewrite_project_to_cached_project → prepare_build`;
-`OFG_USE_CACHING=1` default). It only lacked `fuzzer_build_script/<project>` for
-lcms.
+`ofg-cache` (`prepare_cached_images`, `OFG_USE_CACHING=1` default); it only lacked
+`fuzzer_build_script/<project>` for lcms. That file is an **existence gate** only —
+its content is never applied as build.sh. Mechanism: the library is built into a
+committed image ONCE, each trial `FROM`s it and re-runs the ORIGINAL build.sh, so
+`make` becomes a no-op — the speedup depends on build.sh being **idempotent** on
+the prebuilt image.
 
-**How it works (verified, NOT what it looks like):**
-`fuzzer_build_script/<project>` is used at `experiment/oss_fuzz_checkout.py`
-(`_has_cache_build_script`) ONLY as an **existence gate** — its content is never
-applied as build.sh. Mechanism: (1) `prepare_cached_images` builds the library
-into a committed image ONCE; (2) each trial `FROM`s that image and re-runs the
-ORIGINAL build.sh. So the speedup depends on build.sh being **idempotent** on the
-prebuilt image — `make` becomes a no-op, only the driver recompiles.
+**Extension is per-project fork-idempotency** (open roadmap): lcms's
+`./configure && make` re-runs cleanly; **c-ares FAILS** (`mkdir build` → "File
+exists") until the OSS-Fuzz fork's build.sh is made idempotent (`mkdir -p`, fork =
+github.com/MarkLee131/oss-fuzz). NB: do not reimplement a build-cache layer or
+branch from `main` (broke pub-llm once → reverted; memory
+`feedback_efficiency_and_simplicity`).
 
-**Extension is NOT "one file each"** — it needs each project's build.sh
-idempotent on the cached image. lcms's `./configure && make` re-runs cleanly.
-**c-ares FAILS** (verified): build.sh does `cd $SRC/googletest; mkdir build` →
-"File exists" on re-run; fix = idempotent build.sh in the OSS-Fuzz fork
-(`mkdir -p`, fork = github.com/MarkLee131/oss-fuzz), a ~1-line per-project edit.
-So the cache extension is a per-project fork-idempotency task — open roadmap.
-NB: do not reimplement a build-cache layer or branch from `main` (broke pub-llm
-once → reverted; memory `feedback_efficiency_and_simplicity`).
-
-> **⚠ Build-cache silently disabled Z3 — RESOLVED by A1 (additive canonical base).**
-> *Problem:* with cache on, the reused `gcr.io/oss-fuzz/<proj>` image had no
-> clang-14 → LLVM/SVF extraction fell back to clang-only → `function_conditions`
-> empty → CBFactory degraded, **Z3 OFF for the whole run**. Tell-tale: `Reused
-> existing image` + `clang-14 not found` + `CBFactory degraded mode`.
->
+> **⚠ Build-cache silently disabled Z3 — RESOLVED by A1.** With cache on, the
+> reused image had no clang-14 → SVF extraction fell back to clang-only →
+> `function_conditions` empty → **Z3 OFF for the whole run**.
 > *Fix (`ensure_llvm14_base_builder`):* build the llvm14 image **additively**
-> (clang-14 at /usr/lib/llvm-14 for `wllvm`; default `/usr/local` OSS-Fuzz clang +
-> libc++ untouched, so fuzzers still link — the "fuzzers don't link on llvm14"
-> worry was a misdiagnosis) and retag onto the canonical
-> `gcr.io/oss-fuzz-base/base-builder`. Every project + cache image built FROM it
-> carries clang-14 — one image serves both fuzzer builds and extraction; no
-> Dockerfile patch, no cache bypass. Validated: extract-only → fresh 651KB
-> `conditions.json`, no degraded/clang-only.
->
-> *One-time deploy:* registry-hosted cache images were built on the OLD base —
-> rebuild + re-push the `*-ofg-cached-*` images on the additive base (or run
-> `OFG_USE_CACHING=0`) to make cached eval Z3-on. Full recipe: memory
-> `project_buildcache_llvm14_conflict`.
+> (clang-14 at /usr/lib/llvm-14; default OSS-Fuzz clang untouched so fuzzers still
+> link) and retag onto the canonical base-builder — one image serves both fuzzer
+> builds and extraction, no Dockerfile patch, no cache bypass.
+> *One-time deploy:* rebuild + re-push the `*-ofg-cached-*` images on the additive
+> base (or run `OFG_USE_CACHING=0`). Recipe: memory `project_buildcache_llvm14_conflict`.
 
 ---
 
@@ -234,9 +216,9 @@ open items + roadmap. Short list:
 
 | Item | Why it's the lever |
 |---|---|
-| **Input/seed layer (NEW #1 below binding) — real-seed routing landed (default-on), gain unmeasured** | factory chain made `cmsDoTransform` constructable+compilable, but covers **0/799 of `cmsxform.c`** because random bytes never form a valid ICC profile. Real-seed routing copies the project's REAL format-matching seeds (`*.icc`/`*.it8`/…, classified by parser-entry API + file magic) into each driver's generation corpus + the merged harness (`scripts/seed_discovery.py:seed_corpus_for_driver` → `builder_runner._seed_corpus_dir`; additive, no-op when no seeds). **Next:** measure the cmsxform.c gain end-to-end; synthetic seed generation from format analysis still TODO |
-| **build-cache × llvm14 — RESOLVED by A1** | `ensure_llvm14_base_builder` builds the additive llvm14 image and retags onto `gcr.io/oss-fuzz-base/base-builder`. **One-time deploy:** rebuild + re-push `*-ofg-cached-*` on the additive base (or `OFG_USE_CACHING=0`). Memory `project_buildcache_llvm14_conflict` (see §4) |
-| **merged-harness coverage validity — RESOLVED** | the merged harness used to read spurious 0 coverage: a compile-INVALID driver was KEPT (preflight only vets RUN), then shadowed by `merge.py`'s `\|\|continue` skip + weak-stub no-op, so address build and coverage build compiled DIFFERENT TU sets (A≢B) → 0 coverage. **Fix:** the **compile-validation merge gate** (`tools/merge_drivers/compile_validate.py:validate_compilable` + `run_single_fuzz._compile_validate_candidates`) includes ONLY drivers that compile under real OSS-Fuzz coverage-build flags (per-TU C/C++; `-Werror=implicit-function-declaration` re-promoted to catch link-class failures `-fsyntax-only` misses), so both builds compile the IDENTICAL set. Fail-open; opt-out `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1`; writes `merged/compile_validation.json`. lcms: excluded 9/11 invalid → llvm-cov 551/9590 br. Separately, `run_extended_fuzzing._build_coverage_image` scrubs in-source artifacts (`git clean -dxf` per /src repo) + `build_fuzzers --sanitizer coverage --clean`, forcing a coverage-instrumented LIBRARY rebuild (fixes inconsistent denominators 22 vs 18797). **Also (`skeleton_generator.py`):** renderer emits valid C/C++ by construction (void/`void*` element → `uint8_t` buffer; opaque types → pointers; struct values `{0}`-init; internal opaque typenames → `void*`; `*_internal.h` filtered; cleanup only on declared `ret_<api>`), so fewer drivers reach the gate invalid. Gate + renderer are complementary |
+| **Input/seed layer (NEW #1 below binding) — real-seed routing landed (default-on), gain unmeasured** | factory chain made `cmsDoTransform` constructable+compilable, but covers **0/799 of `cmsxform.c`** because random bytes never form a valid ICC profile. Real-seed routing copies the project's REAL format-matching seeds into each driver's corpus + the merged harness (additive, no-op when no seeds). **Next:** measure the cmsxform.c gain end-to-end; synthetic seed gen still TODO |
+| **build-cache × llvm14 — RESOLVED by A1** | `ensure_llvm14_base_builder` (see §4). **One-time deploy:** rebuild + re-push `*-ofg-cached-*` (or `OFG_USE_CACHING=0`) |
+| **merged-harness coverage validity — RESOLVED** | the merged harness used to read spurious 0 coverage: a compile-INVALID driver was KEPT then silently stubbed, so address + coverage builds compiled DIFFERENT TU sets (A≢B). **Fix:** the **compile-validation merge gate** (`compile_validate.py`) includes ONLY drivers that compile under real coverage-build flags, so both builds compile the IDENTICAL set (lcms: excluded 9/11 → llvm-cov 551/9590 br). Plus a coverage-instrumented LIBRARY rebuild (`git clean -dxf` + `--sanitizer coverage --clean`) and a renderer that emits valid C/C++ by construction (`skeleton_generator.py`), so fewer drivers reach the gate invalid |
 | **Binding layer (#14) — construction lifted, tail remains** | factory chain (channel b) recovers opaque `void*`-return producers; **next:** the residual non-`Create*`-named / no-in-project-producer tail + caller-alloc-init args beyond the SVF-INIT channel |
 | **Multi-project coverage-diff validation** | turn the lcms PoC into a claim: reproduce across projects + show we fill more existing-driver gap than PromeFuzz/CKGFuzzer |
 | **24h union real run** | the actual headline vs PromeFuzz Table 2 absolute coverage (cost OK, deferred) |
@@ -246,45 +228,30 @@ open items + roadmap. Short list:
 Feedback / input layers — **T10 / T11 / T12 implemented (all gated, coverage A/B
 pending — start gated like factory/diversity/lean did):**
 
-- **T10 — generalized format-entry → synthetic seed** (`LOGICFUZZ_FORMAT_INFER`;
-  `liberator_adapter/analysis/format_inference.py` → `scripts/seed_discovery.py`):
+- **T10 — generalized format-entry → synthetic seed** (`LOGICFUZZ_FORMAT_INFER`):
   when no real seed matches a parser-entry driver, synthesize a minimal
-  front-gate-passing seed from an inferred FormatSpec (sampled-seed prefix >
-  known-magic registry > header `#define` magic). *Scope (honest):* deterministic
-  *constant* inference, NOT IR symbolic execution — clears the *leading magic
-  gate*, not a complex parser's deep validation. Real seeds (routing) still
-  preferred; synth is the no-seed fallback. 15 unit tests.
-- **T11 — error-shape skeleton variants** (`LOGICFUZZ_ERROR_VARIANTS`;
-  `sequence_constructor.error_shape_variants`): emit guard-testing shapes
-  (SKIP_INIT / DOUBLE_DESTROY by default; USE_AFTER_DESTROY behind
-  `LOGICFUZZ_ERROR_VARIANTS_AGGRESSIVE`) for **gap-touching** sequences so library
-  error branches become reachable. The LLM fills only leaf holes; any crash is
-  triaged by the crash-frame classifier. 13 unit + integration tests.
-- **T12 — dynamic value feedback** (`LOGICFUZZ_VALUE_FEEDBACK`;
-  `coverage_memory.{record_trial_hole_values,proven_hole_values,attach_proven_holes}`):
-  capture a trial's filled hole values, pin the deepest-coverage ones into the SAME
-  API-sequence's holes next run — matched by **sequence content hash**
-  (`sequence_key`), NOT the positional `cbfactory_skeleton_{i}` name (would mis-pin
-  onto an unrelated chain). Cross-run; the "read" side of Phase C. 13 unit tests
-  incl. the no-mis-pin regression.
-- **B+D scoped NULL-guards** (always-on; gate removed;
-  `sequence_constructor._dependency_components` + `skeleton_generator`): partition a
-  sequence into dependency components and render the creator NULL-guard **per
-  component** (B1 nested-if) instead of the whole-driver `if(!parser)return0`. A
-  producer's guard wraps only its handle-consumers, so an INDEPENDENT API renders
-  OUTSIDE the guard and runs even when the parser returns NULL on random input.
-  Measured (single-file): **+523 br (12.6×)** when the parser fails; ≈0 when valid
-  seeds let it succeed — gain conditional on parser-failure (the common fuzz case).
-- **Tier-1 fuzzable-holes value-domain** (`LOGICFUZZ_FUZZABLE_HOLES`, default-OFF;
-  `hole_semantics._arg_intent`): scalar/float CONFIG holes emit a FUZZ_DERIVE intent
-  invoking the LLM's value-domain judgement (semantically VALID range —
-  chromaticity≈0..1, gamma≈0.1..5, temp≈1000..25000 — then derive from the fuzz
-  input; *not* `data[i]%65536`); enum holes index a fuzz byte into the legal
-  constant set. Mechanism supplied by the language-split prompt (C → index
-  `data[N]`; C++ → `FuzzedDataProvider`). PromeFuzz's *automatic* depth mechanism
-  made explicit, NOT hand-written per-lib `api_hints`. Confirmed:
-  cmsBuildParametricToneCurve fuzz-derived → cmsgamma.c 84→121 br (+44%, same
-  budget).
+  front-gate-passing seed from an inferred FormatSpec. *Scope (honest):*
+  deterministic *constant* inference, NOT symbolic execution — clears the *leading
+  magic gate*, not deep parser validation. Real-seed routing still preferred.
+- **T11 — error-shape skeleton variants** (`LOGICFUZZ_ERROR_VARIANTS`): emit
+  guard-testing shapes (SKIP_INIT / DOUBLE_DESTROY; USE_AFTER_DESTROY behind
+  `_AGGRESSIVE`) for **gap-touching** sequences so library error branches become
+  reachable. LLM fills only leaf holes; crashes triaged by the crash-frame classifier.
+- **T12 — dynamic value feedback** (`LOGICFUZZ_VALUE_FEEDBACK`): capture a trial's
+  filled hole values, pin the deepest-coverage ones into the SAME API-sequence's
+  holes next run (matched by sequence content hash, not positional name). Cross-run;
+  the "read" side of Phase C.
+- **B+D scoped NULL-guards** (always-on, gate removed): render the creator
+  NULL-guard **per dependency component** (nested-if) instead of the whole-driver
+  `if(!parser)return0`, so an INDEPENDENT API runs even when the parser returns NULL
+  on random input. Measured: **+523 br (12.6×)** when the parser fails; ≈0 when valid
+  seeds let it succeed (gain conditional on parser-failure, the common fuzz case).
+- **Tier-1 fuzzable-holes value-domain** (`LOGICFUZZ_FUZZABLE_HOLES`): scalar/float
+  CONFIG holes emit a FUZZ_DERIVE intent invoking the LLM's value-domain judgement
+  (semantically VALID range, then derive from the fuzz input); enum holes index a
+  byte into the legal set. PromeFuzz's *automatic* depth mechanism made explicit,
+  NOT hand-written per-lib `api_hints`. Confirmed: cmsBuildParametricToneCurve →
+  cmsgamma.c 84→121 br (+44%).
 
 Still open: **F6 Phase C CEGAR loop** (prereq WorkingMemory — T12 is a precursor,
 not the principled loop). The T7 cross-project driver-retrieval runtime path was
@@ -294,49 +261,27 @@ reachability weighting — dependency graphs are too flat (max depth 1–3) and 
 blind spots are depth-independent, so reranking can't recover them; root cause is
 the binding layer, not ranking.
 
-### T7 cross-project corpus + embedding index (built)
+### T7 cross-project corpus + embedding index (built; runtime path removed)
 
-Dataset facts for the paper's data-section / threats-to-validity.
+Dataset facts retained for the paper's data-section / threats-to-validity.
 
-**Corpus source.** FI only serves harness *paths/metadata*
-(`/harness-source-and-executable`); `/source-code` + any all-projects listing
-return 404. Built instead from the OSS-Fuzz-gen GCS bucket
-`oss-fuzz-llm-public/human_written_targets/`
-(`data_prep/extract_all_fuzz_drivers.py`, anonymous, $0): **484 projects / 4757
-C/C++ harnesses** (pure driver source — no `.h`; the loader ext set must cover
-`.cxx`/`.c++` or 58 C++ harnesses silently drop).
+**Corpus** (`data_prep/extract_all_fuzz_drivers.py`, from GCS
+`oss-fuzz-llm-public/human_written_targets/`, anonymous, $0): **484 projects / 4757
+C/C++ harnesses**; after dedup (SOURCE-embedding cosine > 0.97 collapses 2508
+vendored near-copies + 32 stubs) **2217 unique**.
 
-**Embedding index** (`results/xproj_index/`, `scripts/build_xproj_embeddings.py`):
-OpenAI `text-embedding-3-large` (3072-dim). Input is comment-stripped first
-(reusing structure-sig `_COMMENT_RE` — identical license headers else inflate
-pairwise cosine) then truncated by *actual* tokens (tiktoken cl100k_base, cap
-8000). One-time cost **$0.315**. Token distribution (post-strip): median 239, mean
-573, p90 1000, p99 6571, max 32946. Truncation reaches 0.95% (45/4757); genuinely-
-affected share **0.29%** (14 large single-library drivers; the rest are
-libFuzzer-selftest noise + vendored near-dupes). Tolerable because the embedding is
-a *re-rank fallback* over structure-sig, and structure-sig uses the FULL
-untruncated API-call list (`extract_api_calls`) — a truncated driver keeps a
-complete structural signature; only its embedding vector is partial.
+**Embedding index** (`results/xproj_index/`, OpenAI `text-embedding-3-large`,
+3072-dim, one-time $0.315; comment-stripped, token-truncated at 8000 — affects
+0.29% genuinely, tolerable because it's a re-rank fallback over the full
+untruncated structure-sig).
 
-**Corpus hygiene — DONE** (`scripts/dedup_xproj_index.py`, wired into
-`load_corpus`). Corpus was **53% redundant**: of 4757, **2508 vendored near-copies**
-+ 32 selftest/runner-stub noise, leaving **2217 unique**. Detection = SOURCE-
-embedding cosine > 0.97 (SOURCE, not template — genuine "same-construction,
-different-library" analogs are NOT collapsed). `load_corpus` auto-restricts to
-`dedup_keep.json` when present.
-
-**Reference-value retrieval axis (construction-template re-rank).** Raw-source
-embedding ranks by DOMAIN; reference value = transferable CONSTRUCTION shape. So
-each driver is also distilled (gpt-4o-mini, grounded on extracted calls +
-`entry_type`) into a library-agnostic construction template (input-wiring idiom +
-role sequence `create→…→destroy` + resource shape), and the TEMPLATE is embedded →
-`templates_embeddings.npy`. Leave-one-out: template-embedding beats source on
+**Construction-template re-rank axis.** Raw-source embedding ranks by DOMAIN;
+reference value = transferable CONSTRUCTION shape. Each driver is also distilled
+into a library-agnostic construction template (input-wiring + role sequence +
+resource shape) and embedded. Leave-one-out: template-embedding beats source on
 **cross-domain-transferable@5 = 35.5% vs 14%** and construction@5 (43% vs 26%);
-source wins domain@5 (orthogonal axes). **Rejected: RRF fusion** of embedding+role+
-api-set LOST to embedding-alone (domain@5 40% < 46.5%) — equal-weight fusion drags
-the strong signal toward weak literal ones. **Caveat:** libpng was an
-unrepresentative worst case (9 self-copies); most libs have 0–3. The decisive test
-remains the end-to-end hint A/B; @K are proxies.
+source wins domain@5 (orthogonal axes). **Rejected: RRF fusion** (domain@5 40% <
+46.5% embedding-alone). Decisive test remains the end-to-end hint A/B; @K are proxies.
 
 ### Roadmap & open decisions
 

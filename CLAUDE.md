@@ -44,18 +44,17 @@ removed; live in `FuzzingContext.prepare()` defaults).
 
 ## Flag / Gate Reference (`LOGICFUZZ_*` / `LIBERATOR_*`)
 
-Format: `FLAG=val — purpose (default; owning file)`. Full rationale/measurements
-live in git history + `docs/superpowers/specs/`.
+Format: `FLAG=val — purpose (default)`. Full rationale/measurements live in git history.
 
 ### Tuning values + always-on A/B kill-switches
-- `LOGICFUZZ_TOP_K=N` — skeleton/driver count, the union-breadth lever (default 10; needs `NO_CACHE=1` to regen). Under PORTFOLIO=complete (default) the fixed cap is SUPERSEDED by coverage-complete selection; only bounds PORTFOLIO=off.
-- `LOGICFUZZ_PORTFOLIO=complete|minimal|off` — coverage-COMPLETE portfolio selection (DEFAULT complete). Guarantees ≥1 lifecycle-valid driver per subsystem cluster (cover) + bounded depth pass; fixes parser-entry-bias. `subsystem_clusters.py` + `coverage_ranker._coverage_complete_select` + data_context Step 5h/10. (minimal=cover only; off=legacy fixed top_k round-robin = A/B control.)
+- `LOGICFUZZ_TOP_K=N` — skeleton/driver count, the union-breadth lever (default 10; needs `NO_CACHE=1` to regen). Under PORTFOLIO=complete (default) SUPERSEDED by coverage-complete selection; only bounds PORTFOLIO=off.
+- `LOGICFUZZ_PORTFOLIO=complete|minimal|off` — coverage-COMPLETE portfolio selection (DEFAULT complete): ≥1 lifecycle-valid driver per subsystem cluster (cover) + bounded depth pass; fixes parser-entry-bias. (minimal=cover only; off=legacy fixed top_k round-robin = A/B control.)
 - `LOGICFUZZ_PORTFOLIO_DEPTH=F` — depth multiplier for PORTFOLIO Phase 2 (default 0.5).
 - `LOGICFUZZ_DENSE_MAX_EXTRA=N` — cap extra APIs appended per chain (default 8 → ~7.7 APIs/seq lcms = PromeFuzz parity).
 - `LOGICFUZZ_DENSE_COOCCUR=0` — density extends ONLY handle-sharing, dropping automaton co-occurrence (default on).
 - `LOGICFUZZ_DENSE_REPEAT_CONSUMER=1` — density also repeats a handle's consumer (default off).
 - `LOGICFUZZ_STRICT_ORDERING=1` — revert B graceful degradation (drop orphan USE_BEFORE_INIT instead of keeping as a hole).
-- `LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES}=1` — A/B kill-switch for that default-on stage. (BASELINE_RECOVERY + TYPEDEF_RECOVERY gates removed: baseline recovery is a permanently-empty slot; typedef recovery is unconditionally always-on, data_context Step 5g.)
+- `LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES}=1` — A/B kill-switch for that default-on stage.
 
 ### Graduated to default (gates removed — now unconditional)
 Design-confirmed / A-B-validated levers that are now DEFAULT behavior; the
@@ -79,32 +78,26 @@ TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT
 - `LOGICFUZZ_ERROR_VARIANTS=1` / `_MAX=N` — T11: emit error-shape skeleton variants (double-free / use-after-destroy / skip-init) so library error branches become reachable (gated, A/B pending).
 - `LOGICFUZZ_VALUE_FEEDBACK` — T12: capture filled hole values → coverage_memory, pin deepest-coverage into the same skeleton next run (cross-run). DEFAULT-ON (opt-out =0); no-op on a fresh project.
 - `LOGICFUZZ_FORMAT_INFER=1` — T10: synthesize front-gate-passing seed(s) from inferred magic when no real seed matches (opt-in; emits a diverse k≥3 corpus).
-- `LOGICFUZZ_FUZZABLE_HOLES=1` — Tier 1: render tunable CONFIG holes (enum/scalar/float) as FUZZ_DERIVE directives so the fuzzer SWEEPS the param (handles/magic/length stay fixed). C → index `data[N]`; C++ → FuzzedDataProvider. DEFAULT-ON (opt-out =0). `hole_semantics._arg_intent`.
-- `LOGICFUZZ_OBJCONSTRUCT_FIRST=1` — L1: prefer object-construction (data_buildable) chain roots over parser-entry (keeps ≥1 parser-rooted per parser-only cluster). The top coverage lever. `sequence_constructor._root_kind` + data_context strand/bucket order. (gated, A/B pending)
-- `LOGICFUZZ_API_FLOOR=1` — L7: ALL-COVER floor — greedy set-cover guarantees every constructable API appears in ≥1 selected sequence; surfaces `api_floor_residual_count`. `coverage_ranker._coverage_complete_select`. (gated)
-- `LOGICFUZZ_RESIDUAL_ALLCOVER=1` — breadth lever (PromeFuzz-style all-cover). The symbolic constructor only emits sequences for APIs with a buildable producer→consumer CHAIN, so un-constructable APIs never enter the pool → unreachable at ANY fuzz time (measured lcms breadth ceiling: 149/297 constructed, links 443/~1100 liblcms2 fns). For every PUBLIC model API not yet in any sequence, append a single-API sequence; the validity-repair prepends leaf creators for its handle args (nullable=False handles → live; nullable=True → shallow entry-only), the portfolio selects it, the Prototyper LLM fills the rest. Lifts API breadth toward the extraction ceiling (cjson 75→78=PF's count; lcms 149→297). data_context Step-10 pre-synthesis. Gate-off byte-identical. The gap-decomposition this addresses: PF-vs-us is time (we cover 197/443 reachable fns — 24h closes) + breadth (149/358 APIs — this lever closes); see Failed Attempts. (gated, A/B pending)
-- `LOGICFUZZ_VALIDITY_CONTRACT=1` — valid-by-construction contract: the constructor satisfies a Validity Contract — every `nullable=False` opaque-handle arg gets a type-matching producer [I2a], producer-before-consumer order [I1], non-NULL value args filled [I2b], type-correct binding [I3] — driven by the model's evidence-based per-arg nullable (doc @param ⊕ IR ⊕ role). Three enforcement layers: (1) I3 binding (`CBFactory._signature_handle_bindings`) wires consumers to producers by handle FAMILY incl. typedef'd opaque void* handles (cmsHPROFILE, 0-star) on BOTH consumer + producer sides; (2) **universal I2a repair** (`sequence_constructor.repair_sequence_validity`, wired at data_context `_synthesize_skeletons_per_sequence`) — floor/densified sequences bypass `_build_prefix`, so for EVERY sequence prepend the cheapest LEAF creator (public, no INPUT_BUFFER/own-handle args) for each non-NULL handle arg lacking an earlier producer; restricted to lifecycle-handle types (union of `requires`/`destroys`, excludes string/value/scalar); (3) Task-11 render guard. Measured lcms: construction-gap 98→0, binding-gap 96→7. Oracle `analysis/validity_contract.py`. Gate-off byte-identical; gate-on no-op on cjson. (gated default-OFF)
-- `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1` — opt OUT of the merge compile-validation gate (default-on, fail-open: ships only drivers that compile under real cov-build flags). `tools/merge_drivers/compile_validate.py`.
+- `LOGICFUZZ_FUZZABLE_HOLES=1` — Tier 1: render tunable CONFIG holes (enum/scalar/float) as FUZZ_DERIVE directives so the fuzzer sweeps the param. DEFAULT-ON (opt-out =0).
+- `LOGICFUZZ_OBJCONSTRUCT_FIRST=1` — L1: prefer object-construction chain roots over parser-entry (top coverage lever; keeps ≥1 parser-rooted per parser-only cluster). (gated, A/B pending)
+- `LOGICFUZZ_API_FLOOR=1` — L7: greedy set-cover guarantees every constructable API appears in ≥1 selected sequence. (gated)
+- `LOGICFUZZ_RESIDUAL_ALLCOVER=1` — breadth lever: append a single-API sequence for every public API the symbolic constructor can't chain (validity-repair prepends its handle creators), lifting API breadth toward the extraction ceiling (cjson 75→78, lcms 149→297). (gated, A/B pending)
+- `LOGICFUZZ_VALIDITY_CONTRACT=1` — valid-by-construction contract: every `nullable=False` opaque-handle arg gets a type-matching producer in producer-before-consumer order with type-correct binding (I1/I2a/I2b/I3), driven by the model's per-arg nullable. Oracle `analysis/validity_contract.py`. (gated default-OFF)
+- `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1` — opt OUT of the merge compile-validation gate (default-on, fail-open: ships only drivers that compile under real cov-build flags).
 
 ### Driver DECOUPLING / DE-DUP levers
-The construct-time decouplers (DENSE_PARTITION, DIVERSIFY_PRODUCERS) and the
-select-time SUBSET_ELIM graduated to default (see the Graduated block above);
-they used to overlap-reduce two channels — API-SET overlap (shared
-prefix/densifier/destroyer) and VALUE/PATH overlap. The remaining slots:
-- `LOGICFUZZ_DEDUP_FINGERPRINT_VALUE_DOMAIN` — (reserved) Layer-C slot; value-domain signature is ALWAYS in the fingerprint (`driver_fingerprint.py`).
-- (Always-on, cheap) Layer E redundancy telemetry → `results/<project>/static_analysis/redundancy_telemetry.json` (`portfolio_redundancy`): mean pairwise API Jaccard + disjointness — the A/B oracle. D-1 (dynamic edge-set marginal) DEFERRED.
+DENSE_PARTITION, DIVERSIFY_PRODUCERS, SUBSET_ELIM graduated to default (see Graduated block). Always-on Layer-E redundancy telemetry → `results/<project>/static_analysis/redundancy_telemetry.json` (mean pairwise API Jaccard + disjointness; the A/B oracle).
 
 ### Driver DEPTH levers
-Addresses the ~79-edge plateau: drivers BUILD an object but never exercise it.
-CROSS_SOURCE_BIND graduated to default (see the Graduated block); EXERCISE_DEEP_BUFFER was removed (lcms over-fit).
-- `LOGICFUZZ_EXERCISE_OBJECT=1` — forward "exercise the object" step: after the backward prefix builds a handle, append ONE consumer that RUNS it (prefers an INPUT_BUFFER fuzz-data consumer). `sequence_constructor._append_exercisers`. (gated, A/B pending)
+CROSS_SOURCE_BIND graduated to default; EXERCISE_DEEP_BUFFER removed (lcms over-fit).
+- `LOGICFUZZ_EXERCISE_OBJECT=1` — after the prefix builds a handle, append ONE consumer that RUNS it (prefers an INPUT_BUFFER fuzz-data consumer). (gated, A/B pending)
 
 ### LLM / debug / SVF config
-- `LOGICFUZZ_LLM_REWRITE=1` — opt OUT of B-design (hole-filling) back to A-design (LLM free-rewrite). DEFAULT B-design: Prototyper fills leaf holes, discards whole-driver rewrites, preserving constructed object-construction skeletons. (A-design = the A/B control; measured inert.) `src/agents/prototyper.py`.
-- `LIBERATOR_SVF_TIMEOUT_SECS=N` — SVF pointer-analysis wall-time cap (default 1800). libtiff/libvpx are TIME-bound (set =14400 / 4h); disk-cached on success.
-- `LIBERATOR_SVF_MEM_GB=N` — SVF memory cap (RLIMIT_AS, GB; default 0=off) via preexec_fn; non-converging analysis → std::bad_alloc → clang-only fallback instead of host OOM (validated libucl).
-- `LOGICFUZZ_REUSE_SKELETONS=1` — DEBUG: load previously-saved `skeleton_drivers.json` and SKIP Z3 synthesis to iterate on the LLM hole-filling / prompt side. Opt-in; do NOT set when you changed a construction lever. data_context Step-10.
-- `LOGICFUZZ_DROP_NO_PROGRESS=1` — opt IN to dropping no-progress drivers from the merge (default KEPT — the 15s solo edge-growth gate is wrong for a merged harness; only crashers dropped). `run_single_fuzz._should_drop_no_progress`.
+- `LOGICFUZZ_LLM_REWRITE=1` — opt OUT of B-design (hole-filling) back to A-design (LLM free-rewrite). DEFAULT B-design preserves constructed skeletons (A-design = A/B control, measured inert).
+- `LIBERATOR_SVF_TIMEOUT_SECS=N` — SVF pointer-analysis wall-time cap (default 1800; libtiff/libvpx are TIME-bound, set =14400).
+- `LIBERATOR_SVF_MEM_GB=N` — SVF memory cap (RLIMIT_AS, GB; default 0=off); over-cap → clang-only fallback instead of host OOM.
+- `LOGICFUZZ_REUSE_SKELETONS=1` — DEBUG: load saved `skeleton_drivers.json`, SKIP Z3 synthesis to iterate on LLM/prompt side. Do NOT set when you changed a construction lever.
+- `LOGICFUZZ_DROP_NO_PROGRESS=1` — opt IN to dropping no-progress drivers from the merge (default KEPT — the solo edge-growth gate is wrong for a merged harness; only crashers dropped).
 - `LOGICFUZZ_{Z3_MODE,CONSTRUCT_MODE,NO_CACHE,TRIAGE_INCONCLUSIVE,TRIAGE_PREFIX_LEN,DRIVERS_ROOT,FI_ENDPOINT,BINDING_TELEMETRY}` — config values.
 
 ## Docs
@@ -310,9 +303,13 @@ Step 12   Existing-driver knowledge extraction + Phase B idiom distillation
 
 ## Recent Keystone Fixes
 
-**Merge/preflight (operational):** stock-binary build bug (`oss_fuzz_checkout._invalidate_stale_cache_dockerfiles` — cached builds compiled the STOCK fuzzer); no_progress gate KEPT for the MERGED harness, only `dead_on_empty` crashers dropped (`LOGICFUZZ_DROP_NO_PROGRESS=1` to drop; `run_single_fuzz._should_drop_no_progress`); crash-path merge exclusion (`StateAdapter` now propagates `compiles`).
-
-**Valid-by-construction + breadth (2026-06, gated `LOGICFUZZ_VALIDITY_CONTRACT`):** Z3-path opaque-handle binding made drivers dead→live (lcms merged ~0→21%; a single driver covers ~1000 liblcms2 br, was 0); `RESIDUAL_ALLCOVER` + portfolio API-floor lift breadth to the extraction ceiling (cjson 78/78 = PromeFuzz count, c-ares 138≥136, lcms 149→297); merge-include fix passes the stock fuzzer's dir as `-iquote dirname(target_path)` (`run_single_fuzz._iquote_dirs_for_target`) so a relocated driver's `#include "../cJSON.h"` idiom resolves in compile-validation + merged build exactly as in the per-driver build — a quote-include resolves relative to the including file's dir, which OFG's per-driver build preserves but merge/validate relocation broke (cjson harness 0→53 drivers; superseded the symlink farm + basename rewrite); ext-fuzz measurement uses libFuzzer-edge snapshots + sampled llvm-cov, and the merged-coverage number is recovered via `llvm-cov` on the surviving `dumps/merged.profdata` (the live replay hangs). Gap decomposition (time + breadth) + eval framing: `contributions_and_related_work.md §3`.
+- **Stock-binary build bug** — cached builds compiled the STOCK fuzzer, not the generated driver (`oss_fuzz_checkout._invalidate_stale_cache_dockerfiles`).
+- **no_progress gate KEPT** for the merged harness; only `dead_on_empty` crashers dropped (`LOGICFUZZ_DROP_NO_PROGRESS=1` to drop).
+- **Crash-path merge exclusion** — `StateAdapter` now propagates `compiles` so compiled-but-crashed drivers aren't lost from the merge.
+- **Valid-by-construction binding** (gated `VALIDITY_CONTRACT`) — Z3-path opaque-handle binding made drivers dead→live (lcms merged ~0→21%; one driver covers ~1000 liblcms2 br, was 0).
+- **Breadth to the extraction ceiling** — `RESIDUAL_ALLCOVER` + portfolio API-floor (cjson 78/78 = PromeFuzz count, c-ares 138≥136, lcms 149→297).
+- **Merge-include root-fix** — pass the stock fuzzer's dir as `-iquote dirname(target_path)` so a relocated driver's `#include "../cJSON.h"` resolves identically in compile-validation + merged build (cjson harness 0→53 drivers).
+- **Merged-coverage measurement** — recover the number via `llvm-cov` on the surviving `dumps/merged.profdata` (the live replay hangs).
 
 ## Open TODOs
 
