@@ -105,3 +105,24 @@ def test_init_source_tolerates_missing_conditions():
     # The loop must complete without raising and must NOT set the flag
     # (no conditions entry means we skip, so no false positive).
     assert not custom_voidp_source
+
+
+# ---------------------------------------------------------------------------
+# Task 6: per-project SVF resource table + lite-mode cmd builder (Fix B1)
+# ---------------------------------------------------------------------------
+from liberator_adapter.extractors.llvm_extractor import (
+    build_svf_cmd, svf_resources_for)
+
+def test_build_svf_cmd_full_has_indirect_jumps():
+    cmd = build_svf_cmd("EX","in.bc","if.json","out.json","min.txt","dl.txt", lite=False)
+    assert "-do_indirect_jumps" in cmd
+    assert "-data_layout" in cmd and cmd[-1] == "dl.txt"
+
+def test_build_svf_cmd_lite_omits_indirect_jumps():
+    cmd = build_svf_cmd("EX","in.bc","if.json","out.json","min.txt","dl.txt", lite=True)
+    assert "-do_indirect_jumps" not in cmd
+    assert "-data_layout" in cmd and cmd[-1] == "dl.txt"
+
+def test_svf_resources_libucl_is_lite():
+    assert svf_resources_for("libucl")["lite"] is True
+    assert svf_resources_for("cjson")["lite"] is False

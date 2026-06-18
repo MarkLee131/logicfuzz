@@ -41,6 +41,63 @@ _SVF_TIMEOUT_SECS = int(os.environ.get('LIBERATOR_SVF_TIMEOUT_SECS', '1800'))
 # can't eat a multi-user host. Timeout bounds WALL-TIME; this bounds MEMORY.
 _SVF_MEM_GB = int(os.environ.get('LIBERATOR_SVF_MEM_GB', '0'))
 
+# Projects where SVF's flow-sensitive analysis must be disabled because it
+# won't converge (libucl has a callback fan-out from -do_indirect_jumps that
+# makes SVF spin).  Comma-separated env override: LIBERATOR_SVF_LITE.
+_SVF_LITE_PROJECTS: set = set(filter(
+    None, os.environ.get("LIBERATOR_SVF_LITE", "libucl").split(",")))
+
+# Per-project SVF resource overrides.  Heavy libs need a bigger one-time
+# budget; the result is disk-cached forever after the first success.
+# Keys: "timeout_secs" and "mem_gb".  Falls back to module defaults for
+# projects not listed here.
+_SVF_PROJECT_RESOURCES: dict = {
+    "sqlite3": {"timeout_secs": 14400, "mem_gb": 0},    # time-bound amalgamation
+    "libucl":  {"timeout_secs": 21600, "mem_gb": 140},  # big flow-sensitive budget
+}
+
+
+def svf_resources_for(project: str) -> dict:
+    """Return {"timeout_secs", "mem_gb", "lite"} for *project*.
+
+    Merges module-level defaults with any per-project overrides from
+    _SVF_PROJECT_RESOURCES, then sets "lite" from _SVF_LITE_PROJECTS.
+    """
+    base = {"timeout_secs": _SVF_TIMEOUT_SECS, "mem_gb": _SVF_MEM_GB, "lite": False}
+    base.update(_SVF_PROJECT_RESOURCES.get(project, {}))
+    base["lite"] = project in _SVF_LITE_PROJECTS
+    return base
+
+
+def build_svf_cmd(
+    extractor_bin: str,
+    bc: str,
+    interface: str,
+    output: str,
+    minimize: str,
+    data_layout: str,
+    lite: bool,
+) -> list:
+    """Build the extractor argv list.
+
+    Includes ``-do_indirect_jumps`` only when *lite* is False (full mode).
+    Always ends with ``-data_layout <data_layout>`` so the caller can rely on
+    ``cmd[-1] == data_layout``.
+    """
+    cmd = [
+        str(extractor_bin), bc,
+        "-interface", interface,
+        "-output", output,
+        "-minimize_api", minimize,
+        "-v", "v0",
+        "-t", "json",
+    ]
+    if not lite:
+        cmd.append("-do_indirect_jumps")  # callback fan-out; the libucl blow-up
+    cmd += ["-data_layout", data_layout]
+    return cmd
+
+
 # clang>=15-only warning tokens that the base-builder (clang-22) injects into
 # CFLAGS; clang-14 rejects them, which trips cmake's CHECK_C_COMPILER_FLAG probes.
 _CLANG14_INCOMPATIBLE_FLAGS = ("-Wno-error=vla-cxx-extension",)
@@ -349,36 +406,37 @@ class LLVMAPIExtractor(BaseAPIExtractor):
                 env = os.environ.copy()
                 env['LIBFUZZ_LOG_PATH'] = temp_dir
 
-                cmd = [
-                    str(self.extractor_bin),
-                    local_bc_file,
-                    '-interface', local_apis_clang,
-                    '-output', local_conditions,
-                    '-minimize_api', local_minimized_apis,
-                    '-v', 'v0',
-                    '-t', 'json',
-                    '-do_indirect_jumps',
-                    '-data_layout', local_data_layout
-                ]
+                _res = svf_resources_for(self.benchmark.project)
+                cmd = build_svf_cmd(
+                    self.extractor_bin, local_bc_file,
+                    local_apis_clang, local_conditions,
+                    local_minimized_apis, local_data_layout,
+                    lite=_res["lite"],
+                )
+                _timeout = _res["timeout_secs"]
+                # Per-project mem cap: use the project-specific value when
+                # > 0; otherwise fall back to the module-level _SVF_MEM_GB.
+                _mem_gb = _res["mem_gb"] if _res["mem_gb"] > 0 else _SVF_MEM_GB
+                _preexec = _svf_preexec if _mem_gb > 0 else None
 
                 logger.info(
-                    f'Running extractor on host (timeout {_SVF_TIMEOUT_SECS}s): '
-                    f'{" ".join(cmd)}'
+                    f'Running extractor on host (timeout {_timeout}s, '
+                    f'lite={_res["lite"]}): {" ".join(str(a) for a in cmd)}'
                 )
                 try:
                     result = subprocess.run(
                         cmd, env=env, capture_output=True, text=True,
-                        timeout=_SVF_TIMEOUT_SECS,
-                        preexec_fn=_svf_preexec if _SVF_MEM_GB > 0 else None,
+                        timeout=_timeout,
+                        preexec_fn=_preexec,
                     )
                 except subprocess.TimeoutExpired:
                     logger.error(
                         'Extractor exceeded %ds wall-time on bitcode %s; '
                         'killing — pipeline will fall back to clang-only mode',
-                        _SVF_TIMEOUT_SECS, os.path.basename(bc_file),
+                        _timeout, os.path.basename(bc_file),
                     )
                     raise RuntimeError(
-                        f'Extractor timed out after {_SVF_TIMEOUT_SECS}s'
+                        f'Extractor timed out after {_timeout}s'
                     )
 
                 if result.returncode != 0:
