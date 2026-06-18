@@ -95,6 +95,8 @@ class ConditionManager:
             #     from IPython import embed; embed(); exit()
             
             fun_cond = get_cond(api)
+            if fun_cond is None:
+                continue
             if (len(api.arguments_info) == 1 and
                     len(getattr(fun_cond, "argument_at", []) or []) >= 1 and
                     self.is_return_sink(api.return_info.type) and
@@ -254,8 +256,10 @@ class ConditionManager:
 
         for api in self.api_list:
             api_cond = get_cond(api)
+            if api_cond is None:
+                continue
             api_call = to_api(api)
-            
+
             for arg_pos, arg_type in enumerate(api_call.arg_types):
                 cond = _safe_arg_cond(api_cond, arg_pos)
                 if cond is None:

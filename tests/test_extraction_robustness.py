@@ -47,3 +47,10 @@ def test_safe_arg_cond_in_range():
 def test_safe_arg_cond_out_of_range_returns_none():
     assert _safe_arg_cond(_FakeCond(0), 0) is None
     assert _safe_arg_cond(_FakeCond(1), 5) is None
+
+from liberator_adapter.common.conditions import FunctionConditionsSet
+
+def test_get_function_conditions_missing_returns_none():
+    fcs = FunctionConditionsSet()
+    # 'operator>' (C++ overload) is not a key -> must not raise
+    assert fcs.get_function_conditions("operator>") is None

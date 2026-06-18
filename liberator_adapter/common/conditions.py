@@ -154,7 +154,7 @@ class FunctionConditionsSet:
         self.fun_cond_set[fun_cond.function_name] = fun_cond
 
     def get_function_conditions(self, fun_name: str):
-        return self.fun_cond_set[fun_name]
+        return self.fun_cond_set.get(fun_name)
 
     def __iter__(self):
         for k, v in self.fun_cond_set.items():
