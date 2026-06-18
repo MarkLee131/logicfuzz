@@ -105,6 +105,26 @@ extern "C" for C libraries, MAX 15 lines of input generation.
 """
 
 
+_OUTPUT_HANDLE_ARRAY_RE = re.compile(
+    r'^(?P<decl>[ \t]*[A-Za-z_][\w ]*\*+[ \t]*[A-Za-z_]\w*[ \t]*\[[ \t]*\d+[ \t]*\])[ \t]*;',
+    re.MULTILINE)
+
+
+def _zero_init_output_handle_arrays(code: str) -> str:
+    """Zero-initialize an uninitialized array-of-pointers local (an output / handle
+    backing): ``png_info *arg0[1];`` → ``png_info *arg0[1] = {0};``.
+
+    An init/fill API (libpng ``png_info_init_3``) reads ``*ptr_ptr`` and FREES it if
+    non-NULL; an uninitialized backing holds a garbage pointer → free of garbage →
+    SEGV. Zero-init makes it NULL so the API skips the free. Always safe — it never
+    changes a correct driver's behavior (an input buffer it touches is overwritten
+    anyway). POINTER-element arrays only; scalar/value arrays and already-initialized
+    decls are left untouched (the regex requires a ``*`` element and a ``;``
+    immediately after ``]``)."""
+    return _OUTPUT_HANDLE_ARRAY_RE.sub(
+        lambda m: m.group('decl') + ' = {0};', code)
+
+
 class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     """Prototyper agent that generates fuzz drivers from pre-fetched context."""
 
@@ -355,6 +375,11 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         # Post-merge fixup #1: resolve the __MIN_SIZE__ placeholder using the
         # actual data[N] indices that the LLM (or HoleFiller) wrote.
         result = self._fixup_min_size_guard(result)
+
+        # Post-merge fixup #1b: zero-init uninitialized output-handle pointer
+        # arrays so an init/fill API sees NULL, not a garbage pointer it frees
+        # (libpng png_info_init_3 SEGV). Deterministic + always safe.
+        result = _zero_init_output_handle_arrays(result)
 
         # Post-merge fixup #2: structural sanity check on the merged driver.
         self._validate_filled_driver(result)
