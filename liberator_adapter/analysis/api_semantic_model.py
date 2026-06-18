@@ -674,18 +674,6 @@ def _reconcile_args(
             log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
                                 ArgRole.OUTPUT.value, 0.75, won=True,
                                 note="OUTPUT confirmed: SVF saw writes"))
-        elif role_i in (ArgRole.HANDLE_IN, ArgRole.CONFIG) and svf is True \
-                and args[i].get("_svf_is_array") is True and is_ptr \
-                and "const" not in atype_i:
-            # A written ARRAY is an OUTPUT buffer, not an in-out handle. The
-            # ``is_array`` discriminator is exactly why HANDLE_IN can be promoted
-            # safely here (a single in-out handle is is_array=False, untouched):
-            # libpng ``png_build_grayscale_palette``'s ``png_color *palette`` is
-            # type-classed a handle → HANDLE_IN, but SVF proved write+array.
-            resolved[i] = ArgRole.OUTPUT
-            log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
-                                ArgRole.OUTPUT.value, 0.8, won=True,
-                                note="OUTPUT confirmed: SVF saw writes to an array"))
         elif svf is None and is_ptr and role_i in (
                 ArgRole.OUTPUT, ArgRole.CONFIG, ArgRole.HANDLE_IN):
             log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
