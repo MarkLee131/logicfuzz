@@ -594,11 +594,19 @@ def _reconcile_role(
     return winner_role, winner_conf, log
 
 
+def _output_array_base(type_str: str) -> str:
+    """Bare element type name (for producer-set membership), all pointer levels
+    and ``const`` stripped: ``"png_color *"`` → ``"png_color"``, ``"cJSON *"`` →
+    ``"cjson"``, produced ``"cjson*"`` → ``"cjson"`` — so the two sides match."""
+    return type_str.replace("*", "").replace("const", "").strip().lower()
+
+
 def _reconcile_args(
     api: Dict[str, Any],
     ir: Optional[_IREvidence],
     doc: Optional[_DocEvidence],
     llm_arg: Optional[Dict[int, ArgRole]] = None,
+    produced_bases: Optional[FrozenSet[str]] = None,
 ) -> Tuple[Tuple[ArgSemantics, ...], List[Evidence]]:
     """Arg roles: doc @param > LLM > type-pattern (IR). Pair LENGTH ↔ buffer.
 
@@ -674,6 +682,21 @@ def _reconcile_args(
             log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
                                 ArgRole.OUTPUT.value, 0.75, won=True,
                                 note="OUTPUT confirmed: SVF saw writes"))
+        elif role_i is ArgRole.HANDLE_IN and svf is True and is_ptr \
+                and "const" not in atype_i \
+                and args[i].get("_svf_is_array") is True \
+                and _output_array_base(atype_i) not in (produced_bases or frozenset()):
+            # A param the IR type-classed as a handle (any struct pointer) that
+            # SVF proved is a WRITTEN ARRAY whose element type has NO producer in
+            # the project is an OUTPUT value-array, not an in-out handle. Both
+            # gates are jointly necessary: ``is_array`` excludes a single in-out
+            # handle (is_array=False); "no producer" excludes a managed handle
+            # that is merely array-accessed (cJSON's linked nodes, gzFile, which
+            # HAVE a creator). png_color (palette) has neither — promoted.
+            resolved[i] = ArgRole.OUTPUT
+            log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
+                                ArgRole.OUTPUT.value, 0.8, won=True,
+                                note="OUTPUT: SVF write to a producer-less value array"))
         elif svf is None and is_ptr and role_i in (
                 ArgRole.OUTPUT, ArgRole.CONFIG, ArgRole.HANDLE_IN):
             log.append(Evidence(EvidenceSource.IR.value, f"arg{i}",
@@ -785,6 +808,14 @@ def reconcile(
     usage = collect_usage_evidence(accepting_paths)
     llm_ev = _parse_llm_roles(llm_roles)
 
+    # Global set of element-type base names that SOME API produces (a creator's
+    # return / out-pointer / init). A WRITTEN ARRAY whose element type is in this
+    # set is a managed handle (cJSON, gzFile), NOT an output value-array — so the
+    # OUTPUT-promotion in _reconcile_args is gated to producer-LESS element types.
+    produced_bases: FrozenSet[str] = frozenset(
+        _output_array_base(t)
+        for ev in ir_ev.values() for t in (ev.produces or frozenset()))
+
     apis: Dict[str, APISemantics] = {}
     for api in project_apis:
         name = api.get("function_name", "")
@@ -805,7 +836,8 @@ def reconcile(
 
         role, role_conf, role_log = _reconcile_role(
             ir, doc, usage.get(name, 0), llm_role=llm_role, llm_conf=llm_conf)
-        arg_sems, arg_log = _reconcile_args(api, ir, doc, llm_arg=llm_arg)
+        arg_sems, arg_log = _reconcile_args(
+            api, ir, doc, llm_arg=llm_arg, produced_bases=produced_bases)
 
         # Mechanism: which handle types, from IR; *direction* assigned by the
         # reconciled role. This is the key correction — a DESTROYER's IR

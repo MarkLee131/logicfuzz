@@ -358,13 +358,20 @@ def annotate_svf_writes(
         entry = by_name.get(fname)
         for i, arg in enumerate(args):
             verdict: Optional[bool] = None
+            is_array: Optional[bool] = None
             if entry is not None:
                 pinfo = entry.get(f"param_{i}")
-                ats = pinfo.get("access_type_set") if isinstance(pinfo, dict) else None
-                if ats:  # analyzed AND has accesses
-                    verdict = any(a.get("access") in ("write", "delete")
-                                  for a in ats)
+                if isinstance(pinfo, dict):
+                    ats = pinfo.get("access_type_set")
+                    if ats:  # analyzed AND has accesses
+                        verdict = any(a.get("access") in ("write", "delete")
+                                      for a in ats)
+                    # SVF array verdict — part of the discriminator that
+                    # separates a written value-ARRAY output buffer from a single
+                    # in-out handle (see api_semantic_model OUTPUT promotion).
+                    is_array = pinfo.get("is_array")
             arg["_svf_writes"] = verdict
+            arg["_svf_is_array"] = is_array
 
 
 # =============================================================================
