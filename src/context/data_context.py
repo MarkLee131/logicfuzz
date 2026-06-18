@@ -18,6 +18,17 @@ import re
 logger = logging.getLogger(__name__)
 
 
+def require_z3_enabled() -> bool:
+    """Return True when LOGICFUZZ_REQUIRE_Z3 is set to 1/true/yes.
+
+    Default OFF — unset env = no behaviour change at either degradation site.
+    When ON, both degradation sites raise RuntimeError instead of silently
+    continuing in Z3-off mode.
+    """
+    return os.environ.get("LOGICFUZZ_REQUIRE_Z3", "").strip().lower() in (
+        "1", "true", "yes")
+
+
 @dataclass(frozen=True)
 class FuzzingContext:
     """
@@ -527,6 +538,10 @@ class FuzzingContext:
             log.warning(
                 f"Failed to build condition manager: {e} — CBFactory enters "
                 f"DEGRADED mode (Z3 lifecycle validation OFF)")
+            if require_z3_enabled():
+                raise RuntimeError(
+                    f"LOGICFUZZ_REQUIRE_Z3 set but condition manager build "
+                    f"failed: {e}") from e
             condition_manager = None
 
         # Condition summary for prompt/LLM
@@ -3390,6 +3405,11 @@ def _synthesize_skeletons_per_sequence(
     from liberator_adapter.driver.synthesis.skeleton_generator import render_skeleton
 
     if _degraded:
+        if require_z3_enabled():
+            raise RuntimeError(
+                "LOGICFUZZ_REQUIRE_Z3 set but extraction degraded "
+                "(function_conditions empty) — refusing to ship unvalidated "
+                "drivers")
         log.warning(
             "CBFactory degraded mode: function_conditions empty (LLVM "
             "extraction likely fell back to clang-only). Z3 validation off; "

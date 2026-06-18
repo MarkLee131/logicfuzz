@@ -144,3 +144,17 @@ def test_image_has_clang14_true(monkeypatch):
 def test_image_has_clang14_false(monkeypatch):
     monkeypatch.setattr(ofc, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: _R(1)), "PIPE": -1}))
     assert ofc._image_has_clang14("img") is False
+
+
+# ---------------------------------------------------------------------------
+# Task 8: LOGICFUZZ_REQUIRE_Z3 opt-in strict gate
+# ---------------------------------------------------------------------------
+from src.context.data_context import require_z3_enabled
+
+def test_require_z3_default_off(monkeypatch):
+    monkeypatch.delenv("LOGICFUZZ_REQUIRE_Z3", raising=False)
+    assert require_z3_enabled() is False
+
+def test_require_z3_on(monkeypatch):
+    monkeypatch.setenv("LOGICFUZZ_REQUIRE_Z3", "1")
+    assert require_z3_enabled() is True
