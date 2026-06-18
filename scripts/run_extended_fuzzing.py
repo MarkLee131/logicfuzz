@@ -534,11 +534,20 @@ EXT_INC=""
 for d in /src/{self.project}/include /src/{self.project} /src/{self.project}/src /src/include /src; do
   [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
 done
-# GENERATED config headers (emitted by the project's build.sh into a build subdir
-# NOT on the fixed list above) — e.g. libpng's pnglibconf.h, c-ares ares_build.h.
-# This prelude runs AFTER the original build.sh, so the headers already exist;
-# locate them and add their dirs (dedup) so a sub-driver's ``#include "png.h"``
-# (which transitively includes pnglibconf.h) resolves like the stock fuzzer build.
+# Some projects' build.sh GENERATES a config header during the build then REMOVES
+# it in a ``make clean``/``distclean`` step (libpng's pnglibconf.h). This prelude
+# runs AFTER the original build.sh, so by here the header may be gone, leaving the
+# appended sub-driver compiles unable to resolve ``#include "png.h"`` (→ pnglibconf.h)
+# and ALL sub-drivers silently skip (``|| continue``) → no .o → no merged binary.
+# Restore from the project's shipped ``*.h.prebuilt`` fallback (libpng ships
+# scripts/pnglibconf.h.prebuilt) into the project root where png.h's quote-include
+# resolves it.
+for _pb in $(find /src/{self.project} -name '*.h.prebuilt' 2>/dev/null); do
+  _hn=$(basename "$_pb" .prebuilt)
+  [ -f "/src/{self.project}/$_hn" ] || cp "$_pb" "/src/{self.project}/$_hn" 2>/dev/null || true
+done
+# GENERATED config headers that survive in a build subdir NOT on the fixed list
+# above (e.g. c-ares ares_build.h) — locate them and add their dirs (dedup).
 for _gd in $(find /src/{self.project} /work \\( -name 'pnglibconf.h' -o -name '*_build.h' -o -name '*_config.h' -o -name '*conf.h' -o -name 'config.h' \\) 2>/dev/null | xargs -r -n1 dirname | sort -u); do
   EXT_INC="$EXT_INC -I$_gd"
 done
@@ -640,6 +649,16 @@ EXT_LFLAGS=$(grep -hoE -- '[[:space:]]-l[A-Za-z0-9_]+' $SRC/build.sh 2>/dev/null
                 _tail = ((result.stdout or "") + (result.stderr or ""))[-3000:]
                 logger.error(f"Failed to build fuzzers (tail):\n{_tail}")
                 return False
+            # build_fuzzers can exit 0 yet not produce the merged binary (a
+            # sub-driver compile that ``|| continue``-skipped, or a swallowed link
+            # error). Surface the merged-build tail so such a "silent" miss is
+            # diagnosable instead of only failing later at run time.
+            _merged_tail = "\n".join(
+                l for l in (result.stdout or "").splitlines()
+                if ("merged:" in l or "synth_" in l or "pnglibconf" in l
+                    or "error:" in l.lower() or "undefined reference" in l))[-2500:]
+            if _merged_tail:
+                logger.info(f"merged-build notes:\n{_merged_tail}")
 
             return True
 
