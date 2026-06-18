@@ -199,11 +199,19 @@ Every boundary records status; nothing degrades without a persisted enum reason;
 `REQUIRE_Z3` promotes any degrade → early hard-fail.
 
 ## 6. Error handling
-- Each `raise` in `llvm_extractor` carries a `DegradedReason`; `hybrid_extractor`'s two
-  `except` blocks store it; `_clang_only_extraction` writes it.
-- `HOST_EXTRACTOR_MISSING` is a **run-fatal setup error** (bootstrap not run), not a
-  per-project degrade.
-- Fix C raise is fatal + actionable; runtime install is explicitly **not** used.
+- `hybrid_extractor`'s two `except` blocks map the exception to a `DegradedReason` via the
+  pure `classify_degraded_reason(msg)` helper (most-specific match first; the over-broad
+  `"compile" in msg` heuristic is NOT used); `_clang_only_extraction` writes it; empty
+  conditions are surfaced as `CONDITIONS_EMPTY` at summary assembly
+  (`refine_status_for_empty_conditions`).
+- **Degradation disposition (amended 2026-06-18, final review):** clang-14-missing /
+  host-extractor-missing / any extraction failure are **swallowed to clang-only**
+  (loud + persisted as the right `DegradedReason`), NOT run-fatal — degraded mode is
+  load-bearing for the default `--eval`/`--merge`/`--generate-drivers` flows. The
+  actionable Fix-C message is logged and the project's stale image is invalidated so it
+  self-heals on the next run; `LOGICFUZZ_REQUIRE_Z3=1` is the explicit opt-in that
+  promotes any degradation to an early hard-fail. Runtime apt-install is explicitly
+  **not** used.
 
 ## 7. Testing
 - **Unit:** flag-strip filter (token in/out, append-preserving); `DegradedReason`
