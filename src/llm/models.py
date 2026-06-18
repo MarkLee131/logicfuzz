@@ -46,18 +46,6 @@ def _create_deepseek_model(model_name: str = "deepseek-chat",
                       **kwargs)
 
 
-def _create_anthropic_model(model_name: str,
-                            temperature: float = TEMPERATURE,
-                            max_tokens: int = MAX_TOKENS,
-                            **kwargs) -> BaseChatModel:
-    """Create an Anthropic Claude chat model."""
-    from langchain_anthropic import ChatAnthropic
-    return ChatAnthropic(model=model_name,
-                         temperature=temperature,
-                         max_tokens=max_tokens,
-                         **kwargs)
-
-
 # Model registry: maps model names to factory functions
 # Only models with tool calling support are included
 MODEL_REGISTRY: Dict[str, Callable[..., BaseChatModel]] = {
@@ -70,22 +58,15 @@ MODEL_REGISTRY: Dict[str, Callable[..., BaseChatModel]] = {
     lambda **kw: _create_openai_model("gpt-4o", **kw),
     "gpt-4o-mini":
     lambda **kw: _create_openai_model("gpt-4o-mini", **kw),
-    "gpt-4-turbo":
-    lambda **kw: _create_openai_model("gpt-4-turbo", **kw),
-    "gpt-4":
-    lambda **kw: _create_openai_model("gpt-4", **kw),
 
-    # DeepSeek models (OpenAI-compatible, support tool calling)
-    "deepseek-chat":
-    lambda **kw: _create_deepseek_model("deepseek-chat", **kw),
-
-    # Anthropic Claude models (all support tool calling)
-    "claude-3-5-sonnet":
-    lambda **kw: _create_anthropic_model("claude-3-5-sonnet-latest", **kw),
-    "claude-3-opus":
-    lambda **kw: _create_anthropic_model("claude-3-opus-latest", **kw),
-    "claude-3-haiku":
-    lambda **kw: _create_anthropic_model("claude-3-haiku-20240307", **kw),
+    # DeepSeek models (OpenAI-compatible, support tool calling).
+    # deepseek-chat IS DeepSeek V3. Override max_tokens to 8192 (the API maximum
+    # for deepseek-chat; default is 4096) so the Prototyper doesn't truncate large
+    # multi-API drivers. 8192 is the hard output ceiling — higher is rejected.
+    # NOTE: there is no DeepSeek "V4" — the API exposes only deepseek-chat (V3)
+    # and deepseek-reasoner (R1); add deepseek-reasoner here if R1 is wanted.
+    "deepseek-V3":
+    lambda **kw: _create_deepseek_model("deepseek-chat", **{**kw, "max_tokens": 8192}),
 }
 
 
