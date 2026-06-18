@@ -41,6 +41,18 @@ _SVF_TIMEOUT_SECS = int(os.environ.get('LIBERATOR_SVF_TIMEOUT_SECS', '1800'))
 # can't eat a multi-user host. Timeout bounds WALL-TIME; this bounds MEMORY.
 _SVF_MEM_GB = int(os.environ.get('LIBERATOR_SVF_MEM_GB', '0'))
 
+# clang>=15-only warning tokens that the base-builder (clang-22) injects into
+# CFLAGS; clang-14 rejects them, which trips cmake's CHECK_C_COMPILER_FLAG probes.
+_CLANG14_INCOMPATIBLE_FLAGS = ("-Wno-error=vla-cxx-extension",)
+
+
+def sanitize_extraction_flags(flags, deny=_CLANG14_INCOMPATIBLE_FLAGS):
+    """Drop clang-14-incompatible tokens; return (cleaned, stripped[])."""
+    kept, stripped = [], []
+    for tok in (flags or "").split():
+        (stripped if tok in deny else kept).append(tok)
+    return " ".join(kept), stripped
+
 
 def _svf_preexec():
     """preexec_fn for the extractor subprocess: apply RLIMIT_AS (Unix). No-op
@@ -134,6 +146,16 @@ class LLVMAPIExtractor(BaseAPIExtractor):
         # Note: libc++-14-dev is pre-installed in logicfuzz/base-builder-llvm14 image
         logger.info("Compiling project with wllvm using clang-14...")
 
+        # Fix A: strip clang-14-incompatible flags the base-builder (clang-22) injects.
+        _cf = self.container.execute('echo "$CFLAGS"').stdout.strip()
+        _cxf = self.container.execute('echo "$CXXFLAGS"').stdout.strip()
+        _cf_clean, _cf_strip = sanitize_extraction_flags(_cf)
+        _cxf_clean, _cxf_strip = sanitize_extraction_flags(_cxf)
+        self.flags_stripped = sorted(set(_cf_strip) | set(_cxf_strip))
+        if self.flags_stripped:
+            logger.info("Stripped clang-14-incompatible flags: %s",
+                        self.flags_stripped)
+
         compile_cmd = (
             'export LLVM_COMPILER=clang && '
             'export LLVM_COMPILER_PATH=/usr/lib/llvm-14/bin && '
@@ -142,6 +164,8 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             'export SANITIZER=none && '
             'export LIB_FUZZING_ENGINE="" && '
             'export FUZZING_ENGINE=none && '
+            f'export CFLAGS="{_cf_clean}" && '
+            f'export CXXFLAGS="{_cxf_clean}" && '
             'compile 2>&1'
         )
         # Use longer timeout for compile (10 minutes) - complex projects like curl need more time
