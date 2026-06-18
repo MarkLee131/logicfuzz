@@ -35,3 +35,15 @@ def test_summary_carries_extraction_status(tmp_path):
     summary = {"project_name": "x", "statistics": {}, **status}
     assert summary["extraction_mode"] == "clang_only"
     assert summary["degraded_reason"] == "svf_timeout"
+
+from liberator_adapter.constraints.ConditionManager import _safe_arg_cond
+
+class _FakeCond:
+    def __init__(self, n): self.argument_at = list(range(n))
+
+def test_safe_arg_cond_in_range():
+    assert _safe_arg_cond(_FakeCond(2), 1) == 1
+
+def test_safe_arg_cond_out_of_range_returns_none():
+    assert _safe_arg_cond(_FakeCond(0), 0) is None
+    assert _safe_arg_cond(_FakeCond(1), 5) is None

@@ -6,6 +6,17 @@ from liberator_adapter.driver.factory import Factory
 from liberator_adapter.common import Api, FunctionConditionsSet, ValueMetadata, Access
 from liberator_adapter.common import FunctionConditionsSet, DataLayout
 
+
+def _safe_arg_cond(api_cond, arg_pos):
+    """Return the per-arg condition or None when SVF emitted fewer entries
+    than the clang-derived signature (length divergence is the parser's
+    documented contract, utils.prase_function_conditions sets params_at=[])."""
+    aa = getattr(api_cond, "argument_at", None) or []
+    if arg_pos < 0 or arg_pos >= len(aa):
+        return None
+    return aa[arg_pos]
+
+
 class ConditionManager:
     sink_map            : Dict[Type, Api]
     sinks               : Set[Api]
@@ -84,9 +95,10 @@ class ConditionManager:
             #     from IPython import embed; embed(); exit()
             
             fun_cond = get_cond(api)
-            if (len(api.arguments_info) == 1 and 
-                self.is_return_sink(api.return_info.type) and
-                self.is_a_sink_condition(fun_cond.argument_at[0])):
+            if (len(api.arguments_info) == 1 and
+                    len(getattr(fun_cond, "argument_at", []) or []) >= 1 and
+                    self.is_return_sink(api.return_info.type) and
+                    self.is_a_sink_condition(fun_cond.argument_at[0])):
                 arg = api.arguments_info[0]
                 the_type = Factory.normalize_type(arg.type, arg.size, 
                                                   arg.flag, arg.is_const)
@@ -245,7 +257,9 @@ class ConditionManager:
             api_call = to_api(api)
             
             for arg_pos, arg_type in enumerate(api_call.arg_types):
-                cond = api_cond.argument_at[arg_pos] 
+                cond = _safe_arg_cond(api_cond, arg_pos)
+                if cond is None:
+                    continue
 
                 if len(cond.setby_dependencies) == 0:
                     continue
@@ -254,6 +268,8 @@ class ConditionManager:
                 n_incomplete_type = 0
                 for d in cond.setby_dependencies:
                     p_idx = int(d.replace("param_", ""))
+                    if p_idx >= len(api_call.arg_types):
+                        continue
                     d_type = api_call.arg_types[p_idx]
                     
                     tt = d_type
