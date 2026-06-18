@@ -77,7 +77,6 @@ Motivation: generated drivers overlapped too much → merge gained little. Two
 channels — API-SET overlap (shared prefix/densifier/destroyer) and VALUE/PATH
 overlap. Fixes deterministic/symbolic; the one doc touch (B-2 guard) consumes an
 existing Comprehender Stage-B verdict (no new LLM calls).
-- `LOGICFUZZ_MARGINAL_DEPTH=1` — B-1: Step-10 depth pass picks by MAX marginal new-API coverage (`coverage_ranker.select_marginal`) instead of bucket round-robin. The headline fix.
 - `LOGICFUZZ_DEDUP_FINGERPRINT_VALUE_DOMAIN` — (reserved) Layer-C slot; value-domain signature is ALWAYS in the fingerprint (`driver_fingerprint.py`).
 - A-2a sibling densifier partition — **GRADUATED to always-on (gate removed):** sibling chains sharing a handle set take DISJOINT ranked slices of the densifier pool (rotate by sibling_rank), so near-twin chains get different densifier suffixes. `sequence_constructor._densify`. Offline-measured win (fewer selected drivers covering MORE APIs at far lower pairwise redundancy: lcms 60→54 drivers / 154→213 APIs / mean Jaccard 0.15→0.06; cjson 33→23 / 58→74 / 0.43→0.09). Was `LOGICFUZZ_DENSE_PARTITION`.
 - `LOGICFUZZ_DEDUP_WORKFLOW_PARTITION=1` — A-2b: group densifier candidates by co-occurrence workflow (`_workflow_clusters`) and rotate whole clusters across siblings; `_rank` gains `workflow_affinity` after `sat`. Source = accepting_paths.
