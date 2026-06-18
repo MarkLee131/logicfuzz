@@ -1,22 +1,18 @@
 # LogicFuzz — Contributions & Related-Work Comparison
 
-What problems in fuzz-driver generation LogicFuzz solves, the **three
-innovations** that distinguish it from prior work, **why a constraint-based
-synthesis core is the objectively-right paradigm for this problem** (the
-method-fit argument closing §2), and an objective, component-level comparison
-against the two systems it is closest to:
+What LogicFuzz solves, the **three innovations** that distinguish it from prior
+work, **why a constraint-based synthesis core is the objectively-right paradigm**
+(the method-fit argument closing §2), and a component-level comparison against the
+two closest systems:
 
 - **PromeFuzz** (`reference/promefuzz`) — the LLM-driven driver generator our
   knowledge layer is derived from. The representative *neural* baseline.
 - **Liberator** (`reference/liberator`, HexHive) — the constraint-based driver
-  synthesizer our backend is adapted from. The representative *symbolic*
-  baseline.
+  synthesizer our backend is adapted from. The representative *symbolic* baseline.
 
-This doc is the SSOT for the "what's new vs prior work" pitch, the descriptive
-baselines behind it, and the **per-LLM-call-site rationale** (§6 — where we use
-the LLM, the symbolic alternative considered, and why the LLM won). For the
-generation pipeline see `docs/generation.md`; for the comprehender + automaton
-mechanics see `docs/knowledge_layer.md`.
+SSOT for the "what's new vs prior work" pitch, the baselines behind it, and the
+**per-LLM-call-site rationale** (§6). Pipeline: `docs/generation.md`; comprehender
++ automaton: `docs/knowledge_layer.md`.
 
 ---
 
@@ -57,9 +53,9 @@ before any sequence is proposed:
 - **usage composition** — accepting paths from the project automaton.
 
 This model is the **role authority** (demoting the heuristic
-`ConditionManager`), and it is recovered to be *correct* along **two orthogonal
-recovery axes** that restore handle relations the raw IR view drops — handle
-*identity* and handle *production* (the latter via two channels):
+`ConditionManager`), recovered to be *correct* along **two orthogonal recovery
+axes** that restore handle relations the raw IR view drops — handle *identity*
+and handle *production* (the latter via two channels):
 
 1. **Handle *identity*** — a typedef-handle recovery pass
    (`analysis/handle_typedef_recovery.py`) restores the opaque-handle identity
@@ -81,67 +77,50 @@ recovery axes** that restore handle relations the raw IR view drops — handle
      creator and never forms a chain; with it `deflateInit_ → deflate →
      deflateEnd` constructs.
    - **(b) Naming-based opaque-return producer recovery**
-     (`analysis/sequence_constructor.py`, `_recover_opaque_producers`; always-on —
-     the `LOGICFUZZ_FACTORY_CHAIN` gate was removed since the pass is monotone, zero
-     effect on libs with no recoverable opaque handles): when an
-     opaque handle is *required* by an arg but its producer's **return type was
-     desugared to `void*`** by the IR (`typedef void* cmsHTRANSFORM` — the param
-     keeps the typedef so `requires` is right, but the return is collapsed, so
-     `extract_produced_handles` misses it → the producer index has no entry → the
-     prefix resolves empty → a NULL hole), the required *non-pointer* opaque type
-     is mapped to its creator by handle naming convention (`cmsHTRANSFORM` → strip
-     lib prefix `cms` + handle marker `h` → `transform` → match
-     `cmsCreate*Transform*`). Three correctness levers keep it sound: the
-     **non-pointer test** (a `*`-typed param is a caller-alloc leaf, not a factory
-     target; a `void*` typedef handle has no `*`), a **camelCase word-boundary
-     match** (rejects `handle ⊄ ErrorHandler`), and **producer preference** for a
-     factory that itself requires another recoverable opaque handle (the true-deep
-     one that chains to the byte opener). Without it 29/52 lcms creators have an
-     empty `produces` set and every `cmsDoTransform`-class API resolves to a NULL
-     hole.
+     (`analysis/sequence_constructor.py`, `_recover_opaque_producers`; always-on,
+     monotone): when an opaque handle is *required* but its producer's **return
+     type was desugared to `void*`** by the IR (`typedef void* cmsHTRANSFORM` — the
+     param keeps the typedef so `requires` is right, but the return collapses →
+     `extract_produced_handles` misses it → empty producer index → empty prefix →
+     NULL hole), the required *non-pointer* opaque type is mapped to its creator by
+     handle naming (`cmsHTRANSFORM` → strip `cms` + `h` → `transform` → match
+     `cmsCreate*Transform*`). Three correctness levers keep it sound: a
+     **non-pointer test** (a `*`-typed param is a caller-alloc leaf; a `void*`
+     typedef handle has no `*`), a **camelCase word-boundary match** (rejects
+     `handle ⊄ ErrorHandler`), and **producer preference** for a factory that
+     itself requires another recoverable opaque handle. Without it 29/52 lcms
+     creators have an empty `produces` set and every `cmsDoTransform`-class API
+     resolves to a NULL hole.
 
 All of these passes are deterministic — zero LLM, zero token cost.
 
-> **Empirical anchor (zlib, validated 2026-06):** with the production-recovery
-> channel the deflate/inflate family goes from **0 → 34 of 36 constructable**,
-> and a single generated driver covers **`deflate.c` (570 lines) + `inflate.c`
-> (551) + `trees.c` (387)** — *all 0 before the fix* — for 1,874/3,397 lines
-> (55%) in that driver's own coverage build. Without the recovery no chain forms
-> for `z_stream`, so none of that code is reachable by any driver. (Measured via
-> the per-driver `run_extended_fuzzing` build; the project's *eval* coverage
-> build is degenerate for zlib — it re-measures the baseline `checksum_fuzzer`,
-> so cov-diff over it understates every zlib driver.)
+> **Empirical anchor (zlib):** with the production-recovery channel the
+> deflate/inflate family goes **0 → 34 of 36 constructable**, and a single driver
+> covers **`deflate.c` (570 lines) + `inflate.c` (551) + `trees.c` (387)** — *all
+> 0 before the fix* — for 1,874/3,397 lines (55%) in that driver's own coverage
+> build; without recovery no chain forms for `z_stream` and none is reachable.
+> (Measured via the per-driver `run_extended_fuzzing` build; the project *eval*
+> build is degenerate for zlib — it re-measures the baseline `checksum_fuzzer`.)
 
-> **Empirical anchor (lcms, channel 2b / factory chain, 2026-06):** the
-> opaque-handle dependency comes back — recovered handle types **0 → 2**, deep
-> opaque args satisfied **0 → 77 of 128**, average resolved prefix length
-> **0.15 → 0.89**, and `cmsDoTransform` — previously an all-NULL-arg dead end —
-> constructs the full chain `cmsOpenProfileFromMem → cmsCreateProofingTransform →
-> cmsDoTransform → cmsDeleteTransform`. Monotone: eight handle-struct libraries
-> (c-ares / zlib / libpng / sqlite3 / nghttp2 / cjson / liblouis / libucl)
-> recover nothing and are byte-identical (no misbinding, no regression). **This
-> is the first dent in the binding-layer ceiling (#14) — the previously-#1 open
-> bottleneck.** *Evidence level (2026-06-08):* **construction proven** — offline
-> probe (since removed) *and* a live run: the emitted skeleton
-> set contains a wired `cmsDoTransform` chain
-> (`cmsCreate_sRGBProfile → cmsCreateTransform → … → cmsDoTransform →
-> cmsDeleteTransform`, `n_factory_recovered=2`), and the driver **compiles** the
-> transform TUs in. **Deep coverage is NOT yet won, and the blocker is below the
-> binding layer:** a degraded-mode 30 s probe covered **0/799 lines of
-> `cmsxform.c`** despite compiling it in — because the opaque chain needs a
-> *valid ICC profile* (`cmsOpenProfileFromMem → cmsCreateTransform`) that random
-> fuzzer bytes essentially never form, so `cmsCreateTransform` returns NULL, the
-> NULL-guard fires, and `cmsDoTransform` never executes. So factory chain lifts
-> the **construction** ceiling but exposes the **input/seed layer** (valid
-> structured input to traverse a multi-hop opaque chain) as the next bottleneck —
-> not construction, not Z3. The enabling fixes have since landed — the
-> build-cache×llvm14 conflict is resolved (A1 additive canonical base → cached
-> eval is Z3-on) and real-seed routing (always-on — the `LOGICFUZZ_SEED_CORPUS`
-> gate was removed; `scripts/seed_discovery.py:seed_corpus_for_driver` +
-> `experiment/builder_runner.py`) routes real format-matching seeds
-> (`*.icc`) into the opaque-chain driver's corpus — so the **end-to-end coverage
-> measurement** (does the seeded `cmsDoTransform` driver now cover `cmsxform.c`?)
-> is the one remaining step, not a missing capability (see `docs/generation.md` §4/§6).
+> **Empirical anchor (lcms, channel 2b / factory chain):** the opaque-handle
+> dependency comes back — recovered handle types **0 → 2**, deep opaque args
+> satisfied **0 → 77 of 128**, average resolved prefix length **0.15 → 0.89**, and
+> `cmsDoTransform` — previously an all-NULL-arg dead end — constructs the full
+> chain `cmsOpenProfileFromMem → cmsCreateProofingTransform → cmsDoTransform →
+> cmsDeleteTransform`. Monotone: eight handle-struct libraries (c-ares / zlib /
+> libpng / sqlite3 / nghttp2 / cjson / liblouis / libucl) recover nothing and are
+> byte-identical. **This is the first dent in the binding-layer ceiling (#14) —
+> the previously-#1 open bottleneck.** Construction is proven (a live run emits a
+> wired chain, `n_factory_recovered=2`, compiling the transform TUs in). **Deep
+> coverage is NOT yet won, and the blocker is below the binding layer:** a 30 s
+> probe covered **0/799 lines of `cmsxform.c`** despite compiling it in — the
+> opaque chain needs a *valid ICC profile* that random fuzzer bytes never form, so
+> `cmsCreateTransform` returns NULL, the NULL-guard fires, `cmsDoTransform` never
+> executes. So factory chain lifts the **construction** ceiling but exposes the
+> **input/seed layer** as the next bottleneck — not construction, not Z3. The
+> enabling fixes have landed (build-cache×llvm14 resolved; real-seed routing, on,
+> routes `*.icc` seeds into the corpus), so the **end-to-end coverage measurement**
+> is the one remaining step, not a missing capability (`docs/generation.md` §4/§6).
 
 > **vs prior work:** PromeFuzz has no dependency substrate at all (the LLM
 > infers relationships); Liberator has a type substrate that both
@@ -182,15 +161,15 @@ matter of soft semantic judgment (leaf values).**
 
 #### ②′ The neuro-symbolic boundary is a *typed context schema*, not a prose dump
 
-Innovation ② says the LLM "fills only the holes." The **interface across that
-boundary** is itself a contribution. Rather than dump raw artifacts at the LLM
-(the prevailing practice — whole driver files, full signature lists, prose
-usage), we define a **typed, symbolically-grounded context schema**: each LLM
-decision is decomposed into a fixed set of **slots ("key aspects")**; each slot
-answers *one* semantic question a human driver-author would ask, and is
-**populated by the most authoritative source available** — static analysis where
-the answer is provable, the LLM only for the residual soft judgment. The LLM
-receives a minimal, structured context, never the underlying analysis.
+The **interface across the hole-filling boundary** is itself a contribution.
+Rather than dump raw artifacts at the LLM (the prevailing practice — whole driver
+files, full signature lists, prose usage), we define a **typed,
+symbolically-grounded context schema**: each LLM decision is decomposed into a
+fixed set of **slots ("key aspects")**; each slot answers *one* semantic question
+a human driver-author would ask, **populated by the most authoritative source
+available** — static analysis where the answer is provable, the LLM only for the
+residual soft judgment. The LLM receives minimal structured context, never the
+underlying analysis.
 
 The schema is instantiated at the **two** generation-stage LLM decision points.
 
@@ -218,10 +197,10 @@ The schema is instantiated at the **two** generation-stage LLM decision points.
 
 **Schema, DSL, or "key aspects"?** Precisely a **typed schema** (a structured
 intermediate representation) whose fields *are* the key aspects of driver
-correctness. It is **not a DSL** in the formal sense — no grammar, no
-composition operators, no parser/evaluator; the rendered hints are
-natural-language constraints *derived from* the schema. **CALLSPEC** (one typed
-per-call row consolidating these slots — now the default Prototyper context, see
+correctness. It is **not a DSL** in the formal sense — no grammar, no composition
+operators, no parser/evaluator; the rendered hints are natural-language
+constraints *derived from* the schema. **CALLSPEC** (one typed per-call row
+consolidating these slots — now the default Prototyper context, see
 `docs/generation.md` §2) is the move toward a single compact *notation*, but it
 stays a schema-rendering, not a language.
 
@@ -229,12 +208,12 @@ stays a schema-rendering, not a language.
 the neuro-symbolic split *at the prompt boundary*: the same analyses that gate
 and rank candidates (②) are reused to **specify the LLM's context slot-by-slot**,
 so *"feed the LLM the right information, not the most"* becomes a **typed
-contract** rather than a heuristic. The selective-context result TLR (FSE'26)
-validates by ablation — typestate-guided minimal context beats dumping
-everything, at a fraction of the tokens — is, in our setting, the **degenerate
-one-slot case** (typestate verdict only); we generalize it to a multi-aspect,
-multi-source, two-decision-point schema in which the symbolic layer authors the
-context and the LLM is invoked only on the slots that remain genuinely soft.
+contract** rather than a heuristic. The selective-context result TLR (FSE'26) —
+typestate-guided minimal context beats dumping everything at a fraction of the
+tokens — is, in our setting, the **degenerate one-slot case** (typestate verdict
+only); we generalize it to a multi-aspect, multi-source, two-decision-point
+schema in which the symbolic layer authors the context and the LLM is invoked
+only on the slots that remain genuinely soft.
 
 ### ③ Project-adaptive usage knowledge + a closed loop — *learn how THIS library is actually used*
 
@@ -286,15 +265,14 @@ at least one.
 | Neural / LLM (PromeFuzz) | no guarantee on *hard* structure → plausible-but-broken drivers, repair cost, hallucination | soft/semantic leaf decisions, repair budget |
 | **Constraint-based (ours)** | **only as good as the encoded model; cannot express *semantic-value / input-data* validity** | **crisp relational spec + expensive oracle + sparse-valid large library** ✓ |
 
-**Advantages it buys.** Validity *by construction* (no repair stage; the
-expensive oracle is never spent on a structurally-invalid driver); solver pruning
-(unsat-core + incremental push/pop) makes the sparse-valid large-library search
-tractable; *global* invariants (lifecycle order, provenance) handled natively;
-backward-chaining init-chains directly attack the binding bottleneck (to obtain an
-opaque handle, recursively synthesize its producer); and cheap **diverse** valid
-output (randomized/biased choice among satisfiable candidates) to feed the
-breadth-via-merge strategy — all **decoupled from the expensive build+fuzz
-oracle**.
+**Advantages it buys.** Validity *by construction* (the expensive oracle is never
+spent on a structurally-invalid driver); solver pruning (unsat-core + incremental
+push/pop) makes the sparse-valid large-library search tractable; *global*
+invariants (lifecycle order, provenance) handled natively; backward-chaining
+init-chains directly attack the binding bottleneck (to obtain an opaque handle,
+recursively synthesize its producer); and cheap **diverse** valid output
+(randomized/biased choice among satisfiable candidates) feeds the
+breadth-via-merge strategy — all **decoupled from the expensive build+fuzz oracle**.
 
 **Honest disadvantage — and it is exactly our current ceiling.** A constraint
 method is only as good as the constraints it can encode: it expresses crisp
@@ -306,20 +284,18 @@ profile"). Both top open bottlenecks are this one disadvantage made concrete —
 `cmsxform.c` 0/799 despite a correctly constructed, compiling chain).
 
 **Objective verdict.** For the *structural* skeleton, constraint-based is the
-clear best fit — its strengths map one-to-one onto the four scenario traits, and
-each alternative fails at least one. The theoretically-closest competitor is
+clear best fit — its strengths map one-to-one onto the four scenario traits, each
+alternative failing at least one. The theoretically-closest competitor is
 **deductive / type-directed** synthesis (our init-chain backward-chaining is
-already deductive in spirit), but it presumes specifications we cannot obtain for
-real C libraries; **constraint-based is precisely its realizable relaxation under
-partial contracts.** Crucially, *no single traditional paradigm suffices*: the
-very thing constraints cannot express (semantic values, valid structured input) is
-what the **neural** layer (LLM hole-filling, ②) and the **seed** layer (real
-format-matching corpora) are added for. **The objectively-correct design is
-therefore not "pick one synthesis method" but a layered split — constraint-based
-for the hard structure it provably owns, neural + seed for the soft/data residual
-it provably cannot — which is the root justification for LogicFuzz being
-neuro-symbolic rather than either pure-symbolic (Liberator) or pure-neural
-(PromeFuzz).**
+deductive in spirit), but it presumes specifications we cannot obtain for real C
+libraries; **constraint-based is precisely its realizable relaxation under partial
+contracts.** *No single traditional paradigm suffices*: the very thing constraints
+cannot express (semantic values, valid structured input) is what the **neural**
+layer (②) and the **seed** layer (real format-matching corpora) add. So the
+objectively-correct design is a **layered split** — constraint-based for the hard
+structure it provably owns, neural + seed for the soft/data residual it provably
+cannot — the root justification for LogicFuzz being neuro-symbolic rather than
+pure-symbolic (Liberator) or pure-neural (PromeFuzz).
 
 ---
 
@@ -366,25 +342,23 @@ LogicFuzz fixes structure symbolically and lets the LLM decide leaf values.*
 - **PromeFuzz:** no SMT/Z3, no typestate automaton, no sequence pre-validation,
   no skeleton/holes, no symbolic dependency resolution.
 - **LogicFuzz:** no crash-constraint memory banning APIs across rounds (crash
-  handling is per-trial; the lean-mode path triages it *deterministically* via
-  `crash_frame.py` instead of two LLM calls — see below); no RAG vector store
-  (uses doxygen/README priors); no fully-wired CEGAR loop (Phase C data only);
-  happy-path driver shape only (variety deferred — `docs/generation.md` F5). The
-  opaque / no-in-project-producer **binding-layer tail** is only *partially*
-  recovered — the factory chain (①·2b) reaches `cmsCreate*`-named opaque
-  producers, but the remaining no-producer APIs still drop to NULL holes
-  (`docs/generation.md` #14).
+  handling is per-trial; lean-mode triages it deterministically via
+  `crash_frame.py` instead of two LLM calls); no RAG vector store (doxygen/README
+  priors instead); no fully-wired CEGAR loop (Phase C data only); happy-path driver
+  shape only (variety deferred — `docs/generation.md` F5). The
+  no-in-project-producer **binding-layer tail** is only *partially* recovered — the
+  factory chain (①·2b) reaches `cmsCreate*`-named opaque producers, the remaining
+  no-producer APIs still drop to NULL holes (`docs/generation.md` #14).
 
 ### Harness merge — optimisations beyond PromeFuzz
 
 After per-driver generation, `tools/merge_drivers/` fuses N drivers into one
-multi-task OSS-Fuzz binary (the O1 preflight → O2 select → O3 merge → O4 corpus
-chain; wired via `run_logicfuzz.py --merge-drivers`). **Why merge at all:**
-per-driver runs fragment the exec budget and share nothing across drivers;
-folding them into one binary that dispatches on a discriminator word lets the
-fuzzer's mutator implicitly schedule across sub-harnesses — an interesting input
-for harness A transfers to B with a single-byte mutation. We adopt PromeFuzz's
-multi-TU + entry-dispatcher structure, then add these optimisations:
+multi-task OSS-Fuzz binary (O1 preflight → O2 select → O3 merge → O4 corpus; wired
+via `--merge-drivers`). **Why merge:** per-driver runs fragment the exec budget and
+share nothing; folding them into one binary that dispatches on a discriminator word
+lets the fuzzer's mutator implicitly schedule across sub-harnesses (an interesting
+input for harness A transfers to B with a single-byte mutation). We adopt
+PromeFuzz's multi-TU + entry-dispatcher structure, then add these optimisations:
 
 | # | LogicFuzz | PromeFuzz baseline | Why |
 |---|---|---|---|
@@ -403,29 +377,27 @@ single-run preflight signal, which needs cross-round state to extend.)
 fuzz on the address binary, replay the corpus on a *separate* coverage binary —
 is sound and standard (PromeFuzz uses it too); it requires only that the two
 builds be the SAME harness (A≡B). Our merged harness used to violate that: a
-compile-INVALID driver was KEPT (preflight only vets RUN, and "couldn't vet ⇒
-keep"), then silently shadowed by the merge's `||continue` skip + a weak-stub
-no-op, so the address build and the coverage build skipped DIFFERENT non-compiling
-TU sets → a corpus input hit a real sub-driver in one and a no-op stub in the
-other → A≢B → spurious 0 coverage. **Compile-validation restores A≡B** — both
-builds compile the identical valid set (lcms: excluded 9/11 invalid drivers →
-merged-harness llvm-cov 551/9590 br, no longer 0). We therefore **exceed
-PromeFuzz's merge on three axes:** (a) compile-validation = a valid-by-construction
-merge (PromeFuzz silently stubs non-compilers, losing them *and* their coverage);
-(b) tail selector (PromeFuzz's head-offset selector corrupts every sub-driver's
-format-magic seed on a front-byte flip); (c) edge-weighted CDF dispatch (PromeFuzz
-uniform).
+compile-INVALID driver was KEPT (preflight only vets RUN), then silently shadowed
+by the merge's `||continue` skip + a weak-stub no-op, so address and coverage
+builds skipped DIFFERENT non-compiling TU sets → a corpus input hit a real
+sub-driver in one and a no-op stub in the other → A≢B → spurious 0 coverage.
+**Compile-validation restores A≡B** — both builds compile the identical valid set
+(lcms: excluded 9/11 invalid drivers → merged-harness llvm-cov 551/9590 br, no
+longer 0). We therefore **exceed PromeFuzz's merge on three axes:** (a)
+compile-validation = a valid-by-construction merge (PromeFuzz silently stubs
+non-compilers, losing them *and* their coverage); (b) tail selector (PromeFuzz's
+head-offset selector corrupts every sub-driver's format-magic seed on a front-byte
+flip); (c) edge-weighted CDF dispatch (PromeFuzz uniform).
 
-### Breadth + low-FP: borrow PromeFuzz's reach, keep our precision (2026-06)
+### Breadth + low-FP: borrow PromeFuzz's reach, keep our precision
 
-The honest gap analysis (`docs/generation.md` §6) found PromeFuzz's
-edge is **API breadth × driver density**, not novelty — our correct-by-
-construction stance dropped every API the symbolic layer couldn't connect
-(≈302/452 gap APIs never entered a candidate). The fix is *graceful degradation*,
-not abandoning the substrate: the symbolic layer authors **structure**, the LLM
-fills the **gaps it can't prove** — and a separate quality layer keeps the FP
-rate low (our actual differentiator: when our drivers crash, is it a real bug or
-a driver bug?).
+The honest gap analysis (`docs/generation.md` §6) found PromeFuzz's edge is **API
+breadth × driver density**, not novelty — our correct-by-construction stance
+dropped every API the symbolic layer couldn't connect (≈302/452 gap APIs never
+entered a candidate). The fix is *graceful degradation*, not abandoning the
+substrate: the symbolic layer authors **structure**, the LLM fills the **gaps it
+can't prove** — and a separate quality layer keeps the FP rate low (our actual
+differentiator: when our drivers crash, is it a real bug or a driver bug?).
 
 | lever (all gated) | borrowed-from-PromeFuzz / ours | what it does |
 |---|---|---|
@@ -445,14 +417,14 @@ partitioned by the dependency graph; the LLM still owns only the leaf values.
 are *synergistic* (neither alone helps — density-only = 0). The 24h `--merge`
 union vs PromeFuzz Table 2 (lcms ~13k, c-ares 6,106) is the pending headline test.
 
-### Which advantage dimensions to compete on — and why NOT raw 24h coverage (2026-06-17)
+### Which advantage dimensions to compete on — and why NOT raw 24h coverage
 
-Systematic debugging (superpowers) settled *where* we can beat PromeFuzz and where
-we structurally cannot. **PromeFuzz's published Table 2 numbers are 24h-AFL++/GCOV
-and SATURATED on small libraries** (cjson 924/944 GCOV branches ≈ 98%). Exceeding a
-saturated 24h baseline requires comparable fuzz time — arithmetic, not a tooling
-gap — so we must NOT lead the evaluation with raw 24h merged coverage. We lead with
-the dimensions where correct-by-construction structurally wins:
+*Where* we can beat PromeFuzz and where we structurally cannot. **PromeFuzz's
+published Table 2 numbers are 24h-AFL++/GCOV and SATURATED on small libraries**
+(cjson 924/944 GCOV branches ≈ 98%). Exceeding a saturated 24h baseline requires
+comparable fuzz time — arithmetic, not a tooling gap — so we must NOT lead the
+evaluation with raw 24h merged coverage. We lead with the dimensions where
+correct-by-construction structurally wins:
 
 **Gap decomposition (lcms, llvm-cov on the merged profdata).** The us-vs-PromeFuzz
 gap is **time + breadth**, not purely time:
@@ -466,7 +438,7 @@ gap is **time + breadth**, not purely time:
   chain required). **Metrics agree** (our gcov-taken 48.7% ≈ llvm-cov 49.9% on
   cjson) — no measurement illusion.
 
-**Breadth levers that close the structural half** (gated, this session): the
+**Breadth levers that close the structural half** (gated): the
 `RESIDUAL_ALLCOVER` pass appends a single-API skeleton for every public API the
 symbolic constructor can't chain (the validity-repair then prepends its handle
 creators), and an **API-floor** in the portfolio pulls every pool API into the
@@ -474,19 +446,19 @@ merged harness. Measured: cjson **75→78 APIs (= PromeFuzz's exact count)**,
 c-ares **96→138 (≥ PromeFuzz's 136)**, lcms 149→297. Plus a merge-include root-fix
 (`-iquote dirname(target_path)`: a relocated synthesized driver keeps the stock
 fuzzer's relative `#include "../cJSON.h"` idiom — which resolves relative to the
-including file's dir — and we hand the merged/compile-validate build the stock
-fuzzer's directory as the quote-search base, exactly as OFG's per-driver build has
-it) — without it cjson dropped **0/41** candidates and never built a harness.
+including file's dir — by handing the merged/compile-validate build the stock
+fuzzer's directory as the quote-search base) — without it cjson dropped **0/41**
+candidates and never built a harness.
 
 **Measured: valid-by-construction / low-FP is a coverage MULTIPLIER, not just a
-quality metric (c-ares, 2026-06-18).** Systematic debugging (superpowers) found the
-dominant c-ares crash class via a symbolized stack: `_is_callback_param` matched the
-`_t` typedef suffix *as a substring*, so opaque handles (`ares_dns_rr_t*`) and `T**`
-output params (`ares_dns_record_t**`) were misclassified as callbacks and the LLM
-filled them with garbage (`(handle*)data`, `&self`) → deref → SEGV (driver 55,
-`ares_dns_record_rr_get`→`ares_array_at`). Fix = classify from STRUCTURE, not name
-substrings: a first-class `Arg.is_function_pointer` IR flag + an *ungated* opaque-
-handle NULL-guard render. On the regenerated merged harness:
+quality metric (c-ares).** The dominant c-ares crash class: `_is_callback_param`
+matched the `_t` typedef suffix *as a substring*, so opaque handles
+(`ares_dns_rr_t*`) and `T**` output params (`ares_dns_record_t**`) were
+misclassified as callbacks and the LLM filled them with garbage (`(handle*)data`,
+`&self`) → deref → SEGV (driver 55, `ares_dns_record_rr_get`→`ares_array_at`).
+Fix = classify from STRUCTURE, not name substrings: a first-class
+`Arg.is_function_pointer` IR flag + an *ungated* opaque-handle NULL-guard render.
+On the regenerated merged harness:
 
 | c-ares merged harness | before (FP-poisoned) | after (structural fix) |
 |---|---|---|
@@ -498,10 +470,9 @@ handle NULL-guard render. On the regenerated merged harness:
 The crash-poison was *halving* coverage by burning fuzz cycles, so our precision is
 directly an **efficiency + coverage** win. Verified clean (0 of `&self` /
 `(void*)data` / `(T_t*)data` / callback-hole patterns) across **43 c-ares skeletons +
-20 LLM-filled drivers**, and at the driver level on cjson (0 crashes) and libpng
-(**77/77 compile**, 0 garbage). This is the headline reframed result: pure-LLM
-baselines pay for FP drivers in *both* a compilation-fix loop *and* wasted fuzz
-cycles; valid-by-construction avoids both.
+20 LLM-filled drivers**, plus cjson (0 crashes) and libpng (**77/77 compile**, 0
+garbage). The headline reframed result: pure-LLM baselines pay for FP drivers in
+*both* a compilation-fix loop *and* wasted fuzz cycles; valid-by-construction avoids both.
 
 **Table A — driver validity (valid-by-construction; cheap, no long fuzz needed).**
 Pure-LLM baselines (PromeFuzz, PromptFuzz) depend on a *compilation-fix loop*; ours
@@ -573,12 +544,11 @@ upstream divergences, so future upstream ports don't reintroduce them.)
 Upstream had **fatal `IPython embed; exit(1)` traps in the production hot path**
 (four in `CBFactory`, one in `Buffer.get_allocated_size`) that abort an entire
 campaign on a single problematic API → replaced with `warning + raise` /
-backtracking / partial-driver return. The **backend renderer**
-(`LFBackendDriver`) and the **Statement IR** (`framework/driver/ir/`) each
-shipped ~6–7 latent crashes (alloctype fall-through, broken `__hash__`,
-off-by-one bounds, non-deterministic include order) — all masked in production
-by a call-site bug that left the renderer dead, and all fixed in the 2026-05
-backend/IR refactors.
+backtracking / partial-driver return. The **backend renderer** (`LFBackendDriver`)
+and the **Statement IR** (`framework/driver/ir/`) each shipped ~6–7 latent crashes
+(alloctype fall-through, broken `__hash__`, off-by-one bounds, non-deterministic
+include order) — all masked in production by a call-site bug that left the renderer
+dead, and all fixed in the backend/IR refactors.
 
 > Full per-fix detail + rollback recipes live in git history
 > (`git log --grep="backend"` / `--grep="IR refactor"` in `liberator_adapter/`).
@@ -607,14 +577,12 @@ backend/IR refactors.
 
 ## 6. Per-LLM-call-site rationale — where we use LLM, what we considered, why
 
-This is the method-fit argument at the call-site granularity: every place
-LogicFuzz invokes an LLM, the symbolic alternative considered first, and why the
-LLM won — so the design is defensible (every LLM call points to a specific
-limitation of the deterministic alternative, not "LLM seemed easier"). Each item
-ends with a **falsifiable measurement** — the experiment that would prove the LLM
-choice wrong; observe that result, revisit the decision. (Mechanism detail for
-each component lives in `docs/generation.md`; this section keeps only the
-*why-LLM* argument.)
+The method-fit argument at call-site granularity: every place LogicFuzz invokes
+an LLM, the symbolic alternative considered first, and why the LLM won — so every
+LLM call points to a specific limitation of the deterministic alternative, not
+"LLM seemed easier." Each item ends with a **falsifiable measurement** — the
+experiment that would prove the LLM choice wrong. (Mechanism detail lives in
+`docs/generation.md`; this section keeps only the *why-LLM* argument.)
 
 ### A. Prototyper — initial driver synthesis from the skeleton
 
@@ -632,24 +600,20 @@ sizes, ConditionManager-paired init/destroy, no loops.
 
 **Why LLM:** three deficits observed across the 17-benchmark suite —
 1. **Loop conditions are LLM-only.** `while (sf_readf_float(sndfile, buf, 1))`
-   terminates on an API return; deciding "use this API's return as the loop
-   condition" needs API semantics. Corpus study: 19 LOOP_CONDITION positions
-   across 70 fuzzers, 0% rule-fillable.
-2. **Non-generic callback bodies.** A `qsort` comparator is generic-stubbable;
-   a `libsndfile` VIO `get_filelen` tracking the fuzz buffer position is
-   library-specific glue. DriverEnhancer covers ~8 common shapes; novel shapes
-   need LLM.
+   terminates on an API return; deciding to use it as the loop condition needs API
+   semantics. Corpus study: 19 LOOP_CONDITION positions across 70 fuzzers, 0%
+   rule-fillable.
+2. **Non-generic callback bodies.** A `qsort` comparator is generic-stubbable; a
+   `libsndfile` VIO `get_filelen` tracking the fuzz buffer position is
+   library-specific glue. DriverEnhancer covers ~8 common shapes; novel ones need LLM.
 3. **Bug-finding "tricks."** `data[0]`-as-buffer-size (zlib), `prebuffer=1`
-   (cjson), magic-byte patterns (c-ares). ~15% of "rule-equivalent" holes had
+   (cjson), magic-byte patterns (c-ares); ~15% of "rule-equivalent" holes had
    expert tricks the rule would miss.
 
-**Cost of reverting:** loop-driven targets (libsndfile, libpcap, chunked
-libxml) run zero loops → coverage collapses to first-frame; lose the ~15%
-expert-tricks uplift.
-
-**Falsifiable:** A/B compile rate + 24h coverage of the full pipeline vs
-symbolic-only rendering (no prototyper). If symbolic reaches ≥95% on every
-project, the LLM is overkill.
+**Cost of reverting:** loop-driven targets (libsndfile, libpcap, chunked libxml)
+run zero loops → coverage collapses to first-frame; lose the ~15% tricks uplift.
+**Falsifiable:** A/B compile rate + 24h coverage vs symbolic-only rendering; if
+symbolic reaches ≥95% on every project, the LLM is overkill.
 
 ### B. Fixer — compile-error recovery
 
@@ -665,18 +629,16 @@ emits a per-bucket fix template.
 
 **Why LLM:** triage handles ~70% cleanly; the rest need cross-error reasoning —
 1. **Multi-error interactions.** One missing header → 6 "undeclared identifier"
-   errors; the LLM recognises the single root fix instead of 7 separate ones.
-2. **Project-specific naming.** mbedtls renamed `mbedtls_ssl_init` →
-   `_setup`; the LLM picks the right replacement by reading arg signatures.
-3. **Type-ambiguous fixes.** "expected X, got Y" is fixable by cast / decl
-   change / different API; the triager defaults to cast, the LLM picks right.
+   errors; the LLM recognises the single root fix.
+2. **Project-specific naming.** mbedtls renamed `mbedtls_ssl_init` → `_setup`; the
+   LLM picks the replacement by reading arg signatures.
+3. **Type-ambiguous fixes.** "expected X, got Y" is fixable by cast / decl change /
+   different API; the triager defaults to cast, the LLM picks right.
 
-**Cost of reverting:** each multi-error case becomes 6+ fix attempts, blowing
-the 3-attempt cap. Pure-triager mode took ~2.5× more compile attempts per
-successful driver in early development.
-
-**Falsifiable:** per-trial compile-attempts-to-success, triager-only vs
-default. If the gap is < 1.5×, the LLM fixer is over-engineered.
+**Cost of reverting:** each multi-error case becomes 6+ fix attempts, blowing the
+3-attempt cap (pure-triager took ~2.5× more attempts per successful driver).
+**Falsifiable:** per-trial compile-attempts-to-success, triager-only vs default; if
+the gap is < 1.5×, the LLM fixer is over-engineered.
 
 ### C. CrashAnalyzer & CrashFeasibilityAnalyzer
 
@@ -703,30 +665,26 @@ synthesised field → infeasible.
 3. **Volume.** A pure-rule classifier flags ~3× more "real bug" false
    positives — each costs maintainer trust.
 
-**Cost of reverting:** ~3× more spurious reports. Early rule-only versions drew
-several "you're calling our API wrong" rejections from maintainers.
-
-**Falsifiable:** maintainer accept rate (merged vs rejected) under rule-only vs
-LLM-classified. Within 10% → LLM is wasted.
+**Cost of reverting:** ~3× more spurious reports (early rule-only versions drew
+"you're calling our API wrong" rejections). **Falsifiable:** maintainer accept rate
+rule-only vs LLM-classified; within 10% → LLM is wasted.
 
 ### D. (REMOVED) CoverageAnalyzer & Improver — per-driver optimize
 
 The per-driver coverage-optimize subsystem (`coverage_analyzer.py` +
-`improver.py` + the §10B `baseline_diff_analyzer` regression recovery) was
-**removed** — it was *per-driver* LLM refinement (N× cost), mismatched with the
-breadth-via-merge design, and addressed none of the real bottlenecks (binding /
-input-seed / breadth-bound). See `CLAUDE.md` Failed Attempts.
+`improver.py` + the §10B `baseline_diff_analyzer`) was **removed** — *per-driver*
+LLM refinement (N× cost), mismatched with breadth-via-merge, and addressing none
+of the real bottlenecks (binding / input-seed / breadth-bound). See `CLAUDE.md`
+Failed Attempts.
 
-The one load-bearing job it did — *coverage-gap targeting* ("which API branches
-stayed uncovered, and why") — was **re-homed to deterministic mechanism, not
-deleted**: sequence selection now targets uncovered code via **reachability-first
-ranking (G3) + G5 gap targeting** (`coverage_gap.py`), and the residual
-soft "why didn't this arg reach this branch?" reasoning (magic bytes, structure
-match — e.g. libpng's `89 50 4E 47…` PNG signature, cjson's `{` switch) is what
-the Prototyper's hole-fill (§A) and the value-feedback / fuzzable-holes intents
-(`docs/generation.md` §6 T12 / fuzzable-holes) now carry. If cross-round coverage
-feedback is ever wanted, it belongs in the Phase C CEGAR loop
-(`docs/generation.md` §6 F6) — portfolio-level, cross-round, NOT a per-trial node.
+Its one load-bearing job — *coverage-gap targeting* — was **re-homed to
+deterministic mechanism**: sequence selection targets uncovered code via
+**reachability-first ranking (G3) + G5 gap targeting** (`coverage_gap.py`), and
+the residual soft "why didn't this arg reach this branch?" reasoning (magic bytes,
+structure match — libpng's `89 50 4E 47…` signature, cjson's `{` switch) is
+carried by the Prototyper's hole-fill (§A) and the value-feedback / fuzzable-holes
+intents. Cross-round coverage feedback, if wanted, belongs in the Phase C CEGAR
+loop (`docs/generation.md` §6 F6) — portfolio-level, NOT a per-trial node.
 
 ### E. Comprehender (knowledge layer A + B)
 
@@ -740,50 +698,32 @@ protocol? object used or wasted? missing init?").
 the test suite via symbolic execution + invariant inference) — ported as
 design-only, not shipped (`docs/knowledge_layer.md`).
 
-**Why LLM:**
-1. **The signal is in prose.** Header comments / README / man pages encode
-   protocol semantics in English; symbolic execution gives statistical
-   patterns, the LLM gives *intent*.
-2. **Stage B compares intent to implementation** — a teleological question
-   ("what is this sequence trying to do?") pure analysis can't answer.
-3. **Cost is bounded** — per-project, not per-trial; cached to
-   `results/{project}/comprehension/`.
+**Why LLM:** (1) **the signal is in prose** — header comments / README / man pages
+encode protocol semantics in English; symbolic execution gives statistical
+patterns, the LLM gives *intent*; (2) **Stage B compares intent to
+implementation** — a teleological question pure analysis can't answer; (3) **cost
+is bounded** — per-project, cached to `results/{project}/comprehension/`.
 
-**Cost of reverting:** Stage A degrades to signature-only (what the prototyper
-already sees); Stage B disappears, so sequences rank by L4 coverage with no
-semantic filter — empirically ~30% nonsense ("compiles but does nothing")
-sequences.
-
-**Falsifiable:** 24h coverage with Stage B disabled. Within 5% → overkill.
+**Cost of reverting:** Stage A degrades to signature-only; Stage B disappears, so
+sequences rank by L4 coverage with no semantic filter (~30% nonsense "compiles but
+does nothing"). **Falsifiable:** 24h coverage with Stage B disabled; within 5% →
+overkill.
 
 ### F. (NO SEPARATE AGENT) Library-purpose derivation — folded into the Comprehender
 
 There is **no standalone ProjectAnalyzer agent** (`src/agents/` ships only
-Prototyper / Fixer / CrashAnalyzer / CrashFeasibilityAnalyzer; the Comprehender
-is a non-LangGraph stage). The library-purpose paragraph the prototyper renders
-as `<library_purpose>` is produced by the **Comprehender's Stage A**
-(`src/knowledge/comprehender.py:comprehend_purpose` — read README + a
-representative source file → a paragraph; `comprehension['purpose']`, consumed at
-`src/agents/prototyper.py:480`), so its why-LLM rationale is already covered by
-§E (Comprehender). It is kept here only as a slot of the §E call, not a
-distinct call-site.
-
-**LLM job (folded into §E):** read README + a representative source file → a
-paragraph (e.g. "streaming parser; consumers must `_init`/`_finalize` around all
-`_update` calls").
+Prototyper / Fixer / CrashAnalyzer / CrashFeasibilityAnalyzer; the Comprehender is
+a non-LangGraph stage). The `<library_purpose>` paragraph the prototyper renders
+is produced by the **Comprehender's Stage A** (`comprehend_purpose` — read README +
+a representative source file → a paragraph, consumed at `prototyper.py:480`), so
+its why-LLM rationale is already covered by §E. Kept here only as a slot of the §E
+call, not a distinct call-site.
 
 **Symbolic alternative:** hand-curated `purpose` field in the benchmark YAML.
-
-**Why LLM:** hand-curation doesn't scale across the benchmark suite — adding a
-project would mean writing the paragraph, defeating "drop in any OSS-Fuzz
-project".
-
-**Cost of reverting:** new-project onboarding goes from one YAML line to a
-hand-written paragraph; blocks scaling.
-
-**Falsifiable:** prototyper output quality on a project with a manual
-`library_purpose` vs the comprehender's. If manual is consistently better, the
-purpose stage is too generic.
+**Why LLM:** hand-curation doesn't scale — adding a project would mean writing the
+paragraph, defeating "drop in any OSS-Fuzz project". **Falsifiable:** prototyper
+output quality with a manual `library_purpose` vs the comprehender's; if manual is
+consistently better, the purpose stage is too generic.
 
 ### G. Where we deliberately did **not** use LLM
 
