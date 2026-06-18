@@ -999,6 +999,11 @@ Output your fuzz driver code inside <fuzz_target> tags.
         # Ensure extern "C" wrapper for C projects (OSS-Fuzz always uses clang++)
         if fuzz_target_code and is_c_project:
             fuzz_target_code = self._ensure_extern_c_wrapper(fuzz_target_code)
+            # C2: _ensure_extern_c_wrapper early-returns when `extern "C"` is merely
+            # PRESENT — it doesn't check balance. Some LLMs (DeepSeek) emit the open
+            # but drop the closing block (fatal under $CXX). Re-balance defensively.
+            from src.utils.cxx_clean import balance_extern_c
+            fuzz_target_code = balance_extern_c(fuzz_target_code)
 
         validation_warnings, fuzz_target_code = self._validate_api_usage(
             fuzz_target_code, benchmark.get('project', 'unknown'),

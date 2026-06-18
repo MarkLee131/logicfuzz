@@ -30,3 +30,35 @@ def test_missing_is_const_is_noop():
 def test_pointer_level_const():
     # 'char *' with const on the pointer (char * const): is_const=[False, True]
     assert const_qualified_type("char *", [False, True]).replace(" ", "") == "char*const"
+
+
+# ---- C2: extern "C" balance repair ----
+
+from src.utils.cxx_clean import balance_extern_c
+
+_UNBALANCED = '''#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    return 0;
+}
+'''
+
+
+def test_balance_adds_missing_close():
+    out = balance_extern_c(_UNBALANCED)
+    assert out.count('extern "C" {') == 1
+    assert out.count('#ifdef __cplusplus') == 2  # open guard + close guard
+    assert out.rstrip().endswith('#endif')
+
+
+def test_balance_noop_when_balanced():
+    balanced = _UNBALANCED + '\n#ifdef __cplusplus\n}\n#endif\n'
+    assert balance_extern_c(balanced) == balanced
+
+
+def test_balance_noop_without_extern_c():
+    plain = 'int LLVMFuzzerTestOneInput(const uint8_t *d, size_t s){return 0;}\n'
+    assert balance_extern_c(plain) == plain
