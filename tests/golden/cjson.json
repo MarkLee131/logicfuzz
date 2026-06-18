@@ -350,7 +350,7 @@
       "cJSON_AddTrueToObject",
       "cJSON_Compare",
       "cJSON_DetachItemFromArray",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromArray"
     ],
     [
       "cJSON_ParseWithLength",
@@ -362,7 +362,7 @@
       "cJSON_GetArraySize",
       "cJSON_GetNumberValue",
       "cJSON_GetObjectItem",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObject"
     ],
     [
       "cJSON_ParseWithLengthOpts",
@@ -374,7 +374,7 @@
       "cJSON_IsBool",
       "cJSON_IsFalse",
       "cJSON_IsInvalid",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObjectCaseSensitive"
     ],
     [
       "cJSON_CreateStringArray",
@@ -390,7 +390,7 @@
       "cJSON_Delete"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_ParseWithLength",
       "cJSON_IsObject",
       "cJSON_ReplaceItemInArray",
       "cJSON_ReplaceItemInObject",
@@ -400,10 +400,10 @@
       "cJSON_SetValuestring",
       "cJSON_AddArrayToObject",
       "cJSON_AddBoolToObject",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromArray"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_ParseWithLengthOpts",
       "cJSON_GetObjectItem",
       "cJSON_AddFalseToObject",
       "cJSON_AddItemReferenceToArray",
@@ -413,10 +413,10 @@
       "cJSON_AddItemToObjectCS",
       "cJSON_AddNullToObject",
       "cJSON_AddNumberToObject",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObject"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_ParseWithOpts",
       "cJSON_AddTrueToObject",
       "cJSON_AddObjectToObject",
       "cJSON_AddRawToObject",
@@ -426,13 +426,13 @@
       "cJSON_DetachItemFromObject",
       "cJSON_DetachItemFromObjectCaseSensitive",
       "cJSON_DetachItemViaPointer",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObjectCaseSensitive"
     ],
     [
       "cJSON_InitHooks"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateArray",
       "cJSON_GetStringValue",
       "cJSON_DetachItemViaPointer",
       "cJSON_Duplicate",
@@ -445,7 +445,7 @@
       "cJSON_Delete"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateBool",
       "cJSON_IsFalse",
       "cJSON_HasObjectItem",
       "cJSON_InsertItemInArray",
@@ -455,10 +455,10 @@
       "cJSON_IsNull",
       "cJSON_IsNumber",
       "cJSON_IsObject",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromArray"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateDoubleArray",
       "cJSON_IsTrue",
       "cJSON_IsObject",
       "cJSON_IsRaw",
@@ -468,10 +468,10 @@
       "cJSON_PrintUnformatted",
       "cJSON_ReplaceItemInArray",
       "cJSON_ReplaceItemInObject",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObject"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateFalse",
       "cJSON_IsNumber",
       "cJSON_ReplaceItemInObjectCaseSensitive",
       "cJSON_ReplaceItemViaPointer",
@@ -481,10 +481,10 @@
       "cJSON_AddBoolToObject",
       "cJSON_AddFalseToObject",
       "cJSON_AddItemReferenceToArray",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObjectCaseSensitive"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateFloatArray",
       "cJSON_InsertItemInArray",
       "cJSON_AddItemReferenceToObject",
       "cJSON_AddItemToArray",
@@ -497,7 +497,7 @@
       "cJSON_Delete"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateIntArray",
       "cJSON_HasObjectItem",
       "cJSON_AddStringToObject",
       "cJSON_AddTrueToObject",
@@ -507,10 +507,10 @@
       "cJSON_DetachItemFromObjectCaseSensitive",
       "cJSON_DetachItemViaPointer",
       "cJSON_Duplicate",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromArray"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateNull",
       "cJSON_Compare",
       "cJSON_GetArraySize",
       "cJSON_GetNumberValue",
@@ -520,10 +520,10 @@
       "cJSON_HasObjectItem",
       "cJSON_InsertItemInArray",
       "cJSON_IsArray",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObject"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateNumber",
       "cJSON_DetachItemFromObjectCaseSensitive",
       "cJSON_IsBool",
       "cJSON_IsFalse",
@@ -533,155 +533,11 @@
       "cJSON_IsObject",
       "cJSON_IsRaw",
       "cJSON_IsString",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObjectCaseSensitive"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateObject",
       "cJSON_SetNumberHelper",
-      "cJSON_IsString",
-      "cJSON_IsTrue",
-      "cJSON_Print",
-      "cJSON_PrintBuffered",
-      "cJSON_PrintUnformatted",
-      "cJSON_ReplaceItemInArray",
-      "cJSON_ReplaceItemInObject",
-      "cJSON_ReplaceItemInObjectCaseSensitive",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_SetValuestring",
-      "cJSON_ReplaceItemViaPointer",
-      "cJSON_SetNumberHelper",
-      "cJSON_AddArrayToObject",
-      "cJSON_AddBoolToObject",
-      "cJSON_AddFalseToObject",
-      "cJSON_AddItemReferenceToArray",
-      "cJSON_AddItemReferenceToObject",
-      "cJSON_AddItemToArray",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_IsRaw",
-      "cJSON_AddItemToObject",
-      "cJSON_AddItemToObjectCS",
-      "cJSON_AddNullToObject",
-      "cJSON_AddNumberToObject",
-      "cJSON_AddObjectToObject",
-      "cJSON_AddRawToObject",
-      "cJSON_AddStringToObject",
-      "cJSON_AddTrueToObject",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_DetachItemViaPointer",
-      "cJSON_Compare",
-      "cJSON_DetachItemFromArray",
-      "cJSON_DetachItemFromObject",
-      "cJSON_DetachItemFromObjectCaseSensitive",
-      "cJSON_Duplicate",
-      "cJSON_GetArrayItem",
-      "cJSON_GetArraySize",
-      "cJSON_GetNumberValue",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_ReplaceItemViaPointer",
-      "cJSON_GetNumberValue",
-      "cJSON_GetObjectItem",
-      "cJSON_GetObjectItemCaseSensitive",
-      "cJSON_GetStringValue",
-      "cJSON_HasObjectItem",
-      "cJSON_InsertItemInArray",
-      "cJSON_IsArray",
-      "cJSON_IsBool",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_GetArraySize",
-      "cJSON_IsInvalid",
-      "cJSON_IsNull",
-      "cJSON_IsNumber",
-      "cJSON_IsObject",
-      "cJSON_IsRaw",
-      "cJSON_IsString",
-      "cJSON_IsTrue",
-      "cJSON_Print",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddStringToObject",
-      "cJSON_PrintBuffered",
-      "cJSON_PrintUnformatted",
-      "cJSON_ReplaceItemInArray",
-      "cJSON_ReplaceItemInObject",
-      "cJSON_ReplaceItemInObjectCaseSensitive",
-      "cJSON_ReplaceItemViaPointer",
-      "cJSON_SetNumberHelper",
-      "cJSON_SetValuestring",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_IsInvalid",
-      "cJSON_AddArrayToObject",
-      "cJSON_AddBoolToObject",
-      "cJSON_AddFalseToObject",
-      "cJSON_AddItemReferenceToArray",
-      "cJSON_AddItemReferenceToObject",
-      "cJSON_AddItemToArray",
-      "cJSON_AddItemToObject",
-      "cJSON_AddItemToObjectCS",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddObjectToObject",
-      "cJSON_AddNullToObject",
-      "cJSON_AddNumberToObject",
-      "cJSON_AddRawToObject",
-      "cJSON_AddStringToObject",
-      "cJSON_AddTrueToObject",
-      "cJSON_Compare",
-      "cJSON_DetachItemFromArray",
-      "cJSON_DetachItemFromObject",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_IsNull",
-      "cJSON_DetachItemFromObject",
-      "cJSON_DetachItemFromObjectCaseSensitive",
-      "cJSON_DetachItemViaPointer",
-      "cJSON_Duplicate",
-      "cJSON_GetArrayItem",
-      "cJSON_GetArraySize",
-      "cJSON_GetNumberValue",
-      "cJSON_GetObjectItem",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_ReplaceItemInObjectCaseSensitive",
-      "cJSON_GetObjectItemCaseSensitive",
-      "cJSON_GetStringValue",
-      "cJSON_HasObjectItem",
-      "cJSON_InsertItemInArray",
-      "cJSON_IsArray",
-      "cJSON_IsBool",
-      "cJSON_IsFalse",
-      "cJSON_IsInvalid",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_GetArrayItem",
-      "cJSON_IsNumber",
       "cJSON_IsObject",
       "cJSON_IsRaw",
       "cJSON_IsString",
@@ -689,337 +545,461 @@
       "cJSON_Print",
       "cJSON_PrintBuffered",
       "cJSON_PrintUnformatted",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_GetObjectItemCaseSensitive",
-      "cJSON_IsString",
-      "cJSON_IsTrue",
-      "cJSON_Print",
-      "cJSON_PrintBuffered",
-      "cJSON_PrintUnformatted",
       "cJSON_ReplaceItemInArray",
-      "cJSON_ReplaceItemInObject",
-      "cJSON_ReplaceItemInObjectCaseSensitive",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddNullToObject",
-      "cJSON_AddFalseToObject",
-      "cJSON_AddItemReferenceToArray",
-      "cJSON_AddItemReferenceToObject",
-      "cJSON_AddItemToArray",
-      "cJSON_AddItemToObject",
-      "cJSON_AddItemToObjectCS",
-      "cJSON_AddNumberToObject",
-      "cJSON_AddObjectToObject",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_PrintBuffered",
-      "cJSON_AddObjectToObject",
-      "cJSON_AddRawToObject",
-      "cJSON_AddStringToObject",
-      "cJSON_AddTrueToObject",
-      "cJSON_Compare",
-      "cJSON_DetachItemFromArray",
-      "cJSON_DetachItemFromObject",
-      "cJSON_DetachItemFromObjectCaseSensitive",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddItemReferenceToArray",
-      "cJSON_Duplicate",
-      "cJSON_GetArrayItem",
-      "cJSON_GetArraySize",
-      "cJSON_GetNumberValue",
-      "cJSON_GetObjectItem",
-      "cJSON_GetObjectItemCaseSensitive",
-      "cJSON_GetStringValue",
-      "cJSON_HasObjectItem",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_ReplaceItemInObject",
-      "cJSON_HasObjectItem",
-      "cJSON_InsertItemInArray",
-      "cJSON_IsArray",
-      "cJSON_IsBool",
-      "cJSON_IsFalse",
-      "cJSON_IsInvalid",
-      "cJSON_IsNull",
-      "cJSON_IsNumber",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddItemToArray",
-      "cJSON_IsRaw",
-      "cJSON_IsString",
-      "cJSON_IsTrue",
-      "cJSON_Print",
-      "cJSON_PrintBuffered",
-      "cJSON_PrintUnformatted",
-      "cJSON_ReplaceItemInArray",
-      "cJSON_ReplaceItemInObject",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_DetachItemFromArray",
-      "cJSON_ReplaceItemInObjectCaseSensitive",
-      "cJSON_ReplaceItemViaPointer",
-      "cJSON_SetNumberHelper",
-      "cJSON_SetValuestring",
-      "cJSON_AddArrayToObject",
-      "cJSON_AddBoolToObject",
-      "cJSON_AddFalseToObject",
-      "cJSON_AddItemReferenceToArray",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_IsArray",
-      "cJSON_AddItemReferenceToObject",
-      "cJSON_AddItemToArray",
-      "cJSON_AddItemToObject",
-      "cJSON_AddItemToObjectCS",
-      "cJSON_AddNullToObject",
-      "cJSON_AddNumberToObject",
-      "cJSON_AddObjectToObject",
-      "cJSON_AddRawToObject",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddItemToObject",
-      "cJSON_AddTrueToObject",
-      "cJSON_Compare",
-      "cJSON_DetachItemFromArray",
-      "cJSON_DetachItemFromObject",
-      "cJSON_DetachItemFromObjectCaseSensitive",
-      "cJSON_DetachItemViaPointer",
-      "cJSON_Duplicate",
-      "cJSON_GetArrayItem",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddItemToObjectCS",
-      "cJSON_GetArraySize",
-      "cJSON_GetNumberValue",
-      "cJSON_GetObjectItem",
-      "cJSON_GetObjectItemCaseSensitive",
-      "cJSON_GetStringValue",
-      "cJSON_HasObjectItem",
-      "cJSON_InsertItemInArray",
-      "cJSON_IsArray",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_ReplaceItemInArray",
-      "cJSON_IsArray",
-      "cJSON_IsBool",
-      "cJSON_IsFalse",
-      "cJSON_IsInvalid",
-      "cJSON_IsNull",
-      "cJSON_IsNumber",
-      "cJSON_IsObject",
-      "cJSON_IsRaw",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_PrintUnformatted",
-      "cJSON_IsString",
-      "cJSON_IsTrue",
-      "cJSON_Print",
-      "cJSON_PrintBuffered",
-      "cJSON_ReplaceItemInArray",
-      "cJSON_ReplaceItemInObject",
-      "cJSON_ReplaceItemInObjectCaseSensitive",
-      "cJSON_ReplaceItemViaPointer",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_DetachItemFromObject",
-      "cJSON_SetNumberHelper",
-      "cJSON_SetValuestring",
-      "cJSON_AddArrayToObject",
-      "cJSON_AddBoolToObject",
-      "cJSON_AddFalseToObject",
-      "cJSON_AddItemReferenceToArray",
-      "cJSON_AddItemReferenceToObject",
-      "cJSON_AddItemToArray",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddFalseToObject",
-      "cJSON_AddItemToObjectCS",
-      "cJSON_AddNullToObject",
-      "cJSON_AddNumberToObject",
-      "cJSON_AddObjectToObject",
-      "cJSON_AddRawToObject",
-      "cJSON_AddStringToObject",
-      "cJSON_AddTrueToObject",
-      "cJSON_Compare",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_Print",
-      "cJSON_Compare",
-      "cJSON_DetachItemFromArray",
-      "cJSON_DetachItemFromObject",
-      "cJSON_DetachItemFromObjectCaseSensitive",
-      "cJSON_DetachItemViaPointer",
-      "cJSON_Duplicate",
-      "cJSON_GetArrayItem",
-      "cJSON_GetArraySize",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddItemReferenceToObject",
-      "cJSON_GetObjectItem",
-      "cJSON_GetObjectItemCaseSensitive",
-      "cJSON_GetStringValue",
-      "cJSON_HasObjectItem",
-      "cJSON_InsertItemInArray",
-      "cJSON_IsArray",
-      "cJSON_IsBool",
-      "cJSON_IsFalse",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_Duplicate",
-      "cJSON_IsInvalid",
-      "cJSON_IsNull",
-      "cJSON_IsNumber",
-      "cJSON_IsObject",
-      "cJSON_IsRaw",
-      "cJSON_IsString",
-      "cJSON_IsTrue",
-      "cJSON_Print",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddArrayToObject",
-      "cJSON_PrintBuffered",
-      "cJSON_PrintUnformatted",
-      "cJSON_ReplaceItemInArray",
-      "cJSON_ReplaceItemInObject",
-      "cJSON_ReplaceItemInObjectCaseSensitive",
-      "cJSON_ReplaceItemViaPointer",
-      "cJSON_SetNumberHelper",
-      "cJSON_SetValuestring",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddNumberToObject",
-      "cJSON_AddArrayToObject",
-      "cJSON_AddBoolToObject",
-      "cJSON_AddFalseToObject",
-      "cJSON_AddItemReferenceToArray",
-      "cJSON_AddItemReferenceToObject",
-      "cJSON_AddItemToArray",
-      "cJSON_AddItemToObject",
-      "cJSON_AddItemToObjectCS",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_AddRawToObject",
-      "cJSON_AddNullToObject",
-      "cJSON_AddNumberToObject",
-      "cJSON_AddObjectToObject",
-      "cJSON_AddStringToObject",
-      "cJSON_AddTrueToObject",
-      "cJSON_Compare",
-      "cJSON_DetachItemFromArray",
-      "cJSON_DetachItemFromObject",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_IsBool",
-      "cJSON_DetachItemFromObject",
-      "cJSON_DetachItemFromObjectCaseSensitive",
-      "cJSON_DetachItemViaPointer",
-      "cJSON_Duplicate",
-      "cJSON_GetArrayItem",
-      "cJSON_GetArraySize",
-      "cJSON_GetNumberValue",
-      "cJSON_GetObjectItem",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_IsString",
-      "cJSON_GetObjectItemCaseSensitive",
-      "cJSON_GetStringValue",
-      "cJSON_HasObjectItem",
-      "cJSON_InsertItemInArray",
-      "cJSON_IsArray",
-      "cJSON_IsBool",
-      "cJSON_IsFalse",
-      "cJSON_IsInvalid",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateStringArray",
-      "cJSON_GetNumberValue",
-      "cJSON_IsNumber",
-      "cJSON_IsObject",
-      "cJSON_IsRaw",
-      "cJSON_IsString",
-      "cJSON_IsTrue",
-      "cJSON_Print",
-      "cJSON_PrintBuffered",
-      "cJSON_PrintUnformatted",
       "cJSON_Delete"
     ],
     [
       "cJSON_CreateRaw",
-      "cJSON_Delete"
+      "cJSON_SetValuestring",
+      "cJSON_ReplaceItemViaPointer",
+      "cJSON_SetNumberHelper",
+      "cJSON_AddArrayToObject",
+      "cJSON_AddBoolToObject",
+      "cJSON_AddFalseToObject",
+      "cJSON_AddItemReferenceToArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateString",
+      "cJSON_IsRaw",
+      "cJSON_AddItemToObject",
+      "cJSON_AddItemToObjectCS",
+      "cJSON_AddNullToObject",
+      "cJSON_AddNumberToObject",
+      "cJSON_AddObjectToObject",
+      "cJSON_AddRawToObject",
+      "cJSON_AddStringToObject",
+      "cJSON_AddTrueToObject",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_CreateStringReference",
+      "cJSON_DetachItemViaPointer",
+      "cJSON_Compare",
+      "cJSON_DetachItemFromArray",
+      "cJSON_DetachItemFromObject",
+      "cJSON_DetachItemFromObjectCaseSensitive",
+      "cJSON_Duplicate",
+      "cJSON_GetArrayItem",
+      "cJSON_GetArraySize",
+      "cJSON_GetNumberValue",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
     ],
     [
       "cJSON_CreateTrue",
+      "cJSON_ReplaceItemViaPointer",
+      "cJSON_GetNumberValue",
+      "cJSON_GetObjectItem",
+      "cJSON_GetObjectItemCaseSensitive",
+      "cJSON_GetStringValue",
+      "cJSON_HasObjectItem",
+      "cJSON_InsertItemInArray",
+      "cJSON_IsArray",
+      "cJSON_IsBool",
       "cJSON_Delete"
+    ],
+    [
+      "cJSON_Parse",
+      "cJSON_GetArraySize",
+      "cJSON_InsertItemInArray",
+      "cJSON_IsArray",
+      "cJSON_IsBool",
+      "cJSON_IsFalse",
+      "cJSON_IsInvalid",
+      "cJSON_IsNull",
+      "cJSON_IsNumber",
+      "cJSON_IsObject",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateStringArray",
+      "cJSON_AddStringToObject",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_ReplaceItemInArray",
+      "cJSON_ReplaceItemInObject",
+      "cJSON_ReplaceItemInObjectCaseSensitive",
+      "cJSON_ReplaceItemViaPointer",
+      "cJSON_SetNumberHelper",
+      "cJSON_SetValuestring",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_ParseWithLength",
+      "cJSON_IsInvalid",
+      "cJSON_AddArrayToObject",
+      "cJSON_AddBoolToObject",
+      "cJSON_AddFalseToObject",
+      "cJSON_AddItemReferenceToArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_AddItemToObject",
+      "cJSON_AddItemToObjectCS",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
+    ],
+    [
+      "cJSON_ParseWithLengthOpts",
+      "cJSON_AddObjectToObject",
+      "cJSON_AddNullToObject",
+      "cJSON_AddNumberToObject",
+      "cJSON_AddRawToObject",
+      "cJSON_AddStringToObject",
+      "cJSON_AddTrueToObject",
+      "cJSON_Compare",
+      "cJSON_DetachItemFromArray",
+      "cJSON_DetachItemFromObject",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_ParseWithOpts",
+      "cJSON_IsNull",
+      "cJSON_DetachItemFromObject",
+      "cJSON_DetachItemFromObjectCaseSensitive",
+      "cJSON_DetachItemViaPointer",
+      "cJSON_Duplicate",
+      "cJSON_GetArrayItem",
+      "cJSON_GetArraySize",
+      "cJSON_GetNumberValue",
+      "cJSON_GetObjectItem",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateArray",
+      "cJSON_ReplaceItemInObjectCaseSensitive",
+      "cJSON_GetObjectItemCaseSensitive",
+      "cJSON_GetStringValue",
+      "cJSON_HasObjectItem",
+      "cJSON_InsertItemInArray",
+      "cJSON_IsArray",
+      "cJSON_IsBool",
+      "cJSON_IsFalse",
+      "cJSON_IsInvalid",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_CreateBool",
+      "cJSON_GetArrayItem",
+      "cJSON_IsNumber",
+      "cJSON_IsObject",
+      "cJSON_IsRaw",
+      "cJSON_IsString",
+      "cJSON_IsTrue",
+      "cJSON_Print",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
+    ],
+    [
+      "cJSON_CreateDoubleArray",
+      "cJSON_GetObjectItemCaseSensitive",
+      "cJSON_IsString",
+      "cJSON_IsTrue",
+      "cJSON_Print",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_ReplaceItemInArray",
+      "cJSON_ReplaceItemInObject",
+      "cJSON_ReplaceItemInObjectCaseSensitive",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_CreateFalse",
+      "cJSON_AddNullToObject",
+      "cJSON_AddFalseToObject",
+      "cJSON_AddItemReferenceToArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_AddItemToObject",
+      "cJSON_AddItemToObjectCS",
+      "cJSON_AddNumberToObject",
+      "cJSON_AddObjectToObject",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateFloatArray",
+      "cJSON_PrintBuffered",
+      "cJSON_AddObjectToObject",
+      "cJSON_AddRawToObject",
+      "cJSON_AddStringToObject",
+      "cJSON_AddTrueToObject",
+      "cJSON_Compare",
+      "cJSON_DetachItemFromArray",
+      "cJSON_DetachItemFromObject",
+      "cJSON_DetachItemFromObjectCaseSensitive",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_CreateIntArray",
+      "cJSON_AddItemReferenceToArray",
+      "cJSON_Duplicate",
+      "cJSON_GetArrayItem",
+      "cJSON_GetArraySize",
+      "cJSON_GetNumberValue",
+      "cJSON_GetObjectItem",
+      "cJSON_GetObjectItemCaseSensitive",
+      "cJSON_GetStringValue",
+      "cJSON_HasObjectItem",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
+    ],
+    [
+      "cJSON_CreateNull",
+      "cJSON_ReplaceItemInObject",
+      "cJSON_HasObjectItem",
+      "cJSON_InsertItemInArray",
+      "cJSON_IsArray",
+      "cJSON_IsBool",
+      "cJSON_IsFalse",
+      "cJSON_IsInvalid",
+      "cJSON_IsNull",
+      "cJSON_IsNumber",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_CreateNumber",
+      "cJSON_AddItemToArray",
+      "cJSON_IsRaw",
+      "cJSON_IsString",
+      "cJSON_IsTrue",
+      "cJSON_Print",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_ReplaceItemInArray",
+      "cJSON_ReplaceItemInObject",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateObject",
+      "cJSON_DetachItemFromArray",
+      "cJSON_Print",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_ReplaceItemInArray",
+      "cJSON_ReplaceItemInObject",
+      "cJSON_ReplaceItemInObjectCaseSensitive",
+      "cJSON_ReplaceItemViaPointer",
+      "cJSON_SetNumberHelper",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_CreateRaw",
+      "cJSON_IsArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_AddItemToObject",
+      "cJSON_AddItemToObjectCS",
+      "cJSON_AddNullToObject",
+      "cJSON_AddNumberToObject",
+      "cJSON_AddObjectToObject",
+      "cJSON_AddRawToObject",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
+    ],
+    [
+      "cJSON_CreateString",
+      "cJSON_AddItemToObject",
+      "cJSON_AddTrueToObject",
+      "cJSON_Compare",
+      "cJSON_DetachItemFromArray",
+      "cJSON_DetachItemFromObject",
+      "cJSON_DetachItemFromObjectCaseSensitive",
+      "cJSON_DetachItemViaPointer",
+      "cJSON_Duplicate",
+      "cJSON_GetArrayItem",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_CreateStringReference",
+      "cJSON_AddItemToObjectCS",
+      "cJSON_GetArraySize",
+      "cJSON_GetNumberValue",
+      "cJSON_GetObjectItem",
+      "cJSON_GetObjectItemCaseSensitive",
+      "cJSON_GetStringValue",
+      "cJSON_HasObjectItem",
+      "cJSON_InsertItemInArray",
+      "cJSON_IsArray",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateTrue",
+      "cJSON_ReplaceItemInArray",
+      "cJSON_IsArray",
+      "cJSON_IsBool",
+      "cJSON_IsFalse",
+      "cJSON_IsInvalid",
+      "cJSON_IsNull",
+      "cJSON_IsNumber",
+      "cJSON_IsObject",
+      "cJSON_IsRaw",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_Parse",
+      "cJSON_PrintUnformatted",
+      "cJSON_IsBool",
+      "cJSON_IsFalse",
+      "cJSON_IsInvalid",
+      "cJSON_IsNull",
+      "cJSON_IsNumber",
+      "cJSON_IsObject",
+      "cJSON_IsRaw",
+      "cJSON_IsString",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
+    ],
+    [
+      "cJSON_CreateStringArray",
+      "cJSON_DetachItemFromObject",
+      "cJSON_SetNumberHelper",
+      "cJSON_SetValuestring",
+      "cJSON_AddArrayToObject",
+      "cJSON_AddBoolToObject",
+      "cJSON_AddFalseToObject",
+      "cJSON_AddItemReferenceToArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_ParseWithLength",
+      "cJSON_AddFalseToObject",
+      "cJSON_AddItemToObjectCS",
+      "cJSON_AddNullToObject",
+      "cJSON_AddNumberToObject",
+      "cJSON_AddObjectToObject",
+      "cJSON_AddRawToObject",
+      "cJSON_AddStringToObject",
+      "cJSON_AddTrueToObject",
+      "cJSON_Compare",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_ParseWithLengthOpts",
+      "cJSON_Print",
+      "cJSON_Compare",
+      "cJSON_DetachItemFromArray",
+      "cJSON_DetachItemFromObject",
+      "cJSON_DetachItemFromObjectCaseSensitive",
+      "cJSON_DetachItemViaPointer",
+      "cJSON_Duplicate",
+      "cJSON_GetArrayItem",
+      "cJSON_GetArraySize",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_ParseWithOpts",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_GetObjectItem",
+      "cJSON_GetObjectItemCaseSensitive",
+      "cJSON_GetStringValue",
+      "cJSON_HasObjectItem",
+      "cJSON_InsertItemInArray",
+      "cJSON_IsArray",
+      "cJSON_IsBool",
+      "cJSON_IsFalse",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
+    ],
+    [
+      "cJSON_CreateArray",
+      "cJSON_Duplicate",
+      "cJSON_IsInvalid",
+      "cJSON_IsNull",
+      "cJSON_IsNumber",
+      "cJSON_IsObject",
+      "cJSON_IsRaw",
+      "cJSON_IsString",
+      "cJSON_IsTrue",
+      "cJSON_Print",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_CreateBool",
+      "cJSON_AddArrayToObject",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_ReplaceItemInArray",
+      "cJSON_ReplaceItemInObject",
+      "cJSON_ReplaceItemInObjectCaseSensitive",
+      "cJSON_ReplaceItemViaPointer",
+      "cJSON_SetNumberHelper",
+      "cJSON_SetValuestring",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateDoubleArray",
+      "cJSON_AddNumberToObject",
+      "cJSON_AddArrayToObject",
+      "cJSON_AddBoolToObject",
+      "cJSON_AddFalseToObject",
+      "cJSON_AddItemReferenceToArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_AddItemToObject",
+      "cJSON_AddItemToObjectCS",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_CreateFalse",
+      "cJSON_AddRawToObject",
+      "cJSON_AddNullToObject",
+      "cJSON_AddNumberToObject",
+      "cJSON_AddObjectToObject",
+      "cJSON_AddStringToObject",
+      "cJSON_AddTrueToObject",
+      "cJSON_Compare",
+      "cJSON_DetachItemFromArray",
+      "cJSON_DetachItemFromObject",
+      "cJSON_DeleteItemFromObjectCaseSensitive"
+    ],
+    [
+      "cJSON_CreateFloatArray",
+      "cJSON_IsBool",
+      "cJSON_DetachItemFromObject",
+      "cJSON_DetachItemFromObjectCaseSensitive",
+      "cJSON_DetachItemViaPointer",
+      "cJSON_Duplicate",
+      "cJSON_GetArrayItem",
+      "cJSON_GetArraySize",
+      "cJSON_GetNumberValue",
+      "cJSON_GetObjectItem",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_CreateIntArray",
+      "cJSON_IsString",
+      "cJSON_GetObjectItemCaseSensitive",
+      "cJSON_GetStringValue",
+      "cJSON_HasObjectItem",
+      "cJSON_InsertItemInArray",
+      "cJSON_IsArray",
+      "cJSON_IsBool",
+      "cJSON_IsFalse",
+      "cJSON_IsInvalid",
+      "cJSON_DeleteItemFromArray"
+    ],
+    [
+      "cJSON_CreateNull",
+      "cJSON_GetNumberValue",
+      "cJSON_IsNumber",
+      "cJSON_IsObject",
+      "cJSON_IsRaw",
+      "cJSON_IsString",
+      "cJSON_IsTrue",
+      "cJSON_Print",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_DeleteItemFromObject"
     ],
     [
       "cJSON_malloc"
     ],
     [
       "cJSON_PrintPreallocated"
-    ],
-    [
-      "cJSON_CreateBool",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateDoubleArray",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateFloatArray",
-      "cJSON_Delete"
     ]
   ],
   "n_apis": 78,
-  "n_constructed": 103,
-  "n_selected": 23,
+  "n_constructed": 98,
+  "n_selected": 19,
   "project": "cjson",
   "selected": [
     [
@@ -1036,7 +1016,7 @@
       "cJSON_Delete"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_ParseWithLength",
       "cJSON_IsObject",
       "cJSON_ReplaceItemInArray",
       "cJSON_ReplaceItemInObject",
@@ -1046,10 +1026,10 @@
       "cJSON_SetValuestring",
       "cJSON_AddArrayToObject",
       "cJSON_AddBoolToObject",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromArray"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_ParseWithLengthOpts",
       "cJSON_GetObjectItem",
       "cJSON_AddFalseToObject",
       "cJSON_AddItemReferenceToArray",
@@ -1059,10 +1039,10 @@
       "cJSON_AddItemToObjectCS",
       "cJSON_AddNullToObject",
       "cJSON_AddNumberToObject",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObject"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_ParseWithOpts",
       "cJSON_AddTrueToObject",
       "cJSON_AddObjectToObject",
       "cJSON_AddRawToObject",
@@ -1072,10 +1052,10 @@
       "cJSON_DetachItemFromObject",
       "cJSON_DetachItemFromObjectCaseSensitive",
       "cJSON_DetachItemViaPointer",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromObjectCaseSensitive"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateArray",
       "cJSON_GetStringValue",
       "cJSON_DetachItemViaPointer",
       "cJSON_Duplicate",
@@ -1088,7 +1068,7 @@
       "cJSON_Delete"
     ],
     [
-      "cJSON_CreateStringArray",
+      "cJSON_CreateBool",
       "cJSON_IsFalse",
       "cJSON_HasObjectItem",
       "cJSON_InsertItemInArray",
@@ -1098,19 +1078,46 @@
       "cJSON_IsNull",
       "cJSON_IsNumber",
       "cJSON_IsObject",
-      "cJSON_Delete"
+      "cJSON_DeleteItemFromArray"
     ],
     [
-      "cJSON_ParseWithOpts",
+      "cJSON_CreateDoubleArray",
+      "cJSON_IsTrue",
+      "cJSON_IsObject",
+      "cJSON_IsRaw",
+      "cJSON_IsString",
+      "cJSON_Print",
+      "cJSON_PrintBuffered",
+      "cJSON_PrintUnformatted",
+      "cJSON_ReplaceItemInArray",
+      "cJSON_ReplaceItemInObject",
+      "cJSON_DeleteItemFromObject"
+    ],
+    [
+      "cJSON_CreateFloatArray",
+      "cJSON_InsertItemInArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_AddItemToObject",
+      "cJSON_AddItemToObjectCS",
       "cJSON_AddNullToObject",
       "cJSON_AddNumberToObject",
       "cJSON_AddObjectToObject",
       "cJSON_AddRawToObject",
+      "cJSON_Delete"
+    ],
+    [
+      "cJSON_CreateIntArray",
+      "cJSON_HasObjectItem",
       "cJSON_AddStringToObject",
       "cJSON_AddTrueToObject",
       "cJSON_Compare",
       "cJSON_DetachItemFromArray",
-      "cJSON_Delete"
+      "cJSON_DetachItemFromObject",
+      "cJSON_DetachItemFromObjectCaseSensitive",
+      "cJSON_DetachItemViaPointer",
+      "cJSON_Duplicate",
+      "cJSON_DeleteItemFromArray"
     ],
     [
       "cJSON_Parse",
@@ -1123,34 +1130,11 @@
       "cJSON_Delete"
     ],
     [
-      "cJSON_CreateDoubleArray",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateFloatArray",
-      "cJSON_Delete"
-    ],
-    [
       "cJSON_malloc"
     ],
     [
       "cJSON_Minify",
       "cJSON_Minify"
-    ],
-    [
-      "cJSON_CreateObject",
-      "cJSON_CreateIntArray",
-      "cJSON_GetArrayItem",
-      "cJSON_AddItemToObject",
-      "cJSON_CreateObject",
-      "cJSON_CreateString",
-      "cJSON_AddItemToObject",
-      "cJSON_CreateObject",
-      "cJSON_CreateString",
-      "cJSON_AddItemToObject",
-      "cJSON_Delete",
-      "cJSON_Delete",
-      "cJSON_Delete"
     ],
     [
       "cJSON_CreateNull",
@@ -1205,39 +1189,29 @@
       "cJSON_Delete"
     ],
     [
-      "cJSON_ParseWithLength",
-      "cJSON_DetachItemFromObject",
-      "cJSON_DetachItemFromObjectCaseSensitive",
-      "cJSON_DetachItemViaPointer",
-      "cJSON_Duplicate",
-      "cJSON_GetArrayItem",
-      "cJSON_GetArraySize",
-      "cJSON_GetNumberValue",
-      "cJSON_GetObjectItem",
-      "cJSON_Delete"
+      "cJSON_CreateRaw",
+      "cJSON_SetValuestring",
+      "cJSON_ReplaceItemViaPointer",
+      "cJSON_SetNumberHelper",
+      "cJSON_AddArrayToObject",
+      "cJSON_AddBoolToObject",
+      "cJSON_AddFalseToObject",
+      "cJSON_AddItemReferenceToArray",
+      "cJSON_AddItemReferenceToObject",
+      "cJSON_AddItemToArray",
+      "cJSON_DeleteItemFromArray"
     ],
     [
-      "cJSON_ParseWithLengthOpts",
+      "cJSON_CreateTrue",
+      "cJSON_ReplaceItemViaPointer",
+      "cJSON_GetNumberValue",
+      "cJSON_GetObjectItem",
       "cJSON_GetObjectItemCaseSensitive",
       "cJSON_GetStringValue",
       "cJSON_HasObjectItem",
       "cJSON_InsertItemInArray",
       "cJSON_IsArray",
       "cJSON_IsBool",
-      "cJSON_IsFalse",
-      "cJSON_IsInvalid",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateRaw",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateTrue",
-      "cJSON_Delete"
-    ],
-    [
-      "cJSON_CreateBool",
       "cJSON_Delete"
     ],
     [

@@ -83,7 +83,6 @@ existing Comprehender Stage-B verdict (no new LLM calls).
 - `LOGICFUZZ_PAIRWISE_DEDUP=1` / `LOGICFUZZ_PAIRWISE_TAU=0.8` — B-2: drop a near-twin skeleton above tau (`driver_dedup.pairwise_dedup_skeletons`); value-domain-guarded (different domain ⇒ 0.0 ⇒ never dropped).
 - `LOGICFUZZ_DEDUP_SEMANTIC_GUARD=1` — B-2 guard: never drop a Comprehender Stage-B VALID sequence for a suboptimal near-twin.
 - `LOGICFUZZ_SUBSET_ELIM=1` — B-3: drop a skeleton whose fingerprint is a strict same-value-domain subset of another's, before B-2 (`driver_dedup.subset_eliminate_skeletons`).
-- `LOGICFUZZ_DIVERSIFY_PRODUCERS=1` — A-1/A-1b/A-3: when a handle has >1 creator/destroyer, rotate which one each sibling uses (`_build_prefix` / `_closing_destroyers`).
 - (Always-on, cheap) Layer E redundancy telemetry → `results/<project>/static_analysis/redundancy_telemetry.json` (`portfolio_redundancy`): mean pairwise API Jaccard + disjointness — the A/B oracle. D-1 (dynamic edge-set marginal) DEFERRED.
 
 ### Driver DEPTH levers (gated default-OFF, A/B pending)

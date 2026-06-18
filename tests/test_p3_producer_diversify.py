@@ -55,15 +55,9 @@ def _hermetic(monkeypatch):
     monkeypatch.delenv("LOGICFUZZ_OBJCONSTRUCT_FIRST", raising=False)
 
 
-def test_producers_rotate_across_siblings_when_gated(monkeypatch):
+def test_producers_rotate_across_siblings_unconditionally(monkeypatch):
+    # A-1/A-3 are now always-on (gate removed): when a handle has >1 creator,
+    # consumer chains rotate across the full producer set deterministically.
     _hermetic(monkeypatch)
-    monkeypatch.setenv("LOGICFUZZ_DIVERSIFY_PRODUCERS", "1")
     res = construct_sequences(reconcile(_multi_producer_lib()))
     assert _producers_in_consumer_chains(res) == {"h_make_a", "h_make_b"}
-
-
-def test_gate_off_uses_single_deterministic_producer(monkeypatch):
-    _hermetic(monkeypatch)
-    monkeypatch.delenv("LOGICFUZZ_DIVERSIFY_PRODUCERS", raising=False)
-    res = construct_sequences(reconcile(_multi_producer_lib()))
-    assert _producers_in_consumer_chains(res) == {"h_make_a"}  # always sorted-first

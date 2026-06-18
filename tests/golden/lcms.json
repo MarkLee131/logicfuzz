@@ -525,7 +525,7 @@
       "cmsCIECAM02Done",
       "cmsDictDup",
       "cmsDeleteContext",
-      "cmsDictFree",
+      "cmsGBDFree",
       "cmsMLUfree"
     ],
     [
@@ -579,7 +579,7 @@
       "cmsIT8EnumPropertyMulti",
       "cmsIT8FindDataFormat",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsCreateContext",
@@ -621,7 +621,7 @@
       "cmsDeleteContext"
     ],
     [
-      "cmsOpenProfileFromMem",
+      "cmsOpenProfileFromFile",
       "cmsGetProfileInfoASCII",
       "cmsGetDeviceClass",
       "cmsGetEncodedICCversion",
@@ -634,18 +634,19 @@
     ],
     [
       "cmsCreateContext",
-      "cmsStageAllocIdentity",
+      "cmsStageAllocToneCurves",
       "cmsStageDup",
-      "cmsStageType",
-      "cmsDupContext",
-      "cmsGetContextUserData",
-      "cmsIT8LoadFromFile",
-      "cmsIT8LoadFromMem",
-      "cmsOpenProfileFromFileTHR",
-      "cmsOpenProfileFromMemTHR",
-      "cmsPluginTHR",
+      "cmsBuildGamma",
+      "cmsGetStageContextID",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsSetLogErrorHandlerTHR",
       "cmsDeleteContext",
-      "cmsStageFree"
+      "cmsStageFree",
+      "cmsFreeToneCurveTriple"
     ],
     [
       "cmsD50_xyY",
@@ -673,7 +674,7 @@
       "cmsIT8SetData",
       "cmsIT8SetDataDbl",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
       "cmsCreateContext",
@@ -719,7 +720,7 @@
       "cmsIT8SetPropertyStr",
       "cmsIT8SetPropertyUncooked",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsIsCLUT"
@@ -758,7 +759,7 @@
       "cmsSetLogErrorHandlerTHR",
       "cmsCIECAM02Done",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
       "cmsCreateContext",
@@ -798,23 +799,6 @@
       "cmsTagLinkedTo",
       "cmsWriteRawTag",
       "cmsWriteTag"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsStageAllocIdentity",
-      "cmsPipelineAlloc",
-      "cmsPipelineInsertStage",
-      "cmsBuildGamma",
-      "cmsGetPipelineContextID",
-      "cmsGetStageContextID",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsPipelineGetPtrToFirstStage",
-      "cmsPipelineGetPtrToLastStage",
-      "cmsDeleteContext",
-      "cmsPipelineFree",
-      "cmsStageFree"
     ],
     [
       "cmsSetHeaderRenderingIntent",
@@ -915,34 +899,38 @@
       "cmsCIECAM02Done"
     ],
     [
+      "cmsCreateContext",
       "cmsD50_xyY",
-      "cmsCreateRGBProfile",
+      "cmsCreateRGBProfileTHR",
       "cmsDetectRGBProfileGamma",
+      "cmsBuildGamma",
       "cmsGetProfileContextID",
       "cmsGetProfileIOhandler",
       "cmsGetToneCurveEstimatedTable",
       "cmsGetToneCurveSegment",
-      "cmsCloseProfile",
-      "cmsDetectTAC",
-      "cmsDupToneCurve",
-      "cmsEstimateGamma",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsDeleteContext",
       "cmsFreeToneCurve"
     ],
     [
       "cmsCMCdeltaE"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsCreateContext",
+      "cmsCreateLinearizationDeviceLinkTHR",
       "cmsEvalToneCurve16",
-      "cmsIsToneCurveLinear",
-      "cmsIsToneCurveMonotonic",
-      "cmsIsToneCurveMultisegment",
-      "cmsReverseToneCurve",
-      "cmsReverseToneCurveEx",
-      "cmsSmoothToneCurve",
-      "cmsCloseProfile",
-      "cmsDoTransform",
-      "cmsFreeToneCurve"
+      "cmsBuildGamma",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsSetLogErrorHandlerTHR",
+      "cmsDupContext",
+      "cmsDeleteContext",
+      "cmsFreeToneCurveTriple"
     ],
     [
       "cmsIT8DefineDblFormat"
@@ -966,7 +954,7 @@
       "cmsIT8EnumProperties",
       "cmsIT8EnumPropertyMulti",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsReadTag",
@@ -980,16 +968,19 @@
       "cmsCloseProfile"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsCreateContext",
+      "cmsStageAllocToneCurves",
       "cmsGetToneCurveParametricType",
-      "cmsGetColorSpace",
-      "cmsSaveProfileToFile",
-      "cmsTransform2DeviceLink",
-      "cmsGetToneCurveEstimatedTable",
-      "cmsGetToneCurveSegment",
+      "cmsStageSampleCLut16bit",
+      "cmsStageSampleCLutFloat",
+      "cmsStageType",
+      "cmsDupContext",
       "cmsDupToneCurve",
       "cmsEstimateGamma",
       "cmsEvalToneCurve16",
+      "cmsEvalToneCurveFloat",
+      "cmsDeleteContext",
+      "cmsStageFree",
       "cmsFreeToneCurve"
     ],
     [
@@ -1109,20 +1100,21 @@
       "cmsIT8SetComment",
       "cmsIT8SetData",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsD50_xyY",
+      "cmsCreateRGBProfile",
       "cmsReverseToneCurve",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
+      "cmsDupToneCurve",
+      "cmsEstimateGamma",
+      "cmsEvalToneCurve16",
       "cmsEvalToneCurveFloat",
       "cmsGetToneCurveEstimatedTableEntries",
       "cmsGetToneCurveParametricType",
-      "cmsIsToneCurveDescending",
-      "cmsIsToneCurveLinear",
-      "cmsIsToneCurveMonotonic",
-      "cmsIsToneCurveMultisegment",
-      "cmsReverseToneCurveEx",
-      "cmsFreeToneCurve"
+      "cmsFreeToneCurveTriple"
     ],
     [
       "cmsGetSupportedIntents"
@@ -1140,7 +1132,7 @@
       "cmsIT8SetPropertyHex",
       "cmsIT8SetPropertyMulti",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsCreateContext",
@@ -1187,14 +1179,14 @@
     [
       "cmsOpenProfileFromMem",
       "cmsSetProfileVersion",
-      "cmsIsMatrixShaper",
-      "cmsIsTag",
-      "cmsLinkTag",
-      "cmsMD5computeID",
-      "cmsReadRawTag",
-      "cmsReadTag",
-      "cmsSaveProfileToFile",
-      "cmsSetColorSpace"
+      "cmsGetPCS",
+      "cmsGetProfileInfoASCII",
+      "cmsGetProfileInfoUTF8",
+      "cmsGetProfileVersion",
+      "cmsGetTagCount",
+      "cmsGetTagSignature",
+      "cmsIsCLUT",
+      "cmsIsIntentSupported"
     ],
     [
       "cmsIT8EnumDataFormat"
@@ -1240,7 +1232,7 @@
       "cmsOpenIOhandlerFromNULL",
       "cmsSetLogErrorHandlerTHR",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
       "cmsCreateContext",
@@ -1255,20 +1247,20 @@
       "cmsIT8EnumDataFormat",
       "cmsIT8EnumProperties",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsCreateContext",
-      "cmsStageAllocIdentity",
+      "cmsStageAllocCLutFloat",
       "cmsStageNext",
-      "cmsSetAdaptationStateTHR",
-      "cmsStageData",
-      "cmsStageDup",
-      "cmsStageInputChannels",
-      "cmsStageOutputChannels",
-      "cmsUnregisterPluginsTHR",
-      "cmsBuildGamma",
-      "cmsGetStageContextID",
+      "cmsStageType",
+      "cmsDupContext",
+      "cmsGetContextUserData",
+      "cmsIT8LoadFromFile",
+      "cmsIT8LoadFromMem",
+      "cmsOpenProfileFromFileTHR",
+      "cmsOpenProfileFromMemTHR",
+      "cmsPluginTHR",
       "cmsDeleteContext",
       "cmsStageFree"
     ],
@@ -1301,16 +1293,19 @@
       "cmsMLUfree"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsCreateContext",
+      "cmsD50_xyY",
+      "cmsCreateRGBProfileTHR",
       "cmsGetToneCurveEstimatedTableEntries",
-      "cmsSmoothToneCurve",
-      "cmsCloseProfile",
-      "cmsDoTransform",
-      "cmsGetColorSpace",
-      "cmsSaveProfileToFile",
-      "cmsTransform2DeviceLink",
+      "cmsBuildGamma",
       "cmsGetToneCurveEstimatedTable",
       "cmsGetToneCurveSegment",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsSetLogErrorHandlerTHR",
+      "cmsDupContext",
+      "cmsDeleteContext",
       "cmsFreeToneCurve"
     ],
     [
@@ -1371,16 +1366,16 @@
       "cmsMLUfree"
     ],
     [
-      "cmsOpenProfileFromMem",
+      "cmsOpenProfileFromFile",
       "cmsSaveProfileToMem",
-      "cmsSetDeviceClass",
-      "cmsSetEncodedICCversion",
-      "cmsSetHeaderAttributes",
-      "cmsSetHeaderFlags",
-      "cmsSetHeaderManufacturer",
-      "cmsSetHeaderModel",
-      "cmsSetHeaderRenderingIntent",
-      "cmsSetPCS"
+      "cmsIsMatrixShaper",
+      "cmsIsTag",
+      "cmsLinkTag",
+      "cmsMD5computeID",
+      "cmsReadRawTag",
+      "cmsReadTag",
+      "cmsSaveProfileToFile",
+      "cmsSetColorSpace"
     ],
     [
       "cmsCreateContext",
@@ -1468,16 +1463,19 @@
       "cmsSetHeaderAttributes"
     ],
     [
-      "cmsOpenProfileFromMem",
+      "cmsCreateContext",
+      "cmsAllocProfileSequenceDescription",
       "cmsGetProfileVersion",
-      "cmsTagLinkedTo",
-      "cmsWriteRawTag",
-      "cmsWriteTag",
-      "cmsDoTransform",
-      "cmsTransform2DeviceLink",
-      "cmsGetProfileContextID",
-      "cmsGetProfileIOhandler",
-      "cmsCloseProfile"
+      "cmsDetectRGBProfileGamma",
+      "cmsDetectTAC",
+      "cmsDupContext",
+      "cmsDupProfileSequenceDescription",
+      "cmsFormatterForColorspaceOfProfile",
+      "cmsFormatterForPCSOfProfile",
+      "cmsGetColorSpace",
+      "cmsGetContextUserData",
+      "cmsDeleteContext",
+      "cmsFreeProfileSequenceDescription"
     ],
     [
       "cmsCreateContext",
@@ -1503,15 +1501,15 @@
     [
       "cmsCreateLinearizationDeviceLink",
       "cmsDupToneCurve",
-      "cmsEstimateGamma",
-      "cmsEvalToneCurve16",
-      "cmsEvalToneCurveFloat",
-      "cmsGetToneCurveEstimatedTableEntries",
-      "cmsGetToneCurveParametricType",
-      "cmsIsToneCurveDescending",
       "cmsIsToneCurveLinear",
       "cmsIsToneCurveMonotonic",
-      "cmsFreeToneCurve"
+      "cmsIsToneCurveMultisegment",
+      "cmsReverseToneCurve",
+      "cmsReverseToneCurveEx",
+      "cmsSmoothToneCurve",
+      "cmsCloseProfile",
+      "cmsDoTransform",
+      "cmsFreeToneCurveTriple"
     ],
     [
       "cmsGetPCS",
@@ -1537,19 +1535,21 @@
       "cmsIT8SaveToFile",
       "cmsIT8SetData",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsCreateContext",
+      "cmsCreateLinearizationDeviceLinkTHR",
       "cmsReverseToneCurveEx",
-      "cmsIsToneCurveMonotonic",
-      "cmsIsToneCurveMultisegment",
-      "cmsReverseToneCurve",
-      "cmsSmoothToneCurve",
-      "cmsCloseProfile",
-      "cmsDoTransform",
-      "cmsGetColorSpace",
-      "cmsSaveProfileToFile",
+      "cmsDupToneCurve",
+      "cmsEstimateGamma",
+      "cmsEvalToneCurve16",
+      "cmsEvalToneCurveFloat",
+      "cmsGetContextUserData",
+      "cmsGetToneCurveEstimatedTableEntries",
+      "cmsGetToneCurveParametricType",
+      "cmsIT8LoadFromFile",
+      "cmsDeleteContext",
       "cmsFreeToneCurve"
     ],
     [
@@ -1596,7 +1596,7 @@
       "cmsIT8SetPropertyHex",
       "cmsIT8SetPropertyMulti",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsCreateContext",
@@ -1622,16 +1622,18 @@
       "cmsIT8TableCount"
     ],
     [
-      "cmsOpenProfileFromMem",
+      "cmsCreateContext",
+      "cmsCreateProfilePlaceholder",
       "cmsGetProfileInfoUTF8",
-      "cmsDetectRGBProfileGamma",
-      "cmsDetectTAC",
-      "cmsFormatterForColorspaceOfProfile",
-      "cmsFormatterForPCSOfProfile",
-      "cmsGetColorSpace",
-      "cmsGetDeviceClass",
-      "cmsGetEncodedICCversion",
-      "cmsGetHeaderCMM"
+      "cmsBuildGamma",
+      "cmsGetProfileContextID",
+      "cmsGetProfileIOhandler",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsSetLogErrorHandlerTHR",
+      "cmsCloseProfile",
+      "cmsDeleteContext"
     ],
     [
       "cmsDoTransform",
@@ -1654,17 +1656,20 @@
       "cmsMD5computeID"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsCreateContext",
+      "cmsStageAllocToneCurves",
       "cmsIsToneCurveMonotonic",
-      "cmsTransform2DeviceLink",
-      "cmsGetToneCurveEstimatedTable",
-      "cmsGetToneCurveSegment",
-      "cmsDupToneCurve",
-      "cmsEstimateGamma",
-      "cmsEvalToneCurve16",
-      "cmsEvalToneCurveFloat",
+      "cmsGetContextUserData",
       "cmsGetToneCurveEstimatedTableEntries",
-      "cmsFreeToneCurve"
+      "cmsGetToneCurveParametricType",
+      "cmsIT8LoadFromFile",
+      "cmsIT8LoadFromMem",
+      "cmsIsToneCurveDescending",
+      "cmsIsToneCurveLinear",
+      "cmsIsToneCurveMultisegment",
+      "cmsDeleteContext",
+      "cmsStageFree",
+      "cmsFreeToneCurveTriple"
     ],
     [
       "cmsGetHeaderRenderingIntent",
@@ -1693,16 +1698,17 @@
       "cmsFreeProfileSequenceDescription"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsD50_xyY",
+      "cmsCreateRGBProfile",
       "cmsIsToneCurveDescending",
-      "cmsGetToneCurveParametricType",
       "cmsIsToneCurveLinear",
       "cmsIsToneCurveMonotonic",
       "cmsIsToneCurveMultisegment",
       "cmsReverseToneCurve",
       "cmsReverseToneCurveEx",
       "cmsSmoothToneCurve",
-      "cmsCloseProfile",
+      "cmsWhitePointFromTemp",
+      "cmsGetToneCurveEstimatedTable",
       "cmsFreeToneCurve"
     ],
     [
@@ -1724,16 +1730,18 @@
       "cmsSetHeaderProfileID"
     ],
     [
-      "cmsCreateTransform",
+      "cmsCreateContext",
+      "cmsCreateTransformTHR",
       "cmsGetTransformInputFormat",
-      "cmsDoTransformLineStride",
-      "cmsDoTransformStride",
-      "cmsGetTransformOutputFormat",
-      "cmsTransform2DeviceLink",
-      "cmsCloseProfile",
-      "cmsGDBAddPoint",
-      "cmsGDBCheckPoint",
-      "cmsGDBCompute",
+      "cmsBuildGamma",
+      "cmsGetNamedColorList",
+      "cmsGetTransformContextID",
+      "cmsGetTransformGamutCheckPipeline",
+      "cmsGetTransformInputColorants",
+      "cmsGetTransformOutputColorants",
+      "cmsGetTransformPipeline",
+      "cmsOpenIOhandlerFromFile",
+      "cmsDeleteContext",
       "cmsDeleteTransform"
     ],
     [
@@ -1754,30 +1762,33 @@
       "cmsGetTagCount"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
+      "cmsCreateContext",
+      "cmsD50_xyY",
+      "cmsCreateRGBProfileTHR",
       "cmsEstimateGamma",
-      "cmsIsToneCurveMonotonic",
-      "cmsIsToneCurveMultisegment",
-      "cmsReverseToneCurve",
-      "cmsReverseToneCurveEx",
-      "cmsSmoothToneCurve",
-      "cmsCloseProfile",
-      "cmsDoTransform",
-      "cmsGetColorSpace",
-      "cmsFreeToneCurve"
+      "cmsDupToneCurve",
+      "cmsEvalToneCurve16",
+      "cmsEvalToneCurveFloat",
+      "cmsGetContextUserData",
+      "cmsGetToneCurveEstimatedTableEntries",
+      "cmsGetToneCurveParametricType",
+      "cmsIT8LoadFromFile",
+      "cmsIT8LoadFromMem",
+      "cmsDeleteContext",
+      "cmsFreeToneCurveTriple"
     ],
     [
       "cmsCreateContext",
-      "cmsStageAllocIdentity",
+      "cmsStageAllocMatrix",
       "cmsStageData",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsSetLogErrorHandlerTHR",
-      "cmsStageSampleCLut16bit",
-      "cmsStageSampleCLutFloat",
-      "cmsStageType",
-      "cmsDupContext",
+      "cmsSetAdaptationStateTHR",
+      "cmsStageDup",
+      "cmsStageInputChannels",
+      "cmsStageNext",
+      "cmsStageOutputChannels",
+      "cmsUnregisterPluginsTHR",
+      "cmsSetColorSpace",
+      "cmsSetDeviceClass",
       "cmsDeleteContext",
       "cmsStageFree"
     ],
@@ -1799,29 +1810,14 @@
     [
       "cmsOpenProfileFromMem",
       "cmsSaveProfileToStream",
-      "cmsGetHeaderCMM",
-      "cmsGetHeaderCreator",
-      "cmsGetHeaderFlags",
-      "cmsGetHeaderManufacturer",
-      "cmsGetHeaderModel",
-      "cmsGetHeaderRenderingIntent",
-      "cmsGetPCS",
-      "cmsGetProfileInfoASCII"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsStageAllocIdentity",
-      "cmsStageOutputChannels",
-      "cmsGetContextUserData",
-      "cmsIT8LoadFromFile",
-      "cmsIT8LoadFromMem",
-      "cmsOpenProfileFromFileTHR",
-      "cmsOpenProfileFromMemTHR",
-      "cmsPluginTHR",
-      "cmsSetAdaptationStateTHR",
-      "cmsStageData",
-      "cmsDeleteContext",
-      "cmsStageFree"
+      "cmsSetDeviceClass",
+      "cmsSetEncodedICCversion",
+      "cmsSetHeaderAttributes",
+      "cmsSetHeaderFlags",
+      "cmsSetHeaderManufacturer",
+      "cmsSetHeaderModel",
+      "cmsSetHeaderRenderingIntent",
+      "cmsSetPCS"
     ],
     [
       "cmsCreateContext",
@@ -1859,14 +1855,14 @@
     [
       "cmsCreateLinearizationDeviceLink",
       "cmsEvalToneCurveFloat",
+      "cmsGetColorSpace",
+      "cmsSaveProfileToFile",
+      "cmsTransform2DeviceLink",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
+      "cmsDupToneCurve",
+      "cmsEstimateGamma",
       "cmsEvalToneCurve16",
-      "cmsGetToneCurveEstimatedTableEntries",
-      "cmsGetToneCurveParametricType",
-      "cmsIsToneCurveDescending",
-      "cmsIsToneCurveLinear",
-      "cmsIsToneCurveMonotonic",
-      "cmsIsToneCurveMultisegment",
-      "cmsReverseToneCurve",
       "cmsFreeToneCurve"
     ],
     [
@@ -1888,7 +1884,7 @@
       "cmsOpenIOhandlerFromMem",
       "cmsOpenIOhandlerFromNULL",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
       "cmsCreateContext",
@@ -1903,7 +1899,7 @@
       "cmsIT8DefineDblFormat",
       "cmsIT8EnumDataFormat",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsDoTransformStride",
@@ -1941,8 +1937,8 @@
     ]
   ],
   "n_apis": 297,
-  "n_constructed": 185,
-  "n_selected": 54,
+  "n_constructed": 183,
+  "n_selected": 48,
   "project": "lcms",
   "selected": [
     [
@@ -1959,25 +1955,56 @@
       "cmsCIECAM02Done",
       "cmsDictDup",
       "cmsDeleteContext",
-      "cmsDictFree",
+      "cmsGBDFree",
       "cmsMLUfree"
     ],
     [
       "cmsCreateContext",
-      "cmsStageAllocIdentity",
-      "cmsPipelineAlloc",
-      "cmsPipelineInsertStage",
+      "cmsStageAllocToneCurves",
+      "cmsStageDup",
       "cmsBuildGamma",
-      "cmsGetPipelineContextID",
       "cmsGetStageContextID",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
       "cmsOpenIOhandlerFromFile",
       "cmsOpenIOhandlerFromMem",
       "cmsOpenIOhandlerFromNULL",
-      "cmsPipelineGetPtrToFirstStage",
-      "cmsPipelineGetPtrToLastStage",
+      "cmsSetLogErrorHandlerTHR",
       "cmsDeleteContext",
-      "cmsPipelineFree",
-      "cmsStageFree"
+      "cmsStageFree",
+      "cmsFreeToneCurveTriple"
+    ],
+    [
+      "cmsCreateContext",
+      "cmsD50_xyY",
+      "cmsCreateRGBProfileTHR",
+      "cmsDetectRGBProfileGamma",
+      "cmsBuildGamma",
+      "cmsGetProfileContextID",
+      "cmsGetProfileIOhandler",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsDeleteContext",
+      "cmsFreeToneCurve"
+    ],
+    [
+      "cmsCreateContext",
+      "cmsStageAllocToneCurves",
+      "cmsIsToneCurveMonotonic",
+      "cmsGetContextUserData",
+      "cmsGetToneCurveEstimatedTableEntries",
+      "cmsGetToneCurveParametricType",
+      "cmsIT8LoadFromFile",
+      "cmsIT8LoadFromMem",
+      "cmsIsToneCurveDescending",
+      "cmsIsToneCurveLinear",
+      "cmsIsToneCurveMultisegment",
+      "cmsDeleteContext",
+      "cmsStageFree",
+      "cmsFreeToneCurveTriple"
     ],
     [
       "cmsCreateContext",
@@ -2007,7 +2034,7 @@
       "cmsIT8EnumPropertyMulti",
       "cmsIT8FindDataFormat",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
       "cmsCreateContext",
@@ -2026,21 +2053,6 @@
     ],
     [
       "cmsCreateContext",
-      "cmsStageAllocIdentity",
-      "cmsStageDup",
-      "cmsStageType",
-      "cmsDupContext",
-      "cmsGetContextUserData",
-      "cmsIT8LoadFromFile",
-      "cmsIT8LoadFromMem",
-      "cmsOpenProfileFromFileTHR",
-      "cmsOpenProfileFromMemTHR",
-      "cmsPluginTHR",
-      "cmsDeleteContext",
-      "cmsStageFree"
-    ],
-    [
-      "cmsCreateContext",
       "cmsIT8Alloc",
       "cmsIT8SetDataRowColDbl",
       "cmsIT8GetPropertyMulti",
@@ -2052,7 +2064,7 @@
       "cmsIT8SetData",
       "cmsIT8SetDataDbl",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
       "cmsCreateContext",
@@ -2082,7 +2094,7 @@
       "cmsSetLogErrorHandlerTHR",
       "cmsCIECAM02Done",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsGBDFree"
     ],
     [
       "cmsCreateContext",
@@ -2098,6 +2110,21 @@
       "cmsIT8LoadFromFile",
       "cmsDeleteContext",
       "cmsFreeNamedColorList"
+    ],
+    [
+      "cmsCreateContext",
+      "cmsPipelineAlloc",
+      "cmsPipelineEvalReverseFloat",
+      "cmsBuildGamma",
+      "cmsGetPipelineContextID",
+      "cmsOpenIOhandlerFromFile",
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsPipelineGetPtrToFirstStage",
+      "cmsPipelineGetPtrToLastStage",
+      "cmsPipelineUnlinkStage",
+      "cmsDeleteContext",
+      "cmsPipelineFree"
     ],
     [
       "cmsCreateContext",
@@ -2132,31 +2159,32 @@
     [
       "cmsCreateContext",
       "cmsAllocProfileSequenceDescription",
-      "cmsDupProfileSequenceDescription",
-      "cmsBuildGamma",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsSetLogErrorHandlerTHR",
+      "cmsGetProfileVersion",
+      "cmsDetectRGBProfileGamma",
+      "cmsDetectTAC",
       "cmsDupContext",
+      "cmsDupProfileSequenceDescription",
+      "cmsFormatterForColorspaceOfProfile",
+      "cmsFormatterForPCSOfProfile",
+      "cmsGetColorSpace",
       "cmsGetContextUserData",
-      "cmsIT8LoadFromFile",
       "cmsDeleteContext",
       "cmsFreeProfileSequenceDescription"
     ],
     [
-      "cmsD50_xyY",
-      "cmsCreateRGBProfile",
-      "cmsDetectRGBProfileGamma",
-      "cmsGetProfileContextID",
-      "cmsGetProfileIOhandler",
-      "cmsGetToneCurveEstimatedTable",
-      "cmsGetToneCurveSegment",
-      "cmsCloseProfile",
-      "cmsDetectTAC",
-      "cmsDupToneCurve",
-      "cmsEstimateGamma",
-      "cmsFreeToneCurve"
+      "cmsCreateContext",
+      "cmsCreateTransformTHR",
+      "cmsGetTransformInputFormat",
+      "cmsBuildGamma",
+      "cmsGetNamedColorList",
+      "cmsGetTransformContextID",
+      "cmsGetTransformGamutCheckPipeline",
+      "cmsGetTransformInputColorants",
+      "cmsGetTransformOutputColorants",
+      "cmsGetTransformPipeline",
+      "cmsOpenIOhandlerFromFile",
+      "cmsDeleteContext",
+      "cmsDeleteTransform"
     ],
     [
       "cmsCreateContext",
@@ -2224,45 +2252,7 @@
       "cmsDeleteContext"
     ],
     [
-      "cmsCreateLinearizationDeviceLink",
-      "cmsEvalToneCurve16",
-      "cmsIsToneCurveLinear",
-      "cmsIsToneCurveMonotonic",
-      "cmsIsToneCurveMultisegment",
-      "cmsReverseToneCurve",
-      "cmsReverseToneCurveEx",
-      "cmsSmoothToneCurve",
-      "cmsCloseProfile",
-      "cmsDoTransform",
-      "cmsFreeToneCurve"
-    ],
-    [
-      "cmsCreateTransform",
-      "cmsGetTransformOutputFormat",
-      "cmsGetNamedColorList",
-      "cmsGetTransformContextID",
-      "cmsGetTransformGamutCheckPipeline",
-      "cmsGetTransformInputColorants",
-      "cmsGetTransformOutputColorants",
-      "cmsGetTransformPipeline",
-      "cmsChangeBuffersFormat",
-      "cmsDoTransform",
-      "cmsDeleteTransform"
-    ],
-    [
-      "cmsOpenProfileFromMem",
-      "cmsCloseProfile",
-      "cmsGetProfileContextID",
-      "cmsGetProfileIOhandler",
-      "cmsSetAdaptationState",
-      "cmsDetectRGBProfileGamma",
-      "cmsDetectTAC",
-      "cmsFormatterForColorspaceOfProfile",
-      "cmsFormatterForPCSOfProfile",
-      "cmsGetColorSpace"
-    ],
-    [
-      "cmsOpenProfileFromMem",
+      "cmsOpenProfileFromFile",
       "cmsGetProfileInfoASCII",
       "cmsGetDeviceClass",
       "cmsGetEncodedICCversion",
@@ -2288,6 +2278,18 @@
     [
       "cmsOpenProfileFromMem",
       "cmsSetProfileVersion",
+      "cmsGetPCS",
+      "cmsGetProfileInfoASCII",
+      "cmsGetProfileInfoUTF8",
+      "cmsGetProfileVersion",
+      "cmsGetTagCount",
+      "cmsGetTagSignature",
+      "cmsIsCLUT",
+      "cmsIsIntentSupported"
+    ],
+    [
+      "cmsOpenProfileFromFile",
+      "cmsSaveProfileToMem",
       "cmsIsMatrixShaper",
       "cmsIsTag",
       "cmsLinkTag",
@@ -2296,18 +2298,6 @@
       "cmsReadTag",
       "cmsSaveProfileToFile",
       "cmsSetColorSpace"
-    ],
-    [
-      "cmsOpenProfileFromMem",
-      "cmsSaveProfileToStream",
-      "cmsGetHeaderCMM",
-      "cmsGetHeaderCreator",
-      "cmsGetHeaderFlags",
-      "cmsGetHeaderManufacturer",
-      "cmsGetHeaderModel",
-      "cmsGetHeaderRenderingIntent",
-      "cmsGetPCS",
-      "cmsGetProfileInfoASCII"
     ],
     [
       "cmsCreateXYZProfile",
@@ -2322,12 +2312,6 @@
       "cmsDoTransform",
       "cmsLCh2Lab",
       "cmsLab2LCh"
-    ],
-    [
-      "cmsGDBAddPoint",
-      "cmsGDBCheckPoint",
-      "cmsGDBCompute",
-      "cmsGBDFree"
     ],
     [
       "cmsMD5computeID",
@@ -2345,13 +2329,7 @@
       "cmsCloseProfile"
     ],
     [
-      "cmsIsCLUT"
-    ],
-    [
       "cmsGetHeaderAttributes"
-    ],
-    [
-      "cmsIsIntentSupported"
     ],
     [
       "cmsCreateNULLProfile",
@@ -2363,6 +2341,22 @@
       "cmsDoTransform",
       "cmsDoTransform",
       "cmsDeleteTransform"
+    ],
+    [
+      "cmsCreateContext",
+      "cmsStageAllocToneCurves",
+      "cmsGetToneCurveParametricType",
+      "cmsStageSampleCLut16bit",
+      "cmsStageSampleCLutFloat",
+      "cmsStageType",
+      "cmsDupContext",
+      "cmsDupToneCurve",
+      "cmsEstimateGamma",
+      "cmsEvalToneCurve16",
+      "cmsEvalToneCurveFloat",
+      "cmsDeleteContext",
+      "cmsStageFree",
+      "cmsFreeToneCurve"
     ],
     [
       "cmsCreateContext",
@@ -2396,7 +2390,7 @@
     ],
     [
       "cmsOpenProfileFromMem",
-      "cmsSaveProfileToMem",
+      "cmsSaveProfileToStream",
       "cmsSetDeviceClass",
       "cmsSetEncodedICCversion",
       "cmsSetHeaderAttributes",
@@ -2405,6 +2399,21 @@
       "cmsSetHeaderModel",
       "cmsSetHeaderRenderingIntent",
       "cmsSetPCS"
+    ],
+    [
+      "cmsCreateContext",
+      "cmsStageAllocMatrix",
+      "cmsStageData",
+      "cmsSetAdaptationStateTHR",
+      "cmsStageDup",
+      "cmsStageInputChannels",
+      "cmsStageNext",
+      "cmsStageOutputChannels",
+      "cmsUnregisterPluginsTHR",
+      "cmsSetColorSpace",
+      "cmsSetDeviceClass",
+      "cmsDeleteContext",
+      "cmsStageFree"
     ],
     [
       "cmsCreateContext",
@@ -2419,48 +2428,21 @@
       "cmsIT8SetPropertyStr",
       "cmsIT8SetPropertyUncooked",
       "cmsDeleteContext",
-      "cmsDictFree"
+      "cmsIT8Free"
     ],
     [
-      "cmsCreateContext",
-      "cmsStageAllocIdentity",
-      "cmsStageNext",
-      "cmsSetAdaptationStateTHR",
-      "cmsStageData",
-      "cmsStageDup",
-      "cmsStageInputChannels",
-      "cmsStageOutputChannels",
-      "cmsUnregisterPluginsTHR",
-      "cmsBuildGamma",
-      "cmsGetStageContextID",
-      "cmsDeleteContext",
-      "cmsStageFree"
-    ],
-    [
-      "cmsCreateLinearizationDeviceLink",
-      "cmsReverseToneCurve",
-      "cmsEvalToneCurveFloat",
-      "cmsGetToneCurveEstimatedTableEntries",
-      "cmsGetToneCurveParametricType",
+      "cmsD50_xyY",
+      "cmsCreateRGBProfile",
       "cmsIsToneCurveDescending",
       "cmsIsToneCurveLinear",
       "cmsIsToneCurveMonotonic",
       "cmsIsToneCurveMultisegment",
+      "cmsReverseToneCurve",
       "cmsReverseToneCurveEx",
+      "cmsSmoothToneCurve",
+      "cmsWhitePointFromTemp",
+      "cmsGetToneCurveEstimatedTable",
       "cmsFreeToneCurve"
-    ],
-    [
-      "cmsCreateTransform",
-      "cmsGetTransformInputFormat",
-      "cmsDoTransformLineStride",
-      "cmsDoTransformStride",
-      "cmsGetTransformOutputFormat",
-      "cmsTransform2DeviceLink",
-      "cmsCloseProfile",
-      "cmsGDBAddPoint",
-      "cmsGDBCheckPoint",
-      "cmsGDBCompute",
-      "cmsDeleteTransform"
     ],
     [
       "cmsGetEncodedCMMversion",
@@ -2471,26 +2453,62 @@
       "cmsUnregisterPlugins"
     ],
     [
-      "cmsOpenProfileFromFile",
-      "cmsReadRawTag",
-      "cmsReadRawTag",
-      "cmsReadTag",
+      "cmsCreateContext",
+      "cmsAllocNamedColorList",
+      "cmsNamedColorCount",
+      "cmsIT8LoadFromFile",
+      "cmsIT8LoadFromMem",
+      "cmsNamedColorIndex",
+      "cmsOpenProfileFromFileTHR",
+      "cmsOpenProfileFromMemTHR",
+      "cmsPluginTHR",
+      "cmsSetAdaptationStateTHR",
+      "cmsUnregisterPluginsTHR",
+      "cmsDeleteContext",
+      "cmsFreeNamedColorList"
+    ],
+    [
+      "cmsCreateTransform",
+      "cmsGetTransformOutputFormat",
+      "cmsGetNamedColorList",
+      "cmsGetTransformContextID",
+      "cmsGetTransformGamutCheckPipeline",
+      "cmsGetTransformInputColorants",
+      "cmsGetTransformOutputColorants",
+      "cmsGetTransformPipeline",
+      "cmsChangeBuffersFormat",
+      "cmsDoTransform",
+      "cmsDeleteTransform"
+    ],
+    [
+      "cmsCreateLinearizationDeviceLink",
+      "cmsEvalToneCurveFloat",
+      "cmsGetColorSpace",
+      "cmsSaveProfileToFile",
+      "cmsTransform2DeviceLink",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
+      "cmsDupToneCurve",
+      "cmsEstimateGamma",
+      "cmsEvalToneCurve16",
+      "cmsFreeToneCurve"
+    ],
+    [
+      "cmsWriteRawTag",
+      "cmsCloseProfile",
       "cmsGetProfileInfoASCII",
       "cmsGetTagCount",
+      "cmsReadRawTag",
+      "cmsReadTag",
+      "cmsSaveProfileToFile",
       "cmsTagLinkedTo",
-      "cmsSaveProfileToFile",
-      "cmsCloseProfile",
-      "cmsOpenProfileFromFile",
-      "cmsReadRawTag",
-      "cmsReadRawTag",
-      "cmsReadTag",
-      "cmsWriteRawTag",
-      "cmsReadRawTag",
-      "cmsReadRawTag",
-      "cmsReadTag",
-      "cmsWriteRawTag",
-      "cmsSaveProfileToFile",
-      "cmsCloseProfile"
+      "cmsWriteTag"
+    ],
+    [
+      "cmsGDBAddPoint",
+      "cmsGDBCheckPoint",
+      "cmsGDBCompute",
+      "cmsGBDFree"
     ],
     [
       "cmsCreateContext",
@@ -2509,36 +2527,6 @@
     ],
     [
       "cmsCreateContext",
-      "cmsPipelineAlloc",
-      "cmsPipelineEvalReverseFloat",
-      "cmsBuildGamma",
-      "cmsGetPipelineContextID",
-      "cmsOpenIOhandlerFromFile",
-      "cmsOpenIOhandlerFromMem",
-      "cmsOpenIOhandlerFromNULL",
-      "cmsPipelineGetPtrToFirstStage",
-      "cmsPipelineGetPtrToLastStage",
-      "cmsPipelineUnlinkStage",
-      "cmsDeleteContext",
-      "cmsPipelineFree"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsAllocNamedColorList",
-      "cmsNamedColorCount",
-      "cmsIT8LoadFromFile",
-      "cmsIT8LoadFromMem",
-      "cmsNamedColorIndex",
-      "cmsOpenProfileFromFileTHR",
-      "cmsOpenProfileFromMemTHR",
-      "cmsPluginTHR",
-      "cmsSetAdaptationStateTHR",
-      "cmsUnregisterPluginsTHR",
-      "cmsDeleteContext",
-      "cmsFreeNamedColorList"
-    ],
-    [
-      "cmsCreateContext",
       "cmsMLUalloc",
       "cmsMLUsetWide",
       "cmsBuildGamma",
@@ -2554,70 +2542,18 @@
     ],
     [
       "cmsCreateContext",
-      "cmsIT8Alloc",
-      "cmsIT8SetSheetType",
-      "cmsIT8SetDataDbl",
-      "cmsIT8SetDataFormat",
-      "cmsIT8SetDataRowCol",
-      "cmsIT8SetDataRowColDbl",
-      "cmsIT8SetIndexColumn",
-      "cmsIT8SetPropertyDbl",
-      "cmsIT8SetPropertyHex",
-      "cmsIT8SetPropertyMulti",
-      "cmsDeleteContext",
-      "cmsDictFree"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsMLUalloc",
-      "cmsMLUtranslationsCount",
-      "cmsOpenProfileFromFileTHR",
-      "cmsOpenProfileFromMemTHR",
-      "cmsPluginTHR",
-      "cmsSetAdaptationStateTHR",
-      "cmsUnregisterPluginsTHR",
-      "cmsDictGetEntryList",
-      "cmsCloseProfile",
-      "cmsDictDup",
-      "cmsDeleteContext",
-      "cmsMLUfree"
-    ],
-    [
-      "cmsCreateContext",
-      "cmsGetPostScriptCSA",
-      "cmsIT8LoadFromMem",
-      "cmsOpenProfileFromFileTHR",
-      "cmsOpenProfileFromMemTHR",
-      "cmsPluginTHR",
-      "cmsSetAdaptationStateTHR",
-      "cmsUnregisterPluginsTHR",
+      "cmsCreateLinearizationDeviceLinkTHR",
+      "cmsEvalToneCurve16",
       "cmsBuildGamma",
+      "cmsGetToneCurveEstimatedTable",
+      "cmsGetToneCurveSegment",
       "cmsOpenIOhandlerFromFile",
-      "cmsDeleteContext"
-    ],
-    [
-      "cmsD50_XYZ",
-      "cmsDetectBlackPoint",
-      "cmsAdaptToIlluminant",
-      "cmsCloseProfile",
-      "cmsSetColorSpace",
-      "cmsSetDeviceClass",
-      "cmsSetHeaderRenderingIntent",
-      "cmsSetPCS",
-      "cmsSetProfileVersion",
-      "cmsWriteTag"
-    ],
-    [
-      "cmsD50_XYZ",
-      "cmsXYZ2Lab",
-      "cmsAdaptToIlluminant",
-      "cmsCloseProfile",
-      "cmsSetColorSpace",
-      "cmsSetDeviceClass",
-      "cmsSetHeaderRenderingIntent",
-      "cmsSetPCS",
-      "cmsSetProfileVersion",
-      "cmsWriteTag"
+      "cmsOpenIOhandlerFromMem",
+      "cmsOpenIOhandlerFromNULL",
+      "cmsSetLogErrorHandlerTHR",
+      "cmsDupContext",
+      "cmsDeleteContext",
+      "cmsFreeToneCurveTriple"
     ]
   ]
 }

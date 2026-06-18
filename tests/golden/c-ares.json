@@ -488,19 +488,6 @@
       "ares_destroy"
     ],
     [
-      "ares_dns_parse",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_query_set_name",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_record_destroy"
-    ],
-    [
       "ares_init",
       "ares_set_local_ip6",
       "ares_set_pending_write_cb",
@@ -524,19 +511,6 @@
       "ares_dns_record_query_set_name",
       "ares_dns_record_set_id",
       "ares_dns_write",
-      "ares_dns_record_destroy"
-    ],
-    [
-      "ares_dns_parse",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_query_set_name",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
       "ares_dns_record_destroy"
     ],
     [
@@ -663,19 +637,6 @@
       "ares_dns_class_fromstr"
     ],
     [
-      "ares_dns_parse",
-      "ares_dns_record_query_get",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_destroy"
-    ],
-    [
       "ares_dns_rr_key_datatype",
       "ares_inet_pton",
       "ares_dns_rec_type_fromstr",
@@ -792,21 +753,6 @@
       "ares_destroy"
     ],
     [
-      "ares_dns_parse",
-      "ares_init",
-      "ares_search_dnsrec",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_query_set_name",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_destroy",
-      "ares_dns_record_destroy"
-    ],
-    [
       "ares_init",
       "ares_reinit",
       "ares_send",
@@ -901,19 +847,6 @@
     ],
     [
       "ares_dns_parse",
-      "ares_dns_record_query_set_name",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_record_destroy"
-    ],
-    [
-      "ares_dns_parse",
       "ares_dns_record_get_rcode",
       "ares_dns_record_get_opcode",
       "ares_dns_record_query_set_name",
@@ -927,19 +860,6 @@
     ],
     [
       "ares_dns_parse",
-      "ares_dns_record_rr_get_const",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_rr_get_name",
-      "ares_dns_rr_get_ttl",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_destroy"
-    ],
-    [
-      "ares_dns_parse",
       "ares_dns_write",
       "ares_dns_record_get_opcode",
       "ares_dns_record_get_rcode",
@@ -949,19 +869,6 @@
       "ares_dns_record_get_flags",
       "ares_dns_record_get_id",
       "ares_dns_record_query_cnt",
-      "ares_dns_record_destroy"
-    ],
-    [
-      "ares_dns_parse",
-      "ares_dns_record_rr_del",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_query_set_name",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_dns_record_duplicate",
       "ares_dns_record_destroy"
     ],
     [
@@ -975,19 +882,6 @@
       "ares_dns_write",
       "ares_dns_record_duplicate",
       "ares_dns_record_get_flags",
-      "ares_dns_record_destroy"
-    ],
-    [
-      "ares_dns_parse",
-      "ares_dns_record_set_id",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_query_set_name",
-      "ares_dns_write",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
       "ares_dns_record_destroy"
     ],
     [
@@ -1020,25 +914,10 @@
     ]
   ],
   "n_apis": 138,
-  "n_constructed": 106,
-  "n_selected": 47,
+  "n_constructed": 98,
+  "n_selected": 45,
   "project": "c-ares",
   "selected": [
-    [
-      "ares_dns_parse",
-      "ares_init",
-      "ares_search_dnsrec",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_query_set_name",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_destroy",
-      "ares_dns_record_destroy"
-    ],
     [
       "ares_dns_parse",
       "ares_init",
@@ -1053,6 +932,20 @@
       "ares_send",
       "ares_destroy",
       "ares_dns_record_destroy"
+    ],
+    [
+      "ares_init",
+      "ares_gethostbyname_file",
+      "ares_get_servers",
+      "ares_get_servers_ports",
+      "ares_gethostbyaddr",
+      "ares_gethostbyname",
+      "ares_query",
+      "ares_queue_wait_empty",
+      "ares_reinit",
+      "ares_search",
+      "ares_destroy",
+      "ares_free_hostent"
     ],
     [
       "ares_init",
@@ -1107,6 +1000,19 @@
       "ares_destroy"
     ],
     [
+      "ares_dns_parse",
+      "ares_dns_record_get_id",
+      "ares_dns_record_get_opcode",
+      "ares_dns_record_get_rcode",
+      "ares_dns_record_query_set_name",
+      "ares_dns_record_set_id",
+      "ares_dns_write",
+      "ares_dns_record_duplicate",
+      "ares_dns_record_get_flags",
+      "ares_dns_record_query_cnt",
+      "ares_dns_record_destroy"
+    ],
+    [
       "ares_init",
       "ares_process",
       "ares_set_pending_write_cb",
@@ -1157,19 +1063,6 @@
       "ares_set_local_ip6",
       "ares_set_servers_csv",
       "ares_destroy"
-    ],
-    [
-      "ares_dns_parse",
-      "ares_dns_record_query_get",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_destroy"
     ],
     [
       "ares_init",
@@ -1362,19 +1255,6 @@
       "ares_free_data"
     ],
     [
-      "ares_dns_parse",
-      "ares_dns_record_rr_get_const",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_get_flags",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_rr_get_name",
-      "ares_dns_rr_get_ttl",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_destroy"
-    ],
-    [
       "ares_init_options",
       "ares_dup",
       "ares_save_options",
@@ -1395,19 +1275,6 @@
       "ares_query",
       "ares_queue_wait_empty",
       "ares_destroy"
-    ],
-    [
-      "ares_dns_parse",
-      "ares_dns_record_rr_del",
-      "ares_dns_record_get_id",
-      "ares_dns_record_query_cnt",
-      "ares_dns_record_get_opcode",
-      "ares_dns_record_get_rcode",
-      "ares_dns_record_query_set_name",
-      "ares_dns_record_set_id",
-      "ares_dns_write",
-      "ares_dns_record_duplicate",
-      "ares_dns_record_destroy"
     ],
     [
       "ares_dns_parse",

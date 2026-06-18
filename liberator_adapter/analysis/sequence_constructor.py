@@ -1162,14 +1162,12 @@ def _build_prefix(
 
         _sorted_cands = sorted(
             cands, key=_recovered_key if from_recovery else _creator_key)
-        # A-1/A-1b (LOGICFUZZ_DIVERSIFY_PRODUCERS): when a handle type has >1
-        # creator, rotate which one each sibling chain uses (deterministic,
-        # per-handle round-robin) so the portfolio exercises the full producer
-        # set instead of always the single sorted-first one. A-1b: confidence
-        # ordering already lives in _creator_key/_recovered_key (role-authored).
-        if (producer_rank is not None and len(_sorted_cands) > 1
-                and os.environ.get("LOGICFUZZ_DIVERSIFY_PRODUCERS", "")
-                .strip().lower() in ("1", "true", "yes", "on")):
+        # A-1/A-1b: when a handle type has >1 creator, rotate which one each
+        # sibling chain uses (deterministic, per-handle round-robin) so the
+        # portfolio exercises the full producer set instead of always the single
+        # sorted-first one. A-1b: confidence ordering already lives in
+        # _creator_key/_recovered_key (role-authored).
+        if producer_rank is not None and len(_sorted_cands) > 1:
             _r = producer_rank.get(t, 0)
             producer_rank[t] = _r + 1
             producer = _sorted_cands[_r % len(_sorted_cands)]
@@ -1300,13 +1298,11 @@ def _closing_destroyers(opened: Set[str], idx: _Index,
                         destroyer_rank: Optional[Dict[str, int]] = None) -> List[str]:
     """One destroyer per opened handle type.
 
-    A-3 (LOGICFUZZ_DIVERSIFY_PRODUCERS): when a handle has >1 destroyer, rotate
-    which one each sibling chain closes with (deterministic per-handle
-    round-robin). Gate-off ⇒ the sorted-first destroyer (unchanged).
+    A-3: when a handle has >1 destroyer, rotate which one each sibling chain
+    closes with (deterministic per-handle round-robin). When destroyer_rank is
+    None (or a handle has a single destroyer) ⇒ the sorted-first destroyer.
     """
-    _rotate = (destroyer_rank is not None
-               and os.environ.get("LOGICFUZZ_DIVERSIFY_PRODUCERS", "")
-               .strip().lower() in ("1", "true", "yes", "on"))
+    _rotate = destroyer_rank is not None
     out: List[str] = []
     for t in sorted(opened):
         dz = idx.destroyers.get(t)
