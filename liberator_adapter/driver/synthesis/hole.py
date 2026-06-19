@@ -325,3 +325,42 @@ def create_loop_condition_hole(name: str, loop_type: str,
     )
 
 
+def seed_refine_defaults(
+        holes: List[Any],
+        llm_fillings: Dict[str, str]) -> Dict[str, str]:
+    """Pre-seed the hole-merge dict with each RefineHole's default value.
+
+    For every REFINE hole in *holes* (accepts both ``RefineHole`` objects and
+    serialised dicts as emitted by ``skeleton_generator.to_dict``), the
+    hole's ``default_value`` is inserted into the returned mapping so that
+    an un-refined hole keeps the symbolic best-guess (fail-open).
+    LLM-supplied fillings in *llm_fillings* take precedence: they override
+    the default when keyed by the same placeholder.
+
+    Args:
+        holes: List of hole items — each may be a ``RefineHole`` instance or
+            a serialised dict with ``hole_type == 'REFINE'``.  Non-refine
+            items are silently skipped.
+        llm_fillings: Hole fillings already parsed from the LLM response.
+            These are applied ON TOP of the seeded defaults, so an LLM
+            replacement wins.
+
+    Returns:
+        A new dict combining the seeded defaults with the LLM overrides.
+    """
+    seeded: Dict[str, str] = {}
+    for item in holes:
+        if isinstance(item, RefineHole):
+            placeholder = item.get_placeholder()
+            seeded[placeholder] = item.default_value
+        elif isinstance(item, dict) and item.get('hole_type') == 'REFINE':
+            placeholder = item.get('placeholder', '')
+            if placeholder:
+                seeded[placeholder] = item.get('default_value', '')
+        # All other hole kinds / object types are skipped.
+
+    # LLM fillings win over symbolic defaults.
+    seeded.update(llm_fillings)
+    return seeded
+
+

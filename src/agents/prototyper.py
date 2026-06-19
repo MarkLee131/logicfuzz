@@ -905,9 +905,15 @@ Output your fuzz driver code inside <fuzz_target> tags.
         if generation_mode == 'hole_filling':
             # Hole-filling mode: merge hole fillings into skeleton
             hole_fillings = parsed_result.get('hole_fillings', {})
-            skeleton_code, _, _ = self._get_active_skeleton(state)
+            skeleton_code, _active_holes, _ = self._get_active_skeleton(state)
 
             if skeleton_code and hole_fillings:
+                # Pre-seed RefineHole defaults so un-refined holes keep the
+                # symbolic best-guess (fail-open); LLM fillings override.
+                from liberator_adapter.driver.synthesis.hole import (
+                    seed_refine_defaults)
+                hole_fillings = seed_refine_defaults(
+                    _active_holes or [], hole_fillings)
                 fuzz_target_code = self._merge_holes_into_skeleton(
                     skeleton_code, hole_fillings)
                 # Floor fallback: if a fill still corrupted the driver into
