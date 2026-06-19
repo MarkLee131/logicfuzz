@@ -622,7 +622,28 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         # This is the division-of-labor design: symbolic owns structure+construction,
         # LLM fills leaf values only. See project_llm_reverts_objconstruct_to_parser.
         import os as _os_hf
-        if (_os_hf.environ.get('LOGICFUZZ_LLM_REWRITE', '0') != '0'):
+        _force_freewrite = (_os_hf.environ.get('LOGICFUZZ_LLM_REWRITE', '0') != '0')
+        # Recall free-write (default-on, opt-out LOGICFUZZ_RECALL_FREEWRITE=0):
+        # an idiom-gated skeleton (carries a FILE_FROM_FUZZ value-intent) CANNOT be
+        # realized by hole-filling — the path arg renders as a fixed ``= NULL`` (no
+        # hole) and the ``tmpfile -> open`` idiom is multi-statement. Route ONLY
+        # those skeletons to free-write so the LLM writes the idiom from the
+        # CALLSPEC directive (which is rendered in both modes, below). Targeted, not
+        # the global LLM_REWRITE (which was measured inert/worse).
+        if (not _force_freewrite
+                and _os_hf.environ.get('LOGICFUZZ_RECALL_FREEWRITE', '1') != '0'):
+            try:
+                from liberator_adapter.analysis.hole_semantics import (
+                    count_file_idiom_skeletons)
+                if active_skeleton and count_file_idiom_skeletons(
+                        [active_skeleton]) > 0:
+                    _force_freewrite = True
+                    logger.info("recall: idiom-gated skeleton → free-write",
+                                trial=self.trial)
+            except Exception as _e:
+                logger.debug(f"recall free-write check skipped: {_e}",
+                             trial=self.trial)
+        if _force_freewrite:
             has_skeleton_template = False
         include_path_context = self._format_include_path_context(
             target_path, existing_fuzzer_headers)
