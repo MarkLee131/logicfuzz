@@ -131,46 +131,6 @@ def _extract_range_from_text(text: str) -> Optional[tuple]:
     return None
 
 
-_FILE_FROM_FUZZ = (
-    "FILE_FROM_FUZZ: this is a filesystem PATH, not raw input. Write the fuzzer "
-    "bytes to a UNIQUE temp file (e.g. ./lf_tmp_<pid>_<n>) and pass THAT path "
-    "here. Do NOT pass NULL and do NOT pass raw fuzz bytes."
-)
-_FILE_MODE_DOMAIN = (
-    'FUZZ_DERIVE: file-mode string — pick from the legal set '
-    '{"rb","wb","ab","r","w"}; do NOT use raw fuzz bytes.'
-)
-
-
-def _is_charptr(type_str: str) -> bool:
-    t = (type_str or "")
-    return t.count("*") == 1 and "char" in t.lower()
-
-
-def file_opener_intents(sem) -> dict:
-    """Directives for a resource-opener's path + mode args.
-
-    A CREATOR (produces a fresh handle/resource) that takes a single-pointer
-    char* is treated as a file opener: the FIRST eligible char* is the PATH
-    (FILE_FROM_FUZZ — write fuzz bytes to a temp file, pass the path), a SECOND
-    eligible char* is the mode (value-domain). Eligible = not
-    LENGTH/OUTPUT/INPUT_BUFFER (a parser's primary fuzz buffer is char*+size =
-    INPUT_BUFFER, never a path). Empty for non-CREATORs or CREATORs with no
-    char* path arg. Name-free + library-agnostic (keys on role+type only)."""
-    role = getattr(sem.role, "value", sem.role)
-    if role != APIRole.CREATOR.value:
-        return {}
-    charptrs = [a for a in sem.args
-                if a.role not in (ArgRole.LENGTH, ArgRole.OUTPUT, ArgRole.INPUT_BUFFER)
-                and _is_charptr(a.type_str)]
-    if not charptrs:
-        return {}
-    out = {charptrs[0].index: _FILE_FROM_FUZZ}
-    if len(charptrs) > 1:
-        out[charptrs[1].index] = _FILE_MODE_DOMAIN
-    return out
-
-
 def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
     """Value intent for one argument, or ``None`` when nothing to say.
 
@@ -401,14 +361,9 @@ def value_intents_for_sequence(
         if sem is None:
             continue
         api_svf = (svf_index or {}).get(name, {})
-        import os as _os_r
-        _file_intents = ({} if _os_r.environ.get("LOGICFUZZ_DISABLE_RECALL")
-                         else file_opener_intents(sem))
         arg_records: List[Dict[str, Any]] = []
         for arg in sem.args:
             intent = _arg_intent(arg, name, vocab)
-            if arg.index in _file_intents:
-                intent = _file_intents[arg.index]   # recall: idiom directive wins
             set_by = (api_svf.get(arg.index) or {}).get("set_by")
             if intent is None and not set_by:
                 continue
@@ -547,17 +502,6 @@ def render_callspec(intents: Sequence[Dict[str, Any]],
         for p in rec.get("handle_provenance", []):
             lines.append(f"    ⚙ {p}")
     return "\n".join(lines)
-
-
-def count_file_idiom_skeletons(skeletons) -> int:
-    """Skeletons carrying ≥1 FILE_FROM_FUZZ intent (the recalled idiom-gated set)."""
-    n = 0
-    for sk in skeletons:
-        vis = sk.get("value_intents") or []
-        if any("FILE_FROM_FUZZ" in (a.get("intent") or "")
-               for rec in vis for a in (rec.get("args") or [])):
-            n += 1
-    return n
 
 
 def annotate_skeletons(
