@@ -153,14 +153,15 @@ def file_opener_intents(sem) -> dict:
     A CREATOR (produces a fresh handle/resource) that takes a single-pointer
     char* is treated as a file opener: the FIRST eligible char* is the PATH
     (FILE_FROM_FUZZ — write fuzz bytes to a temp file, pass the path), a SECOND
-    eligible char* is the mode (value-domain). Eligible = not LENGTH/OUTPUT.
-    Empty for non-CREATORs or CREATORs with no char* path arg. Name-free +
-    library-agnostic (keys on role+type only)."""
+    eligible char* is the mode (value-domain). Eligible = not
+    LENGTH/OUTPUT/INPUT_BUFFER (a parser's primary fuzz buffer is char*+size =
+    INPUT_BUFFER, never a path). Empty for non-CREATORs or CREATORs with no
+    char* path arg. Name-free + library-agnostic (keys on role+type only)."""
     role = getattr(sem.role, "value", sem.role)
     if role != APIRole.CREATOR.value:
         return {}
     charptrs = [a for a in sem.args
-                if a.role not in (ArgRole.LENGTH, ArgRole.OUTPUT)
+                if a.role not in (ArgRole.LENGTH, ArgRole.OUTPUT, ArgRole.INPUT_BUFFER)
                 and _is_charptr(a.type_str)]
     if not charptrs:
         return {}

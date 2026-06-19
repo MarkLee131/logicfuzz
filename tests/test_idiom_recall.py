@@ -13,8 +13,10 @@ def _arg(i, role, t):
 
 def test_creator_charptr_path_gets_file_from_fuzz():
     # gzopen(const char* path, const char* mode) — CREATOR returning a handle
+    # A genuine filesystem path is a lone char* with no following size, classed
+    # CONFIG/UNKNOWN — NOT INPUT_BUFFER.
     sem = _api(APIRole.CREATOR, [
-        _arg(0, ArgRole.INPUT_BUFFER, "const char *"),   # path
+        _arg(0, ArgRole.CONFIG, "const char *"),         # path (lone char*, no size)
         _arg(1, ArgRole.CONFIG, "const char *"),         # mode
     ])
     intents = file_opener_intents(sem)
@@ -42,6 +44,18 @@ def test_length_and_output_charptr_skipped():
     assert file_opener_intents(sem) == {}
 
 
+def test_parser_input_buffer_not_routed_to_file():
+    # Regression: a memory-parser CREATOR — e.g. cmsOpenProfileFromMem(buf, len)
+    # — must NOT emit FILE_FROM_FUZZ for its INPUT_BUFFER arg (arg0).
+    # The primary fuzz buffer (INPUT_BUFFER char* + LENGTH size_t) is fed directly
+    # to the parser, never written to a temp file.
+    sem = _api(APIRole.CREATOR, [
+        _arg(0, ArgRole.INPUT_BUFFER, "const char *"),   # raw fuzz buffer
+        _arg(1, ArgRole.LENGTH, "size_t"),               # buffer length
+    ])
+    assert file_opener_intents(sem) == {}
+
+
 # ---------------------------------------------------------------------------
 # Task 2: value_intents_for_sequence wiring (gated by LOGICFUZZ_DISABLE_RECALL)
 # ---------------------------------------------------------------------------
@@ -51,20 +65,15 @@ from liberator_adapter.analysis.api_semantic_model import APISemanticModel
 
 
 def _opener_model():
-    sem = _api(APIRole.CREATOR, [
-        _arg(0, ArgRole.INPUT_BUFFER, "const char *"),
-        _arg(1, ArgRole.CONFIG, "const char *"),
-    ])
-    # APISemantics is frozen but its name field defaults to "x" via _api helper;
-    # rebuild with name="openf" so model.get("openf") resolves it.
+    # A genuine filesystem opener: path is a lone char* (CONFIG), not INPUT_BUFFER.
     from liberator_adapter.analysis.api_semantic_model import APISemantics
     sem_named = APISemantics(
         name="openf",
         role=APIRole.CREATOR,
         role_confidence=1.0,
         args=tuple([
-            _arg(0, ArgRole.INPUT_BUFFER, "const char *"),
-            _arg(1, ArgRole.CONFIG, "const char *"),
+            _arg(0, ArgRole.CONFIG, "const char *"),   # path (lone char*, no size)
+            _arg(1, ArgRole.CONFIG, "const char *"),   # mode
         ]),
     )
     return APISemanticModel(project="", apis={"openf": sem_named})
