@@ -31,6 +31,7 @@ def _hard_nullguard() -> bool:
     return True
 
 from liberator_adapter.analysis.api_semantic_model import (
+    APIRole,
     ArgRole,
     APISemanticModel,
 )
@@ -128,6 +129,45 @@ def _extract_range_from_text(text: str) -> Optional[tuple]:
         if m:
             return m.group(1), m.group(2)
     return None
+
+
+_FILE_FROM_FUZZ = (
+    "FILE_FROM_FUZZ: this is a filesystem PATH, not raw input. Write the fuzzer "
+    "bytes to a UNIQUE temp file (e.g. ./lf_tmp_<pid>_<n>) and pass THAT path "
+    "here. Do NOT pass NULL and do NOT pass raw fuzz bytes."
+)
+_FILE_MODE_DOMAIN = (
+    'FUZZ_DERIVE: file-mode string — pick from the legal set '
+    '{"rb","wb","ab","r","w"}; do NOT use raw fuzz bytes.'
+)
+
+
+def _is_charptr(type_str: str) -> bool:
+    t = (type_str or "")
+    return t.count("*") == 1 and "char" in t.lower()
+
+
+def file_opener_intents(sem) -> dict:
+    """Directives for a resource-opener's path + mode args.
+
+    A CREATOR (produces a fresh handle/resource) that takes a single-pointer
+    char* is treated as a file opener: the FIRST eligible char* is the PATH
+    (FILE_FROM_FUZZ — write fuzz bytes to a temp file, pass the path), a SECOND
+    eligible char* is the mode (value-domain). Eligible = not LENGTH/OUTPUT.
+    Empty for non-CREATORs or CREATORs with no char* path arg. Name-free +
+    library-agnostic (keys on role+type only)."""
+    role = getattr(sem.role, "value", sem.role)
+    if role != APIRole.CREATOR.value:
+        return {}
+    charptrs = [a for a in sem.args
+                if a.role not in (ArgRole.LENGTH, ArgRole.OUTPUT)
+                and _is_charptr(a.type_str)]
+    if not charptrs:
+        return {}
+    out = {charptrs[0].index: _FILE_FROM_FUZZ}
+    if len(charptrs) > 1:
+        out[charptrs[1].index] = _FILE_MODE_DOMAIN
+    return out
 
 
 def _arg_intent(arg, api_name: str = "", vocab=None) -> Optional[str]:
