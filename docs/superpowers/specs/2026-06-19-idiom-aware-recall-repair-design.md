@@ -57,35 +57,39 @@ The missing capability is narrow: the renderer/LLM is never told the **file-I/O 
 - No coverage-feedback loop here (that is Phase C).
 - No new standalone LLM call-site — repair flows through the existing Prototyper.
 
-## 4. Design — three small pieces on existing hooks
+## 4. Design — small pieces on existing hooks
 
-### 4.1 R0 — File-I/O / resource value-intent (`hole_semantics.py`)
-Extend `_arg_intent` (`hole_semantics.py:133`) with two new deterministic intents:
-- **`FILE_FROM_FUZZ`** — for an arg whose role/type is a filesystem path (a `const char*`
-  / `char*` parameter named like `path`/`file`/`name`, or any `nullable=False` non-handle
-  `const char*` a CREATOR consumes, e.g. `gzopen`): emit the directive
-  *"write the fuzzer bytes to `./dummy_file` and pass that path here; do not pass NULL or
-  raw bytes."*
-- **mode/flag value-domain** — for a companion string arg whose named-constant vocabulary
-  or doc enumerates a small set (`"rb"`,`"wb"`,…): emit a `FUZZ_DERIVE` over that legal
-  set (reuses the existing enum/`named_constants` path at `hole_semantics.py:237-245`).
+> **AS-BUILT NOTE (2026-06-19):** R0 and R1 were implemented **together inside the
+> existing value-intent layer** — the value-intent channel *is* the recall router, so the
+> separate `skeleton_recall.py` module, `validity_contract` I2a/I2b reconstruction, and the
+> Step 10c hook described in the original design were **not built** (same behavior, far less
+> glue). The as-built description below replaces them. `validity_contract` corroboration
+> remains a deferred option if false-positives ever appear.
 
-These attach to the skeleton's `value_intents` exactly like today's intents and reach the
-Prototyper via the CALLSPEC table (`prototyper.py:650,1634`) — **no new wiring**.
+### 4.1 R0 — File-opener value-intent (`hole_semantics.py`)
+New deterministic helper `file_opener_intents(sem) -> Dict[int, str]` (name-free,
+library-agnostic — keys on **role + type only**, never on `gz`/zlib names):
+- A `sem` whose `role is APIRole.CREATOR` (produces a fresh handle/resource) and that has a
+  single-pointer `char*` arg is treated as a resource opener. The **first eligible** `char*`
+  (eligible = role not in `{LENGTH, OUTPUT, INPUT_BUFFER}`) is the PATH → **`FILE_FROM_FUZZ`**
+  directive: *"this is a filesystem PATH — write the fuzzer bytes to a UNIQUE temp file
+  (`./lf_tmp_<pid>_<n>`) and pass THAT path; do NOT pass NULL or raw bytes."*
+- A **second** eligible `char*` is the mode → a `FUZZ_DERIVE` over the legal mode set
+  (`"rb"`,`"wb"`,…).
+- **`INPUT_BUFFER` is excluded** (final-review fix): a memory-parser CREATOR's primary fuzz
+  buffer is a `char*`+size pair classed `INPUT_BUFFER` — it must keep receiving the raw fuzz
+  bytes, NOT be re-routed to a file. A genuine path is a lone `char*` (no size), classed
+  CONFIG/UNKNOWN. Regression test: `test_parser_input_buffer_not_routed_to_file`.
 
-### 4.2 R1 — Degeneracy oracle = route `validity_contract` output (`new: skeleton_recall.py`)
-A small module that, at **Step 10c** (right after 10b annotation, pre-trial), runs
-`validity_contract.check_sequence` on each annotated skeleton and classifies it:
-- **LIVE** — no I2a/I2b on a gating arg → unchanged.
-- **IDIOM-DEGENERATE** — an I2a/I2b violation on an arg that R0 can satisfy (file-path /
-  resource-from-path) → mark `needs_idiom_repair=True` and ensure the R0 `FILE_FROM_FUZZ`
-  /value-domain intents are present on that skeleton (the **recall**: the directive the
-  symbolic path couldn't synthesize).
-- **UNREPAIRABLE-HERE** — degenerate but no R0 idiom applies → leave for B/fallback
-  (logged; out of scope for A).
-
-This is the "召回 not 替换": the symbolic skeleton + its sequence are kept; we only add the
-missing idiom directive so the generator can realize it.
+### 4.2 R1 — Recall routing = emit the intent in `value_intents_for_sequence`
+There is **no separate router module**. `value_intents_for_sequence` (`hole_semantics.py`,
+Step 10b via `annotate_skeletons`) computes `file_opener_intents(sem)` **once per API**
+(gated by `LOGICFUZZ_DISABLE_RECALL`) and, inside its per-arg loop, lets the file directive
+**override** the default `_arg_intent` result for the path/mode args. The directive then
+flows to the Prototyper through the *already-wired* `value_intents` → CALLSPEC path. This is
+the "召回 not 替换": the symbolic skeleton + sequence are kept; we only add the missing
+idiom directive so the generator can realize it. Every opener CREATOR receives it (broader
+than a degeneracy-only trigger, but benign for genuine openers and gated for A/B).
 
 ### 4.3 R2 — Generation + repair loop (reuse Prototyper + Fixer + compile_validate)
 The Prototyper already consumes `value_intents`; with the `FILE_FROM_FUZZ`/value-domain
@@ -102,19 +106,23 @@ global). Gated `LOGICFUZZ_RECALL_FREEWRITE=1`, default off for A.
 
 ## 5. Reuse map (what's new vs existing)
 
-| Piece | Status |
+| Piece | Status (as built) |
 |---|---|
-| Degeneracy detection | **reuse** `validity_contract.check_sequence` (I2a/I2b) |
+| Opener detection | **new** `file_opener_intents(sem)` in `hole_semantics.py` (role+type; excludes INPUT_BUFFER/LENGTH/OUTPUT) |
 | Directive channel to LLM | **reuse** `hole_semantics` value-intents → CALLSPEC → prompt |
-| File-I/O + mode intent | **new** (~30 lines in `hole_semantics._arg_intent`) |
-| Recall router | **new** `liberator_adapter/analysis/skeleton_recall.py` (small) |
+| File-I/O + mode intent | **new** `FILE_FROM_FUZZ` + mode `FUZZ_DERIVE` in `file_opener_intents` |
+| Recall routing | **reuse** — emitted inside `value_intents_for_sequence` (gated); no separate module |
+| Ablation counter | **new** `count_file_idiom_skeletons` + `recall_ablation.json` dump (Step 10b) |
 | Generation / repair loop | **reuse** Prototyper + Fixer + `compile_validate` + dead-filter |
-| Pipeline hook | **new** Step 10c call in `data_context.py` (after 10b) |
+| Pipeline hook | **reuse** existing Step 10b `annotate_skeletons` — no new step |
+| `validity_contract` I2a/I2b routing | **deferred** (not built; corroboration option if FPs appear) |
 
-## 6. Data flow
+## 6. Data flow (as built)
 ```
-Step 10  skeletons → 10b annotate_skeletons (value_intents)
-   → 10c  skeleton_recall:  validity_contract → {LIVE | IDIOM-DEGENERATE(+FILE_FROM_FUZZ) | unrepairable}
+Step 10  skeletons
+   → 10b annotate_skeletons → value_intents_for_sequence:
+            file_opener_intents(sem) [gated LOGICFUZZ_DISABLE_RECALL] overrides path/mode args
+            with FILE_FROM_FUZZ + mode domain;  dump recall_ablation.json
    → trial: Prototyper(reads value_intents) writes tmpfile→gzopen idiom + mode const
    → compile_validate ($CXX) + Fixer(×3)  → build/run
    → merge + dead-filter (UNCHANGED) → live gz* drivers survive
