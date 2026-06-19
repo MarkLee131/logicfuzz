@@ -1962,9 +1962,10 @@ class FuzzingContext:
             # For every public API not yet in any sequence, append a single-API
             # sequence — the validity-repair then PREPENDS creators for its handle
             # args (making it LIVE), and the LLM fills the rest. Raises the API
-            # surface toward the extraction limit. Gated; off ⇒ unchanged.
-            if os.environ.get("LOGICFUZZ_RESIDUAL_ALLCOVER", "").strip().lower() \
-                    in ("1", "true", "yes", "on"):
+            # surface toward the extraction limit. DEFAULT-ON (opt-out =0);
+            # graduated 2026-06-20 — lcms A/B survived 32→157, merged APIs 18→69.
+            if os.environ.get("LOGICFUZZ_RESIDUAL_ALLCOVER", "1").strip().lower() \
+                    not in ("0", "false", "no", "off"):
                 _covered_api = {a.function_name
                                 for s in filtered_api_sequences for a in s}
                 _residual = [a for a in generator.all_apis
@@ -2125,10 +2126,10 @@ class FuzzingContext:
                         # the residual single-API drivers for them are dropped. Pull
                         # the smallest driver covering each still-uncovered pool API
                         # so EVERY extracted API is fuzzed (the breadth the lever
-                        # built must reach the merged harness). Gated ⇒ off-path
-                        # unchanged.
-                        if os.environ.get("LOGICFUZZ_RESIDUAL_ALLCOVER", "") \
-                                .strip().lower() in ("1", "true", "yes", "on"):
+                        # built must reach the merged harness). DEFAULT-ON (opt-out =0);
+                        # graduated 2026-06-20 — lcms A/B survived 32→157, merged APIs 18→69.
+                        if os.environ.get("LOGICFUZZ_RESIDUAL_ALLCOVER", "1") \
+                                .strip().lower() not in ("0", "false", "no", "off"):
                             _all_pool = [_d for _b in _buckets for _d in _b]
                             _sel_apis = {a for _d in _portfolio
                                          for a in (_d.get('api_sequence') or [])}

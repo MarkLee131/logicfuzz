@@ -27,6 +27,8 @@ for _k in list(os.environ):
 # Explicitly disable gates whose DEFAULT flipped to ON so the snapshot always
 # characterises the gates-OFF baseline regardless of the current default.
 os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
+os.environ["LOGICFUZZ_RESIDUAL_ALLCOVER"] = "0"
+os.environ["LOGICFUZZ_API_FLOOR"] = "0"
 
 from liberator_adapter.analysis.api_semantic_model import reconcile
 from liberator_adapter.analysis import sequence_constructor as SC

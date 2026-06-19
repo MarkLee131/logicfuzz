@@ -1,12 +1,13 @@
 """API-floor pass in coverage-complete selection (L7b).
 
-When LOGICFUZZ_API_FLOOR=1 the ranker adds a post-cover greedy pass that
-ensures EVERY API present anywhere in the candidate pool is covered by at
-least one selected sequence — even APIs that live in a cluster that was
-already covered by a different sequence that didn't include them.
+LOGICFUZZ_API_FLOOR is DEFAULT-ON (graduated 2026-06-20). The ranker adds a
+post-cover greedy pass that ensures EVERY API present anywhere in the candidate
+pool is covered by at least one selected sequence — even APIs that live in a
+cluster that was already covered by a different sequence that didn't include them.
+Opt-out: LOGICFUZZ_API_FLOOR=0.
 
-Gate OFF  → no 'api_floor_residual_count' key in summary stats.
-Gate ON   → every pool API covered, api_floor_residual_count == 0.
+Gate OFF (=0) → no 'api_floor_residual_count' key in summary stats.
+Gate ON (default / =1) → every pool API covered, api_floor_residual_count == 0.
 """
 import os
 import sys
@@ -54,6 +55,11 @@ def setup_function(_):
     os.environ["LOGICFUZZ_PORTFOLIO"] = "complete"
 
 
+def _set_gate_off():
+    """Explicitly opt-out of API_FLOOR (now default-ON) to test the OFF baseline."""
+    os.environ["LOGICFUZZ_API_FLOOR"] = "0"
+
+
 def teardown_function(_):
     os.environ.pop("LOGICFUZZ_API_FLOOR", None)
     os.environ.pop("LOGICFUZZ_PORTFOLIO", None)
@@ -64,10 +70,10 @@ def teardown_function(_):
 # ---------------------------------------------------------------------------
 
 def test_gate_off_no_floor_key():
-    """When LOGICFUZZ_API_FLOOR is unset the summary stats must not contain
+    """When LOGICFUZZ_API_FLOOR=0 the summary stats must not contain
     api_floor_residual_count so callers that don't expect the key are
     unaffected."""
-    assert "LOGICFUZZ_API_FLOOR" not in os.environ  # setup_function cleared it
+    _set_gate_off()  # explicit opt-out (gate is now default-ON)
     selected, summary = select_top_k_sequences(
         _SEQS, top_k=99, clusters=_CLUSTERS,
     )
@@ -81,6 +87,7 @@ def test_gate_off_orphan_may_be_uncovered():
     """Gate OFF: api_orphan is not guaranteed to be selected — the cluster-cover
     phase chose a *different* A-cluster sequence, so api_orphan can remain
     uncovered.  (This test documents the pre-floor baseline, not a failure.)"""
+    _set_gate_off()  # explicit opt-out (gate is now default-ON)
     selected, _ = select_top_k_sequences(
         _SEQS, top_k=99, clusters=_CLUSTERS,
     )

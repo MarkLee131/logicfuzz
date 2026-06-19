@@ -549,7 +549,7 @@ class CoverageRanker:
         # EVERY API that is present anywhere in the ranked pool, using the same
         # max-marginal-coverage logic as the depth pass.
         _floor_extra: Dict[str, Any] = {}
-        if os.environ.get("LOGICFUZZ_API_FLOOR") == "1":
+        if os.environ.get("LOGICFUZZ_API_FLOOR", "1").strip().lower() not in ("0", "false", "no", "off"):
             pool_apis = {a for sc in ranked_sequences for a in sc.sequence}
             floor_uncovered = pool_apis - covered_apis
             floor_remaining = [sc for sc in ranked_sequences
