@@ -615,11 +615,12 @@ class DriverSkeleton:
 
 
 def _validity_contract_enabled() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_VALIDITY_CONTRACT``. When on, the renderer
+    """Gate (DEFAULT-ON, opt-out ``LOGICFUZZ_VALIDITY_CONTRACT=0``): the renderer
     consumes the model's evidence-based ``nullable`` and wraps an UNBOUND
     ``nullable=False`` handle consume in ``if (handle) { ... }`` (Task 11
-    defense-in-depth) instead of passing a bare NULL."""
-    return os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "0").strip().lower() in (
+    defense-in-depth) instead of passing a bare NULL.
+    Graduated to default 2026-06-20 (lcms A/B: survived 1->14, APIs 18->49)."""
+    return os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "1").strip().lower() in (
         "1", "true", "yes", "on")
 
 

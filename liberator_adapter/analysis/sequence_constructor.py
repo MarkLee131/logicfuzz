@@ -122,12 +122,14 @@ def _exercise_object() -> bool:
 
 
 def _validity_contract() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_VALIDITY_CONTRACT`` makes construction satisfy
-    the Validity Contract — every ``nullable=False`` opaque-handle ARG the model
+    """Gate (DEFAULT-ON, opt-out ``LOGICFUZZ_VALIDITY_CONTRACT=0``): makes construction
+    satisfy the Validity Contract — every ``nullable=False`` opaque-handle ARG the model
     knows (not just the lossy IR ``requires``) gets a type-matching producer in the
     prefix. Args with no producer (value-structs/buffers) stay holes for the renderer.
+    A/B 2026-06-20 (lcms): preflight-survived 1->14, merged distinct APIs 18->49;
+    additive (only binds unbound nullable=False handles), no regression. Graduated to default.
     See docs/superpowers/specs/2026-06-16-valid-by-construction-contract.md."""
-    return _os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "0").strip().lower() in (
+    return _os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "1").strip().lower() in (
         "1", "true", "yes", "on")
 
 

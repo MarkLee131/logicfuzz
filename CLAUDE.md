@@ -82,7 +82,7 @@ TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT
 - `LOGICFUZZ_OBJCONSTRUCT_FIRST=1` — L1: prefer object-construction chain roots over parser-entry (top coverage lever; keeps ≥1 parser-rooted per parser-only cluster). (gated, A/B pending)
 - `LOGICFUZZ_API_FLOOR=1` — L7: greedy set-cover guarantees every constructable API appears in ≥1 selected sequence. (gated)
 - `LOGICFUZZ_RESIDUAL_ALLCOVER=1` — breadth lever: append a single-API sequence for every public API the symbolic constructor can't chain (validity-repair prepends its handle creators), lifting API breadth toward the extraction ceiling (cjson 75→78, lcms 149→297). (gated, A/B pending)
-- `LOGICFUZZ_VALIDITY_CONTRACT=1` — valid-by-construction contract: every `nullable=False` opaque-handle arg gets a type-matching producer in producer-before-consumer order with type-correct binding (I1/I2a/I2b/I3), driven by the model's per-arg nullable. Oracle `analysis/validity_contract.py`. (gated default-OFF)
+- `LOGICFUZZ_VALIDITY_CONTRACT` — valid-by-construction contract: every `nullable=False` opaque-handle arg gets a type-matching producer in producer-before-consumer order with type-correct binding (I1/I2a/I2b/I3), driven by the model's per-arg nullable. Oracle `analysis/validity_contract.py`. **DEFAULT-ON** (opt-out `=0`); graduated 2026-06-20 — lcms A/B: preflight-survived 1→14, merged distinct APIs 18→49; additive (binds only unbound handles), no regression.
 - `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1` — opt OUT of the merge compile-validation gate (default-on, fail-open: ships only drivers that compile under real cov-build flags).
 
 ### Driver DECOUPLING / DE-DUP levers
