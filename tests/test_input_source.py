@@ -25,3 +25,29 @@ def test_materialize_path():
     assert m.bind_expr == "src0_path"
     assert any("unlink" in c for c in m.cleanup)
     assert "<unistd.h>" in m.includes
+
+
+def test_skeleton_to_dict_serializes_refine_hole_default_value():
+    """Serialization glue: to_dict must preserve RefineHole.default_value.
+
+    This test is RED before the 'default_value' key is added to the hole_dict
+    in DriverSkeleton.to_dict (~line 574-582 of skeleton_generator.py).
+    """
+    from liberator_adapter.driver.synthesis.skeleton_generator import DriverSkeleton
+    from liberator_adapter.driver.synthesis.hole import RefineHole
+
+    skel = DriverSkeleton(name="test_driver", target_apis=[])
+    hole = RefineHole(
+        name="src0",
+        default_value="src0_path",
+        fill_reason="rendered arg as a temp-file PATH",
+    )
+    skel.holes.add(hole)
+
+    d = skel.to_dict()
+    holes = d["holes"]
+    refine_holes = [h for h in holes if h.get("hole_type") == "REFINE"]
+    assert refine_holes, "No REFINE hole found in serialized dict"
+    assert refine_holes[0]["default_value"] == "src0_path", (
+        f"Expected default_value='src0_path', got: {refine_holes[0]}"
+    )

@@ -593,6 +593,11 @@ class DriverSkeleton:
                 hole_dict['loop_type'] = hole.loop_type
             if hasattr(hole, 'target_type'):
                 hole_dict['target_type'] = hole.target_type
+            # Serialization glue (Task 5): preserve RefineHole.default_value so
+            # seed_refine_defaults (in hole.py) can pre-seed the hole-merge dict.
+            # Without this the dict form gets an empty string and the LLM's
+            # RefineHole-keyed override can never apply the symbolic best-guess.
+            hole_dict['default_value'] = getattr(hole, 'default_value', '')
 
             holes_list.append(hole_dict)
 
@@ -618,6 +623,26 @@ def _validity_contract_enabled() -> bool:
         "1", "true", "yes", "on")
 
 
+def _input_source_enabled() -> bool:
+    """Gate (default-on): ``LOGICFUZZ_INPUT_SOURCE``.
+
+    When on, a CREATOR API's FILE* or lone const-char* arg is materialized from
+    the fuzzer's ``data,size`` bytes (FILE_STAR=final bind; PATH=RefineHole) rather
+    than left as NULL. Opt-out ``=0`` to restore the NULL-binding fallback.
+    """
+    return os.environ.get("LOGICFUZZ_INPUT_SOURCE", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _refine_holes_enabled() -> bool:
+    """Gate (default-on): ``LOGICFUZZ_REFINE_HOLES``.
+
+    When on, a PATH input-source materialization is wrapped in a RefineHole so
+    the LLM can verify/refine whether the API really wants a filename or raw
+    content. When off, the symbolic path bind_expr is used directly (no hole).
+    """
+    return os.environ.get("LOGICFUZZ_REFINE_HOLES", "1").strip().lower() not in (
+        "0", "false", "no", "off")
 
 
 # =============================================================================
@@ -1039,6 +1064,10 @@ class SkeletonGenerator:
                     'pairs_with': _pairs,                   # LENGTH↔buffer idx or None
                     'fuzz_scalar_buffer': _fuzz_buf.get(idx),   # Lever B: (T*)data
                     'buffer_length_sizeof': _fuzz_len.get(idx),  # Lever B: size/sizeof
+                    # Task 5: API-level role (APIRole enum value or None) so the
+                    # input-source materialization can gate on CREATOR APIs.
+                    'api_role': getattr(getattr(_sem, 'role', None), 'value',
+                                        getattr(_sem, 'role', None)) if _sem else None,
                 }
                 api_req['args'].append(arg_info)
 
@@ -1343,6 +1372,97 @@ class SkeletonGenerator:
                     allocation=AllocationType.STACK, init_value="{0}",
                     bound_expr=f"&{name}", fuzz_fill_struct=_fill,
                 )
+
+        # ---- Task 5: Input-source materialization (LOGICFUZZ_INPUT_SOURCE) ----
+        # For a CREATOR API's FILE* or lone const-char* arg that would otherwise
+        # remain NULL, materialize the fuzzer's data,size into the needed form.
+        # FILE_STAR (HIGH confidence): final bind — no hole.
+        # PATH (LOW confidence): RefineHole so the LLM can verify/refine.
+        # Gated: LOGICFUZZ_INPUT_SOURCE (default-on); fail-open (try/except).
+        if _input_source_enabled() and is_pointer:
+            try:
+                from liberator_adapter.analysis.input_source import (
+                    classify_input_source, materialize)
+                from liberator_adapter.driver.synthesis.hole import RefineHole
+
+                _api_role = arg_info.get('api_role')
+                _is_input = arg_info.get('is_input', False)
+                _cls = classify_input_source(c_type, _api_role,
+                                             is_input_arg=_is_input)
+                if _cls is not None:
+                    _kind, _confidence = _cls
+                    _arg_idx = arg_info.get('idx', 0)
+                    _prefix = f"src{_arg_idx}"
+                    _m = materialize(_kind, _prefix)
+
+                    # Emit materialization stmts before the consuming call.
+                    # Use the same BUFFER_DECL / BUFFER_INIT mechanism the
+                    # __lf_str_buf path uses — these render in the statements
+                    # block BEFORE the API call sequence.
+                    for _s in _m.stmts:
+                        skeleton.add_statement(SkeletonStatement(
+                            kind=StatementKind.BUFFER_DECL,
+                            code=_s,
+                            indent=1,
+                        ))
+
+                    # Register extra includes (e.g. <stdio.h> for fmemopen).
+                    for _inc in _m.includes:
+                        if _inc not in skeleton.includes:
+                            skeleton.includes.append(_inc)
+
+                    # Register cleanup (e.g. fclose / unlink) as CLEANUP stmts.
+                    for _cl in _m.cleanup:
+                        skeleton.add_cleanup(SkeletonStatement(
+                            kind=StatementKind.CLEANUP,
+                            code=_cl,
+                            indent=1,
+                        ))
+
+                    # Telemetry
+                    skeleton.metadata["input_source_materializations"] = (
+                        skeleton.metadata.get("input_source_materializations", 0) + 1)
+
+                    if _confidence == "HIGH":
+                        # FILE_STAR: bind directly — no hole needed.
+                        return SkeletonVariable(
+                            name=name,
+                            c_type=_public_pointer_type(c_type),
+                            is_pointer=True,
+                            init_value="NULL",
+                            bound_expr=_m.bind_expr,
+                        )
+                    else:
+                        # PATH (LOW): wrap in a RefineHole for LLM verification.
+                        _refine_bind: str
+                        if _refine_holes_enabled():
+                            _rh = RefineHole(
+                                name=_prefix,
+                                default_value=_m.bind_expr,
+                                fill_reason=(
+                                    "rendered arg as a temp-file PATH written from "
+                                    "the fuzz bytes; verify this API takes a filename "
+                                    "(not raw content); if it wants content, bind "
+                                    "data/size instead."),
+                            )
+                            skeleton.add_hole(_rh)
+                            _refine_bind = _rh.get_placeholder()
+                            skeleton.metadata.setdefault(
+                                "refine_holes", []).append("input_source")
+                        else:
+                            _refine_bind = _m.bind_expr
+                        return SkeletonVariable(
+                            name=name,
+                            c_type=_public_pointer_type(c_type),
+                            is_pointer=True,
+                            init_value="NULL",
+                            bound_expr=_refine_bind,
+                        )
+            except Exception:
+                # Fail-open: fall through to the existing NULL-binding path.
+                logger.debug(
+                    "input_source materialization failed for arg %s; falling back",
+                    name, exc_info=True)
 
         # ---- Role-first routing (the reconcile-model floor) ----------------
         # When the model is threaded in, route each arg by its SEMANTIC role
