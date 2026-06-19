@@ -42,6 +42,7 @@ class HoleKind(Enum):
     LOOP_CONDITION = auto()     # Loop termination condition
     ERROR_HANDLING = auto()     # Error handling logic
     RESOURCE_CLEANUP = auto()   # Resource cleanup order (now pre-filled inline)
+    REFINE = auto()             # Symbolic best-guess; LLM verifies/refines (bounded)
 
 
 class HolePriority(Enum):
@@ -220,6 +221,30 @@ class LoopConditionHole(ComplexHole):
 
     def get_placeholder(self) -> str:
         return f"__LOOPCOND_{self.name}__"
+
+
+@dataclass
+class RefineHole(Hole):
+    """A symbolic best-guess the LLM should VERIFY/REFINE, not author from scratch.
+
+    ``default_value`` is symbolic's rendered code; ``fill_reason`` states why
+    symbolic is unsure. The prototyper pre-seeds the merge with ``default_value``
+    so an un-refined hole keeps the symbolic guess (fail-open); an LLM filling
+    keyed by the placeholder overrides it. The hole-merge only substitutes
+    ``__…__`` markers, so refinement is bounded to this region by construction.
+    """
+    kind: HoleKind = field(default=HoleKind.REFINE, init=False)
+    default_value: str = ""
+
+    @property
+    def is_simple(self) -> bool:
+        return False
+
+    def get_placeholder(self) -> str:
+        return f"__REFINE_{self.name}__"
+
+    def validate_fill(self, value: Any) -> bool:
+        return isinstance(value, str)
 
 
 # =============================================================================
