@@ -400,9 +400,14 @@ def value_intents_for_sequence(
         if sem is None:
             continue
         api_svf = (svf_index or {}).get(name, {})
+        import os as _os_r
+        _file_intents = ({} if _os_r.environ.get("LOGICFUZZ_DISABLE_RECALL")
+                         else file_opener_intents(sem))
         arg_records: List[Dict[str, Any]] = []
         for arg in sem.args:
             intent = _arg_intent(arg, name, vocab)
+            if arg.index in _file_intents:
+                intent = _file_intents[arg.index]   # recall: idiom directive wins
             set_by = (api_svf.get(arg.index) or {}).get("set_by")
             if intent is None and not set_by:
                 continue
