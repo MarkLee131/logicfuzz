@@ -2237,6 +2237,19 @@ class FuzzingContext:
                          ' (%d enum families)',
                          _n_annot, len(skeleton_drivers),
                          len((_const_vocab or {}).get('enums', {})))
+                try:
+                    import json as _json_r, os as _os_r
+                    from liberator_adapter.analysis.hole_semantics import (
+                        count_file_idiom_skeletons)
+                    _abl = {
+                        "file_idiom_skeletons": count_file_idiom_skeletons(skeleton_drivers),
+                        "total_skeletons": len(skeleton_drivers),
+                        "disabled": bool(_os_r.environ.get("LOGICFUZZ_DISABLE_RECALL")),
+                    }
+                    with open(f"results/{project_name}/recall_ablation.json", "w") as _f:
+                        _json_r.dump(_abl, _f, indent=2)
+                except Exception as _e:
+                    log.debug("   10b recall ablation dump skipped: %s", _e)
             except Exception as _he:
                 log.warning('G4 hole annotation failed (non-critical): %s', _he)
 

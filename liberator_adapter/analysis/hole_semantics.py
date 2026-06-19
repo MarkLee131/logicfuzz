@@ -548,6 +548,17 @@ def render_callspec(intents: Sequence[Dict[str, Any]],
     return "\n".join(lines)
 
 
+def count_file_idiom_skeletons(skeletons) -> int:
+    """Skeletons carrying ≥1 FILE_FROM_FUZZ intent (the recalled idiom-gated set)."""
+    n = 0
+    for sk in skeletons:
+        vis = sk.get("value_intents") or []
+        if any("FILE_FROM_FUZZ" in (a.get("intent") or "")
+               for rec in vis for a in (rec.get("args") or [])):
+            n += 1
+    return n
+
+
 def annotate_skeletons(
     skeleton_drivers: Sequence[Dict[str, Any]],
     model: APISemanticModel,

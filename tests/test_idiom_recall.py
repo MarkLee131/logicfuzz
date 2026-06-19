@@ -82,3 +82,18 @@ def test_gate_disables_file_intent(monkeypatch):
     recs = value_intents_for_sequence(_opener_model(), ["openf"])
     arg0s = [a for r in recs for a in r["args"] if a["index"] == 0]
     assert all("FILE_FROM_FUZZ" not in a["intent"] for a in arg0s)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: count_file_idiom_skeletons counter
+# ---------------------------------------------------------------------------
+from liberator_adapter.analysis.hole_semantics import count_file_idiom_skeletons
+
+
+def test_count_file_idiom_skeletons():
+    skels = [
+        {"value_intents": [{"args": [{"index": 0, "intent": "FILE_FROM_FUZZ: ..."}]}]},
+        {"value_intents": [{"args": [{"index": 0, "intent": "FUZZ_DERIVE: enum"}]}]},
+        {"value_intents": []},
+    ]
+    assert count_file_idiom_skeletons(skels) == 1
