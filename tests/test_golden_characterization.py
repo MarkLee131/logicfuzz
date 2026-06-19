@@ -50,6 +50,9 @@ def _snapshot(project):
     for k in list(env):
         if k.startswith("LOGICFUZZ_"):
             del env[k]
+    # Golden reflects gate-OFF baseline; explicitly disable so the default-ON
+    # LOGICFUZZ_VALIDITY_CONTRACT does not alter the characterised behavior.
+    env["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
     fixture = os.path.join(GOLDEN_DIR, f"{project}.input.json")
     out = subprocess.check_output(
         [sys.executable, SNAPSHOT_SCRIPT, project, fixture], env=env, cwd=ROOT)

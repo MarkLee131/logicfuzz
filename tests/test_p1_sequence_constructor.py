@@ -127,16 +127,22 @@ def test_orphan_target_kept_for_graceful_degradation():
         _api("thing_create", [], ret="Thing *"),
     ]
     model = reconcile(apis)
-    # Default (graceful): the island API survives as a candidate.
-    res = construct_sequences(model, project_apis=apis)
-    assert any("orphan_use" in s for s in res.sequences)
-    # Strict kill-switch: the old behavior — orphan dropped by the filter.
-    os.environ["LOGICFUZZ_STRICT_ORDERING"] = "1"
+    # Explicitly disable VC so the repair pass does not prepend a producer
+    # (VC-on would prepend a producer and "orphan_use" would no longer be orphan).
+    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
     try:
-        res_strict = construct_sequences(model, project_apis=apis)
-        assert all("orphan_use" not in s for s in res_strict.sequences)
+        # Default (graceful): the island API survives as a candidate.
+        res = construct_sequences(model, project_apis=apis)
+        assert any("orphan_use" in s for s in res.sequences)
+        # Strict kill-switch: the old behavior — orphan dropped by the filter.
+        os.environ["LOGICFUZZ_STRICT_ORDERING"] = "1"
+        try:
+            res_strict = construct_sequences(model, project_apis=apis)
+            assert all("orphan_use" not in s for s in res_strict.sequences)
+        finally:
+            os.environ.pop("LOGICFUZZ_STRICT_ORDERING", None)
     finally:
-        os.environ.pop("LOGICFUZZ_STRICT_ORDERING", None)
+        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
 
 
 def test_creator_gets_create_destroy_coverage():

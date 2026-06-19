@@ -64,9 +64,12 @@ def test_gate_on_wraps_unbound_nonnull_handle_in_guard():
 
 
 def test_gate_off_no_guard():
-    os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
-    code = _render(_model(nullable=False))
-    assert "if (hProfile_cmsGetColorSpace)" not in code
+    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
+    try:
+        code = _render(_model(nullable=False))
+        assert "if (hProfile_cmsGetColorSpace)" not in code
+    finally:
+        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
 
 
 def test_nullable_handle_not_guarded_even_gate_on():

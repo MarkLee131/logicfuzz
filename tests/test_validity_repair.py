@@ -102,7 +102,7 @@ def test_nullable_handle_not_repaired(monkeypatch):
 
 
 def test_gate_off_byte_identical(monkeypatch):
-    monkeypatch.delenv("LOGICFUZZ_VALIDITY_CONTRACT", raising=False)
+    monkeypatch.setenv("LOGICFUZZ_VALIDITY_CONTRACT", "0")
     idx = _fixture()
     seq = ["use_profile", "use_widget"]
     assert sc.repair_sequence_validity(seq, idx=idx) == seq

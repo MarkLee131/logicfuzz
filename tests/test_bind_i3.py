@@ -82,11 +82,14 @@ def test_gate_on_binds_close_to_profile_not_transform():
 
 
 def test_gate_off_is_legacy_nearest_voidstar():
-    os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
-    f = _factory()
-    b = f._signature_handle_bindings(SEQ, dep_model=MODEL)
-    # legacy: nearest void* producer (the LAST one) = the transform
-    assert b.get(("cmsCloseProfile", 0)) == "ret_cmsCreateTransform"
+    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
+    try:
+        f = _factory()
+        b = f._signature_handle_bindings(SEQ, dep_model=MODEL)
+        # legacy: nearest void* producer (the LAST one) = the transform
+        assert b.get(("cmsCloseProfile", 0)) == "ret_cmsCreateTransform"
+    finally:
+        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
 
 
 def test_no_model_unchanged():
