@@ -18,9 +18,11 @@ class MaterializedSource:
     includes: List[str]
 
 
-def classify_input_source(type_str, api_role, is_input_arg: bool = True):
+def classify_input_source(type_str, api_role, is_input_arg: bool = True, arg_role=None) -> Optional[Tuple[str, str]]:
     role = getattr(api_role, "value", api_role)
     if role != APIRole.CREATOR.value:
+        return None
+    if getattr(arg_role, "value", arg_role) == "INPUT_BUFFER":
         return None
     t = (type_str or "")
     if "FILE" in t and "*" in t:

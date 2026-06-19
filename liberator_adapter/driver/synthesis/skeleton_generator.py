@@ -1388,7 +1388,8 @@ class SkeletonGenerator:
                 _api_role = arg_info.get('api_role')
                 _is_input = arg_info.get('is_input', False)
                 _cls = classify_input_source(c_type, _api_role,
-                                             is_input_arg=_is_input)
+                                             is_input_arg=_is_input,
+                                             arg_role=arg_info.get('role'))
                 if _cls is not None:
                     _kind, _confidence = _cls
                     _arg_idx = arg_info.get('idx', 0)

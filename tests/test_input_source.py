@@ -27,6 +27,17 @@ def test_materialize_path():
     assert "<unistd.h>" in m.includes
 
 
+def test_creator_input_buffer_char_not_routed_to_path():
+    # cJSON_Parse(const char* value): CREATOR whose char* is the PRIMARY FUZZ BUFFER
+    # (arg-level role INPUT_BUFFER) must NOT be materialized as a file path.
+    assert classify_input_source("const char *", APIRole.CREATOR,
+                                 arg_role="INPUT_BUFFER") is None
+
+def test_creator_path_char_still_routes_when_not_input_buffer():
+    # a genuine path arg (not the fuzz buffer) still classifies as PATH
+    assert classify_input_source("const char *", APIRole.CREATOR,
+                                 arg_role="CONFIG") == ("PATH", "LOW")
+
 def test_skeleton_to_dict_serializes_refine_hole_default_value():
     """Serialization glue: to_dict must preserve RefineHole.default_value.
 

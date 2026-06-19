@@ -31,7 +31,6 @@ def _hard_nullguard() -> bool:
     return True
 
 from liberator_adapter.analysis.api_semantic_model import (
-    APIRole,
     ArgRole,
     APISemanticModel,
 )
