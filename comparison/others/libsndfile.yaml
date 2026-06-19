@@ -1,4 +1,0 @@
-"language": "c"
-"project": "libsndfile"
-"target_name": "sndfile_fuzzer"
-"target_path": "/src/libsndfile/ossfuzz/sndfile_fuzzer.cc"

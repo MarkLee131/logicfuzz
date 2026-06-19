@@ -59,11 +59,6 @@ MODEL_REGISTRY: Dict[str, Callable[..., BaseChatModel]] = {
     "gpt-4o-mini":
     lambda **kw: _create_openai_model("gpt-4o-mini", **kw),
 
-    # DeepSeek V4 (current generation; OpenAI-compatible; both support tool calling).
-    # Verified against the live /models API (2026-06-18): DeepSeek deprecated V3/R1 —
-    # the legacy aliases deepseek-chat AND deepseek-reasoner now BOTH back to
-    # deepseek-v4-flash. The two distinct served models are v4-flash and v4-pro.
-    # Output range is [1, 393216]; max_tokens comes from the global MAX_TOKENS (8192).
     "deepseek-v4-flash":
     lambda **kw: _create_deepseek_model("deepseek-v4-flash", **kw),
     "deepseek-v4-pro":

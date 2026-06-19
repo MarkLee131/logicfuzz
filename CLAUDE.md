@@ -313,6 +313,8 @@ Step 12   Existing-driver knowledge extraction + Phase B idiom distillation
 
 ## Open TODOs
 
+- 2026-06-19: 实现deepseek的思考模式支持： https://api-docs.deepseek.com/guides/thinking_mode
+
 Live frontier = **coverage vs PromeFuzz** on unsaturated, breadth-matched libs
 (c-ares/libpng/sqlite3); lead the eval on quality/efficiency/complementarity, NOT
 raw 24h (PromeFuzz saturates small libs). Start from `docs/generation.md`.
