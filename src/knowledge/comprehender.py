@@ -458,6 +458,7 @@ class Comprehender:
             # Per-run token meter: the comprehender is the one LLM stage outside
             # the LangGraph agents, so feed it here too (else the per-run total
             # under-counts the upfront knowledge cost).
+            _u: Dict[str, Any] = {}
             try:
                 from src.utils.token_meter import record as _meter_record
                 _md = getattr(response, "response_metadata", None) or {}
@@ -473,6 +474,22 @@ class Comprehender:
                 # Some providers return content as a list of parts.
                 content = "".join(part.get("text", "") if isinstance(part, dict) else str(part)
                                   for part in content)
+            # Per-run LLM interaction ledger (companion to the token meter above).
+            try:
+                from src.utils import llm_trace as _lt
+                _lt.record(
+                    agent="comprehender",
+                    system=system_prompt,
+                    user=user_prompt,
+                    response=content,
+                    tokens={
+                        "prompt_tokens": _u.get("prompt_tokens") or _u.get("input_tokens", 0),
+                        "completion_tokens": _u.get("completion_tokens") or _u.get("output_tokens", 0),
+                        "total_tokens": _u.get("total_tokens", 0),
+                    },
+                    model=self.model_name)
+            except Exception:
+                pass
             return content
         except Exception as exc:
             logger.warning("Comprehender LLM call failed: %s", exc)

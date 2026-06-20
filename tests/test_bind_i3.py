@@ -2,9 +2,8 @@
 a consumer handle arg of family F binds to a producer return of family F (by
 handle family from the model's type_str / producer name), NOT the nearest
 collapsed void*. ADDITIVE: legacy void* binding is the FALLBACK when family is
-unknown. Gated behind LOGICFUZZ_VALIDITY_CONTRACT; gate-off byte-identical.
+unknown. The validity contract is unconditional (graduated 2026-06-20, switch removed).
 """
-import os
 import sys
 import pathlib
 
@@ -71,42 +70,30 @@ def _factory():
 
 
 def test_gate_on_binds_close_to_profile_not_transform():
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "1"
-    try:
-        f = _factory()
-        b = f._signature_handle_bindings(SEQ, dep_model=MODEL)
-        # cmsCloseProfile arg0 must bind to the PROFILE producer, never the xform
-        assert b.get(("cmsCloseProfile", 0)) == "ret_cmsOpenProfileFromMem"
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
+    f = _factory()
+    b = f._signature_handle_bindings(SEQ, dep_model=MODEL)
+    # cmsCloseProfile arg0 must bind to the PROFILE producer, never the xform
+    assert b.get(("cmsCloseProfile", 0)) == "ret_cmsOpenProfileFromMem"
 
 
 def test_no_model_unchanged():
     # No dep_model at all (cjson/zlib path): legacy behavior, no family info.
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "1"
-    try:
-        f = _factory()
-        b = f._signature_handle_bindings(SEQ)   # no dep_model
-        assert b.get(("cmsCloseProfile", 0)) == "ret_cmsCreateTransform"
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
+    f = _factory()
+    b = f._signature_handle_bindings(SEQ)   # no dep_model
+    assert b.get(("cmsCloseProfile", 0)) == "ret_cmsCreateTransform"
 
 
 def test_real_typedef_args_bind_by_type_unchanged():
     # When the Api carries the REAL typedef (cmsHTRANSFORM, has no '*' so the
     # current code skips it) the binding stays whatever the legacy path made —
     # the I3 family pass is ADDITIVE and must not break the void*-typed cases.
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "1"
-    try:
-        seq2 = [OPEN, XFORM,
-                _api("cmsDeleteTransform", "void", ["void *"])]
-        model2 = APISemanticModel("lcms", dict(MODEL.apis))
-        model2.apis["cmsDeleteTransform"] = _msem(
-            "cmsDeleteTransform", APIRole.DESTROYER,
-            ((ArgRole.CONFIG, "cmsHTRANSFORM"),))
-        f = _factory()
-        b = f._signature_handle_bindings(seq2, dep_model=model2)
-        # transform-family arg binds to the transform producer
-        assert b.get(("cmsDeleteTransform", 0)) == "ret_cmsCreateTransform"
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
+    seq2 = [OPEN, XFORM,
+            _api("cmsDeleteTransform", "void", ["void *"])]
+    model2 = APISemanticModel("lcms", dict(MODEL.apis))
+    model2.apis["cmsDeleteTransform"] = _msem(
+        "cmsDeleteTransform", APIRole.DESTROYER,
+        ((ArgRole.CONFIG, "cmsHTRANSFORM"),))
+    f = _factory()
+    b = f._signature_handle_bindings(seq2, dep_model=model2)
+    # transform-family arg binds to the transform producer
+    assert b.get(("cmsDeleteTransform", 0)) == "ret_cmsCreateTransform"

@@ -10,12 +10,10 @@ from typing import List, Optional
 
 import logger
 from src.workflow import FuzzingWorkflow
-from experiment import builder_runner as builder_runner_lib
 from experiment import evaluator as exp_evaluator
 from experiment import oss_fuzz_checkout, textcov
 from experiment.benchmark import Benchmark
 from experiment.workdir import WorkDirs
-from src.llm import models
 from results import BenchmarkResult, TrialResult
 
 # WARN: Avoid high value for NUM_EVA for local experiments.
@@ -121,50 +119,6 @@ def aggregate_results(target_stats: list[tuple[int, exp_evaluator.Result]],
                           found_bug, max_coverage, max_line_coverage_diff,
                           max_coverage_sample, max_coverage_diff_sample,
                           max_coverage_diff_report, all_textcov)
-
-def check_targets(
-    benchmark: Benchmark,
-    work_dirs: WorkDirs,
-    generated_targets: List[str],
-    cloud_experiment_name: str = '',
-    cloud_experiment_bucket: str = '',
-    run_timeout: int = RUN_TIMEOUT,
-    fixer_model_name: str = models.DEFAULT_MODEL,
-) -> Optional[AggregatedResult]:
-  """Builds all targets in the fixed target directory."""
-  target_stats = []
-
-  if cloud_experiment_name:
-    builder_runner = builder_runner_lib.CloudBuilderRunner(
-        benchmark,
-        work_dirs,
-        run_timeout,
-        fixer_model_name,
-        experiment_name=cloud_experiment_name,
-        experiment_bucket=cloud_experiment_bucket,
-    )
-  else:
-    builder_runner = builder_runner_lib.BuilderRunner(benchmark, work_dirs,
-                                                      run_timeout,
-                                                      fixer_model_name)
-
-  evaluator = exp_evaluator.Evaluator(builder_runner, benchmark, work_dirs)
-
-  with pool.ThreadPool(NUM_EVA) as p:
-    for i, target_stat in enumerate(
-        p.map(evaluator.check_target, generated_targets)):
-      if target_stat is None:
-        logging.error('This should never happen: Error evaluating target: %s',
-                      generated_targets[i])
-        target_stat = exp_evaluator.Result()
-
-      target_stats.append((i, target_stat))
-
-  if len(target_stats) > 0:
-    return aggregate_results(target_stats, generated_targets)
-
-  logging.info('No targets to check.')
-  return None
 
 def prepare(oss_fuzz_dir: str) -> None:
   """Prepares the experiment environment."""

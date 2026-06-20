@@ -1,13 +1,12 @@
 """I2a universal validity-repair: every nullable=False opaque-handle consumer
 gets an earlier same-type producer, even in floor / densified sequences that
-bypass _build_prefix. Gated LOGICFUZZ_VALIDITY_CONTRACT (gate-off → unchanged).
+bypass _build_prefix. The validity contract is unconditional (graduated 2026-06-20, switch removed).
 
 Root cause (2026-06-16): after the I3 binding fix, 130 of 137 lcms I2a orphans
 were construction-gaps — consumers (105 cmsHPROFILE) with NO producer in the
 driver at all, because floor/densified sequences never run _build_prefix's
 producer resolution. This pass is the post-construction net.
 """
-import os
 import sys
 import pathlib
 
@@ -58,42 +57,33 @@ def _fixture():
     return idx
 
 
-def _on(monkeypatch):
-    monkeypatch.setenv("LOGICFUZZ_VALIDITY_CONTRACT", "1")
-
-
-def test_floor_consumer_gets_producer_prepended(monkeypatch):
-    _on(monkeypatch)
+def test_floor_consumer_gets_producer_prepended():
     idx = _fixture()
     out = sc.repair_sequence_validity(["use_profile"], idx=idx)
     # a profile producer must precede the consumer; synthetic preferred
     assert out == ["make_profile", "use_profile"]
 
 
-def test_existing_producer_not_duplicated(monkeypatch):
-    _on(monkeypatch)
+def test_existing_producer_not_duplicated():
     idx = _fixture()
     out = sc.repair_sequence_validity(["parse_profile", "use_profile"], idx=idx)
     assert out == ["parse_profile", "use_profile"]  # already satisfied, no prepend
 
 
-def test_two_consumers_share_one_prepend(monkeypatch):
-    _on(monkeypatch)
+def test_two_consumers_share_one_prepend():
     idx = _fixture()
     out = sc.repair_sequence_validity(["use_profile", "use_profile"], idx=idx)
     assert out == ["make_profile", "use_profile", "use_profile"]
 
 
-def test_producerless_handle_left_alone(monkeypatch):
-    _on(monkeypatch)
+def test_producerless_handle_left_alone():
     idx = _fixture()
     # widget has no producer in the model → no prepend (Task-11 guard covers it)
     out = sc.repair_sequence_validity(["use_widget"], idx=idx)
     assert out == ["use_widget"]
 
 
-def test_nullable_handle_not_repaired(monkeypatch):
-    _on(monkeypatch)
+def test_nullable_handle_not_repaired():
     idx = _fixture()
     # flip the consumer arg to nullable → NULL is legal, no producer needed
     idx.by_name["use_profile"].args[0].nullable = True
@@ -101,8 +91,7 @@ def test_nullable_handle_not_repaired(monkeypatch):
     assert out == ["use_profile"]
 
 
-def test_non_handle_pointer_not_repaired(monkeypatch):
-    _on(monkeypatch)
+def test_non_handle_pointer_not_repaired():
     # a CREATOR returning a string "version" (char*) is NOT a lifecycle handle —
     # no API ``requires`` it — so a consumer's non-NULL char* arg must NOT trigger
     # a producer-prepend (zlib zlibVersion / c-ares ares_library_initialized bug).
@@ -115,8 +104,7 @@ def test_non_handle_pointer_not_repaired(monkeypatch):
     assert out == ["use_str"]  # char* is not a handle → renderer fills it
 
 
-def test_internal_creator_never_prepended(monkeypatch):
-    _on(monkeypatch)
+def test_internal_creator_never_prepended():
     # only an INTERNAL (_-prefixed) producer exists → must NOT be prepended
     internal = _Sem("_make_profile", APIRole.CREATOR, produces=("profile",),
                     args=())
@@ -154,8 +142,7 @@ def test_count_repairs_honors_known_names_guard():
     assert stats["n_prepended"] == 0
 
 
-def test_prefers_synthetic_over_parser(monkeypatch):
-    _on(monkeypatch)
+def test_prefers_synthetic_over_parser():
     # producers list with parser first; synthetic must still win
     make = _Sem("make_profile", APIRole.CREATOR, produces=("profile",), args=())
     parse = _Sem("parse_profile", APIRole.CREATOR, produces=("profile",),

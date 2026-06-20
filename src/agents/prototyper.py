@@ -1070,15 +1070,13 @@ Output your fuzz driver code inside <fuzz_target> tags.
                 f'Prototyper regeneration #{prototyper_regenerate_count + 1}',
                 trial=self.trial)
 
-        self._langgraph_logger.flush_agent_logs(self.name)
-
         return state_update
 
     def _dump_reasoning_chain(self, reasoning_chain: Dict[str, str]) -> None:
         """Persist the multi-hop reasoning chain to disk for audit.
 
         Writes ``reasoning_chain.json`` under the per-trial log dir
-        (created by ``LangGraphLogger`` for this trial). Failures here
+        (``<work_dir>/logs/trial_NN/``, created on demand). Failures here
         are non-critical — the reasoning chain is auditable telemetry,
         not a hard pipeline dependency.
         """

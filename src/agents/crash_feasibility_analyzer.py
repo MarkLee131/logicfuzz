@@ -188,9 +188,6 @@ class LangGraphCrashFeasibilityAnalyzer(LangGraphAgent, ToolCallingMixin):
         updated_session_memory = merge_session_memory_updates(
             state, session_memory_updates)
 
-        # Flush logs for this agent after completing execution
-        self._langgraph_logger.flush_agent_logs(self.name)
-
         return {
             "context_analysis": context_result,
             "session_memory": updated_session_memory

@@ -1,10 +1,9 @@
 """Task 11 — defense-in-depth render guard: the renderer reads the model's
 evidence-based ``ArgSemantics.nullable`` and, for a ``nullable=False`` HANDLE_IN
 arg STILL UNBOUND at render, wraps the consumer call in ``if (handle) { ... }``
-instead of passing a bare NULL. Gated behind LOGICFUZZ_VALIDITY_CONTRACT;
-gate-off keeps the legacy bare-NULL consume (byte-identical).
+instead of passing a bare NULL. The validity contract is unconditional
+(graduated 2026-06-20, switch removed).
 """
-import os
 import sys
 import pathlib
 
@@ -50,23 +49,15 @@ def _render(model):
 
 
 def test_gate_on_wraps_unbound_nonnull_handle_in_guard():
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "1"
-    try:
-        code = _render(_model(nullable=False))
-        # the consumer call is wrapped in if (hProfile...) { ... }
-        assert "if (hProfile_cmsGetColorSpace)" in code
-        # and the call is inside that guard
-        guard_pos = code.index("if (hProfile_cmsGetColorSpace)")
-        call_pos = code.index("cmsGetColorSpace(hProfile_cmsGetColorSpace)")
-        assert guard_pos < call_pos
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
+    code = _render(_model(nullable=False))
+    # the consumer call is wrapped in if (hProfile...) { ... }
+    assert "if (hProfile_cmsGetColorSpace)" in code
+    # and the call is inside that guard
+    guard_pos = code.index("if (hProfile_cmsGetColorSpace)")
+    call_pos = code.index("cmsGetColorSpace(hProfile_cmsGetColorSpace)")
+    assert guard_pos < call_pos
 
 
 def test_nullable_handle_not_guarded_even_gate_on():
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "1"
-    try:
-        code = _render(_model(nullable=True))
-        assert "if (hProfile_cmsGetColorSpace)" not in code
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
+    code = _render(_model(nullable=True))
+    assert "if (hProfile_cmsGetColorSpace)" not in code

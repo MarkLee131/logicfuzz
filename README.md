@@ -17,12 +17,15 @@ LogicFuzz automatically generates high-quality fuzz drivers (harnesses) for C/C+
 ## Key Features
 
 - **Reconcile-then-Construct** - Builds an `APISemanticModel` (IR ⊕ doc ⊕ usage), then constructs lifecycle-complete API sequences that are valid by construction (no repair stage)
+- **Valid-by-Construction Binding** - Every non-nullable opaque-handle arg gets a type-matched producer with type-correct wiring; collection args are populated with real producer handles, never `{0}`/NULL (the *validity contract*, default-on)
+- **Seed-Independent Drivers** - Scalar data-buffer args are rendered as `(T*)data` with a paired length bound to `size`, and a CREATOR's `FILE*`/path arg is materialized from the fuzzer bytes, so drivers exercise the library directly from the fuzz input
+- **Breadth to the Extraction Ceiling** - A residual all-cover pass + greedy API-floor guarantees every public API the symbolic layer can reach appears in at least one driver
 - **Multi-Agent Workflow** - Specialized agents for prototyping, compile-error fixing, and crash analysis (LangGraph)
 - **Z3-Guided Synthesis** - Constraint-based driver generation with type matching, provenance tracking, and resource lifecycle management
 - **Progressive Filter Pipeline** - layered filtering (L0–L4) from thousands of APIs down to high-value sequences
 - **Automatic Error Recovery** - Intelligent error triage and iterative fixing with up to 3 retry attempts
 - **Gap-Directed Construction** - Sequence construction and ranking are biased toward baseline-uncovered APIs (coverage-gap signal)
-- **Portfolio Merge** - Folds successful trials into a single multi-task harness for breadth, with a compile-validation gate
+- **Portfolio Merge** - Folds successful trials into a single multi-task harness for breadth, behind a compile-validation gate (with optional single-shot LLM repair of non-compiling drivers)
 - **OSS-Fuzz Integration** - Seamless integration with Google's OSS-Fuzz infrastructure
 
 ## How It Works
@@ -160,7 +163,8 @@ LogicFuzz has been tested on these OSS-Fuzz projects:
 | [zlib](comparison/zlib.yaml) | C | Compression library |
 | [libpng](comparison/libpng.yaml) | C | PNG image library |
 | [libtiff](comparison/libtiff.yaml) | C | TIFF image library |
-| [curl](comparison/curl.yaml) | C | URL transfer library |
+| [lcms](comparison/lcms.yaml) | C | Little CMS color engine |
+| [c-ares](comparison/c-ares.yaml) | C | Async DNS resolver |
 | [mbedtls](comparison/mbedtls.yaml) | C | Crypto library |
 
 ## Architecture
@@ -227,17 +231,6 @@ logicfuzz/
 └── scripts/                  # Utility scripts
 ```
 
-## Citation
-
-If you use LogicFuzz in your research, please cite:
-
-```bibtex
-@software{logicfuzz2024,
-  title = {LogicFuzz: LLM-Powered Agentic Fuzz Driver Generation},
-  year = {2024},
-  url = {https://github.com/anthropics/logicfuzz}
-}
-```
 
 ## License
 
@@ -246,5 +239,3 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## Acknowledgments
 
 - [OSS-Fuzz](https://github.com/google/oss-fuzz) - Google's continuous fuzzing infrastructure
-- [Fuzz Introspector](https://github.com/ossf/fuzz-introspector) - Static analysis for fuzzing
-- [LangGraph](https://github.com/langchain-ai/langgraph) - Agent orchestration framework

@@ -41,7 +41,7 @@ opaque-handle and caller-alloc-init libraries constructable:
 |---|---|---|---|
 | Handle **identity** | re-types IR-collapsed `void*`/`i8*` back to `cmsHPROFILE`/`cmsHTRANSFORM` from headers | `liberator_adapter/analysis/handle_typedef_recovery.py` | dep-graph connected where Liberator's is empty, specific where naive void\* over-connects |
 | Handle **production (a)** | SVF-write-gated INIT channel: `deflateInit_(z_stream*)` (single-ptr in-place init) recovered as a *creator* | `liberator_adapter/analysis/usedef.py` (`annotate_svf_writes` / `extract_produced_handles`) | zlib deflate/inflate **0 → 34/36 constructable**; one driver covers deflate.c+inflate.c+trees.c = 1874/3397 lines, all 0 before |
-| Handle **production (b)** — factory chain | naming-based opaque-return producer recovery: a required non-pointer opaque handle whose creator-return the IR desugared to `void*` (`cmsHTRANSFORM`) is mapped to its `cmsCreate*Transform` factory and fed to the recursive prefix resolver (non-pointer test + camelCase word-boundary + deep-factory preference) | `liberator_adapter/analysis/sequence_constructor.py` (`_recover_opaque_producers`; always-on, monotone) | first dent in the binding-layer ceiling (#14): lcms recovered handle types 0→2, deep opaque args 0→**77/128**, `cmsDoTransform` chain constructs+compiles; 8 handle-struct libs byte-identical. **Deep coverage NOT won** — valid-ICC-profile input blocks the chain → next bottleneck is the input/seed layer, not construction |
+| Handle **production (b)** — factory chain | naming-based opaque-return producer recovery: a required non-pointer opaque handle whose creator-return the IR desugared to `void*` (`cmsHTRANSFORM`) is mapped to its `cmsCreate*Transform` factory and fed to the recursive prefix resolver (non-pointer test + camelCase word-boundary + deep-factory preference) | `liberator_adapter/analysis/sequence_constructor.py` (`_recover_opaque_producers`; always-on, monotone) | first dent in the binding-layer ceiling (#14): lcms recovered handle types 0→2, deep opaque args 0→**77/128**, `cmsDoTransform` chain constructs+compiles; 8 handle-struct libs byte-identical. Deep coverage is then won by the default-on builder levers (POPULATE_COLLECTIONS / FUZZ_BUFFERS / INPUT_SOURCE) feeding fuzz bytes into the chain's buffers/openers (lcms 300s edges 325→943, cov 0.86%→16.81%); the residual tail is deep structured-input validity (synthetic seed gen) |
 | Per-arg **output-array role** | a struct-pointer arg the IR type-pattern reads as a handle (HANDLE_IN) but SVF proved is a *written array* whose element type has **no producer in the project** is reclassified **OUTPUT**. **Dual gate, sound where neither alone is:** `is_array` rules out a single in-out handle (`png_struct*`, is_array=False); *producer-absence* rules out a managed handle that is merely array-/link-accessed (`cJSON*` linked nodes, `gzFile` — both have a creator). The producer set = ∪ every API's IR `produces`. | `usedef.annotate_svf_writes` (`_svf_is_array`) + `api_semantic_model._reconcile_args` (`produced_bases` gate) | recovers libpng `png_build_grayscale_palette(png_color* palette)` → OUTPUT; **verified** no mis-promotion of `cJSON_DetachItemViaPointer` item / `gzFile` / `z_stream` (the is_array-only rule's regression). Render-neutral (struct-ptr render is type-decided) → no overflow regression; corrects binding + hole value-intents |
 
 Closed-loop (Phase G) grows the automaton from Z3-viable sequences each round
@@ -59,8 +59,17 @@ max-coverage diversity selection, real seed-corpus routing, lean crash triage +
 skip per-driver optimize, typedef-handle recovery, densifier partition +
 producer/destroyer diversification, marginal-depth selection, subset-elimination,
 scoped per-component NULL-guards, cross-source profile binding, FP-crasher merge
-quarantine, value-domain leaf constraints. (Full per-lever rationale: `CLAUDE.md`
-flag reference + git history.)
+quarantine, value-domain leaf constraints, **validity contract** (valid-by-
+construction opaque-handle binding I1/I2a/I2b/I3) + universal validity-repair at
+skeleton synthesis, **populate-collections** (handle-collection arg → populated
+producer array, not `{0}`/NULL), **fuzz-buffers** (scalar data-buffer arg →
+`(T*)data` + paired length ⇒ seed-independent), **residual all-cover + API-floor**
+(every reachable public API in ≥1 sequence), **input-source materialization**
+(CREATOR `FILE*`/path arg ← fuzz bytes). (Full per-lever rationale + measured A/B:
+`CLAUDE.md` flag reference + git history.) The graduated 2026-06-20 cohort
+(VALIDITY_CONTRACT + POPULATE_COLLECTIONS + FUZZ_BUFFERS + RESIDUAL_ALLCOVER +
+API_FLOOR) turned lcms drivers live: preflight-survived 1→14, merged distinct APIs
+18→69, 300s-fuzz edges 325→943, coverage 0.86%→16.81%.
 
 ---
 
@@ -108,6 +117,11 @@ satisfied*; guards are IR-derived; the LLM still owns only leaf values.
 | **density** | default-on (tune `_DENSE_MAX_EXTRA`/`_DENSE_COOCCUR`) | `sequence_constructor.py:_densify` | append extenders that USE an already-open handle (`requires ⊆ opened`) → thicken thin chains | 2.5 → 4.3 calls/seq |
 | **density co-occurrence** | `LOGICFUZZ_DENSE_COOCCUR` (1), `LOGICFUZZ_DENSE_MAX_EXTRA` (8) | `sequence_constructor.py` (`_cooccur`) | second `_densify` source: thicken along automaton accepting-path real co-occurrence (= PromeFuzz call-scope grouping) | lcms 6.6 → **7.7 APIs/seq, median 7 ≈ PromeFuzz 7.6** |
 | **hard NULL-guard + opaque factory hint** | default-on | `hole_semantics.py:_hard_nullguard` | `ret_contract` → `MUST-GUARD: if(!x)return0;` + "build the opaque handle via its producer" hint; coupled with density | lcms combo FP 1→0 |
+| **validity contract** | default-on (gate removed) | `validity_contract.py` + `sequence_constructor._validity_contract` | every `nullable=False` opaque-handle arg gets a type-matched producer with type-correct binding (I1/I2a/I2b/I3); universal validity-repair prepends missing handle creators at skeleton synthesis | lcms preflight-survived 1→14, merged distinct APIs 18→49 |
+| **populate-collections** | default-on (gate removed) | `sequence_constructor._populate_collections` + `skeleton_generator` | a CREATOR's handle-collection arg (`cmsToneCurve* const []`) → a populated array of built producer handles, not degenerate `{0}`/NULL | lcms 300s-fuzz edges 325→943, cov 0.86%→16.81% |
+| **fuzz-buffers** | default-on (gate removed) | `sequence_constructor._fuzz_buffers` + `skeleton_generator` | a builder's scalar data-buffer arg (`cmsUInt16Number *`) → `(T*)data` with paired length bound to `size/sizeof(T)` ⇒ drivers are SEED-INDEPENDENT | (combined with populate-collections, above) |
+| **input-source materialization** | `LOGICFUZZ_INPUT_SOURCE` (on) | `analysis/input_source.py` + `skeleton_generator._input_source_enabled` | a CREATOR's `FILE*` (→`fmemopen`) or lone `const char*` path (→`mkstemp`+`write`, LOW-confidence ⇒ RefineHole) arg is materialized from the fuzzer's `data,size` instead of staying NULL; type-driven, library-agnostic, INPUT_BUFFER args excluded | drivers open from fuzz bytes (replaces NULL-guard short-circuit) |
+| **residual all-cover + API-floor** | `LOGICFUZZ_RESIDUAL_ALLCOVER` / `LOGICFUZZ_API_FLOOR` (both on) | `data_context.py` (residual pass) + portfolio set-cover | append a single-API skeleton for every public API the symbolic constructor can't chain (validity-repair prepends its creators); greedy set-cover pulls every constructable API into ≥1 selected sequence; writes `breadth_residual.json` telemetry | cjson 75→78, lcms 149→297; merged distinct APIs 18→69 |
 | **top_k breadth lever** | `LOGICFUZZ_TOP_K` (10; needs `LOGICFUZZ_NO_CACHE=1` to regen) | `data_context.py:316` | raise greedy max-coverage selection cap → more skeletons → more distinct APIs in merged union | top_k=100 → **c-ares 118 ≥ 113, zlib 95 ≥ 89** (PromeFuzz parity); lcms 100→136, 150→186 |
 | **keep-best + file restore** | default | `src/workflow/nodes/execution.py:_keep_best` | never ship a driver worse than the trial's peak; write restored source back to disk (else merge ships the degraded driver) | — |
 | **pre-ship quarantine + dead-filter** | default | `tools/merge_drivers/` | drop immediate-crash 0-coverage FP drivers before merge (else they poison the fused harness) | — |
@@ -191,13 +205,17 @@ Measured caveats — every breadth/density claim above is bounded by them.
   their args. The **factory chain** (always-on, channel b) is the first dent: opaque
   handles whose creator the IR hid behind a `void*` return are recovered by naming
   and chained — lcms deep opaque args 0→77/128, `cmsDoTransform` constructable+
-  compilable. **Caveats:** (i) *deep coverage not won* — degraded-30s probe covered
-  **0/799 of `cmsxform.c`**: the opaque chain needs a valid ICC profile that random
-  bytes never form → `cmsCreateTransform` NULL → guard → `cmsDoTransform` never
-  runs. **The next bottleneck is the input/seed layer, below the binding layer.**
-  (ii) the residual no-producer / non-`Create*`-named tail still drops to NULL
-  holes. (iii) a clean Z3-on confirm was blocked by build-cache×llvm14 (§4, now
-  resolved). So #14 is **"construction-lifted; input layer is the new ceiling."**
+  compilable. **Status (updated 2026-06-20):** (i) the *deep coverage* the factory
+  chain alone could not win (a degraded-30s probe once covered **0/799 of
+  `cmsxform.c`** — `cmsCreateTransform` NULL → guard → `cmsDoTransform` never runs)
+  is now reached by the default-on builder levers: POPULATE_COLLECTIONS +
+  FUZZ_BUFFERS render collection/data-buffer args from the fuzz bytes so drivers are
+  seed-independent (lcms 300s-fuzz edges **325→943, coverage 0.86%→16.81%**), and
+  INPUT_SOURCE materializes a creator's `FILE*`/path arg from the fuzz bytes. (ii) the
+  residual no-producer / non-`Create*`-named tail still drops to NULL holes. (iii) a
+  clean Z3-on confirm was blocked by build-cache×llvm14 (§4, now resolved). So #14 is
+  **"construction + builder input wiring lifted; deep structured-input validity
+  (synthetic seed gen) is the residual tail."**
 
 - **Coverage is breadth-bound, not time-bound (at this scale).** The lcms56 merged
   harness plateaus at **~1424 branches in ~30 min**. More fuzz time does not close
@@ -216,9 +234,11 @@ open items + roadmap. Short list:
 
 | Item | Why it's the lever |
 |---|---|
-| **Input/seed layer (NEW #1 below binding) — real-seed routing landed (default-on), gain unmeasured** | factory chain made `cmsDoTransform` constructable+compilable, but covers **0/799 of `cmsxform.c`** because random bytes never form a valid ICC profile. Real-seed routing copies the project's REAL format-matching seeds into each driver's corpus + the merged harness (additive, no-op when no seeds). **Next:** measure the cmsxform.c gain end-to-end; synthetic seed gen still TODO |
+| **Input/seed layer — builder input wiring landed (default-on); residual = deep structured-input validity** | factory chain made `cmsDoTransform` constructable+compilable but covered 0/799 of `cmsxform.c` on random bytes. Now dented by the default-on builder levers (POPULATE_COLLECTIONS / FUZZ_BUFFERS / INPUT_SOURCE: seed-independent drivers, lcms 300s edges 325→943, cov 0.86%→16.81%) + real-seed routing (copies the project's REAL format-matching seeds into each corpus + merged harness, no-op when none). **Next:** synthetic seed gen for a *valid* deep file (a valid ICC profile from random bytes) — still TODO |
 | **build-cache × llvm14 — RESOLVED by A1** | `ensure_llvm14_base_builder` (see §4). **One-time deploy:** rebuild + re-push `*-ofg-cached-*` (or `OFG_USE_CACHING=0`) |
 | **merged-harness coverage validity — RESOLVED** | the merged harness used to read spurious 0 coverage: a compile-INVALID driver was KEPT then silently stubbed, so address + coverage builds compiled DIFFERENT TU sets (A≢B). **Fix:** the **compile-validation merge gate** (`compile_validate.py`) includes ONLY drivers that compile under real coverage-build flags, so both builds compile the IDENTICAL set (lcms: excluded 9/11 → llvm-cov 551/9590 br). Plus a coverage-instrumented LIBRARY rebuild (`git clean -dxf` + `--sanitizer coverage --clean`) and a renderer that emits valid C/C++ by construction (`skeleton_generator.py`), so fewer drivers reach the gate invalid |
+| **merge stock-target language — RESOLVED (deterministic)** | the compile-validation gate used to content-sniff the extensionless `NN.fuzz_target` for its language; libpng's stock target is `.cc` (C++) but the sniff guessed C → 34/110 dropped as bogus C-vs-C++ errors (A≢B vs the per-trial build). **Fix:** thread the STOCK target's language (`benchmark.file_type` from its path extension) through the gate + merge + build (`compile_validate._resolve_lang`), so all 34 recover **deterministically, zero LLM/FP/cost** (commit `92d17830`) |
+| **merge-gate LLM repair (`LOGICFUZZ_MERGE_REPAIR`) — PROTOTYPE, opt-in, A/B pending** | the compile-validation gate DROPS non-compiling drivers (fail-open). When set, each excluded TU gets ONE LLM rewrite RE-VALIDATED through the same gate; kept only if it now compiles (fail-closed ⇒ A≡B preserved). `tools/merge_drivers/llm_repair.py`; records `repaired_recovered` in `merged/compile_validation.json`. **Now largely subsumed** — the libpng 34/110 it targeted are recovered deterministically by the stock-target-language fix above; its honest residual is genuinely-malformed drivers only. **Next:** ≥2-project A/B before default-on (low priority — keep as fallback) |
 | **Binding layer (#14) — construction lifted, tail remains** | factory chain (channel b) recovers opaque `void*`-return producers; **next:** the residual non-`Create*`-named / no-in-project-producer tail + caller-alloc-init args beyond the SVF-INIT channel |
 | **Multi-project coverage-diff validation** | turn the lcms PoC into a claim: reproduce across projects + show we fill more existing-driver gap than PromeFuzz/CKGFuzzer |
 | **24h union real run** | the actual headline vs PromeFuzz Table 2 absolute coverage (cost OK, deferred) |

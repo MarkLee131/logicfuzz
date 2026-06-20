@@ -7,10 +7,7 @@ import random
 import subprocess as sp
 import tempfile
 import time
-import uuid
 from typing import Dict
-
-from google.cloud import storage
 
 from experiment import benchmark, oss_fuzz_checkout
 
@@ -105,80 +102,13 @@ def _build_project_local_docker(project: str):
     raise Exception('Failed to build OSS-Fuzz image for {project}')
   logger.info('Done building image.')
 
-def _copy_project_src(project: str,
-                      out: str,
-                      cloud_experiment_bucket: str = '',
-                      language: str = 'c++'):
-  """Copies /|src| from cloud if bucket is available or from local image."""
-  if cloud_experiment_bucket:
-    logger.info(
-        'Retrieving human-written fuzz targets of %s from Google Cloud Build.',
-        project)
-    bucket_dirname = _build_project_on_cloud(project, cloud_experiment_bucket)
-    _copy_project_src_from_cloud(bucket_dirname, out, cloud_experiment_bucket)
-  else:
-    logger.info(
-        'Retrieving human-written fuzz targets of %s from local Docker build.',
-        project)
-    _build_project_local_docker(project)
-    _copy_project_src_from_local(project, out, language)
-
-def _build_project_on_cloud(project: str, cloud_experiment_bucket: str) -> str:
-  """Builds project image on cloud and copies /src."""
-  # project => cloud_experiment_name
-  uid = project + '-' + str(uuid.uuid4())
-  search_regex = '-o'.join(f' -name "*{ext}" ' for ext in SEARCH_EXTS)
-  ignore_regex = ' '.join(
-      f'! -path "/src/{bad_dir}/*"' for bad_dir in SEARCH_IGNORE_DIRS)
-  cp_command = (f'find /src \\({search_regex}\\) {ignore_regex} '
-                '-exec cp --parents {} /workspace/out/ \\;')
-  cloud_build_command = [
-      f'./{oss_fuzz_checkout.VENV_DIR}/bin/python3',
-      'infra/build/functions/project_experiment.py',
-      f'--project={project}',
-      f'--command={cp_command}',
-      f"--upload_output=gs://{cloud_experiment_bucket}/{uid}",
-      f'--experiment_name={uid}',
-  ]
-  cloud_build_result = sp.run(cloud_build_command,
-                              capture_output=True,
-                              stdin=sp.DEVNULL,
-                              text=True,
-                              check=False,
-                              cwd=oss_fuzz_checkout.OSS_FUZZ_DIR)
-  if (cloud_build_result.returncode or
-      'failed: step exited with non-zero status' in cloud_build_result.stdout):
-    logger.error('Failed to upload /src/ in OSS-Fuzz image of %s:', project)
-    logger.error('STDOUT: %s', cloud_build_result.stdout)
-    logger.error('STDERR: %s', cloud_build_result.stderr)
-    raise Exception(
-        f'Failed to run cloud build command: {" ".join(cloud_build_command)}')
-
-  return uid
-
-def _copy_project_src_from_cloud(bucket_dirname: str, out: str,
-                                 cloud_experiment_bucket: str):
-  """Copies /src from |bucket_dirname|."""
-  storage_client = storage.Client()
-  bucket = storage_client.bucket(cloud_experiment_bucket)
-  blobs = bucket.list_blobs(prefix=bucket_dirname)
-  # Download each file in the directory
-  for blob in blobs:
-    # Ignore directories
-    if blob.name.endswith('/'):
-      continue
-    # Create a local path that mirrors the structure in the bucket.
-    relative_path = blob.name[len(bucket_dirname) + 1:]
-    local_file_path = os.path.join(out, 'src', relative_path)
-    # Create local directories if they don't exist
-    local_dir = os.path.dirname(local_file_path)
-    os.makedirs(local_dir, exist_ok=True)
-
-    # Download the file
-    blob.download_to_filename(local_file_path)
-    logger.info('Downloaded %s to %s', blob.name, local_file_path)
-    blob.delete()
-    logger.info('Deleted %s from the bucket.', blob.name)
+def _copy_project_src(project: str, out: str, language: str = 'c++'):
+  """Copies /|src| from the project's local OSS-Fuzz Docker image."""
+  logger.info(
+      'Retrieving human-written fuzz targets of %s from local Docker build.',
+      project)
+  _build_project_local_docker(project)
+  _copy_project_src_from_local(project, out, language)
 
 def _copy_project_src_from_local(project: str, out: str, language: str):
   """Runs the project's OSS-Fuzz image to copy /|src| to /|out|."""
@@ -360,7 +290,6 @@ def search_source(
     interesting_filenames: list,
     language: str,
     result_dir: str = '',
-    cloud_experiment_bucket: str = '',
 ) -> tuple[Dict[str, str], Dict[str, str]]:
   """Searches source code of the target OSS-Fuzz project for the files listed
     in |interesting_filenames|. Returns a dictionary of fuzz targets (path:
@@ -369,7 +298,7 @@ def search_source(
     out = os.path.join(temp_dir, 'out')
     os.makedirs(out)
 
-    _copy_project_src(project, out, cloud_experiment_bucket, language)
+    _copy_project_src(project, out, language)
 
     potential_harnesses, interesting_filepaths = _identify_fuzz_targets(
         out, interesting_filenames, language)

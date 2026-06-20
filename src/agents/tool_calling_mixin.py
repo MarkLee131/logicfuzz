@@ -216,37 +216,6 @@ class ToolCallingMixin:
                                    token_usage.get('completion_tokens', 0),
                                    token_usage.get('total_tokens', 0))
 
-            # One-shot prompt+billing capture for token attribution
-            # (env-gated; no behavior change unless LOGICFUZZ_DUMP_PROMPT set).
-            import os as _os
-            if _os.environ.get('LOGICFUZZ_DUMP_PROMPT') and cur_round == 0:
-                try:
-                    import pathlib as _pl
-                    _dd = _pl.Path(_os.environ['LOGICFUZZ_DUMP_PROMPT'])
-                    _dd.mkdir(parents=True, exist_ok=True)
-                    _sys = str(self.system_message)
-                    _usr = str(initial_prompt)
-                    try:
-                        import tiktoken as _tk
-                        _enc = _tk.encoding_for_model('gpt-4o')
-                        _local = len(_enc.encode(_sys)) + len(_enc.encode(_usr))
-                    except Exception:
-                        _local = (len(_sys) + len(_usr)) // 4
-                    _billed = token_usage.get('prompt_tokens') if token_usage else None
-                    _fn = _dd / f'{agent_name}_t{trial}_r{cur_round}.txt'
-                    _fn.write_text(
-                        f'=== LOCAL tiktoken(system+user) = {_local} ===\n'
-                        f'=== API billed prompt_tokens = {_billed} ===\n'
-                        f'=== usage_metadata = {getattr(response, "usage_metadata", None)} ===\n'
-                        f'=== response_metadata = {getattr(response, "response_metadata", {})} ===\n'
-                        f'=== sys_chars={len(_sys)} usr_chars={len(_usr)} ===\n\n'
-                        f'###### SYSTEM ######\n{_sys}\n\n###### USER ######\n{_usr}\n')
-                    logger.info(
-                        f'<DUMP> {_fn.name} local={_local} billed={_billed}',
-                        trial=trial)
-                except Exception as _e:  # never break a real run
-                    logger.info(f'<DUMP> failed: {_e}', trial=trial)
-
             content = response.content or ""
             if isinstance(content, list):
                 # Handle multi-part content (some models return list)
@@ -255,6 +224,27 @@ class ToolCallingMixin:
 
             if content:
                 all_responses.append(content)
+
+            # Per-run LLM interaction ledger: record this call's prompt (round 0
+            # only — the system prompt is identical every round), response,
+            # tool calls, and token usage to results/<proj>/llm_trace.jsonl.
+            # Best-effort; never breaks a real run.
+            try:
+                from src.utils import llm_trace as _lt
+                _lt.record(
+                    agent=agent_name,
+                    trial=trial,
+                    llm_round=cur_round,
+                    system=str(self.system_message) if cur_round == 0 else None,
+                    user=str(initial_prompt) if cur_round == 0 else None,
+                    response=content,
+                    tool_calls=[{'name': tc.get('name', ''),
+                                 'args': tc.get('args', {})}
+                                for tc in tool_calls] or None,
+                    tokens=token_usage or {},
+                    model=getattr(self, 'model_name', ''))
+            except Exception:
+                pass
 
             logger.info(
                 f'<{log_prefix} R{cur_round}> tools={len(tool_calls)} content={len(content)} chars',

@@ -1,8 +1,7 @@
 """Task 7 — I1 (lifecycle order): every producer is emitted BEFORE its
 consumers in a constructed sequence (no use-before-produce / close-before-open).
-Gated behind ``LOGICFUZZ_VALIDITY_CONTRACT``; gate-off is byte-identical.
+The validity contract is unconditional (graduated 2026-06-20, switch removed).
 """
-import os
 import sys
 import pathlib
 
@@ -56,13 +55,9 @@ def test_enforce_producer_order_is_stable_when_already_ordered():
 
 
 def test_construct_gate_on_produces_ordered_sequences():
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "1"
-    try:
-        res = construct_sequences(MODEL)
-        seqs = res.sequences if hasattr(res, "sequences") else res
-        # every sequence that contains both producer and consumer has them ordered
-        for s in seqs:
-            if "makeProfile" in s and "useProfile" in s:
-                assert s.index("makeProfile") < s.index("useProfile")
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
+    res = construct_sequences(MODEL)
+    seqs = res.sequences if hasattr(res, "sequences") else res
+    # every sequence that contains both producer and consumer has them ordered
+    for s in seqs:
+        if "makeProfile" in s and "useProfile" in s:
+            assert s.index("makeProfile") < s.index("useProfile")

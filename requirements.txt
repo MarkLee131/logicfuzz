@@ -21,9 +21,6 @@ pylint>=3.2.0
 pyright>=1.1.0
 yapf>=0.40.0
 
-# Google Cloud - storage for OSS-Fuzz coverage data access
-google-cloud-storage>=2.18.0
-
 # LangGraph for agent workflow
 langgraph>=0.2.74
 langgraph-checkpoint>=1.0.0

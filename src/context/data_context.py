@@ -1681,7 +1681,7 @@ class FuzzingContext:
                 f"Project '{project_name}' has no public_headers file. "
                 f"The Clang/LLVM hybrid extractor was supposed to record "
                 f"it as generator.extract_metadata['local']['public_headers']. "
-                f"Either re-run extraction (drop --disable-llvm-extraction), "
+                f"Either re-run extraction, "
                 f"or pre-populate <work_dir>/public_headers.txt and set the "
                 f"metadata key manually before invoking prepare()."
             )
@@ -3764,7 +3764,7 @@ def _generate_cbfactory_drivers(generator, num_drivers: int, driver_size: int,
             "ConditionManager not available - CBFactory requires LLVM extraction"
         )
         log.warning(
-            "Ensure LLVM extraction is enabled (not --disable-llvm-extraction)"
+            "LLVM extraction must succeed to provide ConditionManager"
         )
         if require_z3_enabled():
             raise RuntimeError(

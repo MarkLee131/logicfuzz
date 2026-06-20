@@ -2,10 +2,9 @@
 required pointer arg (e.g. an opaque ``char* FileName`` the renderer cannot
 synthesize) must never be left NULL — the renderer's value-struct/string fill
 covers the fillable cases, and the constructor DROPS a target consumer whose
-required value arg is genuinely unfillable AND has no producer. Gated behind
-``LOGICFUZZ_VALIDITY_CONTRACT``; gate-off is byte-identical.
+required value arg is genuinely unfillable AND has no producer. The validity
+contract is unconditional (graduated 2026-06-20, switch removed).
 """
-import os
 import sys
 import pathlib
 
@@ -78,13 +77,9 @@ def test_nullable_arg_is_exempt():
 def test_construct_gate_on_drops_unfillable_target():
     model = APISemanticModel("t", {
         s.name: s for s in (OPAQUE_PTR_CONSUMER, STRING_CONSUMER)})
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "1"
-    try:
-        res = construct_sequences(model)
-        seqs = res.sequences
-        flat = {a for s in seqs for a in s}
-        assert "needsOpaquePtr" not in flat   # unfillable -> dropped
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
+    res = construct_sequences(model)
+    seqs = res.sequences
+    flat = {a for s in seqs for a in s}
+    assert "needsOpaquePtr" not in flat   # unfillable -> dropped
 
 

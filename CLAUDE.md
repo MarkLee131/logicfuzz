@@ -17,30 +17,28 @@ repair + Tier-1 F1–F4) was deleted.
 python3 run_logicfuzz.py -y comparison/cjson.yaml -l gpt-4o
 # Extract APIs only (no LLM)
 python3 run_logicfuzz.py -y comparison/cjson.yaml --extract-only
-# Generate drivers with CBFactory only (no LLM)
-python3 run_logicfuzz.py -y comparison/cjson.yaml --generate-drivers --num-drivers 10
-# Phase G closed-loop CBFactory feedback (re-synthesise with grown automaton)
-python3 run_logicfuzz.py -y comparison/cjson.yaml --closed-loop --closed-loop-iters 3 --closed-loop-early-stop 0
-# A/B: disable G2 model-driven construction, fall back to random-walk grammar
-LOGICFUZZ_DISABLE_G2_CONSTRUCT=1 python3 run_logicfuzz.py -y comparison/cjson.yaml
-# Merge: synthesize a multi-task harness from successful trials
-LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 python3 run_logicfuzz.py -y comparison/lcms.yaml --merge-drivers
-# Evaluation profile: bundles --closed-loop + --merge-drivers
-python3 run_logicfuzz.py -y comparison/cjson.yaml --eval
-# Multi-hop reasoning Mode A (Prototyper); opt-in
-python3 run_logicfuzz.py -y comparison/cjson.yaml --multihop-prototyper
-# Control parallelism
-LLM_NUM_EXP=5 python3 run_logicfuzz.py -y comparison/cjson.yaml
+# Evaluation profile (bundles --closed-loop + --merge-drivers) — the headline run
+LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 python3 run_logicfuzz.py -y comparison/lcms.yaml --eval
+# Merge only: fold successful trials into one multi-task harness
+python3 run_logicfuzz.py -y comparison/lcms.yaml --merge-drivers
 # Code quality + tests
 pylint src/ && pyright src/ && pytest tests/
 # Extended fuzzing evaluation (24h)
 python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz_targets/02.fuzz_target -d 86400
 ```
 
+Secondary modes (see `--help`): `--generate-drivers` (static no-LLM baseline),
+`--closed-loop[-iters N]` (Phase G feedback; also implied by `--eval`),
+`--multihop-prototyper` (experimental, unvalidated). A/B kill-switches + tuning
+live in the Flag/Gate Reference below (`LOGICFUZZ_TOP_K`,
+`LOGICFUZZ_DISABLE_G2_CONSTRUCT`, …); control parallelism via `LLM_NUM_EXP=N`.
+
 `--num-samples` auto-resolves to `len(skeleton_drivers)` (one trial per
 Z3-validated skeleton); see `run_single_fuzz.py:_fuzzing_pipelines`. Knowledge-layer
-priors (Phase B / T1) are DEFAULT-ON (`--use-doxygen-priors`/`--use-readme-purpose`
-removed; live in `FuzzingContext.prepare()` defaults).
+priors (Phase B / T1) are DEFAULT-ON (live in `FuzzingContext.prepare()` defaults).
+Every run also writes a per-call LLM interaction ledger (prompt + response +
+token usage) to `results/<project>/llm_trace.jsonl` (companion to
+`token_summary.json`).
 
 ## Flag / Gate Reference (`LOGICFUZZ_*` / `LIBERATOR_*`)
 
@@ -82,11 +80,13 @@ TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT
 - `LOGICFUZZ_VALUE_FEEDBACK` — T12: capture filled hole values → coverage_memory, pin deepest-coverage into the same skeleton next run (cross-run). DEFAULT-ON (opt-out =0); no-op on a fresh project.
 - `LOGICFUZZ_FORMAT_INFER=1` — T10: synthesize front-gate-passing seed(s) from inferred magic when no real seed matches (opt-in; emits a diverse k≥3 corpus).
 - `LOGICFUZZ_FUZZABLE_HOLES=1` — Tier 1: render tunable CONFIG holes (enum/scalar/float) as FUZZ_DERIVE directives so the fuzzer sweeps the param. DEFAULT-ON (opt-out =0).
+- `LOGICFUZZ_INPUT_SOURCE=1` — symbolic input-source materialization: when a CREATOR's `FILE*` or lone `const char*` arg would otherwise stay NULL, materialize the fuzzer's `data,size` into it (`FILE*`→`fmemopen`; path→`mkstemp`+`write`). Type-driven + library-agnostic (keys on `APIRole.CREATOR` + arg type, never library names); `FILE*` is type-certain (HIGH), a lone `const char*` is path-or-content ambiguous (LOW → wrapped in a RefineHole). INPUT_BUFFER args excluded. `liberator_adapter/analysis/input_source.py` + `skeleton_generator._input_source_enabled`. DEFAULT-ON (opt-out =0); fail-open.
+- `LOGICFUZZ_REFINE_HOLES=1` — when on, a LOW-confidence (path) input-source materialization is wrapped in a RefineHole so a later pass can refine it. DEFAULT-ON (opt-out =0).
 - `LOGICFUZZ_OBJCONSTRUCT_FIRST=1` — L1: prefer object-construction chain roots over parser-entry (top coverage lever; keeps ≥1 parser-rooted per parser-only cluster). (gated, A/B pending)
 - `LOGICFUZZ_API_FLOOR=1` — L7: greedy set-cover guarantees every constructable API appears in ≥1 selected sequence. **DEFAULT-ON** (opt-out =0); graduated 2026-06-20 — lcms A/B survived 32→157, merged distinct APIs 18→69 (with VALIDITY_CONTRACT).
 - `LOGICFUZZ_RESIDUAL_ALLCOVER=1` — breadth lever: append a single-API sequence for every public API the symbolic constructor can't chain (validity-repair prepends its handle creators), lifting API breadth toward the extraction ceiling (cjson 75→78, lcms 149→297). **DEFAULT-ON** (opt-out =0); graduated 2026-06-20 — lcms A/B survived 32→157, merged distinct APIs 18→69 (with VALIDITY_CONTRACT).
 - `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1` — opt OUT of the merge compile-validation gate (default-on, fail-open: ships only drivers that compile under real cov-build flags).
-- `LOGICFUZZ_MERGE_REPAIR=1` — opt IN to single-shot LLM repair of drivers the merge compile-validation gate would DROP. Each excluded TU gets one LLM rewrite (deterministic triage-guided prompt) RE-VALIDATED through the same gate; kept only if it now compiles (fail-closed ⇒ A≡B preserved). Recovers mechanical C-vs-C++/undeclared/syntax exclusions (libpng 34/110 excluded, ~all single-shot-fixable). `tools/merge_drivers/llm_repair.py` + `run_single_fuzz._compile_validate_candidates`; records `repaired_recovered` in `merged/compile_validation.json`. (PROTOTYPE, default-OFF, A/B pending — needs ≥2-project confirm.)
+- `LOGICFUZZ_MERGE_REPAIR=1` — opt IN to single-shot LLM repair of drivers the merge compile-validation gate would DROP. Each excluded TU gets one LLM rewrite (deterministic triage-guided prompt) RE-VALIDATED through the same gate; kept only if it now compiles (fail-closed ⇒ A≡B preserved). `tools/merge_drivers/llm_repair.py` + `run_single_fuzz._compile_validate_candidates`; records `repaired_recovered` in `merged/compile_validation.json`. **Largely subsumed by the deterministic stock-target-language fix (commit `92d17830`)** — the libpng 34/110 C-vs-C++ exclusions it targeted now compile by threading `benchmark.file_type` (the stock target's extension) through the gate+merge+build; MERGE_REPAIR's honest residual is genuinely-malformed drivers only. (PROTOTYPE, default-OFF, A/B pending — keep as fallback.)
 
 ### Driver DECOUPLING / DE-DUP levers
 DENSE_PARTITION, DIVERSIFY_PRODUCERS, SUBSET_ELIM graduated to default (see Graduated block). Always-on Layer-E redundancy telemetry → `results/<project>/static_analysis/redundancy_telemetry.json` (mean pairwise API Jaccard + disjointness; the A/B oracle).
@@ -190,7 +190,7 @@ LangGraph tools: `BashExecuteTool` + `GDBExecuteTool` (`src/tools/execution.py`,
 | **APISemanticModel** (G1) | `liberator_adapter/analysis/api_semantic_model.py` | `reconcile()` → per-API role+arg semantics+evidence; role authority (demotes ConditionManager); 0 LLM; Step 5g. |
 | **Sequence Constructor** (G2) | `liberator_adapter/analysis/sequence_constructor.py` | `construct_sequences()` builds lifecycle-complete chains, merged with grammar floor at Step 5h. `_densify()` thickens chains (default-on); factory-chain opaque-producer recovery (default-on). |
 | **Hole Semantics** (G4) | `liberator_adapter/analysis/hole_semantics.py` | `annotate_skeletons()` attaches per-arg value intents at Step 10b. `_hard_nullguard()` (default-on) escalates ret-contract to MUST-GUARD. |
-| **Validity Contract** | `liberator_adapter/analysis/validity_contract.py` | Oracle for `LOGICFUZZ_VALIDITY_CONTRACT` — checks I1/I2a/I2b/I3 over a constructed sequence using the model's per-arg nullable. |
+| **Validity Contract** | `liberator_adapter/analysis/validity_contract.py` | Unconditional valid-by-construction oracle (switch removed, graduated 2026-06-20; gated by `sequence_constructor._validity_contract` ≡ `True`) — checks I1/I2a/I2b/I3 over a constructed sequence using the model's per-arg nullable. |
 | **Crash-frame classifier** | `tools/merge_drivers/crash_frame.py` | `classify_crash_frame()` → driver/library/unknown (deterministic ASan frame attribution). |
 | **Pre-ship quarantine** | `run_single_fuzz.py:_is_immediate_crash_fp` + `_maybe_merge_drivers` | drops immediate-crash 0-coverage FP drivers from the merge; uses the trial's own verdict. + dead-filter bugfix (`dead_on_empty`). |
 | **Compile-validation merge gate** | `tools/merge_drivers/compile_validate.py:validate_compilable` + `run_single_fuzz.py:_compile_validate_candidates` | merge includes ONLY drivers that COMPILE under real OSS-Fuzz cov-build flags (per-TU C/C++, `-Werror=implicit-function-declaration` re-promoted) so address-build and cov-build compile the IDENTICAL set (A≡B). Fail-open; opt-out `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1`; writes `merged/compile_validation.json`. |
@@ -266,7 +266,7 @@ Persistence: `results/{project}/{automaton,comprehension,state}/`.
 - **Error Triage**: categorize build errors (link/header/type) for targeted fixing.
 - **Token Efficiency**: context prefetching, 8KB truncation, deterministic-first Comprehender + automaton prefilter. Per-run cost metered (`src/utils/token_meter.py`) → `results/<project>/token_summary.json`.
 - **Signal vs Filter**: the automaton produces *signals* (acceptance, sampled paths, grafting) that bias the candidate pool/ranking; greedy max-coverage selection is unchanged.
-- **Reuse upstream Liberator over reimplementation**: check `reference/liberator` first; adapt at the boundary, don't fork.
+- **Reuse upstream Liberator over reimplementation**: route synthesis-layer fixes through the adapter port in `liberator_adapter/` (e.g. `RunningContext`/`CBFactory`); adapt at the boundary, don't write a parallel simplified version.
 - **Coverage measurement (A≡B / valid-harness)**: address-build and cov-build must compile the IDENTICAL harness, else replayed coverage is spurious (enforced by the compile-validation gate; `docs/generation.md` §6).
 
 ## Validation Pipeline
@@ -307,6 +307,7 @@ Step 12   Existing-driver knowledge extraction + Phase B idiom distillation
 ## Recent Keystone Fixes
 
 - **Stock-binary build bug** — cached builds compiled the STOCK fuzzer, not the generated driver (`oss_fuzz_checkout._invalidate_stale_cache_dockerfiles`).
+- **Merge stock-target language** (commit `92d17830`) — the compile-validation gate must compile each driver in the STOCK fuzz-target's language (`benchmark.file_type` from the target_path extension), NOT content-sniff the extensionless `NN.fuzz_target`. libpng's `.cc`→C++ but the sniff guessed C → 34/110 dropped (A≢B). Fix threads the lang override into gate+merge+build (`compile_validate._resolve_lang`); all 34 recovered deterministically, zero LLM/FP/cost — subsumes most of `LOGICFUZZ_MERGE_REPAIR`. NB: YAML `language` is the LIBRARY lang (wrong signal).
 - **no_progress gate KEPT** for the merged harness; only `dead_on_empty` crashers dropped (`LOGICFUZZ_DROP_NO_PROGRESS=1` to drop).
 - **Crash-path merge exclusion** — `StateAdapter` now propagates `compiles` so compiled-but-crashed drivers aren't lost from the merge.
 - **Valid-by-construction binding** (gated `VALIDITY_CONTRACT`) — Z3-path opaque-handle binding made drivers dead→live (lcms merged ~0→21%; one driver covers ~1000 liblcms2 br, was 0).
@@ -318,9 +319,14 @@ Step 12   Existing-driver knowledge extraction + Phase B idiom distillation
 
 - 2026-06-19: 实现deepseek的思考模式支持： https://api-docs.deepseek.com/guides/thinking_mode
 
-Live frontier = **coverage vs PromeFuzz** on unsaturated, breadth-matched libs
-(c-ares/libpng/sqlite3); lead the eval on quality/efficiency/complementarity, NOT
-raw 24h (PromeFuzz saturates small libs). Start from `docs/generation.md`.
+- 2026-06-20: 在新的项目上测试我们的工具，对比和promefuzz的覆盖率和效率，特别是在未饱和的库上（如libpng、sqlite3）。我们需要评估质量、效率和互补性（24小时的原始覆盖率只是一方面）。具体有潜力的库有：
+  - libpng: xxx (promefuzz: 1849 branch coverage (bc) in docs/RQ1-result-promefuzz.png), easy to win.
+  - sqlite3: xxx (promefuzz: 13041 bc in docs/RQ1-result-promefuzz.png), easy to win.
+  - curl: xxx (promefuzz: 5596 bc in docs/RQ1-result-promefuzz.png), but not really easy for us to win.
+  - libjpeg-turbo:  xxx (promefuzz: 4975 bc in docs/RQ1-result-promefuzz.png), easy to win.
+  - tinygltf: xxx (promefuzz: 1925 bc in docs/RQ1-result-promefuzz.png), easy to win.
+  - more can be obtained from: https://arxiv.org/pdf/2605.14431
+  
 
 - **The headline test**: a 24h `--merge` run on a breadth-matched config (`VALIDITY_CONTRACT + RESIDUAL_ALLCOVER + API_FLOOR + PORTFOLIO_DEPTH=2`) vs PromeFuzz Table 2 — on the breadth-matched libs only.
 - Verify residual single-API drivers compile+run end-to-end (a `nullable=True`-handle residual driver may be shallow; lcms-style `nullable=False` gets a creator prepended).

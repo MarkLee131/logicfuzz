@@ -201,7 +201,6 @@ class LangGraphCrashAnalyzer(LangGraphAgent, ToolCallingMixin):
             if self.bash_tool:
                 self.bash_tool.terminate()
 
-        self._langgraph_logger.flush_agent_logs(self.name)
         return {
             "crash_analysis": {
                 "root_cause": result.get("insight", "No analysis"),

@@ -8,15 +8,14 @@ The skeleton then renders the parser's HARD-NULLGUARD ``if (ret_parser == NULL)
 return 0;`` BEFORE the independent producer → on random input the parser is ~always
 NULL → the whole driver bails → the param-rich independent APIs never run.
 
-The fix (gated, default-OFF):
+The fix (graduated to always-on; the ``LOGICFUZZ_SCOPED_GUARDS`` switch was removed):
   D — ``construct_sequences`` reorders a constructed ``core`` so dependency
       components are contiguous (shared helper ``_dependency_components``).
   B — ``skeleton_generator`` renders component-scoped NULL guards (B1 nested-if):
       a producer's failure only skips ITS dependents, the independent component
       renders OUTSIDE that ``if``.
 
-Gate-OFF must be byte-identical to the legacy path; the rest of the suite pins
-that. These tests pin the gate-ON contract + the shared helper.
+These tests pin the (now-unconditional) B+D contract + the shared helper.
 """
 from __future__ import annotations
 
@@ -198,11 +197,7 @@ def test_scoped_render_independent_call_outside_parser_guard():
     """Gate-ON: the independent producer's call is NOT gated by the parser's
     NULL guard — no whole-driver ``return 0`` and the independent call is at
     function scope (NOT nested inside the parser's ``if`` block)."""
-    os.environ["LOGICFUZZ_SCOPED_GUARDS"] = "1"
-    try:
-        code = _render(_archetype_apis())
-    finally:
-        os.environ.pop("LOGICFUZZ_SCOPED_GUARDS", None)
+    code = _render(_archetype_apis())
 
     # No whole-driver bail on a producer return.
     assert "if (ret_cmsOpenProfileFromMem == NULL) return 0;" not in code
@@ -258,14 +253,10 @@ def test_scoped_render_uses_threaded_dep_model_over_signature_heuristic():
                       "p_use": _StubSem([], ["handle"])})
 
     def _render_dm(dm):
-        os.environ["LOGICFUZZ_SCOPED_GUARDS"] = "1"
-        try:
-            sk = SkeletonGenerator().generate(
-                api_sequence=[parser, consumer], driver_name="t",
-                is_cpp=False, dep_model=dm)
-            return SkeletonRenderer().render(sk)
-        finally:
-            os.environ.pop("LOGICFUZZ_SCOPED_GUARDS", None)
+        sk = SkeletonGenerator().generate(
+            api_sequence=[parser, consumer], driver_name="t",
+            is_cpp=False, dep_model=dm)
+        return SkeletonRenderer().render(sk)
 
     def _consumer_inside_guard(code: str) -> bool:
         lines = code.splitlines()
@@ -309,11 +300,7 @@ def test_construct_reorders_components_gate_on():
     ]
     model = reconcile(apis)
 
-    os.environ["LOGICFUZZ_SCOPED_GUARDS"] = "1"
-    try:
-        res = construct_sequences(model)
-    finally:
-        os.environ.pop("LOGICFUZZ_SCOPED_GUARDS", None)
+    res = construct_sequences(model)
 
     assert res.sequences
     for seq in res.sequences:

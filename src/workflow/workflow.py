@@ -162,27 +162,6 @@ class FuzzingWorkflow:
         logger.info('📍 [workflow.run] Token usage summary printed',
                     trial=trial)
 
-        # Finalize all agent logs before returning
-        logger.info('📍 [workflow.run] Starting logger finalization...',
-                    trial=trial)
-        from src.utils.logger import LangGraphLogger
-        workflow_logger = LangGraphLogger.get_logger(
-            workflow_id="fuzzing_workflow",
-            trial=trial,
-            base_dir=str(self.args.work_dirs.base) if
-            hasattr(self.args, 'work_dirs') and self.args.work_dirs else None)
-        logger.info('📍 [workflow.run] Got workflow logger instance',
-                    trial=trial)
-
-        finalize_start = time.time()
-        logger.info('📍 [workflow.run] Calling workflow_logger.finalize()...',
-                    trial=trial)
-        workflow_logger.finalize()
-        finalize_duration = time.time() - finalize_start
-        logger.info(
-            f'📍 [workflow.run] Logger finalized in {finalize_duration:.2f}s',
-            trial=trial)
-
         logger.info('📍 [workflow.run] Returning final_state', trial=trial)
         return final_state
 

@@ -155,7 +155,6 @@ class LangGraphFixer(LangGraphAgent, ToolCallingMixin):
             state_update["compilation_retry_count"] = \
                 state.get("compilation_retry_count", 0) + 1
 
-        self._langgraph_logger.flush_agent_logs(self.name)
         return state_update
 
     def _generate_code_context(self, code: str, errors: list) -> str:
