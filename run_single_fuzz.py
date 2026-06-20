@@ -529,7 +529,8 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
   # docs/contributions_and_related_work.md §3 "Harness merge").
   merged_path: Optional[str] = None
   if getattr(args, 'merge_drivers', False):
-    merged_path = _maybe_merge_drivers(benchmark, work_dirs, trial_results)
+    merged_path = _maybe_merge_drivers(benchmark, work_dirs, trial_results,
+                                       model_name=model_name)
 
   # Phase C foundation — persist a post-merge IterationSnapshot. The
   # snapshot is the evaluation unit Phase D Planner / Phase E Adaptive
@@ -747,7 +748,8 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
   return [s for s in sources if str(s) not in rejected]
 
 
-def _compile_validate_candidates(sources, benchmark, work_dirs):
+def _compile_validate_candidates(sources, benchmark, work_dirs,
+                                 model_name=None):
   """Drop merge candidates that don't COMPILE under the OSS-Fuzz build flags.
 
   Compiles each candidate TU inside the project's real OSS-Fuzz container with
@@ -760,6 +762,12 @@ def _compile_validate_candidates(sources, benchmark, work_dirs):
   container hiccup) it returns the sources unchanged and logs the gap — it must
   never BLOCK a merge, only PRUNE known-bad TUs (the weak-stub net still backs
   it up). A run can opt out via ``LOGICFUZZ_SKIP_COMPILE_VALIDATE=1``.
+
+  Opt-in merge-gate LLM repair (``LOGICFUZZ_MERGE_REPAIR=1`` + ``model_name``):
+  before dropping the excluded TUs, give each ONE single-shot LLM rewrite and
+  RE-VALIDATE it through this same gate, keeping it only if it now compiles
+  (fail-closed → A≡B preserved). Recovers the mechanical C-vs-C++ / undeclared /
+  syntax exclusions (measured libpng 34/110) instead of losing them.
   """
   from pathlib import Path
   # Explicit truthy parse — a bare `if os.environ.get(...)` treats "0"/"false"
@@ -781,9 +789,46 @@ def _compile_validate_candidates(sources, benchmark, work_dirs):
                    f'merging unvetted', trial=0)
     return sources
 
+  _iquote = _iquote_dirs_for_target(benchmark)
   valid, excluded = validate_compilable(
-      [Path(s) for s in sources], project,
-      iquote_dirs=_iquote_dirs_for_target(benchmark))
+      [Path(s) for s in sources], project, iquote_dirs=_iquote)
+
+  # === Merge-gate LLM repair (opt-in: LOGICFUZZ_MERGE_REPAIR=1) ===
+  # The excluded set is dominated by MECHANICAL C-vs-C++ / undeclared / syntax
+  # fixes (measured libpng 34/110). Give each excluded TU ONE single-shot LLM
+  # rewrite and RE-VALIDATE it through THIS SAME gate; keep it only if it now
+  # compiles. Fail-closed: a rewrite that still fails is dropped exactly as
+  # before, so A≡B is preserved (a kept TU compiles under identical cov flags).
+  repaired_recovered = 0
+  _do_repair = os.environ.get('LOGICFUZZ_MERGE_REPAIR', '').strip().lower() in (
+      '1', 'true', 'yes', 'on')
+  if excluded and _do_repair and model_name:
+    try:
+      from tools.merge_drivers.llm_repair import repair_candidates
+      from src.llm.adapter import create_llm_adapter
+      _adapter = create_llm_adapter(model_name)
+      if _adapter is None:
+        raise RuntimeError('no LLM adapter')
+
+      def _revalidate(srcs, proj, iquote_dirs=None):
+        return validate_compilable(list(srcs), proj, iquote_dirs=iquote_dirs)
+
+      recovered, excluded = repair_candidates(
+          excluded, project, _adapter.query,
+          out_dir=Path(work_dirs.base) / 'merged' / 'repaired',
+          iquote_dirs=_iquote, revalidate=_revalidate)
+      for _orig, _repaired in recovered:
+        valid.append(_repaired)
+      repaired_recovered = len(recovered)
+      if repaired_recovered:
+        logger.info(
+            f'merge_drivers: LLM-repair RECOVERED {repaired_recovered} '
+            f'previously-excluded driver(s) (re-validated under cov flags): '
+            f'{sorted(Path(o).name for o, _ in recovered)}', trial=0)
+    except Exception as _re:  # never block the merge on the repair path
+      logger.warning(f'merge_drivers: LLM-repair skipped ({_re}); keeping the '
+                     f'original excluded set', trial=0)
+
   if excluded:
     # Visible, not silent: log every excluded driver + the first error line so
     # the loss is auditable (and confirm it drops the known-invalid ones).
@@ -803,6 +848,7 @@ def _compile_validate_candidates(sources, benchmark, work_dirs):
       import json
       rep = {'project': project,
              'valid': sorted(Path(s).name for s in valid),
+             'repaired_recovered': repaired_recovered,
              'excluded': [{'driver': Path(s).name,
                            'reason': (r or '').strip()[:1000]}
                           for s, r in excluded]}
@@ -879,7 +925,8 @@ def _iquote_dirs_for_target(benchmark: Benchmark) -> List[str]:
 
 def _maybe_merge_drivers(benchmark: Benchmark,
                          work_dirs: WorkDirs,
-                         trial_results: List) -> Optional[str]:
+                         trial_results: List,
+                         model_name: Optional[str] = None) -> Optional[str]:
   """Synthesize a multi-task harness from successful trials.
 
   Minimum-viable integration of tools.merge_drivers (--merge-drivers /
@@ -1008,7 +1055,7 @@ def _maybe_merge_drivers(benchmark: Benchmark,
   # address build and the coverage build compile the identical valid set. The
   # ``|| continue`` + weak stub stay as a now-rarely-firing SAFETY NET.
   successful_sources = _compile_validate_candidates(
-      successful_sources, benchmark, work_dirs)
+      successful_sources, benchmark, work_dirs, model_name=model_name)
   if len(successful_sources) < 2:
     logger.info(
         f'merge_drivers: skipping (only {len(successful_sources)} '
