@@ -30,7 +30,7 @@ python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz
 Secondary modes (see `--help`): `--generate-drivers` (static no-LLM baseline),
 `--closed-loop[-iters N]` (Phase G feedback; also implied by `--eval`),
 `--multihop-prototyper` (experimental, unvalidated). A/B kill-switches + tuning
-live in the Flag/Gate Reference below (`LOGICFUZZ_PORTFOLIO`,
+live in the Flag/Gate Reference below (`LOGICFUZZ_PORTFOLIO_DEPTH`,
 `LOGICFUZZ_DISABLE_G2_CONSTRUCT`, …); control parallelism via `LLM_NUM_EXP=N`.
 
 `--num-samples` auto-resolves to `len(skeleton_drivers)` (one trial per
@@ -45,8 +45,7 @@ token usage) to `results/<project>/llm_trace.jsonl` (companion to
 Format: `FLAG=val — purpose (default)`. Full rationale/measurements live in git history.
 
 ### Tuning values + always-on A/B kill-switches
-- `LOGICFUZZ_PORTFOLIO=complete|minimal|off` — coverage-COMPLETE portfolio selection (DEFAULT complete): ≥1 lifecycle-valid driver per subsystem cluster (cover) + bounded depth pass; fixes parser-entry-bias. (minimal=cover only; off=legacy fixed top_k round-robin = A/B control.)
-- `LOGICFUZZ_PORTFOLIO_DEPTH=F` — depth multiplier for PORTFOLIO Phase 2 (default 0.5).
+- `LOGICFUZZ_PORTFOLIO_DEPTH=F` — depth multiplier for coverage-complete Phase 2 (default 0.5). Coverage-complete portfolio selection (≥1 lifecycle-valid driver per subsystem cluster + bounded depth pass + API-floor; fixes parser-entry-bias) is now UNCONDITIONAL — the `LOGICFUZZ_PORTFOLIO=complete|minimal|off` switch was removed (graduated 2026-06-20); this is the only remaining knob.
 - `LOGICFUZZ_DENSE_MAX_EXTRA=N` — cap extra APIs appended per chain (default 8 → ~7.7 APIs/seq lcms = PromeFuzz parity).
 - `LOGICFUZZ_DENSE_COOCCUR=0` — density extends ONLY handle-sharing, dropping automaton co-occurrence (default on).
 - `LOGICFUZZ_DENSE_REPEAT_CONSUMER=1` — density also repeats a handle's consumer (default off).

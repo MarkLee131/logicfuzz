@@ -1375,20 +1375,13 @@ class FuzzingContext:
                         key=lambda s: (0 if 4 <= len(s) <= 12 else 1,
                                        -_gap_hits(s)))
                     _grammar_candidates = list(api_sequences)
-                    from liberator_adapter.constraints.coverage_ranker import (
-                        _portfolio_config as _pfc)
-                    if _pfc()[0] != 'off':
-                        # Coverage-complete: let the FULL constructed pool through
-                        # (per-creator sequences cover every subsystem); the
-                        # cluster-cover cut at Step 10 picks the portfolio. Skeleton
-                        # gen here is Z3+render (no LLM) so a larger pool is cheap —
-                        # LLM cost scales only with the KEPT drivers.
-                        _budget = len(_constructed) + len(_grammar_candidates)
-                        _k = max(filter_top_k or 12, 24)
-                    else:
-                        _budget = max(filter_top_k * 4, 40) if filter_top_k else (
-                            len(_constructed) + len(_grammar_candidates))
-                        _k = filter_top_k or 12
+                    # Coverage-complete (unconditional): let the FULL constructed
+                    # pool through (per-creator sequences cover every subsystem);
+                    # the cluster-cover cut at Step 10 picks the portfolio. Skeleton
+                    # gen here is Z3+render (no LLM) so a larger pool is cheap —
+                    # LLM cost scales only with the KEPT drivers.
+                    _budget = len(_constructed) + len(_grammar_candidates)
+                    _k = max(filter_top_k or 12, 24)
                     # Strand order = priority: parser entries first (deepest
                     # coverage per call), then the protected workflow backbone,
                     # then gap-novelty, automaton-feasible, and the grammar
@@ -2049,10 +2042,9 @@ class FuzzingContext:
                     from liberator_adapter.analysis.subsystem_clusters import (
                         subsystem_clusters)
                     from liberator_adapter.constraints.coverage_ranker import (
-                        _portfolio_config)
-                    _pf_mode, _pf_depth = _portfolio_config()
-                    _clusters = (subsystem_clusters(api_semantic_model)
-                                 if _pf_mode != 'off' else {})
+                        _portfolio_depth)
+                    _pf_depth = _portfolio_depth()
+                    _clusters = subsystem_clusters(api_semantic_model)
                     # LOGICFUZZ_OBJCONSTRUCT_FIRST: demote parser-entry bucket
                     # (_bA) to last so the coverage-complete Phase-1 cover pass
                     # visits workflow + novel subsystem drivers before parsers.
@@ -2097,26 +2089,24 @@ class FuzzingContext:
                                     _covered.add(_cl)
                                     _sel_ids.add(id(_d))
                         _n_cover = len(_portfolio)
-                        # Phase 2 — depth (skipped when minimal): round-robin the
-                        # remaining drivers up to depth_mult x cover.
-                        if _pf_mode != 'minimal':
-                            _depth_budget = int(round(_pf_depth * _n_cover))
-                            # B-1: pick depth drivers by MAX marginal new-API
-                            # coverage over the already-selected cover set — the
-                            # same objective coverage_ranker uses — instead of
-                            # bucket round-robin (which admits near-twins).
-                            from liberator_adapter.constraints.coverage_ranker \
-                                import select_marginal
-                            _covered_apis = {
-                                a for _d in _portfolio
-                                for a in (_d.get('api_sequence') or [])}
-                            _pool = [_d for _b in _buckets for _d in _b
-                                     if id(_d) not in _sel_ids]
-                            _depth_sel = select_marginal(
-                                _pool,
-                                lambda _d: _d.get('api_sequence') or [],
-                                _depth_budget, _covered_apis)
-                            _portfolio.extend(_depth_sel)
+                        # Phase 2 — depth (unconditional): pick depth drivers up to
+                        # depth_mult x cover, by MAX marginal new-API coverage over
+                        # the already-selected cover set — the same objective
+                        # coverage_ranker uses — instead of bucket round-robin
+                        # (which admits near-twins).
+                        _depth_budget = int(round(_pf_depth * _n_cover))
+                        from liberator_adapter.constraints.coverage_ranker \
+                            import select_marginal
+                        _covered_apis = {
+                            a for _d in _portfolio
+                            for a in (_d.get('api_sequence') or [])}
+                        _pool = [_d for _b in _buckets for _d in _b
+                                 if id(_d) not in _sel_ids]
+                        _depth_sel = select_marginal(
+                            _pool,
+                            lambda _d: _d.get('api_sequence') or [],
+                            _depth_budget, _covered_apis)
+                        _portfolio.extend(_depth_sel)
                         # API-floor (RESIDUAL_ALLCOVER): the cover pass keys on
                         # CLUSTER, so APIs sharing a cluster get only one driver and
                         # the residual single-API drivers for them are dropped. Pull
@@ -2149,18 +2139,18 @@ class FuzzingContext:
                                     "   🟦 API-floor: +%d drivers → all %d pool "
                                     "APIs covered", _floor_n, len(_pool_apis))
                         log.info(
-                            '   🎯 portfolio (coverage-complete %s): %d clusters '
+                            '   🎯 portfolio (coverage-complete): %d clusters '
                             'covered → %d cover + %d depth = %d of %d drivers',
-                            _pf_mode, len(_covered), _n_cover,
+                            len(_covered), _n_cover,
                             len(_portfolio) - _n_cover, len(_portfolio),
                             len(skeleton_drivers))
                     else:
-                        # Legacy: fixed top_k round-robin (PORTFOLIO=off A/B
-                        # control). filter_top_k now defaults to None (the env
-                        # knob was removed), so reproduce the historical fixed
-                        # cap of 10 here — this control exists to mirror the
-                        # pre-portfolio behaviour for A/B comparison.
-                        _cap = filter_top_k if filter_top_k is not None else 10
+                        # Degenerate fallback: subsystem_clusters returned {} (a
+                        # model with 0 APIs), so there are no clusters to cover —
+                        # round-robin the buckets. filter_top_k is None on the
+                        # default path ⇒ take all available.
+                        _cap = (filter_top_k if filter_top_k is not None
+                                else len(skeleton_drivers))
                         _used = [[False] * len(_b) for _b in _buckets]
 
                         def _pick_from(_b, _u):

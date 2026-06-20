@@ -20,26 +20,23 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Set, Optional, Any, Tuple
 
 
-def _portfolio_config() -> Tuple[str, float]:
-    """Coverage-complete portfolio selection config (default-ON).
+def _portfolio_depth() -> float:
+    """Depth multiplier for coverage-complete portfolio selection.
 
-    LOGICFUZZ_PORTFOLIO = complete (default) | minimal | off
-      complete : cover every subsystem cluster + a bounded depth pass.
-      minimal  : cover every cluster only (1 driver/cluster, no depth).
-      off      : legacy fixed top_k greedy (the A/B control).
-    LOGICFUZZ_PORTFOLIO_DEPTH : float depth multiplier (default 0.5 → depth
-      drivers ≈ 0.5 × cover drivers).
-    Coverage-complete only engages when a cluster map is threaded in; with no
-    clusters the ranker falls back to legacy top_k regardless of the mode.
+    Coverage-complete selection (cover every subsystem cluster + a bounded
+    depth pass + API-floor) is UNCONDITIONAL — the ``LOGICFUZZ_PORTFOLIO``
+    on/off/minimal switch was removed (graduated 2026-06-20). Only the depth
+    multiplier remains tunable:
+      ``LOGICFUZZ_PORTFOLIO_DEPTH`` : float (default 0.5 → depth drivers ≈
+      0.5 × cover drivers).
+    Coverage-complete engages whenever a cluster map is present; with no
+    clusters (a model with 0 APIs) the ranker degrades to plain greedy.
     """
-    mode = os.environ.get("LOGICFUZZ_PORTFOLIO", "complete").strip().lower()
-    if mode not in ("complete", "minimal", "off"):
-        mode = "complete"
     try:
         depth = float(os.environ.get("LOGICFUZZ_PORTFOLIO_DEPTH", "0.5"))
     except ValueError:
         depth = 0.5
-    return mode, max(0.0, depth)
+    return max(0.0, depth)
 
 
 def select_marginal(items, seq_of, budget, covered=None):
@@ -194,7 +191,6 @@ class CoverageRanker:
         post_extend_max_inputs: int = 12,
         length_floor_safe_apis: Optional[Set[str]] = None,
         clusters: Optional[Dict[str, str]] = None,
-        portfolio_mode: Optional[str] = None,
         portfolio_depth: float = 0.5,
     ) -> CoverageRankingResult:
         """
@@ -353,10 +349,9 @@ class CoverageRanker:
         # cluster map is threaded in — guarantees >=1 driver per subsystem so
         # object-construction subsystems aren't crowded out by parser-entry
         # chains; else the legacy fixed top_k greedy (A/B control / no-model).
-        if clusters and portfolio_mode in ('complete', 'minimal'):
+        if clusters:
             selected, coverage, selection_stats = self._coverage_complete_select(
-                ranked, clusters, depth_mult=portfolio_depth,
-                minimal=(portfolio_mode == 'minimal'))
+                ranked, clusters, depth_mult=portfolio_depth)
         else:
             selected, coverage, selection_stats = self._greedy_select(ranked, top_k)
 
@@ -499,7 +494,6 @@ class CoverageRanker:
         ranked_sequences: List[SequenceScore],
         clusters: Dict[str, str],
         depth_mult: float = 0.5,
-        minimal: bool = False,
     ) -> Tuple[List[List[str]], Set[str], Dict[str, Any]]:
         """Coverage-COMPLETE selection: guarantee >=1 selected sequence per
         SUBSYSTEM cluster present in the candidate pool (Phase 1 cover), then a
@@ -574,8 +568,8 @@ class CoverageRanker:
             _floor_extra['api_floor_residual_count'] = len(floor_uncovered)
             _floor_extra['api_floor_added'] = len(selected) - n_cover
 
-        # Phase 2 — DEPTH (skipped when minimal): bounded max-marginal-coverage.
-        depth_budget = 0 if minimal else int(round(depth_mult * n_cover))
+        # Phase 2 — DEPTH: bounded max-marginal-coverage.
+        depth_budget = int(round(depth_mult * n_cover))
         added = 0
         if depth_budget > 0:
             remaining = [sc for sc in ranked_sequences
@@ -702,7 +696,6 @@ def select_top_k_sequences(
             automaton_sample_paths = []
             automaton_stats = {'enabled': False, 'error': str(exc)}
 
-    _pf_mode, _pf_depth = _portfolio_config()
     result = ranker.rank_and_select(
         sequences, entry_point_names, top_k,
         automaton_acceptance_fn=automaton_acceptance_fn,
@@ -712,10 +705,9 @@ def select_top_k_sequences(
         post_extend_max_inputs=automaton_post_extend_max_inputs,
         length_floor_safe_apis=length_floor_safe_apis,
         clusters=clusters,
-        portfolio_mode=(None if _pf_mode == 'off' else _pf_mode),
-        portfolio_depth=_pf_depth,
+        portfolio_depth=_portfolio_depth(),
     )
-    automaton_stats['portfolio_mode'] = _pf_mode
+    automaton_stats['portfolio_mode'] = 'complete'
     if result.selection_stats.get('coverage_complete'):
         automaton_stats['clusters_covered'] = result.selection_stats.get('clusters_covered')
         automaton_stats['clusters_total'] = result.selection_stats.get('clusters_total')

@@ -51,8 +51,8 @@ def _all_pool_apis(selected, seqs=_SEQS):
 
 def setup_function(_):
     os.environ.pop("LOGICFUZZ_API_FLOOR", None)
-    # Force complete mode so cluster-cover phase is active.
-    os.environ["LOGICFUZZ_PORTFOLIO"] = "complete"
+    # Coverage-complete (cluster-cover phase) is unconditional now — the
+    # LOGICFUZZ_PORTFOLIO switch was removed.
 
 
 def _set_gate_off():
@@ -62,7 +62,6 @@ def _set_gate_off():
 
 def teardown_function(_):
     os.environ.pop("LOGICFUZZ_API_FLOOR", None)
-    os.environ.pop("LOGICFUZZ_PORTFOLIO", None)
 
 
 # ---------------------------------------------------------------------------
