@@ -1,5 +1,20 @@
 from liberator_adapter.extractors.base_extractor import (
     DegradedReason, extraction_status_fields)
+from liberator_adapter.extractors.llvm_extractor import (
+    _stub_engine_build_cmd, STUB_ENGINE_PATH)
+
+
+def test_stub_cmd_builds_valid_archive():
+    cmd = _stub_engine_build_cmd("/tmp/x.a")
+    # builds an object with clang-14 then packs it into a non-empty ar archive
+    assert "/usr/lib/llvm-14/bin/clang" in cmd
+    assert "ar crs /tmp/x.a" in cmd
+    assert ".c" in cmd and "-c" in cmd  # compiles a stub TU, not an empty archive
+
+
+def test_stub_cmd_default_path():
+    assert STUB_ENGINE_PATH in _stub_engine_build_cmd()
+
 
 def test_status_fields_full():
     assert extraction_status_fields(False, None) == {

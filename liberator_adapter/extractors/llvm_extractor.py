@@ -125,6 +125,24 @@ def _should_retry_with_stub_engine(compile_output: str) -> bool:
     return bool(_STUB_ENGINE_SIGNAL.search(compile_output))
 
 
+STUB_ENGINE_PATH = "/tmp/logicfuzz_stub_engine.a"
+
+
+def _stub_engine_build_cmd(stub_path: str = STUB_ENGINE_PATH) -> str:
+    """Shell command (run in-container) that builds a valid, non-empty static
+    archive to stand in for LIB_FUZZING_ENGINE so cmake `if(NOT FUZZ_LIBRARY)`
+    passes. The library builds before the fuzzer link, so the fuzzer link's
+    later failure on this stub is harmless."""
+    src = "/tmp/_lf_stub.c"
+    obj = "/tmp/_lf_stub.o"
+    clang = "/usr/lib/llvm-14/bin/clang"
+    return (
+        f"echo 'static int _lf_stub;' > {src} && "
+        f"{clang} -c {src} -o {obj} && "
+        f"ar crs {stub_path} {obj}"
+    )
+
+
 def _make_svf_preexec(mem_gb_limit: int):
     """Factory for a preexec_fn that caps the SVF child's RLIMIT_AS.
 
