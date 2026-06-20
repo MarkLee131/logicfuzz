@@ -254,72 +254,37 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             logger.info("Stripped clang-14-incompatible flags: %s",
                         self.flags_stripped)
 
-        compile_cmd = (
-            'export LLVM_COMPILER=clang && '
-            'export LLVM_COMPILER_PATH=/usr/lib/llvm-14/bin && '
-            'export CC=wllvm && '
-            'export CXX=wllvm++ && '
-            'export SANITIZER=none && '
-            'export LIB_FUZZING_ENGINE="" && '
-            'export FUZZING_ENGINE=none && '
-            f'export CFLAGS="{_cf_clean}" && '
-            f'export CXXFLAGS="{_cxf_clean}" && '
-            'compile 2>&1'
-        )
-        # Use longer timeout for compile (10 minutes) - complex projects like curl need more time
-        compile_result = self.container.execute(compile_cmd, timeout=600)
-        # Note: compile script may fail when building fuzz targets (libc++ issues)
-        # but the library itself might have been built successfully
-        if compile_result.returncode != 0:
-            logger.warning(f"Compile script returned error, but library may still exist")
-            # Show last 50 lines of compile output for debugging
-            output_lines = compile_result.stdout.strip().split('\n')
-            last_lines = '\n'.join(output_lines[-50:]) if len(output_lines) > 50 else compile_result.stdout
-            logger.info(f"Compile output (last 50 lines):\n{last_lines}")
+        self._cf_clean = _cf_clean
+        self._cxf_clean = _cxf_clean
+        self._bc_source_dir = source_dir
+        self.bitcode_recovery = None
 
         # Find library file and extract bitcode
         if not output_bc:
-            lib_file = None
-            project_name = self.benchmark.project
-
-            # Strategy 1: Search for project-named library (e.g., libcurl.a, libcjson.a)
-            # This is the most reliable approach
-            project_lib_patterns = [
-                f'lib{project_name}*.a',
-                f'lib{project_name}*.so',
-                f'{project_name}*.a',
-                f'{project_name}*.so',
-            ]
-            search_dirs = [f'/src/{project_name}', source_dir, '/src', '/out', '/work']
-
-            for search_dir in search_dirs:
-                for pattern in project_lib_patterns:
-                    find_result = self.container.execute(
-                        f'find {search_dir} -name "{pattern}" -type f 2>/dev/null | head -1'
-                    )
-                    if find_result.returncode == 0 and find_result.stdout.strip():
-                        lib_file = find_result.stdout.strip()
-                        logger.info(f"Found project library: {lib_file}")
-                        break
-                if lib_file:
-                    break
-
-            # Strategy 2: Fall back to any .a file in project-specific directory only
-            if not lib_file:
-                project_dir = f'/src/{project_name}'
-                find_result = self.container.execute(
-                    f'find {project_dir} -name "*.a" -type f 2>/dev/null | head -1'
-                )
-                if find_result.returncode == 0 and find_result.stdout.strip():
-                    lib_file = find_result.stdout.strip()
-                    logger.info(f"Found library in project dir: {lib_file}")
-
+            lib_file, out = self._run_compile_and_find_lib("")
+            if (lib_file is None
+                    and os.getenv("LOGICFUZZ_STUB_ENGINE_RETRY", "1") != "0"
+                    and _should_retry_with_stub_engine(out)):
+                logger.warning(
+                    "No library after blank-engine compile; retrying with stub "
+                    "fuzzing engine (LIB_FUZZING_ENGINE=%s)", STUB_ENGINE_PATH)
+                try:
+                    stub_res = self.container.execute(_stub_engine_build_cmd())
+                    if stub_res.returncode == 0:
+                        lib_file, _ = self._run_compile_and_find_lib(STUB_ENGINE_PATH)
+                        if lib_file is not None:
+                            self.bitcode_recovery = "stub_engine"
+                            logger.info("Stub-engine retry recovered library: %s", lib_file)
+                    else:
+                        logger.warning("Stub-engine archive build failed: %s", stub_res.stdout)
+                except Exception as e:  # fail-open
+                    logger.warning("Stub-engine retry errored (fail-open): %s", e)
             if lib_file:
                 output_bc = f'{lib_file}.bc'
             else:
                 raise RuntimeError(
-                    f"Could not find library file for project '{project_name}'. "
-                    f"Searched for lib{project_name}*.a/.so in {search_dirs}"
+                    f"Could not find library file for project '{self.benchmark.project}'. "
+                    f"Searched for lib{self.benchmark.project}*.a/.so"
                 )
 
         # Use extract-bc to extract bitcode (using clang-14)
@@ -344,6 +309,56 @@ class LLVMAPIExtractor(BaseAPIExtractor):
 
         logger.info(f"Successfully created bitcode file: {output_bc}")
         return output_bc
+
+    def _run_compile_and_find_lib(self, engine_path):
+        """Run the in-container `compile` with LIB_FUZZING_ENGINE=engine_path
+        (rest of the extraction env unchanged), then search for the built static
+        library. Returns (lib_file_or_None, compile_stdout)."""
+        compile_cmd = (
+            'export LLVM_COMPILER=clang && '
+            'export LLVM_COMPILER_PATH=/usr/lib/llvm-14/bin && '
+            'export CC=wllvm && '
+            'export CXX=wllvm++ && '
+            'export SANITIZER=none && '
+            f'export LIB_FUZZING_ENGINE="{engine_path}" && '
+            'export FUZZING_ENGINE=none && '
+            f'export CFLAGS="{self._cf_clean}" && '
+            f'export CXXFLAGS="{self._cxf_clean}" && '
+            'compile 2>&1'
+        )
+        compile_result = self.container.execute(compile_cmd, timeout=600)
+        output = compile_result.stdout or ""
+        if compile_result.returncode != 0:
+            logger.warning("Compile script returned error, but library may still exist")
+            output_lines = output.strip().split('\n')
+            last_lines = '\n'.join(output_lines[-50:]) if len(output_lines) > 50 else output
+            logger.info(f"Compile output (last 50 lines):\n{last_lines}")
+
+        lib_file = None
+        project_name = self.benchmark.project
+        project_lib_patterns = [
+            f'lib{project_name}*.a', f'lib{project_name}*.so',
+            f'{project_name}*.a', f'{project_name}*.so',
+        ]
+        search_dirs = [f'/src/{project_name}', self._bc_source_dir, '/src', '/out', '/work']
+        for search_dir in search_dirs:
+            for pattern in project_lib_patterns:
+                find_result = self.container.execute(
+                    f'find {search_dir} -name "{pattern}" -type f 2>/dev/null | head -1')
+                if find_result.returncode == 0 and find_result.stdout.strip():
+                    lib_file = find_result.stdout.strip()
+                    logger.info(f"Found project library: {lib_file}")
+                    break
+            if lib_file:
+                break
+        if not lib_file:
+            project_dir = f'/src/{project_name}'
+            find_result = self.container.execute(
+                f'find {project_dir} -name "*.a" -type f 2>/dev/null | head -1')
+            if find_result.returncode == 0 and find_result.stdout.strip():
+                lib_file = find_result.stdout.strip()
+                logger.info(f"Found library in project dir: {lib_file}")
+        return lib_file, output
 
     def _ensure_clang14_installed(self):
         """Ensure clang-14 is installed (should already be pre-installed in custom base-builder image)"""

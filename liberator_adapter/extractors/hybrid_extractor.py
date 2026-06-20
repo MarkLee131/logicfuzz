@@ -271,7 +271,9 @@ class HybridAPIExtractor(BaseAPIExtractor):
                     "enum_types": local_paths.get('enum_types.txt'),  # For DataLayout.is_enum_type()
                 },
                 "llvm_output_dir": llvm_output_dir,
-                **extraction_status_fields(False, None),
+                **extraction_status_fields(
+                    False, None,
+                    recovery=getattr(self.llvm_extractor, "bitcode_recovery", None)),
             }
             
             return apis_dict
