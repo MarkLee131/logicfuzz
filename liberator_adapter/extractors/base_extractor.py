@@ -54,14 +54,19 @@ def classify_degraded_reason(msg: str) -> str:
     return msg[:200]
 
 
-def extraction_status_fields(clang_only, reason):
-    """Single source of truth for the persisted extraction-status fields."""
+def extraction_status_fields(clang_only, reason, recovery=None):
+    """Single source of truth for the persisted extraction-status fields.
+
+    recovery: name of the recovery path that produced usable bitcode
+    (e.g. "stub_engine"), or None. Only meaningful in full mode."""
     if not clang_only:
-        return {"extraction_mode": "full", "degraded_reason": None}
+        return {"extraction_mode": "full", "degraded_reason": None,
+                "bitcode_recovery": recovery}
     if isinstance(reason, DegradedReason):
         reason = reason.value
     return {"extraction_mode": "clang_only",
-            "degraded_reason": reason or DegradedReason.COMPILE_FAILED.value}
+            "degraded_reason": reason or DegradedReason.COMPILE_FAILED.value,
+            "bitcode_recovery": None}
 
 
 class BaseAPIExtractor:

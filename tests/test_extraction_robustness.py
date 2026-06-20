@@ -18,11 +18,18 @@ def test_stub_cmd_default_path():
 
 def test_status_fields_full():
     assert extraction_status_fields(False, None) == {
-        "extraction_mode": "full", "degraded_reason": None}
+        "extraction_mode": "full", "degraded_reason": None,
+        "bitcode_recovery": None}
 
 def test_status_fields_degraded_enum():
     assert extraction_status_fields(True, DegradedReason.SVF_TIMEOUT) == {
-        "extraction_mode": "clang_only", "degraded_reason": "svf_timeout"}
+        "extraction_mode": "clang_only", "degraded_reason": "svf_timeout",
+        "bitcode_recovery": None}
+
+def test_status_fields_full_with_recovery():
+    assert extraction_status_fields(False, None, recovery="stub_engine") == {
+        "extraction_mode": "full", "degraded_reason": None,
+        "bitcode_recovery": "stub_engine"}
 
 def test_status_fields_degraded_str_fallback():
     assert extraction_status_fields(True, "boom")["degraded_reason"] == "boom"
