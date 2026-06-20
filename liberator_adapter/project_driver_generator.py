@@ -29,6 +29,51 @@ from liberator_adapter.driver.driver_enhancer import DriverEnhancer, APIPatternC
 logger = logging.getLogger(__name__)
 
 
+def _pick_source_dir(dir_candidates: List[str], project_name: str) -> Optional[str]:
+    """Pick the most likely source directory for ``project_name`` from a list of
+    directory names found under ``/src/``.
+
+    ``dir_candidates`` MUST already be filtered to directories only (never stray
+    files like ``afl_llvm22_patch.diff`` or ``build.sh``) and have OSS-Fuzz engine
+    dirs removed by the caller.
+
+    Matching is rank-based so a versioned dir (``libjpeg-turbo.main``) matches the
+    project ``libjpeg-turbo`` even though neither is a prefix of the other in the
+    old ``startswith`` sense. Ties prefer a ``main`` branch, then the shortest name
+    (the least version-decorated). Returns ``None`` when there is nothing to pick.
+    """
+    if not dir_candidates:
+        return None
+
+    proj = project_name.lower()
+    proj_nolib = proj[3:] if proj.startswith("lib") else proj
+
+    def score(name: str) -> int:
+        n = name.lower()
+        if n == proj:
+            return 0
+        if proj_nolib and n == proj_nolib:
+            return 1
+        if n.startswith(proj):            # libjpeg-turbo.main, libpng16
+            return 2
+        if proj_nolib and n.startswith(proj_nolib):  # aom for libaom
+            return 3
+        if proj.startswith(n):            # short dir name, project adds suffix
+            return 4
+        if proj_nolib and proj_nolib.startswith(n):
+            return 5
+        return 99
+
+    def tiebreak(name: str):
+        # within the same score, prefer a 'main' branch, then the shortest name
+        return (0 if "main" in name.lower() else 1, len(name))
+
+    best = min(dir_candidates, key=lambda c: (score(c), tiebreak(c)))
+    # If nothing matched at all (all score 99), fall back to the first directory
+    # candidate deterministically rather than an arbitrary file.
+    return best
+
+
 class ProjectDriverGenerator:
     """
     Project-level Driver Generator
@@ -467,8 +512,10 @@ class ProjectDriverGenerator:
         except subprocess.CalledProcessError:
             logger.debug(f"Source not at {src_container_path}, searching /src/...")
 
-        # List /src/ to find actual source directory
-        result = container.execute("ls -1 /src/")
+        # List DIRECTORIES under /src/ (never stray files like *.diff / *.zip /
+        # build.sh — selecting one of those aborts the whole run downstream).
+        result = container.execute(
+            "find /src/ -maxdepth 1 -mindepth 1 -type d -printf '%f\\n'")
         if result.returncode != 0:
             raise RuntimeError(f"Failed to list /src/ in container: {result.stderr}")
 
@@ -476,15 +523,9 @@ class ProjectDriverGenerator:
         candidates = [d for d in ls_output.split('\n') if d and d.lower() not in skip_dirs]
         logger.debug(f"Source directory candidates in /src/: {candidates}")
 
-        # Find likely match
-        source_dir = None
-        for candidate in candidates:
-            if self.project_name.startswith(candidate) or candidate.startswith(self.project_name.replace('lib', '')):
-                source_dir = candidate
-                break
-
-        if not source_dir and candidates:
-            source_dir = candidates[0]
+        # Rank-match the project against the directory candidates (handles
+        # versioned source dirs like libjpeg-turbo.main).
+        source_dir = _pick_source_dir(candidates, self.project_name)
 
         if source_dir:
             src_container_path = f"/src/{source_dir}"

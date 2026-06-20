@@ -304,3 +304,36 @@ def test_require_z3_raises_at_cbfactory_no_condition_manager(monkeypatch):
             project_name="test_proj",
             log=logging.getLogger("test"),
         )
+
+
+from liberator_adapter.project_driver_generator import _pick_source_dir
+
+
+def test_pick_source_dir_versioned_prefers_main():
+    # libjpeg-turbo OSS-Fuzz image: /src has versioned source dirs + a stray
+    # 'fuzz' dir (files like afl_llvm22_patch.diff are filtered out by the caller).
+    cands = ["fuzz", "libjpeg-turbo.3.0.x", "libjpeg-turbo.3.1.x",
+             "libjpeg-turbo.main"]
+    assert _pick_source_dir(cands, "libjpeg-turbo") == "libjpeg-turbo.main"
+
+
+def test_pick_source_dir_lib_stripped_match():
+    # libaom project -> source dir is 'aom'
+    assert _pick_source_dir(["aom", "fuzz"], "libaom") == "aom"
+
+
+def test_pick_source_dir_exact_match_wins():
+    assert _pick_source_dir(["libpng", "zlib"], "libpng") == "libpng"
+
+
+def test_pick_source_dir_empty_is_none():
+    assert _pick_source_dir([], "anything") is None
+
+
+def test_pick_source_dir_all_mismatch_is_deterministic():
+    # No match: must still return one of the provided directories deterministically
+    # (never raise, never return a non-candidate), so the caller never falls back
+    # to a stray file.
+    got = _pick_source_dir(["foo", "bar"], "libwhatever")
+    assert got in {"foo", "bar"}
+    assert _pick_source_dir(["foo", "bar"], "libwhatever") == got
