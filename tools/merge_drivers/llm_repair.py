@@ -1,30 +1,12 @@
 """Merge-gate LLM repair — recover non-compiling drivers the compile-validation
-gate would otherwise SILENTLY DROP (Direction 1).
+gate would otherwise silently drop.
 
-The merge gate (``compile_validate.validate_compilable``) compiles each candidate
-under the stricter OSS-Fuzz coverage-build flags and EXCLUDES every TU that fails,
-with NO repair. The excluded set is dominated by MECHANICAL C-vs-C++ fixes that an
-LLM single-shot rewrite handles well (measured libpng: 34/110 excluded, 21 "must
-use 'struct' tag", 8 "expected identifier", 5 "expected expression").
-
-This module gives each excluded TU ONE single-shot LLM rewrite, then RE-VALIDATES
-the rewrite through the SAME ``validate_compilable`` gate and keeps it ONLY if it
-now compiles. That fail-closed re-validation is what preserves the merge's A≡B
-contract: a kept TU compiles under the identical coverage-build flags, so the
-address build and coverage build still compile the same valid set. A rewrite that
-the LLM mangles can never be shipped — it is simply dropped, exactly as today.
-
-Design notes
-------------
-* Single-shot (no container bash exploration): the dominant excluded classes are
-  pure source fixes (struct-tag / undeclared / syntax), so we reuse only the
-  deterministic triage guidance + ``<fuzz_target>`` parsing, NOT the full
-  container-coupled ``LangGraphFixer``.
-* Dependency-injected ``llm_query`` (str→str) and ``revalidate`` so this is
-  unit-testable with no docker and no real LLM.
-* The repaired TU keeps the ORIGINAL file's extension so its merge-target
-  language (``IndividualDriver.suffix``) — hence the compiler used to re-validate
-  AND in the merged build — is unchanged.
+Gives each TU the gate excluded ONE single-shot LLM rewrite, then RE-VALIDATES
+through the SAME ``validate_compilable`` gate, keeping it only if it now compiles.
+Fail-closed re-validation preserves the merge A≡B contract: a kept TU compiles
+under the identical coverage-build flags. Single-shot (no container bash); injects
+``llm_query``/``revalidate`` for docker-free unit testing; repaired TU keeps the
+original extension so the merge-target language is unchanged.
 """
 
 from __future__ import annotations
@@ -38,17 +20,10 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_fuzz_target(response: str) -> str:
-    """Pull the corrected driver out of a ``<fuzz_target>...</fuzz_target>`` block
-    and strip a stray markdown code fence — same semantics as
-    ``src.agents.utils.parse_tag(response, 'fuzz_target')``, inlined so this
-    merge-stage tool does NOT import the LangGraph ``src.agents`` package (whose
-    ``__init__`` pulls a circular agent-graph dependency).
-
-    Falls back to a bare markdown code block when the model omits the tag — GPT-4o
-    routinely returns ```c …``` instead of ``<fuzz_target>`` (the per-trial Fixer
-    handles this same case). Measured: 3 of nghttp2's 8 repair attempts failed
-    ONLY on this format gap, not on capability. Guarded by requiring the block to
-    contain ``LLVMFuzzerTestOneInput`` so prose / unrelated snippets aren't taken.
+    """Pull the corrected driver from a ``<fuzz_target>`` block, stripping a stray
+    markdown fence. Inlined (not ``src.agents.utils.parse_tag``) to avoid a
+    circular ``src.agents`` import. Falls back to a bare code block when the tag is
+    omitted, guarded by requiring ``LLVMFuzzerTestOneInput`` so prose isn't taken.
     """
     m = re.search(r"<fuzz_target>(.*?)</fuzz_target>", response or "", re.DOTALL)
     code = ""
@@ -69,12 +44,10 @@ def _extract_fuzz_target(response: str) -> str:
 
 def build_repair_prompt(source_code: str, error_tail: str, lang: str,
                         known_apis: Optional[List[dict]] = None) -> str:
-    """A single-shot repair prompt: the failing source + the captured compiler
-    diagnostic + the merge-target language + the deterministic triage guidance for
-    the error class. Returns a prompt that asks for a corrected ``<fuzz_target>``.
-
-    Pure (no I/O). ``lang`` is 'c' or 'cpp' (the language the MERGED build compiles
-    this TU as — so the LLM must not re-introduce the other language's syntax).
+    """Build a single-shot repair prompt (failing source + compiler diagnostic +
+    merge-target language + triage guidance) asking for a corrected
+    ``<fuzz_target>``. Pure; ``lang`` is 'c'/'cpp' (the language the MERGED build
+    compiles this TU as — the LLM must not re-introduce the other's syntax).
     """
     lang_name = "C++" if str(lang).lower() in ("cpp", "c++", "cxx", "cc") else "C"
     try:
@@ -122,25 +95,21 @@ def repair_candidates(
     known_apis: Optional[List[dict]] = None,
     revalidate: Optional[Callable] = None,
 ) -> Tuple[List[Tuple[Path, Path]], List[Tuple[Path, str]]]:
-    """Single-shot-repair each excluded TU, then BATCH re-validate the rewrites.
+    """Single-shot-repair each excluded TU, then batch re-validate the rewrites.
 
     Args:
         excluded:    [(source_path, error_tail)] from ``validate_compilable``.
         project:     OSS-Fuzz project (for the re-validation container).
-        llm_query:   callable prompt→completion (e.g. ``LLMAdapter.query``).
+        llm_query:   callable prompt→completion.
         out_dir:     where repaired sources are written (persisted, auditable).
-        iquote_dirs: passed through to re-validation so includes resolve as in
-                     the merged build.
-        known_apis:  optional, for triage's fake-definition hint (not required).
+        iquote_dirs: passed to re-validation so includes resolve as in the merge.
+        known_apis:  optional triage fake-definition hint.
         revalidate:  callable(sources, project, iquote_dirs=...) → (valid,
                      excluded); defaults to the real ``validate_compilable``.
 
-    Returns:
-        (recovered, still_excluded)
-          recovered      — [(original_src, repaired_path)] that NOW compile.
-          still_excluded — [(original_src, reason)] not recovered (no LLM output,
-                           or the rewrite still fails the gate). Fail-closed: a TU
-                           is in ``recovered`` ONLY if its rewrite re-validated.
+    Returns (recovered, still_excluded). Fail-closed: a TU is in ``recovered``
+    ([(orig_src, repaired_path)]) ONLY if its rewrite re-validated; everything
+    else stays in ``still_excluded`` as [(orig_src, reason)].
     """
     revalidate = revalidate or _default_revalidate
     from tools.merge_drivers.compile_validate import _merge_target_lang
@@ -149,7 +118,7 @@ def repair_candidates(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     still_excluded: List[Tuple[Path, str]] = []
-    # repaired_path -> original_src, so we can map re-validation verdicts back.
+    # repaired_path -> original_src, to map re-validation verdicts back.
     repaired_to_orig: dict = {}
 
     for src, error_tail in excluded:
@@ -169,11 +138,9 @@ def repair_candidates(
             continue
         code = _extract_fuzz_target(completion)
         if not code:
-            # No materializable rewrite → nothing to re-validate → stays dropped.
             still_excluded.append((src, "repair: no <fuzz_target> in LLM output"))
             continue
-        # Preserve the original extension so the merge-target language (and thus
-        # the re-validation compiler + merged build) is unchanged.
+        # Keep the original extension so the merge-target language is unchanged.
         repaired = out_dir / f"{src.stem}.repaired{src.suffix}"
         repaired.write_text(code)
         repaired_to_orig[repaired] = src
@@ -184,8 +151,8 @@ def repair_candidates(
         try:
             valid, _gate_excluded = revalidate(
                 rewrites, project, iquote_dirs=iquote_dirs)
-        except Exception as exc:  # noqa: BLE001 — re-validation infra failure:
-            # fail-closed (drop all rewrites; never ship an un-revalidated TU).
+        except Exception as exc:  # noqa: BLE001 — infra failure: fail-closed
+            # (drop all rewrites; never ship an un-revalidated TU).
             logger.warning("merge-repair: re-validation failed (%s); dropping "
                            "all %d rewrites", exc, len(rewrites))
             for rp, orig in repaired_to_orig.items():

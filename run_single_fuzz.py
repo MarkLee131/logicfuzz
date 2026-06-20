@@ -703,12 +703,8 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
 
 
 def _stock_target_lang(benchmark):
-  """Authoritative compile language ('c'/'cpp') for this project's generated
-  drivers — the STOCK fuzz target's language (``benchmark.file_type``, from the
-  ``target_path`` extension), which is what OSS-Fuzz compiles the replaced target
-  in and what the per-trial build already used. NOT the yaml ``language`` field
-  (that is the *library* language — e.g. 'c' for libpng whose fuzzer is ``.cc``).
-  Returns None for non-C/C++ projects so the merge falls back to content-sniff."""
+  """Compile language ('c'/'cpp') from the STOCK fuzz target, not the yaml
+  ``language`` field (that is the *library* language). None ⇒ merge content-sniffs."""
   try:
     if getattr(benchmark, 'is_cpp_target', False):
       return 'cpp'
@@ -735,10 +731,8 @@ def _compile_validate_candidates(sources, benchmark, work_dirs,
   it up). A run can opt out via ``LOGICFUZZ_SKIP_COMPILE_VALIDATE=1``.
 
   Opt-in merge-gate LLM repair (``LOGICFUZZ_MERGE_REPAIR=1`` + ``model_name``):
-  before dropping the excluded TUs, give each ONE single-shot LLM rewrite and
-  RE-VALIDATE it through this same gate, keeping it only if it now compiles
-  (fail-closed → A≡B preserved). Recovers the mechanical C-vs-C++ / undeclared /
-  syntax exclusions (measured libpng 34/110) instead of losing them.
+  give each excluded TU ONE single-shot LLM rewrite, RE-VALIDATE through this same
+  gate, keep only if it now compiles (fail-closed → A≡B preserved).
   """
   from pathlib import Path
   # Explicit truthy parse — a bare `if os.environ.get(...)` treats "0"/"false"
@@ -765,12 +759,9 @@ def _compile_validate_candidates(sources, benchmark, work_dirs,
   valid, excluded = validate_compilable(
       [Path(s) for s in sources], project, iquote_dirs=_iquote, lang=_lang)
 
-  # === Merge-gate LLM repair (opt-in: LOGICFUZZ_MERGE_REPAIR=1) ===
-  # The excluded set is dominated by MECHANICAL C-vs-C++ / undeclared / syntax
-  # fixes (measured libpng 34/110). Give each excluded TU ONE single-shot LLM
-  # rewrite and RE-VALIDATE it through THIS SAME gate; keep it only if it now
-  # compiles. Fail-closed: a rewrite that still fails is dropped exactly as
-  # before, so A≡B is preserved (a kept TU compiles under identical cov flags).
+  # Merge-gate LLM repair (opt-in: LOGICFUZZ_MERGE_REPAIR=1): one single-shot
+  # rewrite per excluded TU, re-validated through this same gate. Fail-closed —
+  # a still-failing rewrite is dropped, so A≡B holds (kept TUs compile under cov).
   repaired_recovered = 0
   _do_repair = os.environ.get('LOGICFUZZ_MERGE_REPAIR', '').strip().lower() in (
       '1', 'true', 'yes', 'on')

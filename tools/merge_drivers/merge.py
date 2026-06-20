@@ -84,8 +84,7 @@ class IndividualDriver:
 
     driver_path: Path
     index: int  # 0-based position in the synthesized driver list
-    lang_override: Optional[str] = None  # authoritative stock-target language
-    # ('c'/'cpp'); when set, suffix returns it INSTEAD of content-sniffing.
+    lang_override: Optional[str] = None  # authoritative stock-target lang; suffix returns it instead of content-sniffing.
 
     @cached_property
     def driver_id(self) -> str:
@@ -108,13 +107,10 @@ class IndividualDriver:
 
         Order of precedence:
 
-        0. ``lang_override`` — the AUTHORITATIVE stock-fuzz-target language
-           (``benchmark.file_type``, derived from ``target_path``'s extension)
-           threaded in by the caller. This is the language OSS-Fuzz compiles the
-           (replaced) target in and the language the per-trial build already
-           used, so honoring it keeps the merge A≡B with the per-trial build.
-           Content-sniffing (below) is only the fallback for the standalone
-           merge CLI that has no benchmark.
+        0. ``lang_override`` — authoritative stock-target language
+           (``benchmark.file_type``); honoring it keeps the merge A≡B with the
+           per-trial build. Content-sniffing (below) is the fallback for the
+           standalone merge CLI with no benchmark.
         1. Real file extension (``.c`` / ``.cpp`` / ``.cc`` / ``.cxx``).
         2. Generic ``.fuzz_target`` etc. — content sniff for C++-only
            syntax: ``std::``, ``class ``, ``template<``, ``namespace ``,
@@ -331,10 +327,8 @@ class SynthesizedDriver:
         weights: Optional[List[float]] = None,
         lang: Optional[str] = None,
     ) -> "SynthesizedDriver":
-        # ``lang`` is the authoritative stock-fuzz-target language
-        # (``benchmark.file_type``); when set, every sub-driver compiles in it
-        # instead of being content-sniffed (keeps the merge A≡B with the
-        # per-trial build). None ⇒ fall back to per-driver content sniff.
+        # ``lang`` = authoritative stock-target language (``benchmark.file_type``);
+        # when set, every sub-driver compiles in it (keeps merge A≡B). None ⇒ content sniff.
         sorted_paths = sorted(paths, key=lambda p: p.name)
         drivers = [IndividualDriver(p, i, lang_override=lang)
                    for i, p in enumerate(sorted_paths)]

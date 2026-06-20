@@ -366,18 +366,10 @@ def count_repairs(
 ) -> Dict[str, int]:
     """Read-only breadth telemetry over the sequences fed to skeleton synthesis.
 
-    Replays the I2a validity-repair (``repair_sequence_validity``) on each
-    name-sequence and tallies how many sequences it FIRES on (gained a producer
-    or were reordered) and how many producer calls it prepends in total — the
-    A/B-confirmation signal that the universal repair net actually ran in a
-    default run (it was dark before the 2026-06-20 gate fix). Pure: mutates
-    nothing, uses the same ``idx`` the gate builds, so the counts match what
-    synthesis does.
-
-    ``known_names`` mirrors the gate's renderability guard — a repair is only
-    counted when every name in the fixed sequence is a known/renderable API
-    (pass the project's api-name set to match the gate exactly; ``None`` counts
-    every repair the pure logic produces).
+    Replays ``repair_sequence_validity`` per name-sequence, tallying how many it
+    fires on and how many producer calls it prepends. Pure: same ``idx`` the gate
+    builds, so counts match synthesis. ``known_names`` mirrors the gate's
+    renderability guard (``None`` counts every repair the pure logic produces).
     """
     n_sequences = n_repaired = n_prepended = 0
     for names in name_sequences:

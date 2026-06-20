@@ -1,16 +1,6 @@
-"""Merge-gate LLM repair (Direction 1): recover non-compiling drivers that the
-merge-stage compile-validation gate would otherwise SILENTLY DROP.
-
-The merge gate (tools/merge_drivers/compile_validate.validate_compilable) compiles
-each candidate under the stricter OSS-Fuzz coverage-build flags and EXCLUDES every
-TU that fails — with no repair. Measured loss: libpng 34/110 excluded, ~all
-mechanical C-vs-C++ fixes ("must use 'struct' tag", undeclared identifier). This
-module gives each excluded TU ONE single-shot LLM rewrite, then RE-VALIDATES it
-through the SAME gate and keeps it only if it now compiles (fail-closed → A≡B is
-preserved: a kept TU compiles identically in the address + coverage builds).
-
-Pure + dependency-injected (llm_query, revalidate) so it is unit-testable with no
-docker and no real LLM.
+"""Merge-gate LLM repair: recover non-compiling drivers the compile-validation
+gate would otherwise silently drop, re-validating through the SAME gate
+(fail-closed → A≡B preserved). Dependency-injected for docker/LLM-free tests.
 """
 import sys
 import pathlib
@@ -22,7 +12,6 @@ from tools.merge_drivers import llm_repair
 from tools.merge_drivers.llm_repair import _extract_fuzz_target
 
 
-# --- _extract_fuzz_target: robust to the common markdown-instead-of-tag variant --
 
 def test_extract_prefers_fuzz_target_tag():
     resp = "<fuzz_target>int LLVMFuzzerTestOneInput(){return 0;}</fuzz_target>\n```c\nWRONG\n```"
@@ -31,9 +20,7 @@ def test_extract_prefers_fuzz_target_tag():
 
 
 def test_extract_markdown_fallback_when_no_tag():
-    # gpt-4o often returns a ```c block instead of the <fuzz_target> tag — recover
-    # it when it's clearly a fuzz target (has LLVMFuzzerTestOneInput). Measured: 3
-    # of nghttp2's 8 repair attempts failed ONLY on this format gap.
+    # recover a ```c block lacking the <fuzz_target> tag when it's clearly a target
     resp = ("Here's the corrected driver:\n```cpp\n"
             "int LLVMFuzzerTestOneInput(const uint8_t*d,size_t s){ return 0; }\n```\n")
     code = _extract_fuzz_target(resp)
@@ -52,27 +39,23 @@ def _write(p, text):
     return p
 
 
-# --- build_repair_prompt: deterministic, carries error + language + triage hint --
 
 def test_prompt_carries_error_language_and_source():
     src = "int LLVMFuzzerTestOneInput(const uint8_t*d,size_t s){BufState x;return 0;}"
     err = "fuzz.c:1:1: error: must use 'struct' tag to refer to type 'BufState'"
     prompt = llm_repair.build_repair_prompt(src, err, lang="c")
-    assert "BufState" in prompt           # the compiler diagnostic is present
+    assert "BufState" in prompt
     assert err in prompt
-    assert src in prompt                  # the source to repair is present
-    # language is stated so the LLM does not re-introduce C++-only syntax
+    assert src in prompt
+    # language stated so the LLM does not re-introduce C++-only syntax
     assert "C" in prompt and "c++" not in prompt.lower().split("language")[0][-40:]
-    # deterministic triage guidance for the struct-tag class is injected
     assert "struct" in prompt.lower()
-    # the LLM is told to emit a <fuzz_target> block (so parse_tag can read it)
     assert "<fuzz_target>" in prompt
 
 
-# --- repair_candidates: happy path recovers a TU that re-validates ----------------
 
 def test_recovers_when_rewrite_revalidates(tmp_path):
-    bad = _write(tmp_path / "07.fuzz_target", "BAD struct tag code")  # excluded
+    bad = _write(tmp_path / "07.fuzz_target", "BAD struct tag code")
     excluded = [(bad, "error: must use 'struct' tag to refer to type 'BufState'")]
     out_dir = tmp_path / "repaired"
 
