@@ -383,3 +383,33 @@ def test_retry_false_without_engine_signal():
 
 def test_retry_false_on_empty():
     assert _should_retry_with_stub_engine("") is False
+
+
+from liberator_adapter.project_driver_generator import _header_declares_private
+
+
+def test_private_header_error_guard_detected():
+    # libpng's pngpriv/pnginfo/pngstruct/pngdebug all carry this guard
+    txt = '#  error This file must not be included by applications; please include <png.h>\n'
+    assert _header_declares_private(txt) is True
+
+
+def test_private_header_not_part_of_public_api():
+    assert _header_declares_private("#error this header is not part of the public API") is True
+
+
+def test_public_header_not_flagged():
+    # png.h has prose ("Do not use this option ...") but no #error private guard
+    txt = ('/* png.h - header file for PNG reference library */\n'
+           ' * images.  Do not use this option for images which will be distributed\n'
+           '#include "pnglibconf.h"\n')
+    assert _header_declares_private(txt) is False
+
+
+def test_public_utils_header_not_flagged():
+    # cjson's cJSON_Utils.h is public, no private guard -> kept (breadth preserved)
+    assert _header_declares_private("#ifndef cJSON_Utils__h\n#include \"cJSON.h\"\n") is False
+
+
+def test_private_declares_empty_is_false():
+    assert _header_declares_private("") is False

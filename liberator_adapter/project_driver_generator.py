@@ -14,6 +14,7 @@ Features:
 """
 import logging
 import os
+import re
 import subprocess
 from typing import Dict, List, Set, Optional
 from pathlib import Path
@@ -72,6 +73,29 @@ def _pick_source_dir(dir_candidates: List[str], project_name: str) -> Optional[s
     # If nothing matched at all (all score 99), fall back to the first directory
     # candidate deterministically rather than an arbitrary file.
     return best
+
+
+# Private-header self-declaration: well-engineered C/C++ libraries guard their
+# build-internal headers with an #error so applications can't include them
+# (libpng: every one of pngpriv.h/pnginfo.h/pngstruct.h/pngdebug.h carries
+# `#error This file must not be included by applications; please include <png.h>`).
+# Detecting that marker drops private headers from the public list WITHOUT a
+# compile probe (which is infeasible here: public-header detection runs BEFORE
+# the build, so generated config headers like pnglibconf.h don't exist yet and
+# every header — including the real public one — would fail to compile).
+_PRIVATE_HEADER_RE = re.compile(
+    r"#\s*error[^\n]*\b(must not be included|not part of the public api|"
+    r"for internal use only|private header|do not include this)\b",
+    re.IGNORECASE)
+
+
+def _header_declares_private(text: str) -> bool:
+    """True iff a header's source self-declares it private/internal via an
+    `#error ... must not be included by applications`-style guard. Pure; takes
+    the header file's text so it is unit-testable without the filesystem."""
+    if not text:
+        return False
+    return bool(_PRIVATE_HEADER_RE.search(text))
 
 
 class ProjectDriverGenerator:
@@ -549,9 +573,14 @@ class ProjectDriverGenerator:
         """
         logger.info("Detecting public headers via local heuristics")
         header_exts = {".h", ".hpp", ".hxx", ".hh"}
-        # Exclude test/example directories
+        # Exclude test/example/sample/contrib directories. `contrib`/`samples`/
+        # `third_party` hold example & vendored code whose headers are NOT on the
+        # driver include path (libpng's contrib/* leaked in and caused
+        # HEADER_NOT_FOUND on 94% of generated drivers).
         exclude_dirs = {'tests', 'test', 'testing', 'examples', 'example',
-                        'benchmarks', 'benchmark', 'docs', 'doc', 'unity'}
+                        'benchmarks', 'benchmark', 'docs', 'doc', 'unity',
+                        'contrib', 'samples', 'sample', 'third_party',
+                        'third-party', '3rdparty', 'tools', 'scripts'}
         # Internal implementation directories (common patterns for C/C++ libraries)
         internal_dir_patterns = {'internal', 'private', 'detail', 'impl', 'src',
                                   '_dsp', '_util', '_mem', '_port', '_scale'}
@@ -642,6 +671,34 @@ class ProjectDriverGenerator:
 
         # Filter out internal headers
         header_paths = [h for h in header_paths if not is_internal_header(h)]
+
+        # Filter out headers that self-declare as private/build-internal via an
+        # `#error ... must not be included by applications`-style guard (libpng's
+        # pngpriv/pnginfo/pngstruct/pngdebug). Build-independent (reads source),
+        # so it works at this pre-build stage where a compile probe cannot.
+        # Never-zero + kill-switch: a content-read quirk must not blank a working
+        # project. Opt out with LOGICFUZZ_HEADER_FILTER=0.
+        if os.getenv("LOGICFUZZ_HEADER_FILTER", "1") != "0":
+            _kept = []
+            _dropped = []
+            for h in header_paths:
+                try:
+                    with open(os.path.join(search_dir, h), "r",
+                              encoding="utf-8", errors="ignore") as _fh:
+                        _txt = _fh.read()
+                except OSError:
+                    _kept.append(h)  # fail-open: unreadable → keep
+                    continue
+                (_dropped if _header_declares_private(_txt) else _kept).append(h)
+            if _kept:  # never-zero guard
+                if _dropped:
+                    logger.info("Dropped %d self-declared-private header(s): %s",
+                                len(_dropped), sorted(_dropped))
+                header_paths = _kept
+            elif _dropped:
+                logger.warning(
+                    "Private-header filter would drop ALL %d header(s); keeping "
+                    "them (never-zero fallback)", len(_dropped))
 
         # If project-named header found, use only that (+ closely related headers)
         if project_header_found and not project_api_dir:
