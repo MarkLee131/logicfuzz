@@ -128,6 +128,32 @@ def test_internal_creator_never_prepended(monkeypatch):
     assert out == ["use_profile"]  # internal not linkable → guard covers it
 
 
+def test_count_repairs_tallies_fired_and_prepended():
+    # Breadth telemetry: count how many sequences the repair FIRES on and how
+    # many producer calls it prepends in total (the A/B-confirmation signal).
+    idx = _fixture()
+    seqs = [
+        ["use_profile"],                    # prepend make_profile -> fired, +1
+        ["parse_profile", "use_profile"],   # already satisfied -> not fired
+        ["use_widget"],                     # no producer in model -> not fired
+        ["use_profile", "use_profile"],     # one shared prepend -> fired, +1
+    ]
+    stats = sc.count_repairs(seqs, idx=idx)
+    assert stats["n_sequences"] == 4
+    assert stats["n_repaired"] == 2
+    assert stats["n_prepended"] == 2
+
+
+def test_count_repairs_honors_known_names_guard():
+    # Mirrors the gate's renderability guard: a repair that prepends an API NOT
+    # in known_names is not counted (the gate would not materialize it either).
+    idx = _fixture()
+    stats = sc.count_repairs(
+        [["use_profile"]], idx=idx, known_names={"use_profile"})
+    assert stats["n_repaired"] == 0
+    assert stats["n_prepended"] == 0
+
+
 def test_prefers_synthetic_over_parser(monkeypatch):
     _on(monkeypatch)
     # producers list with parser first; synthetic must still win

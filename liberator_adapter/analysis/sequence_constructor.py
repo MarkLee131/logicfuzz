@@ -359,6 +359,42 @@ def repair_sequence_validity(
     return result
 
 
+def count_repairs(
+    name_sequences: Sequence[Sequence[str]],
+    idx,
+    known_names: Optional[Set[str]] = None,
+) -> Dict[str, int]:
+    """Read-only breadth telemetry over the sequences fed to skeleton synthesis.
+
+    Replays the I2a validity-repair (``repair_sequence_validity``) on each
+    name-sequence and tallies how many sequences it FIRES on (gained a producer
+    or were reordered) and how many producer calls it prepends in total — the
+    A/B-confirmation signal that the universal repair net actually ran in a
+    default run (it was dark before the 2026-06-20 gate fix). Pure: mutates
+    nothing, uses the same ``idx`` the gate builds, so the counts match what
+    synthesis does.
+
+    ``known_names`` mirrors the gate's renderability guard — a repair is only
+    counted when every name in the fixed sequence is a known/renderable API
+    (pass the project's api-name set to match the gate exactly; ``None`` counts
+    every repair the pure logic produces).
+    """
+    n_sequences = n_repaired = n_prepended = 0
+    for names in name_sequences:
+        names = list(names)
+        n_sequences += 1
+        fixed = repair_sequence_validity(names, idx=idx)
+        if fixed == names:
+            continue
+        if known_names is not None and not all(n in known_names for n in fixed):
+            continue
+        n_repaired += 1
+        prepended = Counter(fixed) - Counter(names)  # net added producer calls
+        n_prepended += sum(prepended.values())
+    return {"n_sequences": n_sequences, "n_repaired": n_repaired,
+            "n_prepended": n_prepended}
+
+
 # I2b (Task 8): a required non-handle pointer arg the renderer CAN synthesize
 # non-NULL — a string (string-wrapped) or a complete public value-struct
 # (stack-alloc {0}, e.g. cmsCIELab / cmsCIEXYZ). Such args are NEVER an I2b

@@ -3558,21 +3558,31 @@ def _synthesize_skeletons_per_sequence(
     _repair_idx = None
     _repair_seq = None
     _name_to_api: Dict[str, Any] = {}
+    # Breadth telemetry (the A/B one-file read): how many sequences the universal
+    # repair net FIRES on + producer calls prepended — proves the net actually
+    # ran in a default run (it was dark before the 2026-06-20 gate fix). Computed
+    # with the SAME idx + renderability guard the synthesis loop below applies, so
+    # it is the single source for the log line + breadth_residual.json.
+    _repair_stats = {"n_sequences": len(target_sequences),
+                     "n_repaired": 0, "n_prepended": 0}
     _vc_on = _validity_repair_enabled()
     if _vc_on and api_semantic_model is not None:
         try:
             from liberator_adapter.analysis.sequence_constructor import (
                 repair_sequence_validity as _rsv,
-                _build_index as _bld_idx)
+                _build_index as _bld_idx,
+                count_repairs as _count_repairs)
             _repair_seq = _rsv
             _repair_idx = _bld_idx(api_semantic_model)
             _name_to_api = {a.function_name: a for a in generator.all_apis}
+            _repair_stats = _count_repairs(
+                [[a.function_name for a in s] for s in target_sequences],
+                _repair_idx, known_names=set(_name_to_api))
         except Exception as _re:
             log.warning("validity-repair index build failed (%s); skipping "
                         "repair.", _re)
             _repair_idx = None
 
-    _repaired_count = 0
     for i, target_seq in enumerate(target_sequences):
         try:
             _prepended: List[str] = []   # producers the repair injected this seq
@@ -3582,7 +3592,6 @@ def _synthesize_skeletons_per_sequence(
                 if _fixed != _names and all(n in _name_to_api for n in _fixed):
                     _orig = list(_names)
                     target_seq = [_name_to_api[n] for n in _fixed]
-                    _repaired_count += 1
                     # Record the injected producers so the portfolio's subsystem
                     # clustering can IGNORE them — a prepended generic creator
                     # (cmsCreateNULLProfile) sits at seq[0], and `_dcl` keys on
@@ -3692,7 +3701,21 @@ def _synthesize_skeletons_per_sequence(
         f"z3_rejected={z3_rejected} (truly unrenderable), "
         f"emitted={len(skeletons)} (of which {unchecked_emitted} via the "
         f"no-Z3-gate model path = recovered gap candidates), "
-        f"validity_repaired={_repaired_count} (I2a producer-prepend)")
+        f"validity_repaired={_repair_stats['n_repaired']} "
+        f"(+{_repair_stats['n_prepended']} producer calls, I2a producer-prepend)")
+
+    # Persist the breadth telemetry next to the other static_analysis artifacts so
+    # an A/B reads the repair-net effect in one file (best-effort, never blocks).
+    _project = getattr(benchmark, 'project', None)
+    if _project:
+        try:
+            _bt_dir = Path(f"./results/{_project}/static_analysis")
+            _bt_dir.mkdir(parents=True, exist_ok=True)
+            with open(_bt_dir / "breadth_residual.json", 'w') as _bf:
+                json.dump({'project': _project, 'emitted_skeletons': len(skeletons),
+                           **_repair_stats}, _bf, indent=2)
+        except Exception as _bte:  # noqa: BLE001 — telemetry is best-effort
+            log.warning(f"breadth telemetry write failed (non-critical): {_bte}")
 
     return skeletons
 
