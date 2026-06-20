@@ -748,6 +748,23 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
   return [s for s in sources if str(s) not in rejected]
 
 
+def _stock_target_lang(benchmark):
+  """Authoritative compile language ('c'/'cpp') for this project's generated
+  drivers — the STOCK fuzz target's language (``benchmark.file_type``, from the
+  ``target_path`` extension), which is what OSS-Fuzz compiles the replaced target
+  in and what the per-trial build already used. NOT the yaml ``language`` field
+  (that is the *library* language — e.g. 'c' for libpng whose fuzzer is ``.cc``).
+  Returns None for non-C/C++ projects so the merge falls back to content-sniff."""
+  try:
+    if getattr(benchmark, 'is_cpp_target', False):
+      return 'cpp'
+    if getattr(benchmark, 'is_c_target', False):
+      return 'c'
+  except Exception:  # noqa: BLE001 — never block the merge on language probing
+    pass
+  return None
+
+
 def _compile_validate_candidates(sources, benchmark, work_dirs,
                                  model_name=None):
   """Drop merge candidates that don't COMPILE under the OSS-Fuzz build flags.
@@ -790,8 +807,9 @@ def _compile_validate_candidates(sources, benchmark, work_dirs,
     return sources
 
   _iquote = _iquote_dirs_for_target(benchmark)
+  _lang = _stock_target_lang(benchmark)
   valid, excluded = validate_compilable(
-      [Path(s) for s in sources], project, iquote_dirs=_iquote)
+      [Path(s) for s in sources], project, iquote_dirs=_iquote, lang=_lang)
 
   # === Merge-gate LLM repair (opt-in: LOGICFUZZ_MERGE_REPAIR=1) ===
   # The excluded set is dominated by MECHANICAL C-vs-C++ / undeclared / syntax
@@ -811,7 +829,8 @@ def _compile_validate_candidates(sources, benchmark, work_dirs,
         raise RuntimeError('no LLM adapter')
 
       def _revalidate(srcs, proj, iquote_dirs=None):
-        return validate_compilable(list(srcs), proj, iquote_dirs=iquote_dirs)
+        return validate_compilable(list(srcs), proj, iquote_dirs=iquote_dirs,
+                                   lang=_lang)
 
       recovered, excluded = repair_candidates(
           excluded, project, _adapter.query,
@@ -1095,6 +1114,7 @@ def _maybe_merge_drivers(benchmark: Benchmark,
         mode=DispatchMode.CDF if _w else DispatchMode.UNIFORM,
         position=SelectorPosition.TAIL,
         weights=_w,
+        lang=_stock_target_lang(benchmark),
     )
     out_dir = Path(work_dirs.base) / 'merged'
     out_dir.mkdir(parents=True, exist_ok=True)

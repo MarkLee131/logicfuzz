@@ -80,6 +80,21 @@ def _merge_target_lang(src: Path) -> str:
         return 'cpp' if ext in ('cc', 'cpp', 'cxx') else 'c'
 
 
+def _resolve_lang(src: Path, lang_override: Optional[str] = None) -> str:
+    """Language ('c'/'cpp') to compile ``src`` as. Honors the AUTHORITATIVE
+    stock-fuzz-target language (``benchmark.file_type``) when the caller threads
+    it in — so this gate compiles each candidate in the SAME language the merged
+    build (and the per-trial build) uses, instead of content-sniffing an
+    extensionless ``.fuzz_target`` and guessing wrong (the A≢B bug: libpng's
+    ``.cc`` target builds the driver as C++ per-trial, but the sniff guessed C and
+    dropped 34/110). ``None`` ⇒ fall back to the per-driver sniff (standalone CLI
+    with no benchmark)."""
+    if lang_override:
+        ov = lang_override.strip().lower()
+        return 'cpp' if ov in ('cpp', 'c++', 'cc', 'cxx') else 'c'
+    return _merge_target_lang(src)
+
+
 @dataclass
 class _TuVerdict:
     name: str           # basename of the candidate source
@@ -297,6 +312,7 @@ def validate_compilable(
     project: str,
     timeout_sec: int = _DEFAULT_TIMEOUT_SEC,
     iquote_dirs: Optional[Sequence[str]] = None,
+    lang: Optional[str] = None,
 ) -> Tuple[List[Path], List[Tuple[Path, str]]]:
     """Compile each candidate TU in the project's OSS-Fuzz container and split
     them into (valid, excluded).
@@ -338,9 +354,10 @@ def validate_compilable(
             shutil.copy(src, staged)
             name_to_src[staged.name] = src
             # Resolve the merge-target language NOW so the container compiles
-            # each TU exactly as the merged build will (C vs C++ is decided by
-            # IndividualDriver.suffix on the original source).
-            manifest_lines.append(f'{staged.name} {_merge_target_lang(src)}')
+            # each TU exactly as the merged build will. ``lang`` (the
+            # authoritative stock-target language) wins over the content sniff so
+            # the gate, the merged build, and the per-trial build all agree.
+            manifest_lines.append(f'{staged.name} {_resolve_lang(src, lang)}')
         (staging / '.langs').write_text('\n'.join(manifest_lines) + '\n')
 
         verdicts = _run_container_validation(image, staging, project,
