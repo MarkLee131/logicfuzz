@@ -337,3 +337,27 @@ def test_pick_source_dir_all_mismatch_is_deterministic():
     got = _pick_source_dir(["foo", "bar"], "libwhatever")
     assert got in {"foo", "bar"}
     assert _pick_source_dir(["foo", "bar"], "libwhatever") == got
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Stub-engine retry-decision helper
+# ---------------------------------------------------------------------------
+from liberator_adapter.extractors.llvm_extractor import _should_retry_with_stub_engine
+
+
+def test_retry_true_on_fuzz_library_error():
+    out = "CMake Error at fuzz/CMakeLists.txt:18 (message):\n  FUZZ_LIBRARY must be specified."
+    assert _should_retry_with_stub_engine(out) is True
+
+
+def test_retry_true_on_lib_fuzzing_engine_mention():
+    assert _should_retry_with_stub_engine("error: LIB_FUZZING_ENGINE is empty") is True
+
+
+def test_retry_false_without_engine_signal():
+    # e.g. header-only: no library target ever referenced the engine
+    assert _should_retry_with_stub_engine("fatal error: 'foo.h' file not found") is False
+
+
+def test_retry_false_on_empty():
+    assert _should_retry_with_stub_engine("") is False

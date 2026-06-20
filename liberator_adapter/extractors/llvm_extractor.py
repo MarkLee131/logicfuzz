@@ -6,6 +6,7 @@ Uses Liberator's condition_extractor/bin/extractor to extract apis_llvm.json fro
 import hashlib
 import os
 import logging
+import re
 import shutil
 import subprocess
 from typing import Optional
@@ -109,6 +110,19 @@ def sanitize_extraction_flags(flags, deny=_CLANG14_INCOMPATIBLE_FLAGS):
     for tok in (flags or "").split():
         (stripped if tok in deny else kept).append(tok)
     return " ".join(kept), stripped
+
+
+_STUB_ENGINE_SIGNAL = re.compile(
+    r"FUZZ_LIBRARY|LIB_FUZZING_ENGINE|FUZZING_ENGINE", re.IGNORECASE)
+
+
+def _should_retry_with_stub_engine(compile_output: str) -> bool:
+    """True iff a failed bitcode compile references the fuzzing-engine config,
+    i.e. the build aborted because we blanked LIB_FUZZING_ENGINE. Skips a wasted
+    rebuild on genuinely lib-less cases (header-only) and unrelated failures."""
+    if not compile_output:
+        return False
+    return bool(_STUB_ENGINE_SIGNAL.search(compile_output))
 
 
 def _make_svf_preexec(mem_gb_limit: int):
