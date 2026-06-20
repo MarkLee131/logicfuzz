@@ -122,39 +122,33 @@ def _exercise_object() -> bool:
 
 
 def _validity_contract() -> bool:
-    """Gate (DEFAULT-ON, opt-out ``LOGICFUZZ_VALIDITY_CONTRACT=0``): makes construction
+    """Unconditional (graduated 2026-06-20, switch removed): makes construction
     satisfy the Validity Contract — every ``nullable=False`` opaque-handle ARG the model
     knows (not just the lossy IR ``requires``) gets a type-matching producer in the
     prefix. Args with no producer (value-structs/buffers) stay holes for the renderer.
     A/B 2026-06-20 (lcms): preflight-survived 1->14, merged distinct APIs 18->49;
-    additive (only binds unbound nullable=False handles), no regression. Graduated to default.
-    See docs/superpowers/specs/2026-06-16-valid-by-construction-contract.md."""
-    return _os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "1").strip().lower() in (
-        "1", "true", "yes", "on")
+    additive (only binds unbound nullable=False handles), no regression."""
+    return True
 
 
 def _populate_collections() -> bool:
-    """Gate: ``LOGICFUZZ_POPULATE_COLLECTIONS`` — render a CREATOR's
+    """Unconditional (graduated 2026-06-20, switch removed): render a CREATOR's
     handle-collection arg (``cmsToneCurve* const []``) as a populated array of
     built producer handles instead of degenerate ``{0}``/NULL, so the deep
     constructor runs (measured +72% edges/driver vs PromeFuzz's build-and-chain
     pattern: 334 vs 194 edges on instrumented lcms).
-    DEFAULT-ON (opt-out =0); graduated 2026-06-20 — lcms 300s-fuzz edges
-    325→943, cov 0.86%→16.81%."""
-    return _os.environ.get("LOGICFUZZ_POPULATE_COLLECTIONS", "1").strip().lower() in (
-        "1", "true", "yes", "on")
+    lcms 300s-fuzz edges 325→943, cov 0.86%→16.81%."""
+    return True
 
 
 def _fuzz_buffers() -> bool:
-    """Gate: ``LOGICFUZZ_FUZZ_BUFFERS`` (Lever B) — render a
+    """Unconditional (graduated 2026-06-20, switch removed): render a
     builder's scalar data-buffer arg (``cmsUInt16Number *``) as ``(T*)data`` (raw
     fuzz bytes) with its paired length bound to ``size/sizeof(T)``, instead of the
     degenerate ``nEntries=0`` / single ``{0}``. Makes drivers SEED-INDEPENDENT
     (any bytes build a real object — PromeFuzz's pattern) and deepens them.
-    DEFAULT-ON (opt-out =0); graduated 2026-06-20 — lcms 300s-fuzz edges
-    325→943, cov 0.86%→16.81%."""
-    return _os.environ.get("LOGICFUZZ_FUZZ_BUFFERS", "1").strip().lower() in (
-        "1", "true", "yes", "on")
+    lcms 300s-fuzz edges 325→943, cov 0.86%→16.81%."""
+    return True
 
 
 def _collection_elem_keys(sem) -> List[str]:

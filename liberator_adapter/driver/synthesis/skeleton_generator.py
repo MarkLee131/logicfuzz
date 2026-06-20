@@ -615,13 +615,12 @@ class DriverSkeleton:
 
 
 def _validity_contract_enabled() -> bool:
-    """Gate (DEFAULT-ON, opt-out ``LOGICFUZZ_VALIDITY_CONTRACT=0``): the renderer
+    """Unconditional (graduated 2026-06-20, switch removed): the renderer
     consumes the model's evidence-based ``nullable`` and wraps an UNBOUND
     ``nullable=False`` handle consume in ``if (handle) { ... }`` (Task 11
     defense-in-depth) instead of passing a bare NULL.
-    Graduated to default 2026-06-20 (lcms A/B: survived 1->14, APIs 18->49)."""
-    return os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "1").strip().lower() in (
-        "1", "true", "yes", "on")
+    lcms A/B: survived 1->14, APIs 18->49."""
+    return True
 
 
 def _input_source_enabled() -> bool:

@@ -30,39 +30,12 @@
       "ares_library_cleanup"
     ],
     [
-      "ares_init_options",
-      "ares_dup",
-      "ares_save_options",
-      "ares_destroy_options",
-      "ares_destroy_options",
-      "ares_destroy",
-      "ares_destroy"
-    ],
-    [
       "ares_init",
       "ares_destroy"
-    ],
-    [
-      "ares_init_options",
-      "ares_destroy",
-      "ares_init_options",
-      "ares_set_servers_csv",
-      "ares_set_sortlist",
-      "ares_dup",
-      "ares_save_options",
-      "ares_destroy_options",
-      "ares_destroy_options",
-      "ares_destroy"
-    ],
-    [
-      "ares_library_init_mem",
-      "ares_init",
-      "ares_library_cleanup"
     ],
     [
       "ares_init",
-      "ares_save_options",
-      "ares_destroy"
+      "ares_library_cleanup"
     ],
     [
       "ares_expand_name",
@@ -137,70 +110,22 @@
       "ares_library_cleanup"
     ],
     [
-      "ares_strerror",
-      "ares_freeaddrinfo"
+      "ares_strerror"
     ],
     [
-      "ares_library_init",
-      "ares_strerror",
-      "ares_init_options",
-      "ares_strerror",
-      "ares_get_servers_csv",
-      "ares_free_string",
-      "ares_destroy",
-      "ares_library_cleanup"
-    ],
-    [
-      "ares_parse_a_reply",
-      "ares_free_hostent",
-      "ares_parse_aaaa_reply",
-      "ares_free_hostent",
-      "ares_parse_ptr_reply",
-      "ares_free_hostent",
-      "ares_parse_ns_reply",
-      "ares_free_hostent",
-      "ares_parse_srv_reply",
-      "ares_free_data",
-      "ares_parse_mx_reply",
-      "ares_free_data",
-      "ares_parse_txt_reply",
-      "ares_free_data",
-      "ares_parse_soa_reply",
-      "ares_free_data",
-      "ares_parse_naptr_reply",
-      "ares_free_data",
-      "ares_parse_caa_reply",
-      "ares_free_data",
-      "ares_parse_uri_reply",
-      "ares_free_data"
-    ],
-    [
-      "ares_parse_caa_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
+      "ares_parse_caa_reply"
     ],
     [
       "ares_init",
-      "ares_search",
       "ares_get_servers",
       "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_reinit",
       "ares_destroy"
     ],
     [
       "ares_parse_ns_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply",
-      "ares_free_hostent"
-    ],
-    [
-      "ares_parse_aaaa_reply",
-      "ares_parse_a_reply",
       "ares_free_hostent"
     ],
     [
@@ -219,40 +144,24 @@
       "ares_expand_string"
     ],
     [
-      "ares_parse_ptr_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply",
-      "ares_free_hostent"
-    ],
-    [
       "ares_parse_txt_reply_ext"
     ],
     [
-      "ares_parse_srv_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
+      "ares_parse_srv_reply"
     ],
     [
-      "ares_parse_soa_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
+      "ares_parse_soa_reply"
     ],
     [
-      "ares_parse_uri_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
+      "ares_parse_uri_reply"
     ],
     [
       "ares_init",
       "ares_gethostbyname_file",
       "ares_get_servers",
       "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_reinit",
-      "ares_search",
       "ares_destroy",
       "ares_free_hostent"
     ],
@@ -261,72 +170,27 @@
     ],
     [
       "ares_init",
-      "ares_gethostbyname",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_search",
-      "ares_destroy"
-    ],
-    [
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply",
-      "ares_free_hostent"
-    ],
-    [
-      "ares_init",
-      "ares_send",
-      "ares_search",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
       "ares_cancel",
       "ares_dup",
       "ares_destroy"
     ],
     [
-      "ares_parse_mx_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
+      "ares_parse_mx_reply"
     ],
     [
       "ares_create_query"
     ],
     [
-      "ares_init",
-      "ares_gethostbyaddr",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
-      "ares_cancel",
-      "ares_dup",
-      "ares_destroy"
-    ],
-    [
-      "ares_parse_naptr_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
+      "ares_parse_naptr_reply"
     ],
     [
       "ares_expand_name"
     ],
     [
-      "ares_parse_txt_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
+      "ares_parse_txt_reply"
     ],
     [
       "ares_init",
-      "ares_query",
       "ares_get_servers_csv",
       "ares_process_fd",
       "ares_process_pending_write",
@@ -339,27 +203,6 @@
     ],
     [
       "ares_init",
-      "ares_save_options",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_getsock",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
       "ares_cancel",
       "ares_destroy"
     ],
@@ -396,24 +239,24 @@
       "ares_set_sortlist",
       "ares_get_servers",
       "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_destroy"
     ],
     [
       "ares_init",
       "ares_set_sortlist",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_reinit",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
       "ares_destroy"
+    ],
+    [
+      "ares_dns_rr_key_to_rec_type",
+      "ares_dns_rec_type_tostr",
+      "ares_dns_rr_key_tostr",
+      "ares_dns_section_tostr",
+      "ares_inet_pton",
+      "ares_dns_rec_type_fromstr",
+      "ares_dns_rr_key_datatype"
     ],
     [
       "ares_init",
@@ -423,7 +266,6 @@
       "ares_set_local_ip6",
       "ares_set_servers_ports_csv",
       "ares_set_sortlist",
-      "ares_init_options",
       "ares_get_servers",
       "ares_get_servers_ports",
       "ares_destroy"
@@ -438,13 +280,8 @@
       "ares_init",
       "ares_set_local_dev",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_reinit",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
       "ares_destroy"
     ],
     [
@@ -452,12 +289,6 @@
     ],
     [
       "ares_init",
-      "ares_process",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
       "ares_cancel",
       "ares_dup",
       "ares_get_servers_csv",
@@ -472,29 +303,17 @@
       "ares_dns_rr_key_datatype"
     ],
     [
-      "ares_dns_addr_to_ptr"
-    ],
-    [
       "ares_init",
-      "ares_fds",
       "ares_set_sortlist",
       "ares_get_servers",
       "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_destroy"
     ],
     [
       "ares_init",
       "ares_set_local_ip6",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
       "ares_cancel",
       "ares_dup",
       "ares_get_servers_csv",
@@ -514,9 +333,6 @@
       "ares_dns_record_destroy"
     ],
     [
-      "ares_dns_pton"
-    ],
-    [
       "ares_init",
       "ares_set_servers_ports_csv",
       "ares_process_fd",
@@ -548,24 +364,15 @@
       "ares_set_servers_csv",
       "ares_set_servers_ports_csv",
       "ares_set_sortlist",
-      "ares_init_options",
       "ares_get_servers",
       "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
       "ares_destroy"
     ],
     [
       "ares_init",
-      "ares_timeout",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_reinit",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
       "ares_destroy"
     ],
     [
@@ -599,18 +406,11 @@
       "ares_queue_active_queries",
       "ares_queue_wait_empty",
       "ares_reinit",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
       "ares_destroy"
     ],
     [
       "ares_init",
       "ares_cancel",
-      "ares_set_socket_configure_callback",
       "ares_dup",
       "ares_get_servers_csv",
       "ares_process_fd",
@@ -618,19 +418,6 @@
       "ares_queue_active_queries",
       "ares_set_local_dev",
       "ares_set_local_ip4",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_set_socket_functions",
-      "ares_get_servers_csv",
-      "ares_process_fd",
-      "ares_process_pending_write",
-      "ares_queue_active_queries",
-      "ares_set_local_dev",
-      "ares_set_local_ip4",
-      "ares_set_local_ip6",
-      "ares_set_servers_csv",
       "ares_destroy"
     ],
     [
@@ -663,104 +450,25 @@
     ],
     [
       "ares_init",
-      "ares_set_socket_configure_callback",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_search",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
       "ares_queue_wait_empty",
       "ares_get_servers",
       "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_reinit",
-      "ares_search",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_set_pending_write_cb",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_getaddrinfo",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_set_socket_callback",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_configure_callback",
-      "ares_cancel",
-      "ares_dup",
       "ares_destroy"
     ],
     [
       "ares_init",
       "ares_get_servers_ports",
       "ares_get_servers",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_reinit",
-      "ares_search",
       "ares_destroy"
     ],
     [
       "ares_init",
       "ares_reinit",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
       "ares_cancel",
       "ares_dup",
       "ares_destroy"
@@ -768,21 +476,14 @@
     [
       "ares_dns_parse",
       "ares_init",
-      "ares_send_dnsrec",
-      "ares_gethostbyname",
       "ares_gethostbyname_file",
-      "ares_query",
       "ares_queue_wait_empty",
       "ares_reinit",
-      "ares_search",
-      "ares_search_dnsrec",
-      "ares_send",
       "ares_destroy",
       "ares_dns_record_destroy"
     ],
     [
       "ares_init",
-      "ares_process_fds",
       "ares_dup",
       "ares_get_servers_csv",
       "ares_process_fd",
@@ -795,54 +496,12 @@
     ],
     [
       "ares_init",
-      "ares_set_socket_functions_ex",
       "ares_set_servers_csv",
       "ares_set_servers_ports_csv",
       "ares_set_sortlist",
       "ares_get_servers",
       "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
       "ares_gethostbyname_file",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_set_server_state_callback",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_getnameinfo",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_set_query_enqueue_cb",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
-      "ares_cancel",
-      "ares_dup",
       "ares_destroy"
     ],
     [
@@ -898,107 +557,14 @@
       "ares_dns_record_destroy"
     ],
     [
-      "ares_init_options",
-      "ares_process_pending_write",
-      "ares_queue_active_queries",
-      "ares_set_local_dev",
-      "ares_set_local_ip4",
-      "ares_set_local_ip6",
-      "ares_set_servers_csv",
-      "ares_set_servers_ports_csv",
-      "ares_set_sortlist",
-      "ares_destroy"
-    ],
-    [
       "ares_threadsafety"
     ]
   ],
   "n_apis": 138,
-  "n_constructed": 98,
-  "n_selected": 45,
+  "n_constructed": 76,
+  "n_selected": 32,
   "project": "c-ares",
   "selected": [
-    [
-      "ares_dns_parse",
-      "ares_init",
-      "ares_send_dnsrec",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_search",
-      "ares_search_dnsrec",
-      "ares_send",
-      "ares_destroy",
-      "ares_dns_record_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_gethostbyname_file",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_search",
-      "ares_destroy",
-      "ares_free_hostent"
-    ],
-    [
-      "ares_init",
-      "ares_send",
-      "ares_search",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
-      "ares_cancel",
-      "ares_dup",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_query",
-      "ares_get_servers_csv",
-      "ares_process_fd",
-      "ares_process_pending_write",
-      "ares_queue_active_queries",
-      "ares_set_local_dev",
-      "ares_set_local_ip4",
-      "ares_set_local_ip6",
-      "ares_set_servers_csv",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_save_options",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_getsock",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
-      "ares_cancel",
-      "ares_destroy"
-    ],
     [
       "ares_dns_parse",
       "ares_dns_record_get_id",
@@ -1014,15 +580,15 @@
     ],
     [
       "ares_init",
-      "ares_process",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_set_server_state_callback",
-      "ares_set_socket_callback",
-      "ares_set_socket_configure_callback",
-      "ares_cancel",
+      "ares_process_pending_write",
       "ares_dup",
       "ares_get_servers_csv",
+      "ares_process_fd",
+      "ares_queue_active_queries",
+      "ares_set_local_dev",
+      "ares_set_local_ip4",
+      "ares_set_local_ip6",
+      "ares_set_servers_csv",
       "ares_destroy"
     ],
     [
@@ -1040,80 +606,15 @@
     ],
     [
       "ares_init",
-      "ares_timeout",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_search",
-      "ares_send",
-      "ares_set_pending_write_cb",
-      "ares_set_query_enqueue_cb",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_set_socket_functions",
       "ares_get_servers_csv",
-      "ares_process_fd",
-      "ares_process_pending_write",
-      "ares_queue_active_queries",
-      "ares_set_local_dev",
-      "ares_set_local_ip4",
-      "ares_set_local_ip6",
-      "ares_set_servers_csv",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_getaddrinfo",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_process_fds",
+      "ares_cancel",
       "ares_dup",
-      "ares_get_servers_csv",
       "ares_process_fd",
       "ares_process_pending_write",
       "ares_queue_active_queries",
       "ares_set_local_dev",
       "ares_set_local_ip4",
       "ares_set_local_ip6",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_set_socket_functions_ex",
-      "ares_set_servers_csv",
-      "ares_set_servers_ports_csv",
-      "ares_set_sortlist",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_getnameinfo",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_reinit",
       "ares_destroy"
     ],
     [
@@ -1143,8 +644,31 @@
       "ares_dns_record_destroy"
     ],
     [
-      "ares_dns_rr_key_tostr",
+      "ares_init",
+      "ares_set_servers_csv",
+      "ares_set_local_dev",
+      "ares_set_local_ip4",
+      "ares_set_local_ip6",
+      "ares_set_servers_ports_csv",
+      "ares_set_sortlist",
+      "ares_get_servers",
+      "ares_get_servers_ports",
+      "ares_destroy"
+    ],
+    [
+      "ares_init",
+      "ares_gethostbyname_file",
+      "ares_get_servers",
+      "ares_get_servers_ports",
+      "ares_queue_wait_empty",
+      "ares_reinit",
+      "ares_destroy",
+      "ares_free_hostent"
+    ],
+    [
       "ares_dns_rr_key_to_rec_type",
+      "ares_dns_rec_type_tostr",
+      "ares_dns_rr_key_tostr",
       "ares_dns_section_tostr",
       "ares_inet_pton",
       "ares_dns_rec_type_fromstr",
@@ -1166,46 +690,6 @@
       "ares_library_cleanup"
     ],
     [
-      "ares_library_init_mem",
-      "ares_init",
-      "ares_library_cleanup"
-    ],
-    [
-      "ares_parse_caa_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
-    ],
-    [
-      "ares_parse_srv_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
-    ],
-    [
-      "ares_parse_soa_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
-    ],
-    [
-      "ares_parse_uri_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
-    ],
-    [
-      "ares_parse_mx_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
-    ],
-    [
-      "ares_parse_naptr_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
-    ],
-    [
-      "ares_parse_txt_reply",
-      "ares_parse_a_reply",
-      "ares_parse_aaaa_reply"
-    ],
-    [
       "ares_expand_name",
       "ares_free_string"
     ],
@@ -1218,63 +702,34 @@
       "ares_free_string"
     ],
     [
-      "ares_strerror",
-      "ares_freeaddrinfo"
+      "ares_strerror"
+    ],
+    [
+      "ares_parse_caa_reply"
     ],
     [
       "ares_parse_txt_reply_ext"
     ],
     [
-      "ares_dns_addr_to_ptr"
+      "ares_parse_srv_reply"
+    ],
+    [
+      "ares_parse_soa_reply"
+    ],
+    [
+      "ares_parse_uri_reply"
+    ],
+    [
+      "ares_parse_mx_reply"
+    ],
+    [
+      "ares_parse_naptr_reply"
+    ],
+    [
+      "ares_parse_txt_reply"
     ],
     [
       "ares_dns_opt_get_datatype"
-    ],
-    [
-      "ares_parse_a_reply",
-      "ares_free_hostent",
-      "ares_parse_aaaa_reply",
-      "ares_free_hostent",
-      "ares_parse_ptr_reply",
-      "ares_free_hostent",
-      "ares_parse_ns_reply",
-      "ares_free_hostent",
-      "ares_parse_srv_reply",
-      "ares_free_data",
-      "ares_parse_mx_reply",
-      "ares_free_data",
-      "ares_parse_txt_reply",
-      "ares_free_data",
-      "ares_parse_soa_reply",
-      "ares_free_data",
-      "ares_parse_naptr_reply",
-      "ares_free_data",
-      "ares_parse_caa_reply",
-      "ares_free_data",
-      "ares_parse_uri_reply",
-      "ares_free_data"
-    ],
-    [
-      "ares_init_options",
-      "ares_dup",
-      "ares_save_options",
-      "ares_destroy_options",
-      "ares_destroy_options",
-      "ares_destroy",
-      "ares_destroy"
-    ],
-    [
-      "ares_init",
-      "ares_fds",
-      "ares_set_sortlist",
-      "ares_get_servers",
-      "ares_get_servers_ports",
-      "ares_gethostbyaddr",
-      "ares_gethostbyname",
-      "ares_gethostbyname_file",
-      "ares_query",
-      "ares_queue_wait_empty",
-      "ares_destroy"
     ],
     [
       "ares_dns_parse",
@@ -1290,13 +745,14 @@
       "ares_dns_record_destroy"
     ],
     [
+      "ares_parse_ns_reply",
+      "ares_free_hostent"
+    ],
+    [
       "ares_expand_string"
     ],
     [
       "ares_dns_opt_get_name"
-    ],
-    [
-      "ares_dns_pton"
     ],
     [
       "ares_dns_class_fromstr"
@@ -1308,6 +764,11 @@
       "ares_library_initialized",
       "ares_library_cleanup",
       "ares_library_initialized"
+    ],
+    [
+      "ares_free_data",
+      "ares_free_data",
+      "ares_free_data"
     ]
   ]
 }

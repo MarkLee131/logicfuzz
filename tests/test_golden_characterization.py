@@ -50,9 +50,9 @@ def _snapshot(project):
     for k in list(env):
         if k.startswith("LOGICFUZZ_"):
             del env[k]
-    # Golden reflects gate-OFF baseline; explicitly disable so the default-ON
-    # LOGICFUZZ_VALIDITY_CONTRACT does not alter the characterised behavior.
-    env["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
+    # VALIDITY_CONTRACT / POPULATE_COLLECTIONS / FUZZ_BUFFERS are now unconditional
+    # (switches removed 2026-06-20); no pin needed — _golden_snapshot.py handles the
+    # RESIDUAL_ALLCOVER / API_FLOOR pins that remain gated.
     fixture = os.path.join(GOLDEN_DIR, f"{project}.input.json")
     out = subprocess.check_output(
         [sys.executable, SNAPSHOT_SCRIPT, project, fixture], env=env, cwd=ROOT)

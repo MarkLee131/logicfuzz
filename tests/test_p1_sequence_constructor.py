@@ -115,36 +115,6 @@ def test_ordering_clean_by_construction():
     assert _ordering_clean(apis, model, res.sequences)
 
 
-def test_orphan_target_kept_for_graceful_degradation():
-    """B graceful degradation: a consumer requiring a handle with NO creator (an
-    island API — opaque / void* / no producer) is NOT dropped. The orphan's
-    USE_BEFORE_INIT is kept so the unchecked render path leaves Ghost* as a hole
-    for the LLM to construct/NULL — that is how we recover the ~302/452 gap APIs
-    the baselines reach. The LOGICFUZZ_STRICT_ORDERING kill-switch restores the
-    old drop behavior."""
-    apis = [
-        _api("orphan_use", [_arg("Ghost *")], ret="int"),  # no Ghost creator
-        _api("thing_create", [], ret="Thing *"),
-    ]
-    model = reconcile(apis)
-    # Explicitly disable VC so the repair pass does not prepend a producer
-    # (VC-on would prepend a producer and "orphan_use" would no longer be orphan).
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
-    try:
-        # Default (graceful): the island API survives as a candidate.
-        res = construct_sequences(model, project_apis=apis)
-        assert any("orphan_use" in s for s in res.sequences)
-        # Strict kill-switch: the old behavior — orphan dropped by the filter.
-        os.environ["LOGICFUZZ_STRICT_ORDERING"] = "1"
-        try:
-            res_strict = construct_sequences(model, project_apis=apis)
-            assert all("orphan_use" not in s for s in res_strict.sequences)
-        finally:
-            os.environ.pop("LOGICFUZZ_STRICT_ORDERING", None)
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
-
-
 def test_creator_gets_create_destroy_coverage():
     apis = [_api("thing_create", [], ret="Thing *"),
             _api("thing_free", [_arg("Thing *")])]

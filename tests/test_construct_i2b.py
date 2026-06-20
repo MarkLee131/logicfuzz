@@ -88,13 +88,3 @@ def test_construct_gate_on_drops_unfillable_target():
         os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)
 
 
-def test_construct_gate_off_keeps_unfillable_target():
-    model = APISemanticModel("t", {
-        s.name: s for s in (OPAQUE_PTR_CONSUMER, STRING_CONSUMER)})
-    os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
-    try:
-        res = construct_sequences(model)
-        flat = {a for s in res.sequences for a in s}
-        assert "needsOpaquePtr" in flat   # gate-off: unchanged
-    finally:
-        os.environ.pop("LOGICFUZZ_VALIDITY_CONTRACT", None)

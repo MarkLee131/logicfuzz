@@ -65,13 +65,11 @@ logger = logging.getLogger(__name__)
 
 
 def _validity_contract_enabled() -> bool:
-    """Gate ``LOGICFUZZ_VALIDITY_CONTRACT`` (DEFAULT-ON, opt-out ``=0``). When on (and a
+    """Unconditional (graduated 2026-06-20, switch removed). When on (and a
     model is supplied), ``_signature_handle_bindings`` binds opaque handle args by
     handle FAMILY (I3, Task 10) instead of the collapsed nearest-void* match.
-    Graduated to default 2026-06-20 (lcms A/B: survived 1->14, APIs 18->49)."""
-    import os as _os
-    return _os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "1").strip().lower() in (
-        "1", "true", "yes", "on")
+    lcms A/B: survived 1->14, APIs 18->49."""
+    return True
 
 
 def _distribute_cross_source(
