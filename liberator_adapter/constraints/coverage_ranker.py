@@ -186,7 +186,7 @@ class CoverageRanker:
         self,
         sequences: List[List[str]],
         entry_point_names: Optional[Set[str]] = None,
-        top_k: int = 10,
+        top_k: Optional[int] = None,
         automaton_acceptance_fn: Optional[Any] = None,
         automaton_graft_fn: Optional[Any] = None,
         automaton_sample_paths: Optional[List[List[str]]] = None,
@@ -440,7 +440,7 @@ class CoverageRanker:
     def _greedy_select(
         self,
         ranked_sequences: List[SequenceScore],
-        top_k: int
+        top_k: Optional[int]
     ) -> Tuple[List[List[str]], Set[str], Dict[str, Any]]:
         """
         Greedy selection maximizing API coverage.
@@ -466,15 +466,18 @@ class CoverageRanker:
         # still leads among equal-coverage picks). Reaches the API tail with
         # fewer, more-diverse drivers than the legacy fixed-order filter and
         # stops once nothing adds new APIs (fewer trials too).
+        # top_k is None ⇒ NO cap: run until the greedy self-terminates because
+        # no remaining sequence adds a new API (covers the candidate pool).
+        _floor = 3 if top_k is None else min(3, top_k)
         remaining = list(ranked_sequences)
-        while remaining and len(selected) < top_k:
+        while remaining and (top_k is None or len(selected) < top_k):
             best_i = max(
                 range(len(remaining)),
                 key=lambda i: len(set(remaining[i].sequence) - covered_apis),
             )
             best = remaining.pop(best_i)
             new_apis = set(best.sequence) - covered_apis
-            if not new_apis and len(selected) >= min(3, top_k):
+            if not new_apis and len(selected) >= _floor:
                 break  # nothing left contributes new APIs → stop (fewer trials)
             selected.append(best.sequence)
             covered_apis.update(best.sequence)
@@ -610,7 +613,7 @@ class CoverageRanker:
 def select_top_k_sequences(
     sequences: List[List[str]],
     entry_point_analysis: Optional[Dict[str, Any]] = None,
-    top_k: int = 10,
+    top_k: Optional[int] = None,
     logger_instance: Optional[logging.Logger] = None,
     automaton_artifact: Optional[Any] = None,
     automaton_n_sample_paths: int = 8,

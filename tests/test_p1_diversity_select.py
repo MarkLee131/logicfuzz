@@ -45,3 +45,17 @@ def test_diversity_stops_when_nothing_new():
     sel, cov, _ = ranker._greedy_select(cast(Any, ranked), 10)
     assert len(cov) == 3                # a,b,c
     assert len(sel) == 3                # stops at full coverage, no padding to top_k
+
+
+def test_top_k_none_covers_whole_pool():
+    """top_k=None (the new default — the LOGICFUZZ_TOP_K knob was retired) ⇒
+    NO cap: greedy runs until it covers every API the candidate pool can,
+    self-terminating when nothing new is added (never an infinite loop)."""
+    ranker = CoverageRanker()
+    # 12 disjoint single-API sequences: a fixed top_k=10 would drop 2 APIs;
+    # top_k=None must cover all 12.
+    apis = [f"api{i}" for i in range(12)]
+    ranked = _pool(*[[a] for a in apis])
+    sel, cov, _ = ranker._greedy_select(cast(Any, ranked), None)
+    assert cov == set(apis)             # full pool coverage, no 10-cap
+    assert len(sel) == 12

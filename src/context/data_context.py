@@ -298,14 +298,16 @@ class FuzzingContext:
                 logger_instance: logging.Logger = None,
                 num_sequences: int = 24,
                 driver_size: int = 5,
-                # Budget cap on the per-project driver count after L4
-                # greedy max-coverage. NOT a viability filter — viability
-                # is decided by L0–L4 + the greedy itself, which already
-                # orders by marginal coverage and self-terminates when no
-                # candidate adds new APIs. This cap just bounds compile /
-                # fuzz / LLM cost. Matches PromeFuzz CCS'25's per-project
-                # driver count for direct comparability.
-                filter_top_k: int = 10,
+                # Optional cap on the L4 grammar-floor greedy selection. The
+                # default is None = NO cap: the greedy self-terminates when no
+                # candidate adds a new API (covers the candidate pool). The old
+                # =10 "PromeFuzz parity budget" was retired — on the default
+                # path (PORTFOLIO=complete) the driver count is decided by the
+                # portfolio (cluster cover + bounded depth + API-floor), not by
+                # this number, and construction + residual all-cover already
+                # lift breadth to the extraction ceiling. Kept only as an
+                # explicit knob for the PORTFOLIO=off A/B control.
+                filter_top_k: Optional[int] = None,
                 use_cache: bool = True,
                 llm_client: Any = None,
                 closed_loop_iters: int = 0,
@@ -361,20 +363,14 @@ class FuzzingContext:
         _random.seed(_rng_seed)
         log.info("Symbolic-layer RNG seeded with %d (LOGICFUZZ_SEED)", _rng_seed)
 
-        # Breadth lever (2026-06): the skeleton/driver count caps API breadth.
-        # filter_top_k=10 → greedy max-coverage keeps only 10 sequences → ~45 of
-        # 297 lcms APIs reach drivers (vs PromeFuzz's 293 over 141 drivers).
-        # LOGICFUZZ_TOP_K raises the cap (offline: 10→45, 50→86, 100→136 APIs).
-        # The funnel, not candidate generation, is the bottleneck (the pool
-        # already covers all 297). Cost scales linearly (more LLM+build trials).
-        _env_top_k = os.environ.get("LOGICFUZZ_TOP_K")
-        if _env_top_k:
-            try:
-                filter_top_k = int(_env_top_k)
-                log.info(f'🔭 LOGICFUZZ_TOP_K={filter_top_k} (breadth: more '
-                         f'skeletons → more distinct APIs in the merged union)')
-            except ValueError:
-                pass
+        # NOTE (2026-06-20): the LOGICFUZZ_TOP_K breadth knob was REMOVED.
+        # It implied it capped API breadth, but on the default path
+        # (PORTFOLIO=complete) breadth is lifted to the extraction ceiling by
+        # construction + residual all-cover regardless of any top_k, and the
+        # driver count is portfolio-determined (cluster cover + depth + floor),
+        # not top_k. ``filter_top_k`` now defaults to None (no L4 grammar-floor
+        # cap; the greedy self-terminates at full pool coverage) and survives
+        # only as the explicit cap for the PORTFOLIO=off A/B control.
 
         # Try to load from cache first. LOGICFUZZ_NO_CACHE=1 forces a fresh
         # prepare() so iterative changes to Step 5h (construct) / Step 10
@@ -907,9 +903,9 @@ class FuzzingContext:
             # regressed lcms 1→0); the floor also covers when construction
             # yields nothing.
             pre_rank_count = len(api_sequences)
-            # filter_top_k is a budget cap (default 10); greedy max-coverage
-            # may stop earlier when no candidate adds new APIs (viability
-            # self-termination at coverage_ranker.py:394).
+            # filter_top_k defaults to None (no cap); the greedy max-coverage
+            # then self-terminates when no candidate adds a new API — covering
+            # the candidate pool (only PORTFOLIO=off passes a fixed cap).
             api_sequences, ranking_summary = select_top_k_sequences(
                 api_sequences,
                 entry_point_analysis=entry_point_analysis_result,
@@ -2159,8 +2155,12 @@ class FuzzingContext:
                             len(_portfolio) - _n_cover, len(_portfolio),
                             len(skeleton_drivers))
                     else:
-                        # Legacy: fixed filter_top_k round-robin (PORTFOLIO=off).
-                        _cap = filter_top_k or len(skeleton_drivers)
+                        # Legacy: fixed top_k round-robin (PORTFOLIO=off A/B
+                        # control). filter_top_k now defaults to None (the env
+                        # knob was removed), so reproduce the historical fixed
+                        # cap of 10 here — this control exists to mirror the
+                        # pre-portfolio behaviour for A/B comparison.
+                        _cap = filter_top_k if filter_top_k is not None else 10
                         _used = [[False] * len(_b) for _b in _buckets]
 
                         def _pick_from(_b, _u):

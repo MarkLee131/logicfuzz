@@ -9,20 +9,29 @@ to be. A separate "user must pass -n N" expectation was also broken
 because N (the count of viable sequences) is not knowable until the
 viability analysis finishes.
 
-Resolution chosen (matches PromeFuzz CCS'25 per-project driver count):
+Resolution chosen (2026-06-20 update — the ``top_k`` budget was retired):
 
-  - Single budget cap, default ``filter_top_k = 10``.
-  - L4 greedy max-coverage outputs at most 10 sequences (or fewer if the
-    greedy self-terminates because no candidate adds new APIs).
-  - Skeleton emission and the trial axis both derive their count from
+  - ``filter_top_k`` default is ``None`` (NO hardcoded breadth cap). The
+    old ``=10`` "PromeFuzz parity budget" was empirically inert on the
+    default path: under ``PORTFOLIO=complete`` the driver count is decided
+    by the portfolio (cluster cover + bounded depth + API-floor), NOT by
+    ``filter_top_k`` (measured c-ares: 73 drivers / 138 APIs with the old
+    ``top_k=10``). So ``top_k`` only ever bounded the L4 grammar *floor*,
+    which construction + residual all-cover already supersede.
+  - The ``LOGICFUZZ_TOP_K`` env knob was REMOVED — it raised breadth on no
+    path that matters (residual all-cover already lifts breadth to the
+    extraction ceiling) and was a foot-gun implying it capped coverage.
+  - L4 greedy max-coverage with ``top_k=None`` self-terminates when no
+    candidate adds new APIs (covers the candidate pool).
+  - Skeleton emission and the trial axis still derive their count from
     ``len(skeleton_drivers)`` — never an independent cap.
   - ``--num-samples`` defaults to ``None`` (auto), resolved at runtime
     in ``_fuzzing_pipelines`` to ``len(skeleton_drivers)`` so every
     viable Z3 skeleton gets one trial. User can still override
     (``-n 1`` for a fast smoke).
 
-This test pins down the budget-cap default and the auto-resolve so a
-future refactor can't silently re-introduce the old hardcoded ceilings.
+This test pins the new default + the env removal so a future refactor
+can't silently re-introduce the old hardcoded ceiling or the knob.
 """
 from __future__ import annotations
 
@@ -39,16 +48,33 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
-def test_filter_top_k_default_is_budget_cap_10():
-    """The single budget knob is set to 10 (PromeFuzz parity)."""
+def test_filter_top_k_default_is_none_no_hardcoded_cap():
+    """The breadth cap was retired: ``filter_top_k`` default is ``None`` so
+    nothing hardcodes the per-project API breadth; the portfolio decides the
+    driver count."""
     from src.context.data_context import FuzzingContext
 
     sig = inspect.signature(FuzzingContext.prepare)
     default = sig.parameters['filter_top_k'].default
-    assert default == 10, (
-        f'filter_top_k default changed from 10 to {default} — that\'s the '
-        f'per-project driver budget; document the new value here if you '
-        f'genuinely meant to raise/lower it')
+    assert default is None, (
+        f'filter_top_k default is {default!r}, expected None. The top_k '
+        f'budget was retired (driver count is portfolio-determined); a '
+        f'non-None default re-introduces a hardcoded breadth ceiling.')
+
+
+def test_logicfuzz_top_k_env_removed():
+    """The ``LOGICFUZZ_TOP_K`` env knob was removed — it implied it capped
+    coverage, but residual all-cover already lifts breadth to the extraction
+    ceiling on the default path. Guard against re-introduction."""
+    import src.context.data_context as dc
+
+    src_text = inspect.getsource(dc)
+    # Guard the actual behaviour (the env is no longer READ), not a
+    # "we removed this" doc mention — the quoted form only appears in an
+    # ``os.environ.get("LOGICFUZZ_TOP_K")`` read.
+    assert '"LOGICFUZZ_TOP_K"' not in src_text, (
+        'LOGICFUZZ_TOP_K is read again — it was removed (top_k is no longer '
+        'a knob; driver count is portfolio-determined). Do not re-add it.')
 
 
 def test_num_samples_default_is_none_for_auto_resolve():

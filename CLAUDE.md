@@ -18,7 +18,7 @@ python3 run_logicfuzz.py -y comparison/cjson.yaml -l gpt-4o
 # Extract APIs only (no LLM)
 python3 run_logicfuzz.py -y comparison/cjson.yaml --extract-only
 # Evaluation profile (bundles --closed-loop + --merge-drivers) — the headline run
-LOGICFUZZ_NO_CACHE=1 LOGICFUZZ_TOP_K=56 python3 run_logicfuzz.py -y comparison/lcms.yaml --eval
+LOGICFUZZ_NO_CACHE=1 python3 run_logicfuzz.py -y comparison/lcms.yaml --eval
 # Merge only: fold successful trials into one multi-task harness
 python3 run_logicfuzz.py -y comparison/lcms.yaml --merge-drivers
 # Code quality + tests
@@ -30,7 +30,7 @@ python scripts/run_extended_fuzzing.py -p re2 -f results/output-re2-project/fuzz
 Secondary modes (see `--help`): `--generate-drivers` (static no-LLM baseline),
 `--closed-loop[-iters N]` (Phase G feedback; also implied by `--eval`),
 `--multihop-prototyper` (experimental, unvalidated). A/B kill-switches + tuning
-live in the Flag/Gate Reference below (`LOGICFUZZ_TOP_K`,
+live in the Flag/Gate Reference below (`LOGICFUZZ_PORTFOLIO`,
 `LOGICFUZZ_DISABLE_G2_CONSTRUCT`, …); control parallelism via `LLM_NUM_EXP=N`.
 
 `--num-samples` auto-resolves to `len(skeleton_drivers)` (one trial per
@@ -45,7 +45,6 @@ token usage) to `results/<project>/llm_trace.jsonl` (companion to
 Format: `FLAG=val — purpose (default)`. Full rationale/measurements live in git history.
 
 ### Tuning values + always-on A/B kill-switches
-- `LOGICFUZZ_TOP_K=N` — skeleton/driver count, the union-breadth lever (default 10; needs `NO_CACHE=1` to regen). Under PORTFOLIO=complete (default) SUPERSEDED by coverage-complete selection; only bounds PORTFOLIO=off.
 - `LOGICFUZZ_PORTFOLIO=complete|minimal|off` — coverage-COMPLETE portfolio selection (DEFAULT complete): ≥1 lifecycle-valid driver per subsystem cluster (cover) + bounded depth pass; fixes parser-entry-bias. (minimal=cover only; off=legacy fixed top_k round-robin = A/B control.)
 - `LOGICFUZZ_PORTFOLIO_DEPTH=F` — depth multiplier for PORTFOLIO Phase 2 (default 0.5).
 - `LOGICFUZZ_DENSE_MAX_EXTRA=N` — cap extra APIs appended per chain (default 8 → ~7.7 APIs/seq lcms = PromeFuzz parity).
@@ -73,7 +72,7 @@ Jaccard 0.43→0.05; lcms 60→45 / 154→212 / 0.15→0.06).
 - **FUZZ_BUFFERS** — render a builder's scalar data-buffer arg (`cmsUInt16Number *`) as `(T*)data` with paired length bound to `size/sizeof(T)`, making drivers SEED-INDEPENDENT (`sequence_constructor._fuzz_buffers`, `skeleton_generator`); lcms 300s-fuzz edges 325→943, cov 0.86%→16.81%.
 
 ### Pruned (removed — redundant / over-fit / niche)
-TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT / XPROJ_CORPUS (unvalidated resource-thin fallback); DEDUP_WORKFLOW_PARTITION (⊂ DENSE_PARTITION); PAIRWISE_DEDUP / PAIRWISE_TAU (⊂ SUBSET_ELIM + construction decoupling); ORDERSETS (⊂ coverage-complete selection).
+TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT / XPROJ_CORPUS (unvalidated resource-thin fallback); DEDUP_WORKFLOW_PARTITION (⊂ DENSE_PARTITION); PAIRWISE_DEDUP / PAIRWISE_TAU (⊂ SUBSET_ELIM + construction decoupling); ORDERSETS (⊂ coverage-complete selection); **TOP_K** (`LOGICFUZZ_TOP_K`, retired 2026-06-20 — it implied it capped API breadth, but breadth is portfolio-determined and construction + residual all-cover already reach the extraction ceiling regardless; `filter_top_k` now defaults to `None`/no-cap, the greedy L4 floor self-terminates at full pool coverage, and the legacy fixed cap survives only as the `PORTFOLIO=off` A/B control).
 
 ### Construction / depth / dedup levers
 - `LOGICFUZZ_ERROR_VARIANTS=1` / `_MAX=N` — T11: emit error-shape skeleton variants (double-free / use-after-destroy / skip-init) so library error branches become reachable (gated, A/B pending).
