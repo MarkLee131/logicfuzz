@@ -42,14 +42,28 @@ def _extract_fuzz_target(response: str) -> str:
     and strip a stray markdown code fence — same semantics as
     ``src.agents.utils.parse_tag(response, 'fuzz_target')``, inlined so this
     merge-stage tool does NOT import the LangGraph ``src.agents`` package (whose
-    ``__init__`` pulls a circular agent-graph dependency)."""
+    ``__init__`` pulls a circular agent-graph dependency).
+
+    Falls back to a bare markdown code block when the model omits the tag — GPT-4o
+    routinely returns ```c …``` instead of ``<fuzz_target>`` (the per-trial Fixer
+    handles this same case). Measured: 3 of nghttp2's 8 repair attempts failed
+    ONLY on this format gap, not on capability. Guarded by requiring the block to
+    contain ``LLVMFuzzerTestOneInput`` so prose / unrelated snippets aren't taken.
+    """
     m = re.search(r"<fuzz_target>(.*?)</fuzz_target>", response or "", re.DOTALL)
-    if not m:
-        return ""
-    code = m.group(1).strip()
-    fence = re.match(r"^```(?:c|cpp|c\+\+)?\s*\n(.*?)```$", code, re.DOTALL)
-    if fence:
-        code = fence.group(1).strip()
+    code = ""
+    if m:
+        code = m.group(1).strip()
+        fence = re.match(r"^```(?:c|cpp|c\+\+)?\s*\n(.*?)```$", code, re.DOTALL)
+        if fence:
+            code = fence.group(1).strip()
+    else:
+        for fm in re.finditer(r"```(?:c|cpp|c\+\+)?\s*\n(.*?)```",
+                              response or "", re.DOTALL):
+            block = fm.group(1).strip()
+            if "LLVMFuzzerTestOneInput" in block:
+                code = block
+                break
     return code
 
 

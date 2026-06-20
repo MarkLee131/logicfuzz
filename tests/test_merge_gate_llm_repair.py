@@ -19,6 +19,32 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools.merge_drivers import llm_repair
+from tools.merge_drivers.llm_repair import _extract_fuzz_target
+
+
+# --- _extract_fuzz_target: robust to the common markdown-instead-of-tag variant --
+
+def test_extract_prefers_fuzz_target_tag():
+    resp = "<fuzz_target>int LLVMFuzzerTestOneInput(){return 0;}</fuzz_target>\n```c\nWRONG\n```"
+    assert "LLVMFuzzerTestOneInput" in _extract_fuzz_target(resp)
+    assert "WRONG" not in _extract_fuzz_target(resp)
+
+
+def test_extract_markdown_fallback_when_no_tag():
+    # gpt-4o often returns a ```c block instead of the <fuzz_target> tag — recover
+    # it when it's clearly a fuzz target (has LLVMFuzzerTestOneInput). Measured: 3
+    # of nghttp2's 8 repair attempts failed ONLY on this format gap.
+    resp = ("Here's the corrected driver:\n```cpp\n"
+            "int LLVMFuzzerTestOneInput(const uint8_t*d,size_t s){ return 0; }\n```\n")
+    code = _extract_fuzz_target(resp)
+    assert "LLVMFuzzerTestOneInput" in code
+    assert "```" not in code and "Here's" not in code
+
+
+def test_extract_ignores_non_driver_markdown():
+    # a markdown block that is NOT a fuzz target (no entrypoint) must not be taken
+    assert _extract_fuzz_target("```sh\nrm -rf /tmp/x\n```") == ""
+    assert _extract_fuzz_target("I can't help with that.") == ""
 
 
 def _write(p, text):
