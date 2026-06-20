@@ -134,22 +134,26 @@ def _validity_contract() -> bool:
 
 
 def _populate_collections() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_POPULATE_COLLECTIONS`` — render a CREATOR's
+    """Gate: ``LOGICFUZZ_POPULATE_COLLECTIONS`` — render a CREATOR's
     handle-collection arg (``cmsToneCurve* const []``) as a populated array of
     built producer handles instead of degenerate ``{0}``/NULL, so the deep
     constructor runs (measured +72% edges/driver vs PromeFuzz's build-and-chain
-    pattern: 334 vs 194 edges on instrumented lcms)."""
-    return _os.environ.get("LOGICFUZZ_POPULATE_COLLECTIONS", "0").strip().lower() in (
+    pattern: 334 vs 194 edges on instrumented lcms).
+    DEFAULT-ON (opt-out =0); graduated 2026-06-20 — lcms 300s-fuzz edges
+    325→943, cov 0.86%→16.81%."""
+    return _os.environ.get("LOGICFUZZ_POPULATE_COLLECTIONS", "1").strip().lower() in (
         "1", "true", "yes", "on")
 
 
 def _fuzz_buffers() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_FUZZ_BUFFERS`` (Lever B) — render a
+    """Gate: ``LOGICFUZZ_FUZZ_BUFFERS`` (Lever B) — render a
     builder's scalar data-buffer arg (``cmsUInt16Number *``) as ``(T*)data`` (raw
     fuzz bytes) with its paired length bound to ``size/sizeof(T)``, instead of the
     degenerate ``nEntries=0`` / single ``{0}``. Makes drivers SEED-INDEPENDENT
-    (any bytes build a real object — PromeFuzz's pattern) and deepens them."""
-    return _os.environ.get("LOGICFUZZ_FUZZ_BUFFERS", "0").strip().lower() in (
+    (any bytes build a real object — PromeFuzz's pattern) and deepens them.
+    DEFAULT-ON (opt-out =0); graduated 2026-06-20 — lcms 300s-fuzz edges
+    325→943, cov 0.86%→16.81%."""
+    return _os.environ.get("LOGICFUZZ_FUZZ_BUFFERS", "1").strip().lower() in (
         "1", "true", "yes", "on")
 
 

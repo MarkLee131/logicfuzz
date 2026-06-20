@@ -2,7 +2,8 @@
 with built producer handles instead of the degenerate ``{0}``/NULL, so the deep
 constructor runs. Measured +72% edges/driver vs PromeFuzz's build-and-chain pattern
 (334 vs 194 on instrumented lcms). Gated ``LOGICFUZZ_POPULATE_COLLECTIONS``,
-default-OFF, gate-off byte-identical.
+DEFAULT-ON (opt-out =0); graduated 2026-06-20 — lcms 300s-fuzz edges 325→943,
+cov 0.86%→16.81%.
 """
 import os
 import sys
@@ -14,8 +15,13 @@ sys.path.insert(0, str(ROOT))
 from liberator_adapter.analysis import sequence_constructor as sc
 
 
-def test_gate_default_off(monkeypatch):
+def test_gate_default_on(monkeypatch):
     monkeypatch.delenv("LOGICFUZZ_POPULATE_COLLECTIONS", raising=False)
+    assert sc._populate_collections() is True
+
+
+def test_gate_explicit_off(monkeypatch):
+    monkeypatch.setenv("LOGICFUZZ_POPULATE_COLLECTIONS", "0")
     assert sc._populate_collections() is False
 
 
@@ -201,7 +207,7 @@ def test_creator_collection_populated_when_gated(monkeypatch):
 
 
 def test_creator_collection_legacy_when_off(monkeypatch):
-    monkeypatch.delenv("LOGICFUZZ_POPULATE_COLLECTIONS", raising=False)
+    monkeypatch.setenv("LOGICFUZZ_POPULATE_COLLECTIONS", "0")
     gen = SkeletonGenerator()
     sk = DriverSkeleton(name="t", target_apis=[])
     sk.add_variable(SkeletonVariable(name="ret_cmsBuildGamma", c_type="cmsToneCurve *",

@@ -29,6 +29,8 @@ for _k in list(os.environ):
 os.environ["LOGICFUZZ_VALIDITY_CONTRACT"] = "0"
 os.environ["LOGICFUZZ_RESIDUAL_ALLCOVER"] = "0"
 os.environ["LOGICFUZZ_API_FLOOR"] = "0"
+os.environ["LOGICFUZZ_POPULATE_COLLECTIONS"] = "0"
+os.environ["LOGICFUZZ_FUZZ_BUFFERS"] = "0"
 
 from liberator_adapter.analysis.api_semantic_model import reconcile
 from liberator_adapter.analysis import sequence_constructor as SC
