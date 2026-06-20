@@ -164,12 +164,35 @@ def _ensure_project_image(project: str) -> Optional[str]:
 # is checked as C (``$CC``/``-x c``) — the same compiler the merge uses for its
 # ``<id>.c`` — and a C++ driver as C++ (``$CXX``/``-x c++``). No try-both
 # fallback, which would mask C-invalid TUs. Prints one "RESULT <ok|fail> <name>".
+def _include_search_dirs() -> Tuple[str, ...]:
+    """In-image ``-I`` base dirs (``$PROJ`` is a shell var set in the script) the
+    gate probes for a project's PUBLIC headers. Broadened beyond ``.../include``
+    to cover common OSS-Fuzz layouts the gate used to miss — e.g. nghttp2 keeps
+    ``<nghttp2/nghttp2.h>`` under ``lib/includes``; others use ``inc`` or
+    ``src/include``. A too-LEAN list drops drivers the real merged build would
+    compile (false-negative → lost breadth); over-inclusive ``-I`` is harmless
+    for a ``-fsyntax-only`` check. The dynamic include/includes find in the
+    script handles arbitrary nesting this static list can't anticipate."""
+    return (
+        "/src/$PROJ/include", "/src/$PROJ/lib/includes", "/src/$PROJ/lib",
+        "/src/$PROJ/includes", "/src/$PROJ/inc", "/src/$PROJ/src/include",
+        "/src/$PROJ/src", "/src/$PROJ", "/src/include", "/src",
+    )
+
+
 _VALIDATE_SH = r'''
 set -u
 PROJ="__PROJECT__"
 EXT_INC=""
-for d in /src/$PROJ/include /src/$PROJ /src/$PROJ/src /src/include /src; do
+for d in __INCDIRS__; do
   [ -d "$d" ] && EXT_INC="$EXT_INC -I$d"
+done
+# Layout-agnostic auto-discovery: -I every nested public-header root, so a project
+# that nests its API headers (nghttp2 lib/includes, *_src/include, …) resolves a
+# plain ``#include <proj/x.h>`` the static list above can't anticipate. Bounded
+# depth + dedup keeps it cheap; over-inclusive -I is harmless for -fsyntax-only.
+for d in $(find /src/$PROJ -maxdepth 5 -type d \( -name include -o -name includes \) 2>/dev/null | sort -u); do
+  EXT_INC="$EXT_INC -I$d"
 done
 # -iquote bases so a candidate that kept the stock fuzzer's relative include
 # (``#include "../cJSON.h"``) resolves from /candidates/. A quote-include is
@@ -225,6 +248,19 @@ echo "VALIDATE_DONE"
 '''
 
 
+def _build_validate_script(project: str,
+                           iquote_dirs: Optional[Sequence[str]] = None) -> str:
+    """Render the in-container validation bash for ``project`` — interpolating the
+    project name, the hardened ``-I`` search dirs, and the ``-iquote`` bases.
+    Pure (no I/O / no docker) so the include-discovery hardening is unit-testable.
+    """
+    iquote_flags = ' '.join(f'-iquote "{d}"' for d in (iquote_dirs or []))
+    return (_VALIDATE_SH
+            .replace('__PROJECT__', project)
+            .replace('__INCDIRS__', ' '.join(_include_search_dirs()))
+            .replace('__IQUOTE__', iquote_flags))
+
+
 def _run_container_validation(
     image: str,
     candidates_dir: Path,
@@ -238,10 +274,7 @@ def _run_container_validation(
     so the caller can fail OPEN (keep the unvetted set) rather than dropping
     everything on a docker hiccup.
     """
-    iquote_flags = ' '.join(f'-iquote "{d}"' for d in (iquote_dirs or []))
-    script = (_VALIDATE_SH
-              .replace('__PROJECT__', project)
-              .replace('__IQUOTE__', iquote_flags))
+    script = _build_validate_script(project, iquote_dirs)
     # NAME channel container-leak fix: `image` is the BARE base
     # gcr.io/oss-fuzz/<project> (shared / a user's interactive shell may run it),
     # so ancestor-scoped cleanup would be unsafe. Give the container a UNIQUE
