@@ -3390,6 +3390,25 @@ def _generate_sequences_from_grammar(grammar, num_sequences: int, max_len: int,
     return sequences
 
 
+def _validity_repair_enabled() -> bool:
+    """Whether the universal post-construction validity-repair net
+    (``repair_sequence_validity``) runs at skeleton synthesis.
+
+    Delegates to the constructor's ``_validity_contract()`` SSOT — unconditional
+    since the graduation commit ac65481e ("make VALIDITY_CONTRACT unconditional,
+    remove switches"). That commit flipped the constructor / CBFactory /
+    skeleton_generator gates but MISSED this call site, which kept an independent
+    ``os.environ.get("LOGICFUZZ_VALIDITY_CONTRACT", "")`` read defaulting OFF — so
+    the repair net was dark in every default run (floor/densified/RESIDUAL_ALLCOVER
+    single-API sequences reached synthesis unrepaired → NULL handles → dead
+    drivers) despite CLAUDE.md/docstrings claiming it unconditional. Routing the
+    decision through the same predicate keeps the four VALIDITY_CONTRACT sites
+    from ever drifting apart again.
+    """
+    from liberator_adapter.analysis.sequence_constructor import _validity_contract
+    return _validity_contract()
+
+
 def _synthesize_skeletons_per_sequence(
     generator,
     target_sequences: List[List[Any]],
@@ -3527,19 +3546,19 @@ def _synthesize_skeletons_per_sequence(
     # useful for re-evaluating whether to ever re-enable rejection.
     artifact_for_score = automaton_artifact if automaton_artifact is not None else None
 
-    # I2a universal validity-repair (LOGICFUZZ_VALIDITY_CONTRACT, gated): floor /
-    # densified sequences bypass _build_prefix and arrive here with handle
-    # consumers that have NO producer in the sequence → NULL handle → Task-11
-    # guard → dead driver (the 130/137 construction-gap orphans measured on
-    # lcms). Prepend the cheapest creator for each non-NULL handle arg lacking an
-    # earlier producer, then map back to Api objects. Gate-off ⇒ idx not built,
-    # sequences untouched (byte-identical).
+    # I2a universal validity-repair (VALIDITY_CONTRACT, unconditional via
+    # _validity_repair_enabled): floor / densified / RESIDUAL_ALLCOVER sequences
+    # bypass _build_prefix and arrive here with handle consumers that have NO
+    # producer in the sequence → NULL handle → Task-11 guard → dead driver (the
+    # 130/137 construction-gap orphans measured on lcms). Prepend the cheapest
+    # creator for each non-NULL handle arg lacking an earlier producer, then map
+    # back to Api objects. (Until 2026-06-20 this site kept an independent env
+    # gate defaulting OFF — the graduation commit ac65481e missed it — so the
+    # net was dark in every default run; now it tracks the constructor SSOT.)
     _repair_idx = None
     _repair_seq = None
     _name_to_api: Dict[str, Any] = {}
-    _vc_on = os.environ.get(
-        "LOGICFUZZ_VALIDITY_CONTRACT", "").strip().lower() in (
-            "1", "true", "yes", "on")
+    _vc_on = _validity_repair_enabled()
     if _vc_on and api_semantic_model is not None:
         try:
             from liberator_adapter.analysis.sequence_constructor import (
