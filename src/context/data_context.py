@@ -1957,16 +1957,21 @@ class FuzzingContext:
                     not in ("0", "false", "no", "off"):
                 _covered_api = {a.function_name
                                 for s in filtered_api_sequences for a in s}
-                _residual = [a for a in generator.all_apis
-                             if not a.function_name.startswith("_")
-                             and a.function_name not in _covered_api]
+                # Exclude destroyer-family APIs: a standalone free/destroy
+                # residual renders its freed pointer arg as a stack buffer and
+                # crashes with invalid-free; chainable destroyers are already in
+                # constructed creator→…→destroyer sequences (so already covered).
+                _destroyers = (set(api_semantic_model.destroyers())
+                               if api_semantic_model is not None else set())
+                _residual = _residual_allcover_apis(
+                    generator.all_apis, _covered_api, _destroyers)
                 for _a in _residual:
                     filtered_api_sequences.append([_a])
                 log.info(
                     "   🟦 residual all-cover: +%d single-API sequences "
-                    "(API breadth %d → %d)",
+                    "(API breadth %d → %d; skipped %d destroyer-family)",
                     len(_residual), len(_covered_api),
-                    len(_covered_api) + len(_residual))
+                    len(_covered_api) + len(_residual), len(_destroyers))
             if not skeleton_drivers:
                 skeleton_drivers = _synthesize_skeletons_per_sequence(
                     generator=generator,
@@ -3397,6 +3402,26 @@ def _validity_repair_enabled() -> bool:
     """
     from liberator_adapter.analysis.sequence_constructor import _validity_contract
     return _validity_contract()
+
+
+def _residual_allcover_apis(all_apis, covered_names, destroyer_names):
+    """APIs that need a single-API RESIDUAL_ALLCOVER sequence.
+
+    Public, not already covered by a constructed sequence, and NOT
+    destroyer-family. A standalone destroyer/free (e.g. ``cJSON_free``) has no
+    object to destroy: the hole-filler renders its freed pointer arg as a STACK
+    buffer and the driver calls ``cJSON_free(stackbuf)`` → ASan "attempting free
+    on non-malloc'd address" (cjson: 2 such residuals = ~9.6k crashes that
+    dominate the merged harness). Chainable destroyers are already emitted inside
+    constructed ``creator→…→destroyer`` sequences (so they're in ``covered_names``
+    and never reach here); the destroyers that fall through to the residual are
+    exactly the unchainable stack-free crashers. Library-agnostic: keys on
+    ``APIRole.DESTROYER`` from the semantic model, never on names."""
+    dset = set(destroyer_names or ())
+    return [a for a in all_apis
+            if not a.function_name.startswith("_")
+            and a.function_name not in covered_names
+            and a.function_name not in dset]
 
 
 def _synthesize_skeletons_per_sequence(
