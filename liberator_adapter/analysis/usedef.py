@@ -166,6 +166,22 @@ def _extract_return_type(api: Dict[str, Any]) -> str:
     return api.get("return_type", "") or ""
 
 
+_TYPE_KEYWORD_RE = _re.compile(
+    r'\b(?:const|volatile|struct|union|class|enum|restrict|__restrict__|__restrict)\b')
+
+
+def _strip_type_keywords(t: str) -> str:
+    """Drop C type qualifier/elaboration KEYWORDS by WORD BOUNDARY. The legacy
+    ``.replace("struct ", "")`` was a substring strip that corrupted a type NAME
+    embedding the keyword: ``png_struct *`` -> ``png_*`` (and
+    ``_cmsContext_struct *`` -> ``_cmscontext_*``), so a creator's ``produces``
+    no longer matched the consumer's ``requires`` for ANY library whose handle
+    name contains ``struct`` -> orphan NULL handle -> dead driver. Word
+    boundaries strip only the real keyword: ``struct png_struct_def *`` ->
+    ``png_struct_def *``; ``png_struct *`` -> ``png_struct *`` (name kept)."""
+    return ' '.join(_TYPE_KEYWORD_RE.sub(' ', t or '').split())
+
+
 def is_handle_type(type_str: str) -> bool:
     """A non-primitive opaque type carried as data.
 
@@ -178,11 +194,7 @@ def is_handle_type(type_str: str) -> bool:
     if not type_str:
         return False
     norm = _normalize_type_str(type_str)
-    bare = (norm.replace("const ", "")
-                 .replace("volatile ", "")
-                 .replace("struct ", "")
-                 .replace("union ", "")
-                 .replace("class ", "")
+    bare = (_strip_type_keywords(norm)
                  .replace("*", "")
                  .replace("&", "")
                  .strip())
@@ -199,9 +211,7 @@ def normalize_handle_type(type_str: str) -> str:
     if not type_str:
         return ""
     norm = _normalize_type_str(type_str)
-    return (norm.replace("const ", "")
-                .replace("volatile ", "")
-                .replace("struct ", "")
+    return (_strip_type_keywords(norm)
                 .replace(" *", "*")
                 .replace(" &", "&")
                 .strip()

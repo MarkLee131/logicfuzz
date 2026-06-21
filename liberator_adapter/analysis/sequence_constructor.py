@@ -312,13 +312,28 @@ def repair_sequence_validity(
         # producer determinable here — binding one cross-wires (cmsGBDFree on a
         # profile → heap corruption → crash), so leave it NULL+guarded instead.
         kf = _vc_family(key)
-        if kf is None:
-            return None  # generic void* (cmsHANDLE) — no type-safe pick
-        prods = [p for p in _producers_for_type(idx, key)
-                 if _is_leaf_creator(p, key)
-                 and _vc_family(getattr(p, "name", "") or "") == kf]
+        leaves = [p for p in _producers_for_type(idx, key)
+                  if _is_leaf_creator(p, key)]
+        if kf is not None:
+            # lcms void*-collapsed handles: the by-type pool cross-wires families,
+            # so disambiguate by NAME family (cmsCreateNULLProfile=profile, …).
+            prods = [p for p in leaves
+                     if _vc_family(getattr(p, "name", "") or "") == kf]
+        else:
+            # No lcms name-family (any OTHER library, e.g. png_struct *). A DISTINCT
+            # typed handle's pool is type-correct by construction — every producer
+            # indexed under it produces exactly this type, so type-match is safe
+            # (this is what makes png_create_read_struct prependable; previously we
+            # bailed here and left the handle NULL → dead driver). Guard against a
+            # genuine void*-collapsed pool (cmsHANDLE: many families share one
+            # typedef) by requiring the candidates' produced types to be
+            # UNAMBIGUOUS (all == key); else leave NULL+guarded.
+            kn = _norm_handle(key)
+            produced = {_norm_handle(pt) for p in leaves
+                        for pt in (getattr(p, "produces", ()) or [])}
+            prods = leaves if (leaves and produced and produced <= {kn}) else []
         if not prods:
-            return None  # no standalone same-family leaf → Task-11 guard covers
+            return None  # no safe standalone leaf → Task-11 guard covers
         prods = sorted(prods, key=lambda p: (
             0 if _is_synthetic_producer(p) else 1,
             len([a for a in (getattr(p, "args", ()) or ())
