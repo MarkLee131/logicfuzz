@@ -49,6 +49,16 @@ _HANDLE_FAMILIES = ("transform", "profile", "tonecurve", "pipeline", "stage",
 
 def _family(s: str) -> Optional[str]:
     t = (s or "").lower()
+    # The _HANDLE_FAMILIES allow-list is an lcms-specific heuristic for
+    # disambiguating lcms's void*-collapsed opaque handles (cmsHPROFILE vs
+    # cmsHTRANSFORM share one void* typedef). Apply it ONLY to lcms-style
+    # names/types (must contain "cms"); otherwise a NON-lcms type or name that
+    # merely shares a substring spuriously matches (EVP_PIPELINE->pipeline,
+    # png_context->context, GLTFStage->stage, it8_data->it8, my_transform_t->
+    # transform) and CBFactory.produced_by_family then CROSS-WIRES two unrelated
+    # handle types. Non-lcms -> None -> the type-exact binding path handles it.
+    if "cms" not in t:
+        return None
     if "hprofile" in t:
         return "profile"
     if "htransform" in t:
