@@ -269,6 +269,36 @@ def _edges_weights_for(sources, out_dir: Optional[Path]):
 
 
 # ---------------------------------------------------------------------------
+# Dominance-filter stage (O2-pre): drop fully-redundant drivers
+# ---------------------------------------------------------------------------
+
+def _apply_dominance(sources, *, cov_reports_dir, edges=None):
+  """Drop sources whose measured reached-function set is fully dominated by
+  another kept source.  No-op (keep all) when <2 sources have real coverage
+  data — the correctness fallback.  ``edges`` is an optional
+  {Path: edges_15s} map for the exact-duplicate tie-break.
+
+  This runs AFTER compile-validate so the shipped set is always a subset of
+  the compile-validated set (A≡B). It never empties the merge — if fewer than
+  2 drivers have real coverage data it returns all sources unchanged.
+  """
+  from tools.merge_drivers.select import DriverCoverage, dominance_filter
+  edges = edges or {}
+  covs = [
+      DriverCoverage.from_oss_fuzz_report(
+          s,
+          (cov_reports_dir / s.name) if cov_reports_dir else None,
+          edges_15s=int(edges.get(s, 0)),
+      )
+      for s in sources
+  ]
+  if sum(1 for c in covs if c.has_real_data) < 2:
+    return list(sources)  # correctness fallback: never select blind
+  res = dominance_filter(covs)
+  return [c.driver_path for c in res.kept]
+
+
+# ---------------------------------------------------------------------------
 # Compile-validation gate
 # ---------------------------------------------------------------------------
 
@@ -518,6 +548,20 @@ def run_merge_pipeline(
         f'candidate(s) survived compile-validation; need ≥2 to merge)',
         trial=0)
     return None
+
+  # --- Dominance filter: drop fully-redundant drivers (measured coverage) ---
+  # Runs AFTER compile-validate (A≡B): the shipped set is always a subset of
+  # the validated set. No-op when <2 drivers have real coverage data (the
+  # correctness fallback — never empties the merge). No LOGICFUZZ_* flag:
+  # this is default behavior (a dominated driver adds nothing to the union).
+  _before = len(successful_sources)
+  successful_sources = _apply_dominance(
+      successful_sources, cov_reports_dir=cov_reports_dir)
+  if len(successful_sources) < _before:
+    logger.info(
+        f'merge_drivers: dominance-filter dropped '
+        f'{_before - len(successful_sources)} fully-redundant driver(s)',
+        trial=0)
 
   try:
     from tools.merge_drivers.merge import (
