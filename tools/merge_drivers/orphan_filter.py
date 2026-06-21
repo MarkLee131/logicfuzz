@@ -58,11 +58,46 @@ _C_KEYWORDS = frozenset((
 _CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(\s*([^,)]*)")
 
 
+# Split a name into snake_case + camelCase SEGMENTS. Token matching must be
+# segment-exact, NOT substring: ``png_set_chunk_malloc_max`` must NOT count as a
+# creator just because ``malloc`` contains ``alloc`` — that mis-kept the one real
+# NULL-deref poison while safe consumers were dropped.
+_CAMEL_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+")
+
+
+def _name_segments(api: str) -> Set[str]:
+    segs: Set[str] = set()
+    for part in api.split("_"):
+        for seg in _CAMEL_RE.findall(part):
+            segs.add(seg.lower())
+    return segs
+
+
 def _is_creator(api: str) -> bool:
     if any(api.startswith(p) for p in _CREATOR_PREFIXES):
         return True
-    low = api.lower()
-    return any(tok in low for tok in _CREATOR_TOKENS)
+    return bool(_name_segments(api) & set(_CREATOR_TOKENS))
+
+
+_IF_RE = re.compile(r"\bif\s*\(")
+
+
+def _truthy_guarded(cond: str, candidates: Set[str]) -> frozenset:
+    """Of ``candidates``, the vars a guard condition checks TRUTHY (``h``,
+    ``h != NULL``, ``h && …``). A NEGATIVE check (``h == NULL`` / ``!h``) does
+    NOT protect a consume in the block (``if (h == NULL) {}`` then consume(h) is
+    still a NULL deref), so it is excluded."""
+    out = set()
+    for v in candidates:
+        b = re.escape(v)
+        if not re.search(r"\b" + b + r"\b", cond):
+            continue
+        if re.search(b + r"\s*==\s*(NULL|0)\b", cond):   # h == NULL / h == 0
+            continue
+        if re.search(r"!\s*" + b + r"\b", cond):          # !h
+            continue
+        out.add(v)
+    return frozenset(out)
 
 
 def _produced_vars(code: str) -> Set[str]:
@@ -92,23 +127,65 @@ def _null_decl_vars(code: str) -> Set[str]:
 
 
 def is_degenerate_orphan(code: str) -> bool:
-    """True iff a non-creator CONSUMER is called with a first (handle) arg that
-    is a declared-NULL var never produced (no assignment, no out-param write)."""
+    """True iff a non-creator CONSUMER is called with a first (handle) arg that is
+    a declared-NULL var never produced AND NOT protected by a truthy NULL-guard.
+
+    Brace-aware: a consume lexically inside ``if (h && …) { … }`` is SAFE (the
+    library never sees NULL), so it is not flagged. A negative check
+    (``if (h == NULL) {}``) followed by an unguarded consume IS still flagged."""
     produced = _produced_vars(code)
     orphan_handles = {v for v in _null_decl_vars(code) if v not in produced}
     if not orphan_handles:
         return False
-    for m in _CALL_RE.finditer(code):
-        api, first = m.group(1), m.group(2).strip()
-        if api in _C_KEYWORDS or _is_creator(api):
+    # Single linear scan tracking brace depth + a stack of active truthy-guards.
+    guard_stack: List = []        # (depth_at_block_open, frozenset(guarded vars))
+    pending = frozenset()         # guards parsed from an if-cond awaiting its block
+    depth = 0
+    i, n = 0, len(code)
+    while i < n:
+        mif = _IF_RE.match(code, i)
+        if mif:                   # parse balanced ( ... ) condition
+            j, pd = mif.end(), 1
+            cs = j
+            while j < n and pd:
+                pd += (code[j] == "(") - (code[j] == ")")
+                j += 1
+            pending = _truthy_guarded(code[cs:j - 1], orphan_handles)
+            i = j
             continue
-        # strip a leading cast, isolate the bare first arg
-        fv = re.sub(r"^\([^)]*\)\s*", "", first).strip()
-        # &VAR here is an OUT-PARAM write (the callee produces it), not a consume
-        if fv.startswith("&"):
+        c = code[i]
+        if c == "{":
+            guard_stack.append((depth, pending))
+            pending = frozenset()
+            depth += 1
+            i += 1
             continue
-        if fv in orphan_handles:
+        if c == "}":
+            depth -= 1
+            while guard_stack and guard_stack[-1][0] >= depth:
+                guard_stack.pop()
+            i += 1
+            continue
+        if c == ";":
+            pending = frozenset()  # `if (c) stmt;` (no braces) — guard scope ends
+            i += 1
+            continue
+        mc = _CALL_RE.match(code, i)
+        if mc:
+            api, first = mc.group(1), mc.group(2).strip()
+            i = mc.end()
+            if api in _C_KEYWORDS or _is_creator(api):
+                continue
+            fv = re.sub(r"^\([^)]*\)\s*", "", first).strip()
+            if fv.startswith("&") or fv not in orphan_handles:
+                continue
+            active = set(pending)               # `if (c) consume(c);` brace-less
+            for _, gv in guard_stack:
+                active |= gv
+            if fv in active:
+                continue                         # truthy-guarded → safe
             return True
+        i += 1
     return False
 
 
