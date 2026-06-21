@@ -224,40 +224,10 @@ def _preflight_filter_candidates(sources, *, project: str = "",
 # Language + include-dir helpers (previously tied to Benchmark type)
 # ---------------------------------------------------------------------------
 
-def _stock_target_lang(benchmark):
-  """Compile language ('c'/'cpp') from the STOCK fuzz target, not the yaml
-  ``language`` field (that is the *library* language). None ⇒ merge content-sniffs."""
-  try:
-    if getattr(benchmark, 'is_cpp_target', False):
-      return 'cpp'
-    if getattr(benchmark, 'is_c_target', False):
-      return 'c'
-  except Exception:  # noqa: BLE001 — never block the merge on language probing
-    pass
-  return None
-
-
-def _iquote_dirs_for_target(benchmark) -> List[str]:
-  """In-image ``-iquote`` dirs so a RELOCATED synthesized driver resolves the
-  stock fuzzer's relative include (``#include "../cJSON.h"``) — which resolves
-  relative to the including file's directory, not -I/CWD.
-
-  Derived from the benchmark's ``target_path`` (the stock fuzzer's in-image path,
-  e.g. ``/src/cjson/fuzzing/cjson_read_fuzzer.c``): the fuzzer's own directory
-  (handles ``../X.h``) plus the project root (handles ``X.h``). This reconstructs
-  the exact quote-search base the per-driver build has, so the driver's original
-  oss-fuzz include resolves identically from ``$SRC/synthesized`` / ``/candidates``.
-  Empty when target_path is absent or not an absolute in-image path."""
-  tp = (getattr(benchmark, 'target_path', '') or '').strip()
-  if not tp.startswith('/'):
-    return []
-  fuzzer_dir = os.path.dirname(tp)        # e.g. /src/cjson/fuzzing
-  proj_root = os.path.dirname(fuzzer_dir)  # e.g. /src/cjson
-  dirs: List[str] = []
-  for d in (fuzzer_dir, proj_root):
-    if d and d not in dirs and d not in ('/', '/src'):
-      dirs.append(d)
-  return dirs
+# NB: stock-target language + iquote-dir derivation read the Benchmark object and
+# therefore live in the ADAPTER layer (run_single_fuzz._stock_target_lang /
+# _iquote_dirs_for_target). run_merge_pipeline takes the resolved ``stock_lang`` /
+# ``iquote_dirs`` as explicit params so this module stays Benchmark-agnostic.
 
 
 # ---------------------------------------------------------------------------

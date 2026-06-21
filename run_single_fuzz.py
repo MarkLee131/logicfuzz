@@ -620,7 +620,6 @@ def _compile_validate_candidates(sources, benchmark, work_dirs, model_name=None)
   from pathlib import Path
   from tools.merge_drivers.pipeline import (
       _compile_validate_candidates as _impl,
-      _stock_target_lang, _iquote_dirs_for_target,
   )
   return _impl(
       sources,
@@ -633,15 +632,41 @@ def _compile_validate_candidates(sources, benchmark, work_dirs, model_name=None)
 
 
 def _stock_target_lang(benchmark):
-  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
-  from tools.merge_drivers.pipeline import _stock_target_lang as _impl
-  return _impl(benchmark)
+  """Compile language ('c'/'cpp') from the STOCK fuzz target, not the yaml
+  ``language`` field (that is the *library* language). None ⇒ merge content-sniffs.
+
+  Lives in the ADAPTER layer (not pipeline.py) because it reads the Benchmark
+  object; run_merge_pipeline takes the resolved ``stock_lang`` as an explicit
+  param so the pipeline stays Benchmark-agnostic."""
+  try:
+    if getattr(benchmark, 'is_cpp_target', False):
+      return 'cpp'
+    if getattr(benchmark, 'is_c_target', False):
+      return 'c'
+  except Exception:  # noqa: BLE001 — never block the merge on language probing
+    pass
+  return None
 
 
 def _iquote_dirs_for_target(benchmark) -> List[str]:
-  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
-  from tools.merge_drivers.pipeline import _iquote_dirs_for_target as _impl
-  return _impl(benchmark)
+  """In-image ``-iquote`` dirs so a RELOCATED synthesized driver resolves the
+  stock fuzzer's relative include (``#include "../cJSON.h"``) — which resolves
+  relative to the including file's directory, not -I/CWD.
+
+  Derived from the benchmark's ``target_path`` (the stock fuzzer's in-image path):
+  the fuzzer's own directory (handles ``../X.h``) plus the project root (handles
+  ``X.h``). Empty when target_path is absent or not an absolute in-image path.
+  Adapter-layer (Benchmark-reading); the pipeline takes ``iquote_dirs`` explicitly."""
+  tp = (getattr(benchmark, 'target_path', '') or '').strip()
+  if not tp.startswith('/'):
+    return []
+  fuzzer_dir = os.path.dirname(tp)         # e.g. /src/cjson/fuzzing
+  proj_root = os.path.dirname(fuzzer_dir)  # e.g. /src/cjson
+  dirs: List[str] = []
+  for d in (fuzzer_dir, proj_root):
+    if d and d not in dirs and d not in ('/', '/src'):
+      dirs.append(d)
+  return dirs
 
 
 def _maybe_merge_drivers(benchmark: Benchmark,
@@ -671,8 +696,8 @@ def _maybe_merge_drivers(benchmark: Benchmark,
   return _pipe.run_merge_pipeline(
       candidates,
       project=getattr(benchmark, 'project', '') or '',
-      stock_lang=_pipe._stock_target_lang(benchmark),
-      iquote_dirs=_pipe._iquote_dirs_for_target(benchmark),
+      stock_lang=_stock_target_lang(benchmark),
+      iquote_dirs=_iquote_dirs_for_target(benchmark),
       out_dir=Path(work_dirs.base) / 'merged',
       trial_verdicts=verdicts,
       preflight_dir=Path(work_dirs.base) / 'preflight_bins',

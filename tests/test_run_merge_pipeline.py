@@ -39,8 +39,9 @@ def test_run_single_fuzz_adapter_delegates(monkeypatch):
     trs = []
     for i in (1, 2):
         tr = _TR(); tr.trial = i; trs.append(tr)
-    monkeypatch.setattr(run_single_fuzz, "_should_quarantine_from_merge",
-                        lambda br, tr: False, raising=False)
+    # The adapter calls _pipe._should_quarantine_from_merge directly, so patch
+    # the pipeline copy (patching the run_single_fuzz alias has no effect).
+    monkeypatch.setattr(pipe, "_should_quarantine_from_merge", lambda br, tr: False)
     out = run_single_fuzz._maybe_merge_drivers(_Bench(), _WD(), trs)
     assert out == "/tmp/merged"
     assert len(called["candidates"]) == 2
