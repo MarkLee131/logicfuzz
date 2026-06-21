@@ -510,145 +510,60 @@ def _fuzzing_pipelines(benchmark: Benchmark, model_name: str,
 
 
 def _is_immediate_crash_fp(br) -> bool:
-  """Pre-ship quarantine criterion: a compiled driver that crashed in-container
-  with ~0 coverage is an immediate-SEGV false positive (unchecked creator return
-  / garbage opaque arg — the class density can introduce on handle-ful drivers).
-  It poisons the single-process fused merge harness and contributes no coverage.
-  A crasher that made real progress (cov>0) is a normal fuzz target — keep it."""
-  if not getattr(br, 'crashes', False):
-    return False
-  cov_pcs = getattr(br, 'cov_pcs', 0) or 0
-  cov_frac = getattr(br, 'coverage', 0.0) or 0.0
-  return cov_pcs == 0 and cov_frac <= 0.001
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _is_immediate_crash_fp as _impl
+  return _impl(br)
 
 
 def _should_quarantine_from_merge(br, tr) -> bool:
-  """Drop a compiled driver from the merge iff it's a driver-FP crasher — it
-  crashed AND its triage did NOT confirm a real (feasible) library bug. This
-  covers BOTH cov==0 immediate-crash FPs AND cov>0 deterministic driver-FP
-  crashers: a DRIVER-bug crasher that covers a few edges before aborting (e.g.
-  libpng driver 116's ``png_color`` output array sized [1] for an API that writes
-  up to 256 entries → stack-overflow on ~every input) still poisons the fused
-  harness and throttles throughput. A confirmed real library bug is NEVER dropped
-  (``_trial_confirms_real_bug``)."""
-  return getattr(br, 'crashes', False) and not _trial_confirms_real_bug(tr)
-
-
-def _trial_confirms_real_bug(tr) -> bool:
-  """True iff this trial's crash triage CONFIRMED a real (feasible) bug — a
-  library-frame crash kept by lean, or an LLM-feasible verdict. Such a driver is
-  KEPT in the merge even at 0 coverage (a genuine library crash may abort before
-  accumulating edges); only driver-FP / unverified immediate crashes are
-  quarantined. Relies on the verdict reaching ``TrialResult.is_semantic_error``
-  (the analysis-result fix in adapters.py). ``is_semantic_error`` is False both
-  for a real bug AND for 'no verdict', so we require an actual analysis result —
-  a no-verdict immediate crash stays quarantined (the safe default)."""
-  return (getattr(tr, 'best_analysis_result', None) is not None
-          and not getattr(tr, 'is_semantic_error', True))
-
-
-def _resolve_candidate_binary(src, work_dirs):
-  """Best-effort: find a host-runnable libFuzzer binary for a driver source.
-
-  Per-trial OSS-Fuzz binaries are built in Docker and cleaned up, so this
-  returns one only when the eval preserved a host-runnable build under
-  ``<base>/preflight_bins/<NN>`` (the preservation hook). Returns None when no
-  runnable binary exists — preflight then can't vet this driver (it is kept,
-  not dropped).
-  """
-  from pathlib import Path
-  stem = src.stem  # e.g. "06" from "06.fuzz_target"
-  base = Path(work_dirs.base) / 'preflight_bins'
-  for cand in (base / stem, base / f'{stem}.bin', base / f'{stem}_fuzzer'):
-    if cand.is_file():
-      return cand
-  return None
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _should_quarantine_from_merge as _impl
+  return _impl(br, tr)
 
 
 def _is_degenerate_binary_set(hashes) -> bool:
-  """True when preflight binaries collapse to a tiny set of distinct hashes — the
-  stock-binary build-cache bug signature (instrumented vs not, ± a few sanitizer
-  variants). It makes the no_progress edge signal a PHANTOM (verified: lcms 63→2
-  hashes, c-ares 29→2, both the stock fuzzer). Real per-driver builds (zlib 18→18,
-  libucl 13→13) are NOT degenerate, so their no_progress gate stays trustworthy.
-
-  Threshold is RATIO-based (``distinct <= max(2, total//10)``), not a flat ``<=2``:
-  a partial collapse (e.g. 3 distinct among 60 — a handful of sanitizer variants of
-  the same stock binary) is still a phantom signal, and a flat ``<=2`` would miss
-  it. The ``max(2, …)`` floor preserves the original behaviour for small sets
-  (c-ares 29→2 still degenerate; zlib 18→18 / libucl 13→13 still real).
-  Cross-project-safe."""
-  hashes = list(hashes or [])
-  if len(hashes) < 5:
-    return False
-  return len(set(hashes)) <= max(2, len(hashes) // 10)
-
-
-def _binaries_degenerate(pairs) -> bool:
-  """Hash the preflight binaries and test for the stock-binary collapse."""
-  import hashlib
-  from pathlib import Path as _P
-  hashes = []
-  for _src, b in pairs:
-    try:
-      hashes.append(hashlib.md5(_P(str(b)).read_bytes()).hexdigest())
-    except OSError:
-      continue
-  return _is_degenerate_binary_set(hashes)
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _is_degenerate_binary_set as _impl
+  return _impl(hashes)
 
 
 def _should_drop_no_progress(env_val) -> bool:
-  """Decide whether to drop ``no_progress`` drivers from a MERGE.
-
-  DEFAULT = False (KEEP). ``no_progress`` (15s solo edge-growth = 0) is the WRONG
-  selector for a MERGED harness: a driver that doesn't GROW in a 15s solo smoke
-  run still contributes its construction/exercise edges to the UNION, and a deep
-  build+exercise driver (the point of the depth levers) is exactly the kind that
-  reads as no_progress solo yet adds union breadth. PromeFuzz filters on COMPILE,
-  not 15s runtime growth (Fix 1a principle).
-
-  This used to be ``drop = not _binaries_degenerate(pairs)`` — keep only when the
-  preflight binaries collapsed (stock-binary build bug). That mis-fired once the
-  build bug was FIXED: real (non-degenerate) binaries RE-ENABLED the gate and it
-  culled 10/13 merge-valuable drivers (lcms 16→6 merged, 1411 vs 2289 edges,
-  2026-06-16). The realness of the binary does NOT make 15s-solo-growth a valid
-  merge selector. Only the explicit env override forces the drop (A/B control).
-  Crashers (``dead_on_empty``) are dropped UNCONDITIONALLY elsewhere. Binary
-  degeneracy is still detected + LOGGED at the call site as a build-health warning.
-  """
-  v = (env_val or '').strip().lower()
-  return v in ('1', 'true', 'yes', 'on')
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _should_drop_no_progress as _impl
+  return _impl(env_val)
 
 
 def _preflight_rejection_set(results, drop_no_progress: bool):
-  """Compute the set of driver_paths to reject from preflight results.
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _preflight_rejection_set as _impl
+  return _impl(results, drop_no_progress)
 
-  Always drops crashers (``dead_on_empty``). Drops ``no_progress`` (15s edge-
-  growth = 0) ONLY when ``drop_no_progress`` — by default these are KEPT, since
-  a deterministic build+exercise driver contributes its construction edges to the
-  merged UNION regardless of 15s growth, and the lcms preflight binary was the
-  stock cms_gdb_fuzzer (phantom signal). Accepted drivers are never rejected.
-  """
-  reasons = ('dead_on_empty',) + (('no_progress',) if drop_no_progress else ())
-  return {r.driver_path for r in results
-          if not r.accepted and r.rejection_reason.startswith(reasons)}
+
+def _trial_confirms_real_bug(tr) -> bool:
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _trial_confirms_real_bug as _impl
+  return _impl(tr)
+
+
+def _resolve_candidate_binary(src, work_dirs):
+  """Compatibility wrapper: adapts old work_dirs API to pipeline's preflight_dir param."""
+  from pathlib import Path
+  from tools.merge_drivers.pipeline import _resolve_candidate_binary as _impl
+  preflight_dir = Path(work_dirs.base) / 'preflight_bins'
+  return _impl(src, preflight_dir)
 
 
 def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
-  """Smoke-test candidate drivers and drop crash / no-progress ones.
+  """Compatibility wrapper: adapts old work_dirs API to pipeline's explicit params.
 
-  Returns the surviving source paths. Drops a driver ONLY on a crash or
-  zero-edge verdict from a runnable binary; a driver whose binary can't be
-  resolved/run is kept (couldn't vet ≠ reject). If fewer than 2 binaries are
-  resolvable, preflight is skipped entirely and all sources are returned
-  unchanged (logged), preserving prior behaviour.
-
-  *project*: OSS-Fuzz project name threaded into ``preflight()`` so each
-  smoke run can execute inside the base-runner container (avoids host glibc
-  version mismatches for binaries built against a newer glibc, e.g. 2.38).
-  Defaults to ``""`` (legacy host-run behaviour).
+  Uses the module-local ``_resolve_candidate_binary`` (not pipeline's copy) so
+  that existing tests that monkeypatch ``rsf._resolve_candidate_binary`` continue
+  to work — the monkeypatch is visible in this module's namespace.
   """
   from pathlib import Path
+  import os as _os
+  # Inline the binary-resolution step using THIS module's _resolve_candidate_binary
+  # (the one tests monkeypatch) rather than pipeline's private copy.
   pairs = []
   for src in sources:
     b = _resolve_candidate_binary(src, work_dirs)
@@ -667,11 +582,7 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
     logger.warning(f'merge_drivers: preflight unavailable ({exc}); '
                    f'merging unvetted', trial=0)
     return sources
-
-  # Route real format-matching seeds into the preflight smoke corpus so
-  # parser-entry drivers aren't culled as no_progress on random bytes (the
-  # seed-starvation gate). Kill-switch reproduces the legacy empty-corpus gate.
-  _route_seeds = os.environ.get("LOGICFUZZ_PREFLIGHT_SEEDS", "1").strip().lower() \
+  _route_seeds = _os.environ.get("LOGICFUZZ_PREFLIGHT_SEEDS", "1").strip().lower() \
       not in ("0", "false", "no", "off")
   results = preflight(pairs, smoke_duration_sec=15, drop_on_crash=True,
                       project=project, route_seeds=_route_seeds)
@@ -679,16 +590,11 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
     write_report(results, Path(work_dirs.base) / 'merged' / 'preflight.json')
   except Exception:
     pass
-  # Drop crashers ALWAYS; KEEP no_progress by default. The 15s solo edge-GROWTH
-  # gate is the WRONG selector for a MERGE — a deep build+exercise driver that is
-  # flat solo still adds UNION edges (PromeFuzz filters on compile, not 15s growth,
-  # Fix 1a). The old `drop = not degenerate` rule mis-fired once the stock-binary
-  # build bug was fixed: real binaries re-enabled the gate → culled 10/13
-  # merge-valuable drivers (lcms 16→6, 1411 vs 2289 edges, 2026-06-16). Env
-  # override LOGICFUZZ_DROP_NO_PROGRESS in {0,1} forces it (A/B). Degeneracy is now
-  # a build-HEALTH warning only (it should be impossible post-fix).
+  from tools.merge_drivers.pipeline import (
+      _should_drop_no_progress, _binaries_degenerate, _preflight_rejection_set,
+  )
   _drop_np = _should_drop_no_progress(
-      os.environ.get('LOGICFUZZ_DROP_NO_PROGRESS', ''))
+      _os.environ.get('LOGICFUZZ_DROP_NO_PROGRESS', ''))
   if _binaries_degenerate(pairs):
     logger.info('merge_drivers: ⚠ preflight binaries DEGENERATE (stock-binary '
                 'build bug recurred? expected distinct per-driver builds)',
@@ -702,389 +608,79 @@ def _preflight_filter_candidates(sources, work_dirs, project: str = ""):
   return [s for s in sources if str(s) not in rejected]
 
 
-def _stock_target_lang(benchmark):
-  """Compile language ('c'/'cpp') from the STOCK fuzz target, not the yaml
-  ``language`` field (that is the *library* language). None ⇒ merge content-sniffs."""
-  try:
-    if getattr(benchmark, 'is_cpp_target', False):
-      return 'cpp'
-    if getattr(benchmark, 'is_c_target', False):
-      return 'c'
-  except Exception:  # noqa: BLE001 — never block the merge on language probing
-    pass
-  return None
-
-
-def _compile_validate_candidates(sources, benchmark, work_dirs,
-                                 model_name=None):
-  """Drop merge candidates that don't COMPILE under the OSS-Fuzz build flags.
-
-  Compiles each candidate TU inside the project's real OSS-Fuzz container with
-  ``$CC $CFLAGS -fsyntax-only`` (plus the coverage-build flags — the stricter
-  measurement build), in ONE container, once. A TU that fails is EXCLUDED from
-  the merge instead of being silently ``|| continue``-skipped + weak-stubbed
-  into a no-op slot (which loses the driver and reads 0 coverage on it).
-
-  Fails OPEN: on any infra problem (docker unavailable, no project image,
-  container hiccup) it returns the sources unchanged and logs the gap — it must
-  never BLOCK a merge, only PRUNE known-bad TUs (the weak-stub net still backs
-  it up). A run can opt out via ``LOGICFUZZ_SKIP_COMPILE_VALIDATE=1``.
-
-  Opt-in merge-gate LLM repair (``LOGICFUZZ_MERGE_REPAIR=1`` + ``model_name``):
-  give each excluded TU ONE single-shot LLM rewrite, RE-VALIDATE through this same
-  gate, keep only if it now compiles (fail-closed → A≡B preserved).
-  """
-  from pathlib import Path
-  # Explicit truthy parse — a bare `if os.environ.get(...)` treats "0"/"false"
-  # as set, so SKIP_COMPILE_VALIDATE=0 would SKIP the A≡B gate. 2026-06 review.
-  if os.environ.get('LOGICFUZZ_SKIP_COMPILE_VALIDATE', '').strip().lower() in (
-          '1', 'true', 'yes', 'on'):
-    logger.info('merge_drivers: compile-validation skipped '
-                '(LOGICFUZZ_SKIP_COMPILE_VALIDATE set)', trial=0)
-    return sources
-  project = getattr(benchmark, 'project', None)
-  if not project:
-    logger.warning('merge_drivers: no benchmark.project; skipping '
-                   'compile-validation (merging unvetted)', trial=0)
-    return sources
-  try:
-    from tools.merge_drivers.compile_validate import validate_compilable
-  except ImportError as exc:
-    logger.warning(f'merge_drivers: compile-validation unavailable ({exc}); '
-                   f'merging unvetted', trial=0)
-    return sources
-
-  _iquote = _iquote_dirs_for_target(benchmark)
-  _lang = _stock_target_lang(benchmark)
-  valid, excluded = validate_compilable(
-      [Path(s) for s in sources], project, iquote_dirs=_iquote, lang=_lang)
-
-  # Merge-gate LLM repair (opt-in: LOGICFUZZ_MERGE_REPAIR=1): one single-shot
-  # rewrite per excluded TU, re-validated through this same gate. Fail-closed —
-  # a still-failing rewrite is dropped, so A≡B holds (kept TUs compile under cov).
-  repaired_recovered = 0
-  _do_repair = os.environ.get('LOGICFUZZ_MERGE_REPAIR', '').strip().lower() in (
-      '1', 'true', 'yes', 'on')
-  if excluded and _do_repair and model_name:
-    try:
-      from tools.merge_drivers.llm_repair import repair_candidates
-      from src.llm.adapter import create_llm_adapter
-      _adapter = create_llm_adapter(model_name)
-      if _adapter is None:
-        raise RuntimeError('no LLM adapter')
-
-      def _revalidate(srcs, proj, iquote_dirs=None):
-        return validate_compilable(list(srcs), proj, iquote_dirs=iquote_dirs,
-                                   lang=_lang)
-
-      recovered, excluded = repair_candidates(
-          excluded, project, _adapter.query,
-          out_dir=Path(work_dirs.base) / 'merged' / 'repaired',
-          iquote_dirs=_iquote, revalidate=_revalidate)
-      for _orig, _repaired in recovered:
-        valid.append(_repaired)
-      repaired_recovered = len(recovered)
-      if repaired_recovered:
-        logger.info(
-            f'merge_drivers: LLM-repair RECOVERED {repaired_recovered} '
-            f'previously-excluded driver(s) (re-validated under cov flags): '
-            f'{sorted(Path(o).name for o, _ in recovered)}', trial=0)
-    except Exception as _re:  # never block the merge on the repair path
-      logger.warning(f'merge_drivers: LLM-repair skipped ({_re}); keeping the '
-                     f'original excluded set', trial=0)
-
-  if excluded:
-    # Visible, not silent: log every excluded driver + the first error line so
-    # the loss is auditable (and confirm it drops the known-invalid ones).
-    for src, reason in excluded:
-      first = (reason or '').strip().splitlines()
-      head = first[0] if first else 'compile error'
-      logger.info(
-          f'merge_drivers: EXCLUDED non-compiling driver {Path(src).name} '
-          f'— {head}', trial=0)
-    logger.info(
-        f'merge_drivers: compile-validation dropped {len(excluded)} of '
-        f'{len(sources)} candidate(s) that fail to build under the OSS-Fuzz '
-        f'coverage flags (would have been weak-stubbed no-ops): '
-        f'{sorted(Path(s).name for s, _ in excluded)}', trial=0)
-    # Persist a machine-readable record alongside the merged output.
-    try:
-      import json
-      rep = {'project': project,
-             'valid': sorted(Path(s).name for s in valid),
-             'repaired_recovered': repaired_recovered,
-             'excluded': [{'driver': Path(s).name,
-                           'reason': (r or '').strip()[:1000]}
-                          for s, r in excluded]}
-      rep_dir = Path(work_dirs.base) / 'merged'
-      rep_dir.mkdir(parents=True, exist_ok=True)
-      (rep_dir / 'compile_validation.json').write_text(
-          json.dumps(rep, indent=2))
-    except Exception:  # noqa: BLE001 — reporting is best-effort
-      pass
-  else:
-    logger.info(
-        f'merge_drivers: compile-validation — all {len(sources)} candidate(s) '
-        f'compile under the OSS-Fuzz flags', trial=0)
-  return valid
-
-
 def _edges_weights_for(sources, work_dirs):
-  """Per-driver dispatch weights from preflight's edges_15s.
-
-  Liberator's "a driver that produces seeds (interacts with the library) is
-  high-value" signal — our preflight already smoke-fuzzes each driver 15s and
-  records ``edges_seen`` (written to ``merged/preflight.json``). We feed that as
-  CDF dispatch weights so the merged fuzzer spends MORE of its per-input budget
-  on high-interaction sub-drivers (instead of UNIFORM ``selector % N``). Returns
-  ``None`` when there's no edge data (→ uniform dispatch, prior behaviour), or
-  when all weights tie. Drivers without data get the MEDIAN weight (neutral, not
-  penalised). Weights are aligned to the merge's name-sorted driver order
-  (``SynthesizedDriver.from_paths`` sorts by ``path.name``)."""
-  import json
+  """Compatibility wrapper: adapts old work_dirs API to pipeline's explicit params."""
   from pathlib import Path
-  try:
-    payload = json.loads(
-        (Path(work_dirs.base) / 'merged' / 'preflight.json').read_text())
-    results = payload.get('results') or []
-  except (OSError, ValueError):
-    return None
-  edges_by_name = {Path(r['driver_path']).name: float(r.get('edges_seen') or 0)
-                   for r in results if r.get('driver_path')}
-  known = sorted(edges_by_name[Path(s).name] for s in sources
-                 if Path(s).name in edges_by_name)
-  if not known:
-    return None
-  median = known[len(known) // 2]
-  default = median if median > 0 else 1.0
-  ordered = sorted(sources, key=lambda p: Path(p).name)  # match from_paths
-  weights = [max(edges_by_name.get(Path(s).name, default), 1.0) for s in ordered]
-  if len(set(weights)) <= 1:
-    return None
-  return weights
+  from tools.merge_drivers.pipeline import _edges_weights_for as _impl
+  return _impl(sources, Path(work_dirs.base) / 'merged')
 
 
-def _iquote_dirs_for_target(benchmark: Benchmark) -> List[str]:
-  """In-image ``-iquote`` dirs so a RELOCATED synthesized driver resolves the
-  stock fuzzer's relative include (``#include "../cJSON.h"``) — which resolves
-  relative to the including file's directory, not -I/CWD.
+def _compile_validate_candidates(sources, benchmark, work_dirs, model_name=None):
+  """Compatibility wrapper: adapts old benchmark/work_dirs API to pipeline's explicit params."""
+  from pathlib import Path
+  from tools.merge_drivers.pipeline import (
+      _compile_validate_candidates as _impl,
+      _stock_target_lang, _iquote_dirs_for_target,
+  )
+  return _impl(
+      sources,
+      project=getattr(benchmark, 'project', None) or '',
+      stock_lang=_stock_target_lang(benchmark),
+      iquote_dirs=_iquote_dirs_for_target(benchmark),
+      out_dir=Path(work_dirs.base) / 'merged',
+      model_name=model_name,
+  )
 
-  Derived from the benchmark's ``target_path`` (the stock fuzzer's in-image path,
-  e.g. ``/src/cjson/fuzzing/cjson_read_fuzzer.c``): the fuzzer's own directory
-  (handles ``../X.h``) plus the project root (handles ``X.h``). This reconstructs
-  the exact quote-search base the per-driver build has, so the driver's original
-  oss-fuzz include resolves identically from ``$SRC/synthesized`` / ``/candidates``.
-  Empty when target_path is absent or not an absolute in-image path."""
-  tp = (getattr(benchmark, 'target_path', '') or '').strip()
-  if not tp.startswith('/'):
-    return []
-  fuzzer_dir = os.path.dirname(tp)        # e.g. /src/cjson/fuzzing
-  proj_root = os.path.dirname(fuzzer_dir)  # e.g. /src/cjson
-  dirs: List[str] = []
-  for d in (fuzzer_dir, proj_root):
-    if d and d not in dirs and d not in ('/', '/src'):
-      dirs.append(d)
-  return dirs
+
+def _stock_target_lang(benchmark):
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _stock_target_lang as _impl
+  return _impl(benchmark)
+
+
+def _iquote_dirs_for_target(benchmark) -> List[str]:
+  """Alias — delegates to tools.merge_drivers.pipeline (the SSOT)."""
+  from tools.merge_drivers.pipeline import _iquote_dirs_for_target as _impl
+  return _impl(benchmark)
 
 
 def _maybe_merge_drivers(benchmark: Benchmark,
                          work_dirs: WorkDirs,
                          trial_results: List,
                          model_name: Optional[str] = None) -> Optional[str]:
-  """Synthesize a multi-task harness from successful trials.
-
-  Minimum-viable integration of tools.merge_drivers (--merge-drivers /
-  --eval). Output: ``<work_dirs.base>/merged/`` with:
-    - synthesized/entry.{c,cpp}    dispatcher
-    - synthesized/<id>.{c,cpp}     renamed sub-driver i
-    - oss_fuzz_build_snippet.sh    append to OSS-Fuzz project build.sh
-
-  **Preflight is now wired** (``_preflight_filter_candidates``): candidates are
-  smoke-fuzzed and crashing / no-progress drivers are dropped BEFORE merge, so
-  one bad auto-driver can't poison the fused campaign (the failure that
-  motivated this). It activates when host-runnable binaries are resolvable
-  under ``<base>/preflight_bins/`` (preservation hook); per-trial OSS-Fuzz
-  binaries are still cleaned up, so when none are resolvable preflight logs the
-  gap and proceeds with the unvetted set rather than blocking the merge. A
-  driver is dropped only on a real crash/no-progress verdict, never for a
-  missing/unrunnable binary.
-
-  Still skipped vs the standalone `pipeline` subcommand:
-    - **coverage-aware Top-K selection**: needs binaries
-      to gather per-driver edge counts. Without it we use uniform
-      dispatch (PromeFuzz §5.2 fallback when coverage signal is
-      unavailable). Future enhancement: read from per-driver coverage
-      reports under work_dirs.code_coverage_report (the run_target_local
-      path produces these and they survive cleanup).
-
-  Returns the output directory on success, None if there were fewer
-  than 2 successful trials (nothing meaningful to merge).
-  """
+  """Adapter onto tools.merge_drivers.pipeline.run_merge_pipeline (the SSOT)."""
   from pathlib import Path
-  successful_sources: List[Path] = []
-  quarantined = 0
+  try:
+    from tools.merge_drivers import pipeline as _pipe
+  except ImportError as exc:
+    logger.warning(
+        f'merge_drivers: pipeline unavailable ({exc}); skipping', trial=0)
+    return None
+  candidates, verdicts = [], {}
   for tr in trial_results:
     if not tr or not getattr(tr, 'best_result', None):
       continue
     br = tr.best_result
     if not getattr(br, 'compiles', False):
       continue
-    # Pre-ship quarantine (binary-free, complements preflight). A driver that
-    # crashed in-container is a driver-FP unless the triage CONFIRMED a real
-    # (feasible) library bug. Both the cov==0 immediate-SEGV false positive
-    # (unchecked creator return / garbage opaque arg) AND the cov>0 deterministic
-    # driver-FP crasher (libpng driver-116 class: covers a few edges then aborts
-    # on ~every input) poison the single-process fused harness — the former
-    # crashes before any sub-driver runs, the latter throttles throughput. Both
-    # are dropped. A crash the triage CONFIRMED feasible (a real library bug, can
-    # abort even at 0 coverage) is NEVER dropped — the low-FP classifier's "real
-    # bug" decision is honored.
-    if _should_quarantine_from_merge(br, tr):
-      quarantined += 1
-      _cov = getattr(br, 'cov_pcs', 0) or 0
-      logger.info(
-          f'merge: quarantined trial {tr.trial:02d} (driver-FP crash, '
-          f'cov_pcs={_cov}) — would poison the fused harness', trial=0)
-      continue
     src = Path(work_dirs.fuzz_targets) / f'{tr.trial:02d}.fuzz_target'
-    if src.exists():
-      successful_sources.append(src)
-  if quarantined:
-    logger.info(f'merge: pre-ship quarantine dropped {quarantined} '
-                f'immediate-crash FP driver(s)', trial=0)
-
-  if len(successful_sources) < 2:
-    logger.info(
-        f'merge_drivers: skipping (only {len(successful_sources)} '
-        f'successful trial(s); need ≥2 to merge)', trial=0)
-    return None
-
-  # === Preflight (O1): vet candidates before merging ===
-  # A merged harness runs all sub-drivers in ONE process, so a single
-  # crashing/zero-progress driver poisons the whole fused campaign (observed:
-  # an auto-driver that passed NULL to a consumer aborted the union). We smoke
-  # each candidate and drop the bad ones first. Preflight needs *host-runnable*
-  # libFuzzer binaries (tools.merge_drivers.preflight runs them as
-  # subprocesses); the per-trial OSS-Fuzz binaries are built in Docker and
-  # cleaned up, so they're only available when the eval kept a host-runnable
-  # build (resolver below). When none are resolvable we DON'T silently merge
-  # everything blind — we log the gap and proceed with the unvetted set
-  # (preserving prior behaviour), and a crash will surface in the merged run.
-  # Only crash / no-progress verdicts drop a driver; a missing/unrunnable
-  # binary is treated as "couldn't vet", never as a reason to drop.
-  successful_sources = _preflight_filter_candidates(
-      successful_sources, work_dirs,
-      project=getattr(benchmark, 'project', '') or '')
-  if len(successful_sources) < 2:
-    logger.info(
-        f'merge_drivers: skipping (only {len(successful_sources)} '
-        f'candidate(s) survived preflight; need ≥2 to merge)', trial=0)
-    return None
-
-  # === Orphan filter: drop lifecycle-incomplete crashers preflight missed ===
-  # A driver that calls a handle-CONSUMER on a handle declared `= NULL` and never
-  # produced (a constructor graceful-degradation orphan) derefs NULL inside the
-  # library → SEGV (lcms cmsGetColorSpace(NULL) @ 0x8c). These COMPILE and slipped
-  # past preflight (crashed=False), then poison the fused harness AND corrupt the
-  # coverage -merge replay (measured: 65 crashes / 37 -merge restarts; excluding
-  # them → 0 crashes, 1975 edges in 56s vs 2150 in 30min poisoned). Narrow scope
-  # (never-produced handle only) avoids dropping valid drivers; static, no LLM.
-  try:
-    from tools.merge_drivers.orphan_filter import filter_orphans
-    _kept, _orphans = filter_orphans(successful_sources)
-    if _orphans:
-      logger.info(
-          f'merge_drivers: orphan filter dropped {len(_orphans)} '
-          f'lifecycle-incomplete (getter-on-NULL) driver(s): '
-          f'{[str(o).split("/")[-1] for o in _orphans]}', trial=0)
-      successful_sources = _kept
-  except Exception as _ofe:  # never block a merge on the filter
-    logger.warning(f'merge_drivers: orphan filter skipped ({_ofe})', trial=0)
-  if len(successful_sources) < 2:
-    logger.info(
-        f'merge_drivers: skipping (only {len(successful_sources)} '
-        f'candidate(s) survived orphan filter; need ≥2 to merge)', trial=0)
-    return None
-
-  # === Compile-validation: keep the MERGED harness VALID ===
-  # First principle: the merge must ship only sub-drivers that COMPILE under the
-  # real OSS-Fuzz build flags. Preflight (above) only drops crash/no-progress —
-  # and only for drivers that HAD a host-runnable binary; a COMPILE-INVALID
-  # driver never built one, so "couldn't vet" kept it. Those invalid TUs then
-  # get ``|| continue``-skipped in the merged build and weak-stubbed into silent
-  # no-op slots — the portfolio loses them and coverage replay reads 0 on them
-  # (the address-build vs coverage-build divergence). We compile each candidate
-  # in the project's OSS-Fuzz container under the COVERAGE-build flags
-  # (-fsyntax-only, one container) and EXCLUDE every TU that fails, so both the
-  # address build and the coverage build compile the identical valid set. The
-  # ``|| continue`` + weak stub stay as a now-rarely-firing SAFETY NET.
-  successful_sources = _compile_validate_candidates(
-      successful_sources, benchmark, work_dirs, model_name=model_name)
-  if len(successful_sources) < 2:
-    logger.info(
-        f'merge_drivers: skipping (only {len(successful_sources)} '
-        f'candidate(s) survived compile-validation; need ≥2 to merge)',
-        trial=0)
-    return None
-
-  try:
-    # Import lazily so a missing tools.merge_drivers package doesn't
-    # break the main run; the flag is opt-in and a clean error is
-    # better than a hard import failure at module-load.
-    from tools.merge_drivers.merge import (
-        DispatchMode, SelectorPosition, SynthesizedDriver)
-  except ImportError as exc:
-    logger.warning(
-        f'merge_drivers: tools.merge_drivers unavailable ({exc}); '
-        f'skipping', trial=0)
-    return None
-
-  try:
-    # Dispatch mode. DEFAULT = UNIFORM (``selector % N``, PromeFuzz's mode) — the
-    # ONLY mode whose tail selector can be SEED-TAGGED, so real format seeds
-    # (.icc/.it8) reliably reach their parser sub-driver at run time
-    # (run_extended_fuzzing._parse_merged_dispatch tags UNIFORM, NOT CDF). The
-    # edge-weighted CDF dispatch (opt-in LOGICFUZZ_CDF_DISPATCH=1) gives
-    # high-interaction sub-drivers a larger budget share BUT makes the selector
-    # un-taggable → real seeds route ~1/N at random → the parser is rarely hit →
-    # merged coverage collapses + becomes a routing LOTTERY (measured: same
-    # drivers, CDF=416 br/7.89%@0s vs UNIFORM seed-routed control=1708/25.84%@0s).
-    # For seed-dependent parser drivers, correct seed routing dominates budget
-    # weighting, so UNIFORM is the right default.
-    _cdf = os.environ.get("LOGICFUZZ_CDF_DISPATCH", "0").strip().lower() in (
-        "1", "true", "yes", "on")
-    _w = _edges_weights_for(successful_sources, work_dirs) if _cdf else None
-    drv = SynthesizedDriver.from_paths(
-        successful_sources,
-        mode=DispatchMode.CDF if _w else DispatchMode.UNIFORM,
-        position=SelectorPosition.TAIL,
-        weights=_w,
-        lang=_stock_target_lang(benchmark),
-    )
-    out_dir = Path(work_dirs.base) / 'merged'
-    out_dir.mkdir(parents=True, exist_ok=True)
-    drv.save(out_dir)
-    snippet_path = out_dir / 'oss_fuzz_build_snippet.sh'
-    # Relocated synthesized drivers keep the stock fuzzer's relative include
-    # idiom (``#include "../cJSON.h"``), which resolves relative to the driver's
-    # own directory. Give the compile the stock fuzzer's directory (and the
-    # project root) as -iquote bases so that include resolves from $SRC/synthesized
-    # exactly as it does in the per-driver build at target_path. (See
-    # tools/merge_drivers/merge.emit_oss_fuzz_build_snippet docstring.)
-    snippet_path.write_text(drv.emit_oss_fuzz_build_snippet(
-        target_name='merged_fuzzer',
-        iquote_dirs=_iquote_dirs_for_target(benchmark)))
-    logger.info(
-        f'merge_drivers: synthesized {drv.driver_count} drivers '
-        f'(lang={"C++" if drv.is_cpp else "C"}, '
-        f'selector_bytes={drv.selector_bytes}) → {out_dir}',
-        trial=0)
-    return str(out_dir)
-  except Exception as exc:  # noqa: BLE001 — never break the main run
-    logger.warning(
-        f'merge_drivers: synthesis failed ({type(exc).__name__}: {exc}); '
-        f'main run unaffected', trial=0)
-    return None
+    if not src.exists():
+      continue
+    candidates.append(src)
+    verdicts[src] = _pipe._should_quarantine_from_merge(br, tr)
+  return _pipe.run_merge_pipeline(
+      candidates,
+      project=getattr(benchmark, 'project', '') or '',
+      stock_lang=_pipe._stock_target_lang(benchmark),
+      iquote_dirs=_pipe._iquote_dirs_for_target(benchmark),
+      out_dir=Path(work_dirs.base) / 'merged',
+      trial_verdicts=verdicts,
+      preflight_dir=Path(work_dirs.base) / 'preflight_bins',
+      cov_reports_dir=Path(getattr(work_dirs, 'code_coverage_report', '') or
+                           (Path(work_dirs.base) / 'code-coverage-reports')),
+      model_name=model_name,
+      cdf=os.environ.get('LOGICFUZZ_CDF_DISPATCH', '0').strip().lower()
+          in ('1', 'true', 'yes', 'on'))
 
 
 def _persist_phase_c_snapshot(

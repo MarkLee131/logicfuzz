@@ -1,0 +1,46 @@
+"""Tests for tools.merge_drivers.pipeline and the _maybe_merge_drivers adapter."""
+import importlib
+import os
+
+
+def test_pipeline_module_exposes_run_merge_pipeline():
+    mod = importlib.import_module("tools.merge_drivers.pipeline")
+    assert hasattr(mod, "run_merge_pipeline")
+    assert hasattr(mod, "MergeResult") or callable(mod.run_merge_pipeline)
+
+
+def test_run_single_fuzz_adapter_delegates(monkeypatch):
+    # _maybe_merge_drivers must call run_merge_pipeline (no duplicated orchestration)
+    import run_single_fuzz
+    import tools.merge_drivers.pipeline as pipe
+    called = {}
+    def fake(candidates, **kw):
+        called["candidates"] = list(candidates)
+        called["kw"] = kw
+        return "/tmp/merged"
+    monkeypatch.setattr(pipe, "run_merge_pipeline", fake)
+
+    class _BR:  # minimal best_result
+        compiles = True
+        cov_pcs = 0
+    class _TR:
+        trial = 1
+        best_result = _BR()
+    class _Bench:
+        project = "demo"
+        file_type = ".c"
+    class _WD:
+        base = "/tmp/wd"
+        fuzz_targets = "/tmp/wd/ft"
+    # 2 compiling, non-crashing trials with on-disk sources
+    os.makedirs("/tmp/wd/ft", exist_ok=True)
+    for i in (1, 2):
+        open(f"/tmp/wd/ft/{i:02d}.fuzz_target", "w").write("int x;")
+    trs = []
+    for i in (1, 2):
+        tr = _TR(); tr.trial = i; trs.append(tr)
+    monkeypatch.setattr(run_single_fuzz, "_should_quarantine_from_merge",
+                        lambda br, tr: False, raising=False)
+    out = run_single_fuzz._maybe_merge_drivers(_Bench(), _WD(), trs)
+    assert out == "/tmp/merged"
+    assert len(called["candidates"]) == 2
