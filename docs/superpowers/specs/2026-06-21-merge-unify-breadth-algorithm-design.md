@@ -1,7 +1,7 @@
 # Merge Unification + Systematic Breadth Algorithm — Design
 
 **Date:** 2026-06-21
-**Status:** design (awaiting user review → writing-plans)
+**Status:** approved (dominance-filter + direct integration) → writing-plans
 **Origin:** 4-agent parallel review `wf_bcd8c0e7-b16`; root causes in
 [memory] `project_merge_unify_breadth_algorithm`.
 
@@ -15,15 +15,26 @@ Eliminate two structural inconsistencies the user flagged:
    is dead CLI-only code.
 
 Replace both with: **ONE shared merge pipeline** that both entry points call, containing **ONE
-explicit coverage-aware greedy max-coverage selector** run at merge time.
+explicit, measured DOMINANCE-FILTER selector** (keep-all-non-dominated) run at merge time.
 
 ## Decisions (user-confirmed 2026-06-21)
 
-- **Dilution cap:** uncapped while marginal coverage > 0 (keep every driver that adds ≥1 distinct
-  API). Maximizes breadth + per-API redundancy/robustness. An explicit finite cap is opt-in only.
-- **Rollout:** flag-gated A/B first (`LOGICFUZZ_MERGE_SELECT`, default-OFF). Production behavior stays
-  byte-identical, locked by a golden test, until static multi-project A/B proves no regression; then
-  graduate to default-ON. (Systematic-debugging / gate-then-graduate discipline.)
+- **Algorithm = measured dominance-filter, NOT greedy max-coverage.** Analysis showed greedy
+  max-coverage (even uncapped) collapses to a near-minimal cover and KILLS the per-API redundancy the
+  user wants; it is also tie-break/noise-sensitive. The dominance-filter (drop a driver only if its
+  measured reached-function set is fully contained in a single other kept driver) keeps maximum
+  breadth + redundancy, is EXACT + deterministic + order-independent, and generalizes the existing
+  `SUBSET_ELIM` (name-set@construction → measured-coverage@merge). Greedy/Z3-exact max-cover are kept
+  in reserve ONLY for a future hard cap N. (Empirical backing: breadth-dominates-depth; CDF dispatch
+  lost 1708→416 br to uniform; "27 shallow drivers beat 16 deep".)
+- **Dilution cap:** none (uncapped). The dominance-filter has no cap; it drops only fully-redundant
+  drivers. An explicit finite cap (then via Z3-exact max-cover) is a future opt-in, not in scope.
+- **Rollout = direct integration, NO switch.** The dominance-filter becomes the default merge
+  selection, replacing keep-all. This is safe WITHOUT a flag because it provably cannot drop any
+  distinct API (it only removes drivers whose coverage is a strict subset of another kept driver), so
+  there is nothing to A/B-guard. The only fallback is a CORRECTNESS one (no measured coverage ⇒ keep
+  all), not a runtime switch. The golden test still locks the mechanical merge-unification refactor,
+  and the lcms/cjson/c-ares/libpng regression still runs to confirm distinct-API counts hold.
 
 ## Part A — Merge Unification
 
@@ -38,7 +49,8 @@ the only measured max-coverage greedy `select.select_top_k` + corpus-union but *
 **Design.**
 - New module `tools/merge_drivers/pipeline.py:run_merge_pipeline(candidates, *, project, stock_lang,
   iquote_dirs, trial_verdicts=None, model_name=None, drop_no_progress=None, cdf=False,
-  coverage_reports_dir=None, corpus_root=None, select=False, select_cap=None) -> MergeResult`.
+  coverage_reports_dir=None, corpus_root=None) -> MergeResult`. The dominance-filter runs whenever
+  `coverage_reports_dir` resolves ≥2 per-driver reports (no flag); otherwise it is a no-op (keep all).
   Body = PATH A's orchestration (run_single_fuzz.py:924-1082), parameterized so it depends on no
   `Benchmark`/`WorkDirs` types. The merge-only helpers (run_single_fuzz.py:512-887:
   `_is_immediate_crash_fp`, `_should_quarantine_from_merge`, `_trial_confirms_real_bug`,
@@ -53,33 +65,37 @@ the only measured max-coverage greedy `select.select_top_k` + corpus-union but *
   compile gate runs (fail-open when absent — never block). `_cmd_pipeline` passes
   `coverage_reports_dir` + `corpus_root` to enable the optional selector + corpus union.
 - Quarantine takes an injected per-candidate verdict callback; the CLI (no trial verdicts) passes None
-  and that stage is skipped. `select`/`corpus`/`cdf` stages are OPTIONAL, keyed on data availability,
-  DEFAULT-OFF → production byte-identical.
+  and that stage is skipped. The dominance-filter and corpus stages key on data availability
+  (`coverage_reports_dir` / `corpus_root`); CDF stays per-caller (UNIFORM default). The golden test
+  locks the GATE STACK + dispatch byte-identical; the dominance-filter is an intentional, additive
+  behavior change (drops only fully-dominated drivers — provably no distinct-API loss).
 
 ## Part B — Systematic Breadth Algorithm
 
-**Objective function (explicit).**
-> Select `D ⊆ Pool` maximizing `|⋃_{d∈D} APIs_executed(d)|`, where `Pool` = candidates that
-> (1) COMPILE under OSS-Fuzz coverage-build flags (existing `compile_validate` gate ⇒ A≡B),
-> (2) are LIVE (preflight `edges_seen > 0`, not `dead_on_empty`),
-> (3) are non-crashing-FP / non-orphan.
-> **Keep every driver that adds ≥1 distinct API** (no min-cardinality early-stop); cap only by an
-> explicit opt-in `select_cap`. Tie-breaks, lexicographic: (a) minimize mean pairwise API Jaccard
-> redundancy (redundancy_telemetry oracle), (b) prefer higher preflight `edges_15s`, (c) driver name.
-> Floor: ≥1 driver per subsystem cluster (preserves the parser-entry-bias fix) — as a soft floor.
-> `APIs_executed(d)` = measured reached-functions from `code-coverage-reports/<id>/linux/summary.json`
-> (`DriverCoverage.from_oss_fuzz_report`, `has_real_data`); falls back to the constructed api_sequence
-> NAME set per-driver only when no measurement exists (never double-counted).
+**Selection rule (explicit — dominance filter).**
+> Ship `D = { d ∈ Pool : ¬∃ d' ∈ Pool, d'≠d, APIs(d) ⊆ APIs(d') }`, i.e. keep every driver EXCEPT
+> those whose measured reached-function set is fully contained in another kept driver. `Pool` =
+> candidates that (1) COMPILE under OSS-Fuzz coverage-build flags (existing `compile_validate` gate ⇒
+> A≡B), (2) are LIVE (preflight `edges_seen > 0`, not `dead_on_empty`), (3) are non-crashing-FP /
+> non-orphan. This keeps maximum breadth AND redundancy (partial-overlap drivers are kept; only
+> fully-dominated ones drop), so it **provably cannot remove any distinct API**.
+> `APIs(d)` = measured reached-functions from `code-coverage-reports/<id>/linux/summary.json`
+> (`DriverCoverage.from_oss_fuzz_report`, `has_real_data`); a driver with no measurement is treated as
+> NON-dominated (kept) — never compared on a fallback singleton, never double-counted.
+> **Dominance tie-handling:** if `APIs(d) == APIs(d')` (mutual containment / exact duplicates), keep
+> the one with higher preflight `edges_15s`, then lexicographic name (deterministic); drop the other.
+> **Subsystem floor:** never drop the sole kept driver of a subsystem cluster even if dominated
+> (preserves the parser-entry-bias fix). Exactness is unaffected (floor only ADDS back).
 
-**The one greedy.** Promote `select.select_top_k` (select.py:133-206 — classical (1−1/e) max-coverage
-greedy, already reads summary.json, edges_15s + name tie-breaks, self-terminates at 0 marginal gain)
-to the authoritative merge selector. Add the Jaccard-redundancy tie-break + the subsystem-cluster
-soft-floor to its comparator.
+**The algorithm.** A single O(n²) pairwise dominance pass over the Pool's measured API sets (n is small
+— tens to low-hundreds of drivers). Deterministic, order-independent. NOT greedy `select.select_top_k`
+(kept in the module, unused by production, reserved for a future hard-cap path via Z3-exact max-cover).
+Generalizes `SUBSET_ELIM` from name-set@construction to measured-coverage@merge — same concept, one home.
 
 **Where it runs.** ONE merge-time stage, strictly AFTER `compile_validate` (so shipped ⊆ A≡B set),
-inside `run_merge_pipeline` as optional stage O2. Gated by `LOGICFUZZ_MERGE_SELECT` (default-OFF
-initially). **Empty-merge guard:** when <2 per-driver coverage reports resolve, fall back to keep-all
-survivors (today's behavior) — never empty the merge.
+inside `run_merge_pipeline`, **directly integrated (no flag)**. **Correctness fallback:** when <2
+per-driver coverage reports resolve, it is a no-op (keep all survivors — today's behavior); never
+empties the merge.
 
 **Generator vs selector split.** Construction + `_densify` + RESIDUAL_ALLCOVER + repair_validity stay
 GENERATOR-only (produce the candidate pool toward the extraction ceiling); they no longer treat
@@ -118,13 +134,16 @@ their gains. The "systematic breadth algorithm" is therefore TWO layers with dis
   dispatch) for fixed candidates+verdicts; the mechanical extraction must keep it byte-identical.
 - **A≡B:** selector runs downstream of compile_validate; assert `merged/compile_validation.json` shows
   shipped == compiled.
-- **lcms non-regression:** static A/B preserves merged distinct APIs (≥69 merged / pool toward 297);
-  never drop sole-carrier residual single-API drivers (uncapped default ensures this).
-- **Empty-merge guard:** keep-all fallback when no measured coverage; never empty the merge.
+- **Distinct-API invariant (the dominance guarantee):** the merged distinct-API union AFTER the
+  dominance-filter must EQUAL the union over the full Pool (the filter only drops fully-dominated
+  drivers). Assert this in a test — it is the formal safety net replacing a flag.
+- **lcms non-regression:** static A/B — merged distinct APIs hold (≥69 merged / pool toward 297); the
+  dominance-filter cannot drop a sole carrier of any API (by construction) and the subsystem floor
+  protects sole cluster carriers.
+- **Empty-merge guard:** no-op (keep-all) when <2 measured reports resolve; never empty the merge.
 - **Dispatch invariant:** UNIFORM default (CDF measured 1708→416 br collapse); golden test asserts mode.
-- **Subsystem balance:** retain the ≥1-driver-per-cluster soft floor.
-- **Determinism:** lexicographic name tie-break (select_top_k already does) against edge-count noise +
-  PYTHONHASHSEED drift.
+- **Determinism:** exact-duplicate tie broken by edges_15s then lexicographic name; order-independent
+  (no greedy ordering) — robust against edge-count noise + PYTHONHASHSEED drift.
 - **Multi-project:** validate on cjson/c-ares/zlib/libpng, not just lcms (over-fit guard).
 
 ## Out of scope
@@ -134,7 +153,9 @@ their gains. The "systematic breadth algorithm" is therefore TWO layers with dis
 - The deeper measured-coverage signal for ALL pool candidates (eval currently writes per-driver reports
   for a subset; keep-all fallback covers the gap).
 
-## Open questions (resolved → defaults)
+## Open questions (resolved)
 
-- Dilution cap: uncapped (decided). Cluster floor: soft floor (tie-break + guarantee), not hard
-  constraint. SUBSET_ELIM: fold into selector keep-rule.
+- Algorithm: measured dominance-filter, not greedy (decided after analysis). Cap: none. Rollout:
+  direct integration, no flag. Cluster floor: soft (only adds back a sole carrier). SUBSET_ELIM: the
+  merge-time dominance-filter IS its measured generalization; the construction-time name-set SUBSET_ELIM
+  stays for now (its consolidation is part of the deferred de-dup follow-up).
