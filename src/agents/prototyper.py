@@ -2139,8 +2139,16 @@ Output your fuzz driver code inside <fuzz_target> tags.
         # Build header includes to add
         header_lines = []
         for header in missing_headers:
-            # Project headers via angle brackets (OSS-Fuzz sets the include path)
-            header_lines.append(f'#include <{header}>')
+            # Project headers via DOUBLE QUOTES, not angle brackets. The target
+            # library's header is in-tree (not installed on a system path), so the
+            # quote form is the safe default: it searches the including file's own
+            # directory first, then falls back to the -I search path — a strict
+            # superset of the angle-bracket search. Angle brackets ONLY resolve if
+            # the header dir is on -I; the per-trial build did not add it, so forced
+            # `<header>` failed (HEADER_NOT_FOUND). The build now also adds the
+            # public-header dir to -I (belt-and-suspenders), so quote resolves
+            # regardless of the driver's location.
+            header_lines.append(f'#include "{header}"')
 
         # Find the best place to insert headers (after existing includes)
         lines = code.split('\n')
