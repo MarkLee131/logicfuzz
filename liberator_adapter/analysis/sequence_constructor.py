@@ -416,8 +416,30 @@ def count_repairs(
 # non-NULL — a string (string-wrapped) or a complete public value-struct
 # (stack-alloc {0}, e.g. cmsCIELab / cmsCIEXYZ). Such args are NEVER an I2b
 # violation, so a consumer with only fillable required value args is kept.
+# lcms value-struct NAME fallback (kept additively so lcms never regresses if its
+# DataLayout entry is missing); the GENERAL signal below is the primary path.
 _FILLABLE_VALUE_STRUCT = re.compile(
     r"cms(cie|jch|xyy|xyz|viewingconditions|curvesegment|lab|lch)", re.I)
+
+
+def _is_complete_value_struct(type_str: str) -> bool:
+    """True if ``type_str``'s core is a COMPLETE public struct — DataLayout knows
+    its full layout and it is not opaque/incomplete — so the renderer can
+    stack-allocate it as ``{0}``. Project-agnostic structural replacement for the
+    lcms ``_FILLABLE_VALUE_STRUCT`` name list: keeps ``png_color`` / ``struct tm``
+    / any library's complete POD value-struct consumer, not just lcms's seven.
+    Fail-safe: False when DataLayout is unavailable (→ caller keeps the lcms regex
+    fallback / the conservative drop)."""
+    from liberator_adapter.analysis.usedef import _strip_type_keywords
+    core = _strip_type_keywords(type_str or "").replace("*", "").replace(" ", "")
+    if not core:
+        return False
+    try:
+        from liberator_adapter.common import DataLayout
+        dl = DataLayout.instance()
+        return bool(dl.is_a_struct(core)) and not bool(dl.is_incomplete(core))
+    except Exception:  # noqa: BLE001 — DataLayout absent/uninit ⇒ not provably fillable
+        return False
 
 
 def _i2b_unfillable_consumer(sem, idx) -> bool:
@@ -444,8 +466,8 @@ def _i2b_unfillable_consumer(sem, idx) -> bool:
         low = ts.lower()
         if "char" in low:
             continue  # string → string-wrapped non-NULL
-        if _FILLABLE_VALUE_STRUCT.search(ts):
-            continue  # complete value-struct → stack-alloc {0}
+        if _is_complete_value_struct(ts) or _FILLABLE_VALUE_STRUCT.search(ts):
+            continue  # complete public value-struct → renderer stack-allocs {0}
         return True   # unfillable required pointer → drop the consumer
     return False
 
