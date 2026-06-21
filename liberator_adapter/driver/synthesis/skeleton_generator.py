@@ -509,17 +509,29 @@ class SkeletonVariable:
     # opaque handle is never intended (the c-ares ``(ares_dns_rr_t*)data`` SEGV).
     opaque_handle: bool = False
 
+    @staticmethod
+    def _named_decl(c_type: str, name: str) -> str:
+        """Splice the identifier into its type's declarator (named-declarator form).
+
+        For a function-pointer (or similar derived-declarator) c_type the abstract
+        form carries an EMPTY declarator slot ``(*)`` where the identifier must go,
+        e.g. ``unsigned int (*)(void*, unsigned char**)`` → ``… (*name)(…)``.
+        Appending ``{c_type} {name}`` is invalid C there (the parser reads a
+        complete abstract type then a stray identifier → the name becomes an
+        undeclared identifier at its USE site, the zlib ``inflateBack`` callback
+        leaks). For every ordinary scalar/pointer/object type there is no ``(*)``
+        slot, so this is byte-identical to ``f"{c_type} {name}"`` (zero risk)."""
+        if "(*)" in c_type:
+            return c_type.replace("(*)", f"(*{name})", 1)
+        return f"{c_type} {name}"
+
     def get_declaration(self) -> str:
         """Generate declaration code"""
         if self.is_array and self.array_size:
-            if self.init_value:
-                return (f"{self.c_type} {self.name}[{self.array_size}]"
-                        f" = {self.init_value}")
-            return f"{self.c_type} {self.name}[{self.array_size}]"
-        elif self.init_value:
-            return f"{self.c_type} {self.name} = {self.init_value}"
-        else:
-            return f"{self.c_type} {self.name}"
+            base = f"{self._named_decl(self.c_type, self.name)}[{self.array_size}]"
+            return f"{base} = {self.init_value}" if self.init_value else base
+        decl = self._named_decl(self.c_type, self.name)
+        return f"{decl} = {self.init_value}" if self.init_value else decl
 
 
 @dataclass
