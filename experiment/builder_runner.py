@@ -935,6 +935,20 @@ class BuilderRunner:
                stderr=sp.STDOUT,
                check=True)
       except sp.CalledProcessError:
+        # build.sh may run extra steps AFTER the fuzzer is linked (e.g. cjson's
+        # ENABLE_CJSON_TEST test-build, which recompiles the driver under strict
+        # C and rejects valid C99 `//` comments). Those failures abort `compile`
+        # with a non-zero exit even though the fuzzer binary built fine. The
+        # container `rm -rf /out/*` at the start, so a present binary was built
+        # THIS run — treat its existence as build success (same contract the
+        # bitcode extractor uses: "script errored but artifact may still exist").
+        fuzzer_bin = os.path.join(outdir, self.benchmark.target_name)
+        if os.path.exists(fuzzer_bin):
+          logger.warning(
+              'build.sh returned non-zero for %s but fuzzer binary exists (%s) '
+              '— treating as success (post-fuzzer build step failed)',
+              generated_project, fuzzer_bin)
+          return True
         logger.info('Failed to build fuzzer for %s with %s', generated_project,
                     sanitizer)
         return False
