@@ -3,7 +3,7 @@
 Subcommands:
 
   ``merge``       emit synthesized/ + entry + build snippet (no preflight,
-                  no coverage selection — just rename + dispatcher).
+                  no coverage selection — just compile-validate + dispatcher).
   ``preflight``   smoke-fuzz N built binaries → JSON report (no merge).
   ``pipeline``    full O1 → O2 → O3 → O4 chain. Smoke-fuzzes all
                   candidate binaries, picks Top-K by max-coverage greedy
@@ -34,6 +34,7 @@ import argparse
 import json
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -58,6 +59,7 @@ from tools.merge_drivers.select import (  # noqa: E402
     select_top_k,
 )
 from tools.merge_drivers.corpus import union_corpus  # noqa: E402
+import tools.merge_drivers.pipeline as _pipeline  # noqa: E402
 
 
 def _parse_pair(spec: str) -> tuple[Path, Path]:
@@ -69,71 +71,66 @@ def _parse_pair(spec: str) -> tuple[Path, Path]:
     return Path(src), Path(binary)
 
 
+def _lang_from_inputs(inputs: List[Path]) -> Optional[str]:
+    """Infer stock_lang from the first input's extension; None if ambiguous."""
+    for p in inputs:
+        ext = p.suffix.lower()
+        if ext in (".cc", ".cpp", ".cxx"):
+            return "cpp"
+        if ext in (".c",):
+            return "c"
+    return None
+
+
 def _cmd_merge(args: argparse.Namespace) -> int:
+    """Thin adapter: gather inputs, call run_merge_pipeline, print summary."""
     inputs = [Path(p) for p in args.inputs]
     missing = [p for p in inputs if not p.exists()]
     if missing:
         print(f"error: missing inputs: {missing}", file=sys.stderr)
         return 2
-    # Only merge drivers whose trial actually BUILT. ``fuzz_targets/`` holds the
-    # best source of EVERY trial — including ones that failed to compile (the
-    # eval still writes ``best_result.fuzz_target_source`` regardless of
-    # ``compiles``). Those failures take two shapes that both poison the fused
-    # build: an unfilled bare skeleton (LLM never produced a buildable driver →
-    # leftover ``HOLE[...]`` + unsafe defaults) and a driver that references a
-    # hallucinated / non-exported symbol (compiles but won't link, e.g. lcms
-    # ``cmsBuildGammaTHR``). The pipeline merge
-    # (run_single_fuzz._maybe_merge_drivers) excludes both via the trial's
-    # ``compiles==True`` flag. We reuse that SAME authoritative signal — it is
-    # persisted per trial at ``<base>/status/<NN>/result.json`` — instead of any
-    # build-independent heuristic, so the filter can't regress a driver that
-    # genuinely builds. Fallback (no status file, e.g. ad-hoc inputs): drop bare
-    # skeletons by their leftover ``HOLE[`` marker.
-    def _trial_failed_to_build(p: Path) -> bool:
-        status = p.parent.parent / "status" / p.stem / "result.json"
-        if status.exists():
-            try:
-                return json.load(status.open()).get("compiles") is False
-            except Exception:
-                pass  # unreadable status → fall through to the static check
-        return "HOLE[" in p.read_text(encoding="utf-8", errors="replace")
 
-    kept = [p for p in inputs if not _trial_failed_to_build(p)]
-    dropped = [p for p in inputs if p not in kept]
-    if dropped:
-        print(f"[merge] skipped {len(dropped)} non-compiling driver(s) "
-              f"(trial compiles=False / unfilled skeleton): "
-              f"{[p.name for p in dropped]}", file=sys.stderr)
-    if len(kept) < 2:
-        print(f"error: only {len(kept)} buildable driver(s) after dropping "
-              f"non-compiling ones; need >=2 to merge", file=sys.stderr)
-        return 2
-    inputs = kept
-    drv = SynthesizedDriver.from_paths(
-        inputs,
-        mode=DispatchMode(args.mode),
-        position=SelectorPosition(args.position),
-        weights=None,  # uniform — pipeline command supplies weights
-    )
     out = Path(args.output)
-    out.mkdir(parents=True, exist_ok=True)
-    synth_dir = drv.save(out)
 
-    if args.libs or args.includes or args.target_name != "synthesized_fuzzer":
-        snippet = drv.emit_oss_fuzz_build_snippet(
-            target_name=args.target_name,
-            extra_libs=args.libs or "",
-            extra_includes=args.includes or "",
-        )
-        (out / "oss_fuzz_build_snippet.sh").write_text(snippet)
+    # Derive stock_lang: explicit --lang flag, then file extension, then None.
+    lang_arg = getattr(args, "lang", None)
+    if lang_arg:
+        stock_lang: Optional[str] = lang_arg.lower()
+    else:
+        stock_lang = _lang_from_inputs(inputs)
 
-    print(
-        f"[merge] {drv.driver_count} drivers → {synth_dir}  "
-        f"(mode={drv.mode.value}, position={drv.position.value}, "
-        f"selector_bytes={drv.selector_bytes}, "
-        f"lang={'C++' if drv.is_cpp else 'C'})"
+    # Derive iquote_dirs from --includes (space- or comma-separated, or list).
+    includes = getattr(args, "includes", None) or ""
+    if isinstance(includes, list):
+        iquote_dirs: List[str] = [s for s in includes if s]
+    else:
+        # Accept space/comma-separated string from argparse default
+        iquote_dirs = [s.strip() for s in includes.replace(",", " ").split() if s.strip()]
+
+    project = getattr(args, "project", None) or ""
+
+    result = _pipeline.run_merge_pipeline(
+        inputs,
+        project=project,
+        stock_lang=stock_lang,
+        iquote_dirs=iquote_dirs,
+        out_dir=out,
+        trial_verdicts=None,      # CLI has no per-trial triage
+        preflight_dir=None,       # merge subcommand: no binaries
+        cov_reports_dir=None,
+        model_name=None,
+        cdf=(getattr(args, "mode", "uniform") == "cdf"),
     )
-    print(f"[merge] build snippet: {out / 'oss_fuzz_build_snippet.sh'}")
+
+    if result is None:
+        print(
+            "[merge] run_merge_pipeline returned None — not enough surviving "
+            "drivers (need ≥2 after gates). Check logs for details.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"[merge] synthesized harness → {result}")
     return 0
 
 
@@ -180,12 +177,22 @@ def _resolve_coverage_report(
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> int:
+    """Thin adapter: O1 preflight (explicit pairs) → run_merge_pipeline → O4 corpus.
+
+    O1 (preflight with explicit src=binary pairs) and O4 (corpus union) are kept
+    as leaf-primitive calls because run_merge_pipeline resolves binaries via a
+    preflight_dir directory rather than explicit pairs, and does not perform corpus
+    union. Everything else (orphan filter, compile-validate, dominance filter,
+    synthesis) is handled by run_merge_pipeline.
+    """
     pairs: List[tuple[Path, Path]] = args.pair
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     project_root = Path(args.project_root) if args.project_root else None
 
     # ----------------- O1: Pre-flight -----------------
+    # Run preflight with explicit src=binary pairs. Survivors are passed to
+    # run_merge_pipeline via a preflight_dir populated with symlinks.
     if args.skip_preflight:
         accepted: List[PreflightResult] = [
             PreflightResult(
@@ -221,131 +228,124 @@ def _cmd_pipeline(args: argparse.Namespace) -> int:
             print("[pipeline] no drivers survived preflight; aborting", file=sys.stderr)
             return 1
 
-    # ----------------- O2: Coverage-aware selection -----------------
-    if project_root is None:
+    # Build a preflight_dir with symlinks so run_merge_pipeline can resolve
+    # binaries for any additional internal preflight it may do.
+    preflight_dir = out / "preflight_bins"
+    preflight_dir.mkdir(parents=True, exist_ok=True)
+    for r in accepted:
+        src_path = Path(r.driver_path)
+        bin_path = Path(r.fuzzer_binary)
+        link = preflight_dir / src_path.stem
+        if not link.exists() and bin_path.exists():
+            try:
+                link.symlink_to(bin_path.resolve())
+            except OSError:
+                pass
+
+    # Surviving source paths from preflight
+    surviving_sources = [Path(r.driver_path) for r in accepted]
+
+    # Coverage reports dir for dominance filter
+    cov_reports_dir: Optional[Path] = None
+    if project_root is not None:
+        cov_dir = project_root / "code-coverage-reports"
+        if cov_dir.exists():
+            cov_reports_dir = cov_dir
+
+    # Derive stock_lang and iquote_dirs
+    lang_arg = getattr(args, "lang", None)
+    if lang_arg:
+        stock_lang: Optional[str] = lang_arg.lower()
+    else:
+        stock_lang = _lang_from_inputs(surviving_sources)
+
+    includes = getattr(args, "includes", None) or ""
+    if isinstance(includes, list):
+        iquote_dirs: List[str] = [s for s in includes if s]
+    else:
+        iquote_dirs = [s.strip() for s in includes.replace(",", " ").split() if s.strip()]
+
+    project = getattr(args, "project", None) or ""
+
+    # ----------------- O2+O3: run_merge_pipeline (gates + synthesis) -----------------
+    result = _pipeline.run_merge_pipeline(
+        surviving_sources,
+        project=project,
+        stock_lang=stock_lang,
+        iquote_dirs=iquote_dirs,
+        out_dir=out,
+        trial_verdicts=None,          # CLI has no per-trial triage
+        preflight_dir=preflight_dir,
+        cov_reports_dir=cov_reports_dir,
+        model_name=None,
+        cdf=(getattr(args, "mode", "cdf") == "cdf"),
+    )
+
+    if result is None:
         print(
-            "[pipeline] WARNING: --project-root not given; coverage "
-            "data unavailable — selection will fall through to all "
-            "preflight survivors with uniform weights",
+            "[pipeline] run_merge_pipeline returned None — not enough surviving "
+            "drivers (need ≥2 after all gates). Check logs for details.",
             file=sys.stderr,
         )
-        coverages: List[DriverCoverage] = [
-            DriverCoverage(
-                driver_path=Path(r.driver_path),
-                reached_funcs=frozenset({f"__fallback__:{Path(r.driver_path).stem}"}),
-                edges_15s=r.edges_seen,
-                has_real_data=False,
-            )
-            for r in accepted
-        ]
-        require_data = False
-    else:
-        coverages = []
-        for r in accepted:
-            drv_src = Path(r.driver_path)
-            report = _resolve_coverage_report(project_root, drv_src)
-            cov = DriverCoverage.from_oss_fuzz_report(
-                drv_src, report, edges_15s=r.edges_seen,
-            )
-            coverages.append(cov)
-        require_data = True
-
-    sel = select_top_k(
-        coverages,
-        k=args.top_k,
-        require_coverage_data=require_data,
-    )
-    print(f"[pipeline] selection: {len(sel.steps)} drivers (covered "
-          f"{sel.total_funcs_covered} unique functions)")
-    for step in sel.steps:
-        print(f"  {step.driver.driver_path.name}: "
-              f"+{step.marginal_funcs} funcs (cum={step.cumulative_funcs})")
-    if sel.skipped_no_data:
-        print(f"  [skipped {len(sel.skipped_no_data)} without coverage data]")
-    if not sel.steps:
-        print("[pipeline] no drivers selected; aborting", file=sys.stderr)
         return 1
 
-    # Persist selection report
-    (out / "selection.json").write_text(json.dumps({
-        "n_selected": len(sel.steps),
-        "total_funcs_covered": sel.total_funcs_covered,
-        "n_skipped_no_data": len(sel.skipped_no_data),
-        "steps": [
-            {
-                "driver": str(s.driver.driver_path),
-                "marginal_funcs": s.marginal_funcs,
-                "cumulative_funcs": s.cumulative_funcs,
-                "edges_15s": s.driver.edges_15s,
-                "has_real_data": s.driver.has_real_data,
-            }
-            for s in sel.steps
-        ],
-    }, indent=2))
-
-    # ----------------- O3: CDF emit (or uniform) -----------------
-    selected_paths = [s.driver.driver_path for s in sel.steps]
-    selected_weights = [float(s.marginal_funcs) for s in sel.steps]
-    mode = DispatchMode(args.mode)
-    drv = SynthesizedDriver.from_paths(
-        selected_paths,
-        mode=mode,
-        position=SelectorPosition(args.position),
-        weights=selected_weights if mode == DispatchMode.CDF else None,
-    )
-    synth_dir = drv.save(out)
-    if args.libs or args.includes or args.target_name != "synthesized_fuzzer":
-        snippet = drv.emit_oss_fuzz_build_snippet(
-            target_name=args.target_name,
-            extra_libs=args.libs or "",
-            extra_includes=args.includes or "",
-        )
-        (out / "oss_fuzz_build_snippet.sh").write_text(snippet)
-    print(f"[pipeline] merged {drv.driver_count} sub-drivers → {synth_dir}")
-    print(f"  mode={drv.mode.value}, position={drv.position.value}, "
-          f"selector_bytes={drv.selector_bytes}, "
-          f"lang={'C++' if drv.is_cpp else 'C'}")
+    print(f"[pipeline] merged harness → {result}")
 
     # ----------------- O4: Corpus + dict union -----------------
+    # Reload the synthesized driver to get driver metadata for corpus union.
+    # run_merge_pipeline writes the synthesized/ dir; we reconstruct the SynthesizedDriver
+    # from the saved artifacts.
     if args.skip_corpus:
         print("[pipeline] corpus union skipped")
     else:
-        # Sort selected paths back to drv.drivers order — `from_paths`
-        # may reorder by filename. Build dict path list aligned to that.
-        if args.dict:
-            user_dicts = {Path(d) for d in args.dict}
-            # Match dict-to-driver on exact stem only. The previous
-            # ``startswith(driver_id)`` fallback paired ``10.dict`` with
-            # driver_id ``"1"`` (any string-prefix match), silently
-            # misrouting dictionaries between sub-drivers.
-            dict_paths: Optional[List[Optional[Path]]] = [
-                next(
-                    (p for p in user_dicts
-                     if p.stem == d.driver_path.stem
-                     or p.stem == d.driver_id),
-                    None,
+        try:
+            # Re-load the synthesized driver from the saved artifacts so we can
+            # call union_corpus with accurate driver metadata.
+            synth_dir = out / "synthesized"
+            _mode = DispatchMode(getattr(args, "mode", "cdf"))
+            _pos = SelectorPosition(getattr(args, "position", "tail"))
+            # Collect the synthesized TU sources
+            _synth_sources = sorted(synth_dir.glob("*.c")) + sorted(synth_dir.glob("*.cc"))
+            if _synth_sources:
+                drv = SynthesizedDriver.from_paths(
+                    _synth_sources, mode=_mode, position=_pos, weights=None)
+
+                if args.dict:
+                    user_dicts = {Path(d) for d in args.dict}
+                    dict_paths: Optional[List[Optional[Path]]] = [
+                        next(
+                            (p for p in user_dicts
+                             if p.stem == d.driver_path.stem
+                             or p.stem == d.driver_id),
+                            None,
+                        )
+                        for d in drv.drivers
+                    ]
+                else:
+                    dict_paths = None
+                stats = union_corpus(
+                    synth=drv,
+                    output_dir=out,
+                    project_root=project_root,
+                    dict_paths=dict_paths,
                 )
-                for d in drv.drivers
-            ]
-        else:
-            dict_paths = None
-        stats = union_corpus(
-            synth=drv,
-            output_dir=out,
-            project_root=project_root,
-            dict_paths=dict_paths,
-        )
-        print(f"[pipeline] corpus union: {stats.n_seeds_tagged} seeds "
-              f"from {stats.n_drivers_with_corpus} sub-drivers"
-              + (f", {stats.n_dicts_merged} dicts merged" if stats.n_dicts_merged else "")
-              + f" → {stats.output_corpus_dir}")
+                print(f"[pipeline] corpus union: {stats.n_seeds_tagged} seeds "
+                      f"from {stats.n_drivers_with_corpus} sub-drivers"
+                      + (f", {stats.n_dicts_merged} dicts merged" if stats.n_dicts_merged else "")
+                      + f" → {stats.output_corpus_dir}")
+            else:
+                print("[pipeline] corpus union skipped — no synthesized TU sources found")
+        except Exception as _e:
+            print(f"[pipeline] corpus union failed ({_e}); "
+                  f"merge artifacts are still usable", file=sys.stderr)
 
     # ----------------- summary -----------------
     print(f"[pipeline] done. artifacts under {out}/")
-    print(f"  synthesized/  — multi-TU sub-drivers + entry.{drv.entry_suffix}")
-    print(f"  corpus_merged/ — tagged seed corpus" if not args.skip_corpus else "")
+    print(f"  synthesized/  — multi-TU sub-drivers + entry")
+    if not args.skip_corpus:
+        print(f"  corpus_merged/ — tagged seed corpus")
     print(f"  oss_fuzz_build_snippet.sh — append to OSS-Fuzz project build.sh")
-    print(f"  preflight.json, selection.json — telemetry")
+    print(f"  preflight.json — preflight telemetry")
     return 0
 
 
@@ -362,9 +362,14 @@ def main(argv: list[str] | None = None) -> int:
     pm.add_argument("--inputs", nargs="+", required=True,
                     help=".fuzz_target source files to merge")
     pm.add_argument("--output", required=True)
+    pm.add_argument("--project", default=None,
+                    help="OSS-Fuzz project name; when absent compile-gate fail-opens")
+    pm.add_argument("--lang", default=None, choices=["c", "cpp"],
+                    help="force stock-target language (c or cpp); "
+                         "defaults to input file extension")
     pm.add_argument("--target-name", default="synthesized_fuzzer")
-    pm.add_argument("--libs", default="")
-    pm.add_argument("--includes", default="")
+    pm.add_argument("--libs", default=None)
+    pm.add_argument("--includes", default=None)
     pm.add_argument("--mode", choices=["uniform", "cdf"], default="uniform",
                     help="dispatch mode (cdf needs weights — use pipeline)")
     pm.add_argument("--position", choices=["head", "tail"], default="tail",
@@ -404,15 +409,20 @@ def main(argv: list[str] | None = None) -> int:
                     help="SRC=BIN: source path = built fuzzer binary path")
     pl.add_argument("--project", default=None,
                     help="OSS-Fuzz project name (informational only)")
+    pl.add_argument("--lang", default=None, choices=["c", "cpp"],
+                    help="force stock-target language (c or cpp); "
+                         "defaults to input file extension")
     pl.add_argument("--project-root", default=None,
                     help="results/output-<proj>-project/ root for "
                          "coverage reports + corpus discovery")
     pl.add_argument("--output", required=True,
                     help="dir for synthesized/, corpus_merged/, "
-                         "preflight.json, selection.json, build snippet")
+                         "preflight.json, build snippet")
     pl.add_argument("--top-k", type=int, default=None,
                     help="cap on selected drivers (default: no cap; "
-                         "greedy stops naturally at zero marginal gain)")
+                         "greedy stops naturally at zero marginal gain); "
+                         "note: selection is now via run_merge_pipeline's "
+                         "dominance-filter (kept for forward compat)")
     pl.add_argument("--mode", choices=["uniform", "cdf"], default="cdf")
     pl.add_argument("--position", choices=["head", "tail"], default="tail")
     pl.add_argument("--smoke-duration", type=int, default=15)
@@ -423,8 +433,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--skip-corpus", action="store_true",
                     help="skip O4 corpus union")
     pl.add_argument("--target-name", default="synthesized_fuzzer")
-    pl.add_argument("--libs", default="")
-    pl.add_argument("--includes", default="")
+    pl.add_argument("--libs", default=None)
+    pl.add_argument("--includes", default=None)
     pl.add_argument("--dict", action="append", default=[],
                     help="optional dictionary file(s) to include in union; "
                          "stem is matched to sub-driver id")
