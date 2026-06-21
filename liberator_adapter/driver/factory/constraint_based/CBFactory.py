@@ -1523,16 +1523,24 @@ class CBFactory(Factory):
                         bindings[(api.function_name, j)] = \
                             produced_by_family[fam]
                         bound = True
-                    # Legacy void* fallback (nearest same-normalized-type producer).
-                    # Under the contract, typed handles bind via FAMILY above; a
-                    # family-LESS arg (cmsHANDLE — gamut/IT8/… collapse to one void*
-                    # typedef) has NO type-safe producer, and the collapsed-void*
-                    # index pools wrong-type producers, so binding it here
-                    # cross-wires (cmsGBDFree on a profile → heap corruption →
-                    # crash). Require a resolved family under i3; gate-off keeps the
-                    # legacy fallback unchanged.
+                    # Legacy type-exact fallback (nearest same-normalized-type
+                    # producer). Suppress it ONLY for a genuinely COLLAPSED opaque
+                    # pointer (``void*``/``void``): there the produced[] index pools
+                    # wrong-type producers (lcms cmsHANDLE — gamut/IT8/… share one
+                    # void* typedef) so binding cross-wires (cmsGBDFree on a profile
+                    # → heap corruption → crash); a family-LESS void* has no
+                    # type-safe producer. But a DISTINCT named struct-pointer key
+                    # (cJSON*, png_struct*, ares_channel, z_streamp) is type-EXACT —
+                    # produced[key] is the SAME handle type — so bind it.
+                    # GENERALIZATION FIX: the guard was ``not (i3 and fam is None)``,
+                    # but ``_family`` returns None for EVERY non-lcms type, so under
+                    # the now-unconditional contract that suppressed the binding for
+                    # every non-lcms handle → unbound → NULL/guarded → dead driver.
+                    # Gate on the real hazard (collapsed void*), not on family-name
+                    # absence.
+                    _collapsed_opaque = key in ("void*", "void")
                     if (not bound and key and key in produced
-                            and not (i3 and fam is None)):
+                            and not (i3 and fam is None and _collapsed_opaque)):
                         bindings[(api.function_name, j)] = produced[key]
                     if cross and key:
                         arg_tokens[j] = key

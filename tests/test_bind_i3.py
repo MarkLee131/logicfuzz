@@ -97,3 +97,32 @@ def test_real_typedef_args_bind_by_type_unchanged():
     b = f._signature_handle_bindings(seq2, dep_model=model2)
     # transform-family arg binds to the transform producer
     assert b.get(("cmsDeleteTransform", 0)) == "ret_cmsCreateTransform"
+
+
+# --- Generalization (over-fit BREAKING #1): the legacy type-exact binding must
+# fire for DISTINCT named struct-pointer handles on non-lcms libs. The old guard
+# `not (i3 and fam is None)` suppressed EVERY non-lcms handle (fam None) → unbound
+# → NULL → dead. Suppress ONLY a genuinely-collapsed void* (the cross-wire hazard).
+def test_non_lcms_distinct_handle_binds_despite_no_family():
+    prod = _api("cJSON_CreateObject", "cJSON *", [])
+    cons = _api("cJSON_Delete", "void", ["cJSON *"])
+    model = APISemanticModel("cjson", {
+        "cJSON_CreateObject": _msem("cJSON_CreateObject", APIRole.CREATOR, ()),
+        "cJSON_Delete": _msem("cJSON_Delete", APIRole.DESTROYER,
+                              ((ArgRole.CONFIG, "cJSON *"),)),
+    })
+    b = _factory()._signature_handle_bindings([prod, cons], dep_model=model)
+    assert b.get(("cJSON_Delete", 0)) == "ret_cJSON_CreateObject"  # was unbound (bug)
+
+
+def test_generic_voidstar_no_family_stays_unbound():
+    # genuine void* + no family (lcms cmsHANDLE class) → produced[] pools wrong
+    # types → must NOT bind via the legacy match (cross-wire → crash). Protected.
+    prod = _api("cmsGBDAlloc", "void *", ["void *"])
+    cons = _api("cmsGBDFree", "void", ["void *"])
+    model = APISemanticModel("lcms", {
+        "cmsGBDAlloc": _msem("cmsGBDAlloc", APIRole.CREATOR, ((ArgRole.CONFIG, "void *"),)),
+        "cmsGBDFree": _msem("cmsGBDFree", APIRole.DESTROYER, ((ArgRole.CONFIG, "void *"),)),
+    })
+    b = _factory()._signature_handle_bindings([prod, cons], dep_model=model)
+    assert ("cmsGBDFree", 0) not in b
