@@ -1957,24 +1957,9 @@ class FuzzingContext:
                     not in ("0", "false", "no", "off"):
                 _covered_api = {a.function_name
                                 for s in filtered_api_sequences for a in s}
-
-                def _has_ptr_ptr_arg(_api):
-                    # Skip APIs with a pointer-to-pointer (T**) arg from the
-                    # single-API residual: they can't be safely standalone-built
-                    # (png_read_image's row_pointers → size-1 garbage-pointer array
-                    # → crash; getters like png_get_tRNS are dead standalone anyway —
-                    # they need a populated handle from a chain). Construction already
-                    # excludes the OUTPUT-T** ones (sequence_constructor.
-                    # _has_unsizable_output_buffer); this keeps them out of residual.
-                    for _arg in getattr(_api, "arguments_info", ()) or ():
-                        if (getattr(_arg, "type", "") or "").replace(" ", "").count("*") >= 2:
-                            return True
-                    return False
-
                 _residual = [a for a in generator.all_apis
                              if not a.function_name.startswith("_")
-                             and a.function_name not in _covered_api
-                             and not _has_ptr_ptr_arg(a)]
+                             and a.function_name not in _covered_api]
                 for _a in _residual:
                     filtered_api_sequences.append([_a])
                 log.info(
