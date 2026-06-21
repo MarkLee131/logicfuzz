@@ -63,3 +63,29 @@ fundamentally, the two strongest suspects for the *broad* degeneration:
    getters on NULL handles.
 6. **tinygltf:** out of scope for the symbolic core (header-only) — would need the
    fork `build.sh` fallback to synthesize a TU.
+
+---
+
+## CORRECTION (2026-06-21, after the GPT isolation test)
+
+The "model is the likely cause" suspicion above is **WRONG**. Ran the decisive
+isolation test: **cjson regenerated with `gpt-4o` → also 0/26 compile**, identical
+to deepseek-v4-pro. So the winnable-lib failures are a **pipeline/build
+regression, NOT deepseek driver quality.**
+
+Raw build error (model-independent):
+```
+(.text+0x24): undefined reference to `main'
+clang ... -stdlib=libc++ /src/cjson/fuzzing/cjson_read_fuzzer.c -I. \
+  -o /out/cjson_read_fuzzer /src/cjson/build/libcjson.a
+```
+The link line is **missing `$LIB_FUZZING_ENGINE`** (libFuzzer's `main`), and trials
+also churn on cJSON.h header resolution. cJSON.h DOES exist at `/src/cjson/cJSON.h`.
+
+**Revised conclusion:** cjson/zlib/c-ares failures are a trial-build config
+regression (missing fuzzing-engine link and/or include path), fixable, and
+model-independent. libpng's "7 dead drivers / 0% coverage" is a SEPARATE
+driver-depth issue (it compiled fine). The right next step is to debug the
+trial/preflight build command construction (where `$LIB_FUZZING_ENGINE` and the
+project include path are set), NOT to switch models. Likely regressed in a recent
+commit (e.g. the build/merge refactors); `git log` the build node + bisect.
