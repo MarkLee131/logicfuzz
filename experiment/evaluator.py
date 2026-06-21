@@ -193,6 +193,31 @@ class _Logger:
 
     return result
 
+
+def _trial_include_dirs(target_path: str) -> list:
+  """In-container ``-I`` dirs so the per-trial driver's library ``#include``
+  resolves regardless of form. The generated driver is COPYed to
+  ``target_path`` (the STOCK fuzzer's in-image location), so the headers it
+  needs live at the fuzzer's own dir and the project root — exactly where the
+  stock fuzzer's own ``#include "../X.h"`` points. Without these on ``-I`` a
+  ``<X.h>`` / bare ``"X.h"`` include fails HEADER_NOT_FOUND (the header is in
+  the parent dir, not on the search path), which dropped ~40% of otherwise-valid
+  drivers at the build gate (cjson 11/27). Mirror of
+  ``run_single_fuzz._iquote_dirs_for_target`` but for the trial build, emitted
+  as ``-I`` (form-agnostic: covers `<X.h>`, bare `"X.h"`, AND leaves relative
+  `"../X.h"` working). Empty unless ``target_path`` is an absolute in-image path."""
+  tp = (target_path or '').strip()
+  if not tp.startswith('/'):
+    return []
+  fuzzer_dir = os.path.dirname(tp)         # e.g. /src/cjson/fuzzing
+  proj_root = os.path.dirname(fuzzer_dir)  # e.g. /src/cjson
+  dirs = []
+  for d in (fuzzer_dir, proj_root):
+    if d and d not in dirs and d not in ('/', '/src'):
+      dirs.append(d)
+  return dirs
+
+
 class Evaluator:
   """Target evaluator."""
 
@@ -323,6 +348,20 @@ class Evaluator:
     with open(os.path.join(generated_project_path, 'Dockerfile'), 'a') as f:
       f.write(f'\nCOPY {os.path.basename(target_file)} '
               f'{benchmark.target_path}\n')
+
+    # Put the project's public-header dirs (the stock fuzzer's own dir + the
+    # project root — where the stock fuzzer's own `#include "../X.h"` points) on
+    # the include search path, so the driver's library #include resolves
+    # regardless of form (`<X.h>` / bare `"X.h"` / `"../X.h"`). Without this the
+    # per-trial build dropped ~40% of otherwise-valid drivers as HEADER_NOT_FOUND
+    # (the header sits in the parent dir, not on -I; cjson 11/27). Form-agnostic;
+    # mirrors the merge gate's -iquote, applied to the per-trial build.
+    _inc = _trial_include_dirs(benchmark.target_path)
+    if _inc:
+      _iflags = ' '.join(f'-I{d}' for d in _inc)
+      with open(os.path.join(generated_project_path, 'Dockerfile'), 'a') as f:
+        f.write(f'\nENV CFLAGS="${{CFLAGS}} {_iflags}"\n')
+        f.write(f'\nENV CXXFLAGS="${{CXXFLAGS}} {_iflags}"\n')
 
     # KEYSTONE FIX: the driver COPY just appended must reach the CACHED build.
     # The extraction/cache-prep phase snapshots Dockerfile_original + the cached
