@@ -50,6 +50,13 @@ class Factory:
         # Without this the "*$" pointer-shape check below misclassifies the type,
         # AND the downstream ``a_type.replace("*","")`` concatenates the qualifier
         # into the type name (``png_struct__restrict``) and DataLayout lookup fails.
+        # `restrict` is a pure optimizer hint, legal ONLY on a pointer; libpng
+        # places it MID-string (``png_struct __restrict *``) where the trailing
+        # strip below misses it, leaving a mangled DataLayout key
+        # (``png_struct__restrict``). Drop it wherever it appears first
+        # (word-boundary, always safe), then strip trailing qualifiers.
+        a_type = re.sub(r"\b(?:__restrict__|__restrict|restrict)\b", " ", a_type)
+        a_type = " ".join(a_type.split())
         # Explicit alternatives (cover GCC ``__keyword__`` spellings):
         a_type = re.sub(
             r"(\s*(__restrict__|__restrict|restrict|"

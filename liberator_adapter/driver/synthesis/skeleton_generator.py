@@ -14,6 +14,7 @@ Design principles:
 
 import logging
 import os
+import re
 from typing import Dict, List, Optional, Set, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -82,6 +83,23 @@ _INTERNAL_HEADER_MARKERS = (
     "_internal.", "_private.", "_impl.", "_detail.", "_p.h", "internal/")
 
 
+_RESTRICT_RE = re.compile(r'\b(?:__restrict__|__restrict|restrict)\b')
+
+
+def _strip_restrict(c_type: str) -> str:
+    """Drop ``restrict``/``__restrict``/``__restrict__`` wherever they appear in a
+    C type. ``restrict`` is a pure optimizer hint (always semantically removable),
+    but it is ILLEGAL on a non-pointer base type: libpng signatures arrive as
+    ``png_struct __restrict *`` and emitting that verbatim gives gcc's
+    "invalid use of 'restrict'". The trailing-anchored qualifier strip in
+    ``Factory.normalize_type`` only catches a qualifier at the END of the string,
+    so a MID-string ``__restrict`` (before the ``*``) survives into the rendered
+    decl. Word-boundary match so it never mangles a real identifier."""
+    if not c_type or 'restrict' not in c_type:
+        return c_type
+    return ' '.join(_RESTRICT_RE.sub(' ', c_type).split())
+
+
 def _strip_one_pointer(c_type: str) -> str:
     """Remove exactly ONE trailing ``*`` (and surrounding space). Used to get
     an array/element type — ``cmsToneCurve **`` → ``cmsToneCurve *`` (still a
@@ -96,6 +114,7 @@ def _strip_one_pointer(c_type: str) -> str:
 def _bare_name(c_type: str) -> str:
     """Lowercase-comparable bare type name: drop qualifiers / struct-union-enum
     keywords / all pointer stars."""
+    c_type = _strip_restrict(c_type)
     t = (c_type.replace('const', ' ')
                .replace('volatile', ' ')
                .replace('struct ', ' ')
@@ -151,6 +170,7 @@ def _public_pointer_type(c_type: str) -> str:
     """Render a single-pointer type for declaration, mapping internal opaque
     struct pointers to ``void *`` (the public typedef is unknown here and the
     var is only held opaquely / NULL-initialized)."""
+    c_type = _strip_restrict(c_type)
     if c_type.count('*') == 1 and _is_internal_opaque_type(c_type):
         return "void *"
     return c_type
@@ -164,6 +184,7 @@ def const_qualified_type(c_type: str, is_const) -> str:
     under $CXX (OSS-Fuzz compiles C fuzzers as clang++). is_const[0] = const on the
     base type; is_const[i>0] = const on the (i-1)-th pointer level. No-op when
     is_const is empty/falsy."""
+    c_type = _strip_restrict(c_type)
     if not is_const or not any(is_const):
         return c_type
     stars = c_type.count('*')
