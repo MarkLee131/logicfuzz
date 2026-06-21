@@ -693,19 +693,29 @@ def _maybe_merge_drivers(benchmark: Benchmark,
       continue
     candidates.append(src)
     verdicts[src] = _pipe._should_quarantine_from_merge(br, tr)
-  return _pipe.run_merge_pipeline(
-      candidates,
-      project=getattr(benchmark, 'project', '') or '',
-      stock_lang=_stock_target_lang(benchmark),
-      iquote_dirs=_iquote_dirs_for_target(benchmark),
-      out_dir=Path(work_dirs.base) / 'merged',
-      trial_verdicts=verdicts,
-      preflight_dir=Path(work_dirs.base) / 'preflight_bins',
-      cov_reports_dir=Path(getattr(work_dirs, 'code_coverage_report', '') or
-                           (Path(work_dirs.base) / 'code-coverage-reports')),
-      model_name=model_name,
-      cdf=os.environ.get('LOGICFUZZ_CDF_DISPATCH', '0').strip().lower()
-          in ('1', 'true', 'yes', 'on'))
+  try:
+    return _pipe.run_merge_pipeline(
+        candidates,
+        project=getattr(benchmark, 'project', '') or '',
+        stock_lang=_stock_target_lang(benchmark),
+        iquote_dirs=_iquote_dirs_for_target(benchmark),
+        out_dir=Path(work_dirs.base) / 'merged',
+        trial_verdicts=verdicts,
+        preflight_dir=Path(work_dirs.base) / 'preflight_bins',
+        # Per-driver coverage reports live at <base>/code-coverage-reports/
+        # <NN>.fuzz_target/linux/summary.json — the dominance-filter's signal.
+        # (NB: WorkDirs.code_coverage_report is a METHOD taking a benchmark, NOT
+        # an attribute — getattr'ing it returns a truthy bound method and
+        # Path()-ing that raises TypeError; use the dir directly.)
+        cov_reports_dir=Path(work_dirs.base) / 'code-coverage-reports',
+        model_name=model_name,
+        cdf=os.environ.get('LOGICFUZZ_CDF_DISPATCH', '0').strip().lower()
+            in ('1', 'true', 'yes', 'on'))
+  except Exception as exc:  # noqa: BLE001 — fail-open: never abort the run on merge
+    logger.warning(
+        f'merge_drivers: run_merge_pipeline failed ({type(exc).__name__}: {exc}); '
+        f'main run unaffected', trial=0)
+    return None
 
 
 def _persist_phase_c_snapshot(

@@ -32,6 +32,11 @@ def test_run_single_fuzz_adapter_delegates(monkeypatch):
     class _WD:
         base = "/tmp/wd"
         fuzz_targets = "/tmp/wd/ft"
+        # code_coverage_report is a METHOD on the real WorkDirs (takes a
+        # benchmark) — mirror that so the adapter must NOT getattr-and-Path it
+        # (that returns a truthy bound method → Path() raises TypeError).
+        def code_coverage_report(self, benchmark):
+            return f"{self.base}/code-coverage-reports/{benchmark}"
     # 2 compiling, non-crashing trials with on-disk sources
     os.makedirs("/tmp/wd/ft", exist_ok=True)
     for i in (1, 2):
