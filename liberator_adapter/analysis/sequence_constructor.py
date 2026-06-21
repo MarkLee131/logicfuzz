@@ -203,8 +203,18 @@ def _is_init_idiom_name(name: str, lib_prefix: str) -> bool:
 
 
 def _norm_handle(type_str: str) -> str:
-    """Normalize a handle type to the index key (lowercase, no spaces/star)."""
-    return (type_str or "").strip().lower().replace(" ", "").rstrip("*")
+    """Normalize a handle type to the index key (lowercase, no spaces/star).
+
+    Strips cv/restrict KEYWORDS (word-boundary) FIRST so a consumer arg
+    ``png_struct * __restrict`` keys identically to a producer's ``png_struct*``.
+    Without this, libpng handle args (229/295 carry ``__restrict``) keyed as
+    ``png_struct*__restrict`` and never matched the producer/handle_types key
+    ``png_struct`` → ``repair_sequence_validity`` silently bailed (key-not-in-
+    handle_types / no-producer) → NULL handle → dead driver. Sibling of the #19
+    ``usedef.normalize_handle_type`` fix, in the function the repair actually uses."""
+    from liberator_adapter.analysis.usedef import _strip_type_keywords
+    t = _strip_type_keywords(type_str or "")
+    return t.strip().lower().replace(" ", "").rstrip("*")
 
 
 def _producers_for_type(idx, key: str):
