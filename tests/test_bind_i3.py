@@ -76,11 +76,27 @@ def test_gate_on_binds_close_to_profile_not_transform():
     assert b.get(("cmsCloseProfile", 0)) == "ret_cmsOpenProfileFromMem"
 
 
-def test_no_model_unchanged():
-    # No dep_model at all (cjson/zlib path): legacy behavior, no family info.
+def test_no_model_collapsed_voidstar_not_bound():
+    # Contract (A-1): a COLLAPSED void* (not a handle type, no distinct family)
+    # must NOT bind to the nearest-void* producer — that is the cross-wire hazard
+    # (cmsCloseProfile wired to a transform → UAF). void* is not a handle type, so
+    # it is never registered as a type-exact producer → the consumer arg stays
+    # unbound (safe under-approx, a NULL hole filled downstream), instead of the
+    # old over-approx nearest-void* bind (was ret_cmsCreateTransform).
     f = _factory()
     b = f._signature_handle_bindings(SEQ)   # no dep_model
-    assert b.get(("cmsCloseProfile", 0)) == "ret_cmsCreateTransform"
+    assert ("cmsCloseProfile", 0) not in b
+
+
+def test_value_pointer_return_not_registered_as_producer():
+    # A-1: commit c8b15ca0 re-opened a char* cross-wire — a char*-returning fn
+    # (cJSON_Version) was registered as a producer of char*, so a char* CONTENT
+    # arg (cJSON_CreateString's string) bound to it instead of staying fuzz/NULL.
+    # A value pointer (char*/scalar*) is NOT a handle → never a type-exact producer.
+    prod = _api("cJSON_Version", "const char *", [])
+    cons = _api("cJSON_CreateString", "cJSON *", ["const char *"])
+    b = _factory()._signature_handle_bindings([prod, cons])
+    assert ("cJSON_CreateString", 0) not in b   # was ret_cJSON_Version (cross-wire)
 
 
 def test_real_typedef_args_bind_by_type_unchanged():

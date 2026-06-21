@@ -1483,7 +1483,8 @@ class CBFactory(Factory):
         FAMILY first. ADDITIVE: the legacy void* match is the FALLBACK whenever
         family info is absent (non-lcms / no model) ⇒ those libs are unchanged.
         """
-        from liberator_adapter.analysis.usedef import normalize_handle_type
+        from liberator_adapter.analysis.usedef import (
+            normalize_handle_type, is_handle_type)
         from liberator_adapter.analysis.validity_contract import _family
         i3 = bool(dep_model) and _validity_contract_enabled()
         bindings: Dict[Tuple[str, int], str] = {}
@@ -1548,7 +1549,19 @@ class CBFactory(Factory):
             rt = getattr(ri, 'type', '') if ri else ''
             is_prod = bool(rt and rt not in ('void', '') and rt.count('*') == 1)
             ret_token = normalize_handle_type(rt) if is_prod else None
-            if is_prod:
+            # A-1 contract: register a type-exact producer ONLY for a real HANDLE
+            # return. A value pointer (``char*``/scalar*, is_handle_type False) is
+            # NOT a producer — registering it cross-wired a content arg to a
+            # value-returning fn (cJSON_CreateString → ret_cJSON_Version, reopened
+            # by c8b15ca0). A COLLAPSED ``void*`` (is_handle_type False too) is the
+            # ambiguous-opaque cross-wire hazard (cmsHANDLE pools gamut/IT8/Dict) —
+            # excluding it at the source keeps the binder UNDER-approximate (the
+            # consumer arg stays a NULL hole) instead of binding the nearest void*.
+            # Distinct named handles (cJSON*/z_streamp/ares_channel) are unaffected.
+            # NB: ``is_prod`` itself stays unchanged — the family-name producer
+            # fallback (cmsCreate* → profile) and the cross-source ``ordered`` flag
+            # still need it; only the type-exact ``produced[]`` index is gated.
+            if is_prod and is_handle_type(rt):
                 produced[ret_token] = f"ret_{api.function_name}"
             if i3:
                 # I3: register a typedef'd opaque-handle PRODUCER by family even

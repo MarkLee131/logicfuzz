@@ -121,12 +121,17 @@ def _api(name, arg_types, ret_type):
     )
 
 
+# A-1 contract: the handle producers/args use a DISTINCT named handle type
+# (``Profile *``), not ``void *``. A collapsed ``void *`` is no longer a type-exact
+# producer (is_handle_type False → not registered → safe under-approx), so a bare
+# ``void *`` stand-in would never bind. Cross-source distribution is exercised with
+# a real bindable handle — what it sees in production (cmsHPROFILE / cJSON*).
 def _xform_seq():
     return [
-        _api("openP", ["void *", "unsigned int"], "void *"),
-        _api("makeP", [], "void *"),
-        _api("xform", ["void *", "unsigned int", "void *",
-                       "unsigned int"], "void *"),
+        _api("openP", ["void *", "unsigned int"], "Profile *"),
+        _api("makeP", [], "Profile *"),
+        _api("xform", ["Profile *", "unsigned int", "Profile *",
+                       "unsigned int"], "Profile *"),
     ]
 
 
@@ -142,9 +147,9 @@ def test_signature_bindings_cross_source_noop_single_arg():
     # a CREATOR with only ONE handle arg is unaffected (no same-type pair).
     sig = CBFactory._signature_handle_bindings.__get__(types.SimpleNamespace())
     seq = [
-        _api("openP", [], "void *"),
-        _api("makeP", [], "void *"),
-        _api("useOne", ["void *", "unsigned int"], "void *"),
+        _api("openP", [], "Profile *"),
+        _api("makeP", [], "Profile *"),
+        _api("useOne", ["Profile *", "unsigned int"], "Profile *"),
     ]
     out = sig(seq)
-    assert out[("useOne", 0)] == "ret_makeP", out  # legacy last-producer
+    assert out[("useOne", 0)] == "ret_makeP", out  # last same-type producer
