@@ -31,10 +31,8 @@ Typical usage::
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
-import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -53,10 +51,6 @@ from tools.merge_drivers.preflight import (  # noqa: E402
     PreflightResult,
     preflight,
     write_report,
-)
-from tools.merge_drivers.select import (  # noqa: E402
-    DriverCoverage,
-    select_top_k,
 )
 from tools.merge_drivers.corpus import union_corpus  # noqa: E402
 import tools.merge_drivers.pipeline as _pipeline  # noqa: E402
@@ -159,21 +153,6 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
         for r in accepted:
             print(r.driver_path)
     return 0
-
-
-def _resolve_coverage_report(
-    project_root: Path, driver_path: Path
-) -> Optional[Path]:
-    """Find the OSS-Fuzz coverage report dir for a sub-driver source.
-
-    Layout: ``<project_root>/code-coverage-reports/<driver_filename>/``
-    Returns None if absent — the selector then falls back to the
-    singleton placeholder.
-    """
-    candidate = (
-        project_root / "code-coverage-reports" / driver_path.name
-    )
-    return candidate if candidate.exists() else None
 
 
 def _cmd_pipeline(args: argparse.Namespace) -> int:
