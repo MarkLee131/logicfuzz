@@ -2,8 +2,9 @@
 
 ``run_merge_pipeline`` is the public entry point.  ``run_single_fuzz._maybe_merge_drivers``
 is a thin adapter that reads from ``Benchmark``/``WorkDirs`` objects and calls this.
-The CLI (``tools/merge_drivers/__main__.py``) can also call this directly (Task 3
-will wire dominance_filter; for now it is behavior-preserving / unused here).
+The CLI (``tools/merge_drivers/__main__.py``) can also call this directly. After the
+compile-validation gate, ``_apply_dominance`` drops fully-redundant drivers (measured
+keep-all-non-dominated, no flag) before synthesis.
 
 All helpers that were formerly in ``run_single_fuzz.py`` (lines 512-887) live here
 so neither the production path nor the CLI path needs to duplicate orchestration.
