@@ -512,6 +512,9 @@ class SkeletonVariable:
     def get_declaration(self) -> str:
         """Generate declaration code"""
         if self.is_array and self.array_size:
+            if self.init_value:
+                return (f"{self.c_type} {self.name}[{self.array_size}]"
+                        f" = {self.init_value}")
             return f"{self.c_type} {self.name}[{self.array_size}]"
         elif self.init_value:
             return f"{self.c_type} {self.name} = {self.init_value}"
@@ -768,6 +771,18 @@ class SkeletonGenerator:
             if applied:
                 skeleton.metadata['wired_args'] = applied
 
+        # 3.7. Wire OUT-pointer / caller-alloc-init producers to their consumers.
+        # A creator that emits its handle via an OUTPUT arg (ares_init's
+        # ``ares_channel_t**``, deflateInit_'s ``z_stream*``) — not the int return —
+        # is invisible to the ``ret_<api>`` binders, so its consumer rendered NULL.
+        # This fills the gap from the producer's already-rendered output local.
+        # Runs unconditionally (the c-ares/zlib construction path supplies no
+        # arg_bindings) and only fills args still UNBOUND after _apply_arg_bindings.
+        wired_out = self._wire_output_producers(
+            skeleton, var_requirements, api_sequence)
+        if wired_out:
+            skeleton.metadata['wired_out_producers'] = wired_out
+
         # 4. Generate API call sequence. Scoped guards (B, always-on): group
         # calls into dependency components and emit component-scoped NULL guards
         # (a producer's failure only skips ITS dependents, not the whole driver)
@@ -860,6 +875,78 @@ class SkeletonGenerator:
                 # CONSUMER arg — it owns no resource and needs no cleanup.
                 applied += 1
         return applied
+
+    def _wire_output_producers(
+        self,
+        skeleton: DriverSkeleton,
+        var_requirements: Dict[str, Dict],
+        api_sequence: List[Api],
+    ) -> int:
+        """Wire a consumer's UNBOUND handle arg to an EARLIER OUTPUT producer's
+        rendered output local.
+
+        ares_init / deflateInit_-class creators emit their handle through an
+        OUTPUT arg, NOT the (int) return — so the ``ret_<api>`` binders
+        (_apply_arg_bindings, RunningContext) never reach the consumer and it
+        rendered NULL → guard → dead. The producer's output local is already
+        rendered: a ``T**`` out-pointer becomes an ARRAY ``T name[N]`` (the handle
+        lands in ``name[0]``); a caller-alloc init becomes ``T name = {0}`` with
+        the producing call passing ``&name`` (so the handle the consumers want is
+        ``&name``). We point each matching consumer handle arg at that expression.
+
+        Strictly UNDER-approximate (the A-1 contract): we fill an arg ONLY when it
+        is still unbound, its role is HANDLE_IN, and its normalized type EXACTLY
+        matches a producer rendered EARLIER in the sequence. A degraded OUTPUT
+        local (an opaque/unsizable struct fell through to ``T* name = NULL``)
+        registers NOTHING, so its consumer stays NULL rather than binding to a
+        dead pointer — losing breadth, never cross-wiring.
+        """
+        from liberator_adapter.analysis.usedef import normalize_handle_type
+        produced: Dict[str, str] = {}   # normalized handle type -> consumer expr
+        wired = 0
+        for api in api_sequence:
+            req = var_requirements.get(api.function_name)
+            if req is None:
+                continue
+            args = req.get('args', []) or []
+            # (1) Wire this api's consumer handle args from EARLIER producers
+            #     (an api never consumes its own output → wire before registering).
+            for arg_info in args:
+                if arg_info.get('role') != 'HANDLE_IN':
+                    continue
+                key = normalize_handle_type(arg_info.get('type', '') or '')
+                if not key or key not in produced:
+                    continue
+                idx = arg_info.get('idx', 0)
+                var = skeleton.variables.get(
+                    f"{arg_info.get('name') or f'arg{idx}'}_{api.function_name}")
+                if var is None or var.bound_expr is not None:
+                    continue
+                if var.allocation == AllocationType.FUZZ_INPUT:
+                    continue
+                if var.init_value and var.init_value.startswith('__'):
+                    continue
+                var.bound_expr = produced[key]
+                wired += 1
+            # (2) Register this api's OUTPUT producers for LATER consumers.
+            for arg_info in args:
+                if arg_info.get('role') != 'OUTPUT':
+                    continue
+                idx = arg_info.get('idx', 0)
+                var = skeleton.variables.get(
+                    f"{arg_info.get('name') or f'arg{idx}'}_{api.function_name}")
+                if var is None:
+                    continue
+                if var.is_array:
+                    # ``T**`` out-pointer → array ``T name[N]``; handle in name[0].
+                    produced[normalize_handle_type(var.c_type)] = f"{var.name}[0]"
+                elif var.bound_expr and var.bound_expr.startswith('&'):
+                    # caller-alloc init ``T name = {0}`` → consumers want ``&name``;
+                    # the produced handle is a pointer to the value's type.
+                    produced[normalize_handle_type(var.c_type + ' *')] = \
+                        var.bound_expr
+                # else: degraded ``T* name = NULL`` out-param → no usable handle.
+        return wired
 
     def _maybe_inject_c_string_wrapper(
         self,
@@ -1700,6 +1787,10 @@ class SkeletonGenerator:
                     is_array=True,
                     array_size=hole.get_placeholder(),
                     allocation=AllocationType.STACK,
+                    # Zero-init: an OUTPUT array is read by a downstream consumer
+                    # (wired to ``name[0]``); if the producing call FAILS without
+                    # writing it, the consumer must see a NULL handle, not garbage.
+                    init_value="{0}",
                 )
             # Degrade an opaque/incomplete out-param to a single typed pointer.
             return SkeletonVariable(
