@@ -36,8 +36,10 @@ from tools.merge_drivers.merge import (
 from tools.merge_drivers.preflight import PreflightResult, preflight
 from tools.merge_drivers.select import (
     DriverCoverage,
+    DominanceResult,
     SelectionResult,
     SelectionStep,
+    dominance_filter,
     select_top_k,
 )
 from tools.merge_drivers.corpus import CorpusUnionStats, union_corpus
@@ -50,8 +52,10 @@ __all__ = [
     "PreflightResult",
     "preflight",
     "DriverCoverage",
+    "DominanceResult",
     "SelectionStep",
     "SelectionResult",
+    "dominance_filter",
     "select_top_k",
     "CorpusUnionStats",
     "union_corpus",

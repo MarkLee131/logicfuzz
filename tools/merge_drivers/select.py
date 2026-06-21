@@ -130,6 +130,52 @@ class SelectionResult:
         return self.steps[-1].cumulative_funcs if self.steps else 0
 
 
+@dataclass
+class DominanceResult:
+    """Output of ``dominance_filter``: the kept (shipped) drivers and the
+    fully-dominated ones removed (each dropped driver's reached set is a subset
+    of some kept driver, so the union is unchanged)."""
+
+    kept: List[DriverCoverage] = field(default_factory=list)
+    dropped: List[DriverCoverage] = field(default_factory=list)
+
+
+def dominance_filter(coverages: Sequence[DriverCoverage]) -> DominanceResult:
+    """Keep every driver whose measured reached-function set is NOT fully
+    contained in another KEPT driver; drop only fully-dominated drivers.
+
+    Guarantee: the union of ``reached_funcs`` over ``kept`` equals the union over
+    ``coverages`` — a dropped driver adds nothing the kept set does not already
+    cover. So this cannot remove any distinct reached function (no breadth loss).
+
+    - A driver with ``has_real_data == False`` is ALWAYS kept (its fallback
+      singleton is unique, never a subset of a real set).
+    - Exact duplicates (mutually-contained sets): the one with higher
+      ``edges_15s``, then lexicographically smaller ``driver_path.name``, is
+      kept; the other is dropped.
+    - Deterministic and order-independent: candidates are processed
+      largest-set-first (edges, then name as tie-breaks), so a dominator is
+      always seen before any driver it dominates.
+    """
+    real = [c for c in coverages if c.has_real_data]
+    nodata = [c for c in coverages if not c.has_real_data]
+
+    order = sorted(
+        real,
+        key=lambda c: (-len(c.reached_funcs), -c.edges_15s, c.driver_path.name),
+    )
+    kept: List[DriverCoverage] = []
+    dropped: List[DriverCoverage] = []
+    for c in order:
+        if any(c.reached_funcs <= k.reached_funcs for k in kept):
+            dropped.append(c)
+        else:
+            kept.append(c)
+
+    kept.extend(nodata)  # no-data drivers are never dominated
+    return DominanceResult(kept=kept, dropped=dropped)
+
+
 def select_top_k(
     coverages: Sequence[DriverCoverage],
     k: Optional[int] = None,
