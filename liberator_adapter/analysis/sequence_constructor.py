@@ -912,6 +912,28 @@ def _recover_opaque_producers(
     return out
 
 
+def _has_unsizable_output_buffer(sem) -> bool:
+    """True if the API writes through a caller-allocated pointer-ARRAY (``T**``)
+    OUTPUT buffer whose length is a runtime value — e.g. ``png_read_image``'s
+    ``png_bytepp`` row_pointers (sized by the decoded image height). Such an API
+    CANNOT be safely standalone-synthesized: the constructor renders the buffer as
+    a size-1 array of UNINITIALIZED pointers, and the callee then writes HEIGHT rows
+    through garbage pointers → crash that poisons the merged harness. We exclude it
+    from ALL construction; the deep row-loop decode is the LLM's job (it hand-writes
+    the height-sized buffer, e.g. libpng driver 92) and ``png_read_png`` covers the
+    full one-call decode with no caller row buffer.
+
+    Discriminator is arg-shape + role (project-agnostic): a pointer-to-pointer
+    (``>=2`` stars) arg whose role is OUTPUT. A HANDLE_IN ``T**`` (``png_get_tRNS``'s
+    ``png_bytep*`` where the lib SETS one pointer to internal data) is NOT flagged,
+    nor is a scalar OUTPUT (``int*``)."""
+    for a in getattr(sem, "args", ()) or ():
+        if (getattr(a, "role", None) is ArgRole.OUTPUT
+                and (getattr(a, "type_str", "") or "").replace(" ", "").count("*") >= 2):
+            return True
+    return False
+
+
 def _build_index(model: APISemanticModel) -> _Index:
     producers: Dict[str, List[APISemantics]] = {}
     destroyers: Dict[str, List[APISemantics]] = {}
@@ -923,6 +945,14 @@ def _build_index(model: APISemanticModel) -> _Index:
     getters: Dict[str, List[APISemantics]] = {}
 
     for sem in model.apis.values():
+        if _has_unsizable_output_buffer(sem):
+            # Exclude from ALL construction (producer/consumer/creator/mutator/
+            # densify): a caller-allocated runtime-sized pointer-array OUTPUT buffer
+            # (png_read_image's row_pointers) can't be safely synthesized → would
+            # render a size-1 garbage-pointer array and crash. Left to the LLM /
+            # png_read_png. Also fixes the spurious "produces=[png_byte*]" that made
+            # png_read_image look like a producer of the row element type.
+            continue
         for t in sem.produces:
             producers.setdefault(t, []).append(sem)
         for t in sem.destroys:
