@@ -388,7 +388,7 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
         # domain (a sketch is a program only once every hole is bound). Filled
         # holes are already substituted above, so this only rewrites the residue —
         # byte-identical when nothing leaked.
-        result = self._floor_unfilled_holes(result)
+        result = LangGraphPrototyper._floor_unfilled_holes(result)
 
         # Post-merge fixup #1: resolve the __MIN_SIZE__ placeholder using the
         # actual data[N] indices that the LLM (or HoleFiller) wrote.
