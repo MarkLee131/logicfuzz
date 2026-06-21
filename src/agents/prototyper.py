@@ -246,6 +246,22 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                 trial=self.trial)
             return {}
 
+    @staticmethod
+    def _floor_unfilled_holes(code: str) -> str:
+        """Closedness floor: ground EVERY residual hole placeholder so no
+        ``__<KIND>_<name>__`` macro survives into the emitted C (an unfilled
+        placeholder is an undeclared-identifier compile error). ARRAY_LENGTH holes
+        floor to a bounded size (used as ``buf[N]``); every other kind floors to
+        ``0`` (valid as int / pointer / NULL function-pointer in the C contexts
+        holes appear in). REFINE is included (it was previously omitted, so
+        ``__REFINE_src0__`` leaked). Byte-identical when no placeholder survives —
+        filled holes are already substituted before this runs."""
+        code = re.sub(r'__ARRLEN_[\w]+__', '64', code)
+        code = re.sub(
+            r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP'
+            r'|ERRHANDLE|COMPLEX_HOLE|REFINE)_[\w]+__', '0', code)
+        return code
+
     def _merge_holes_into_skeleton(self, skeleton_code: str,
                                    hole_fillings: Dict[str, str]) -> str:
         """Merge hole fillings into skeleton code.
@@ -334,7 +350,7 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
 
         # Check for unfilled holes using a more comprehensive regex
         # Pattern matches: __TYPE_name__ where name can contain letters, digits, and underscores
-        unfilled_pattern = r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN|ERRHANDLE|COMPLEX_HOLE)_[\w]+__'
+        unfilled_pattern = r'__(?:HOLE|BUFSIZE|CALLBACK|INIT|LOOPCOND|LOOPBOUND|CLEANUP|ARRLEN|ERRHANDLE|COMPLEX_HOLE|REFINE)_[\w]+__'
         unfilled = re.findall(unfilled_pattern, result)
 
         # Also check for HOLE comments that weren't filled
@@ -364,13 +380,15 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
                 f'{len(hole_comments)} HOLE comments remain: {hole_comments[:2]}',
                 trial=self.trial)
 
-        # FIX C floor-safety: any tunable CONFIG value-hole (``__INIT_…__``) the
-        # LLM left unfilled degrades to a valid scalar default (``0``) — keeps the
-        # #1b empty-fill FLOOR valid C (an unfilled placeholder is a compile
-        # error). Filled holes are already substituted above; this only rewrites
-        # the residue, so it is byte-identical to the prior fixed ``= 0`` floor on
-        # any arg the LLM didn't fill.
-        result = re.sub(r'__INIT_[\w]+__', '0', result)
+        # Closedness floor (I1 — template-synthesis ground-term completeness): an
+        # unfilled placeholder is a compile error ("use of undeclared identifier
+        # '__ARRLEN_arrlen_1__'/'__REFINE_src0__'"; 11 cjson/zlib leaks). Whatever
+        # the LLM (or the empty-dict B-design floor path) left unsubstituted is
+        # GROUNDED here so the substitution map is TOTAL over the placeholder
+        # domain (a sketch is a program only once every hole is bound). Filled
+        # holes are already substituted above, so this only rewrites the residue —
+        # byte-identical when nothing leaked.
+        result = self._floor_unfilled_holes(result)
 
         # Post-merge fixup #1: resolve the __MIN_SIZE__ placeholder using the
         # actual data[N] indices that the LLM (or HoleFiller) wrote.
