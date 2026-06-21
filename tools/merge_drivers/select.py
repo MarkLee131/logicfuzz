@@ -153,12 +153,19 @@ def dominance_filter(coverages: Sequence[DriverCoverage]) -> DominanceResult:
     - Exact duplicates (mutually-contained sets): the one with higher
       ``edges_15s``, then lexicographically smaller ``driver_path.name``, is
       kept; the other is dropped.
-    - Deterministic and order-independent: candidates are processed
-      largest-set-first (edges, then name as tie-breaks), so a dominator is
-      always seen before any driver it dominates.
+    - An empty-coverage real driver (``reached_funcs == frozenset()``) is
+      dominated by every non-empty kept driver and is dropped — correct, since
+      it contributes nothing to the union (and the guarantee still holds).
+    - Deterministic and order-independent: real candidates are processed
+      largest-set-first (edges, then name as tie-breaks) and the kept order
+      (incl. no-data drivers, sorted by name) does not depend on input order,
+      so a dominator is always seen before any driver it dominates.
     """
     real = [c for c in coverages if c.has_real_data]
-    nodata = [c for c in coverages if not c.has_real_data]
+    nodata = sorted(
+        (c for c in coverages if not c.has_real_data),
+        key=lambda c: c.driver_path.name,
+    )
 
     order = sorted(
         real,

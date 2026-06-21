@@ -47,7 +47,17 @@ def test_no_data_driver_always_kept():
 
 
 def test_deterministic_under_input_reordering():
-    drivers = [_cov("a", {1, 2}), _cov("b", {2, 3}), _cov("c", {1, 3}), _cov("sub", {2})]
+    # includes a no-data driver to exercise the sorted-nodata ordering path
+    drivers = [_cov("a", {1, 2}), _cov("b", {2, 3}), _cov("c", {1, 3}),
+               _cov("sub", {2}), _cov("nd", {"__fallback__:nd"}, real=False)]
     r1 = [d.driver_path.stem for d in dominance_filter(drivers).kept]
     r2 = [d.driver_path.stem for d in dominance_filter(list(reversed(drivers))).kept]
-    assert sorted(r1) == sorted(r2)
+    assert r1 == r2          # identical SET *and* order, not just same members
+
+
+def test_empty_coverage_real_driver_is_dropped():
+    full = _cov("full", {1, 2, 3})
+    empty = _cov("empty", set())          # real driver, zero coverage
+    res = dominance_filter([full, empty])
+    assert [d.driver_path.stem for d in res.kept] == ["full"]
+    assert [d.driver_path.stem for d in res.dropped] == ["empty"]
