@@ -562,8 +562,15 @@ class UseDefGraph:
 class Typestate:
     """Resource lifecycle automaton. Stateless; queried via ``check``."""
 
-    def __init__(self, graph: UseDefGraph):
+    def __init__(self, graph: UseDefGraph, handle_types=None):
         self.graph = graph
+        # Optional project HANDLE-type allow-list (normalized keys). When set,
+        # only these types are tracked as lifecycle handles — value-structs
+        # (cmsCIEXYZ, png_splt_t) carried by pointer are NOT handles and must not
+        # raise USE_BEFORE_INIT (their "producer" is a const getter, and the
+        # renderer fills them as value args). Default None = track every effect
+        # type (unchanged behavior for L2/L3 and existing callers).
+        self.handle_types = handle_types
 
     def check(self, sequence: List[str]) -> List[ViolationRecord]:
         """Walk a sequence and return all observed violations.
@@ -578,14 +585,22 @@ class Typestate:
         state: Dict[HandleType, ResourceLifecycleState] = {}
         opens: Dict[HandleType, int] = {}
         violations: List[ViolationRecord] = []
+        ht = self.handle_types
+
+        def _h(types):
+            if ht is None:
+                return types
+            return [t for t in types if normalize_handle_type(t) in ht]
+
         for pos, name in enumerate(sequence):
             eff = self.graph.effect(name)
             if eff is None:
                 continue
+            _uses, _kills, _defs = _h(eff.use), _h(eff.kill), _h(eff.def_)
             # Process KILLs before DEFs so an in-place re-init pattern
             # (rare; e.g. ``ucl_parser_destroy(p); p = ucl_parser_new();``)
             # is reported as REINIT only when there's no kill.
-            for h in eff.use:
+            for h in _uses:
                 cur = state.get(h, ResourceLifecycleState.UNINITIALIZED)
                 if cur == ResourceLifecycleState.UNINITIALIZED and opens.get(h, 0) == 0:
                     violations.append(ViolationRecord(
@@ -599,7 +614,7 @@ class Typestate:
                         api_name=name, handle=h, position=pos,
                         expected=ResourceLifecycleState.INITIALIZED, actual=cur,
                     ))
-            for h in eff.kill:
+            for h in _kills:
                 cur = state.get(h, ResourceLifecycleState.UNINITIALIZED)
                 if cur == ResourceLifecycleState.UNINITIALIZED and opens.get(h, 0) == 0:
                     violations.append(ViolationRecord(
@@ -617,7 +632,7 @@ class Typestate:
                     opens[h] = max(0, opens.get(h, 0) - 1)
                     if opens[h] == 0:
                         state[h] = ResourceLifecycleState.DESTROYED
-            for h in eff.def_:
+            for h in _defs:
                 if opens.get(h, 0) > 0:
                     violations.append(ViolationRecord(
                         kind=ViolationKind.REINIT_WITHOUT_DESTROY,

@@ -63,10 +63,14 @@ def test_naming_destroyer_overrides_ir_creator():
 
     role_ev = [e for e in sem.evidence if e.field == "role"]
     won = [e for e in role_ev if e.won]
-    losers = [e for e in role_ev if not e.won]
     assert len(won) == 1 and won[0].value == "DESTROYER"
     assert won[0].source == "NAMING"
-    assert any(l.source == "IR" and l.value == "CREATOR" for l in losers)
+    # The handle-aware IR lattice no longer MISREADS a free's ``T**`` out-pointer
+    # as a CREATOR (``Thing*`` is not an established handle here — nothing creates
+    # or frees it, and the produced type is type-vetoed), so naming wins cleanly
+    # and no IR CREATOR claim survives. (Previously IR guessed CREATOR; the fix is
+    # that it no longer does — see _compute_handle_types / _classify_ir_role.)
+    assert not any(e.value == "CREATOR" and e.won for e in role_ev)
 
 
 def test_creator_from_naming_and_ir_agree():

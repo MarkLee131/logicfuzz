@@ -43,6 +43,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 from liberator_adapter.analysis.usedef import (
     extract_api_effects,
     is_handle_type,
+    normalize_handle_type,
     _count_pointer_levels,
     _find_buffer_size_positions,
     _get_is_const,
@@ -198,6 +199,11 @@ class APISemanticModel:
     """The reconciled model — one ``APISemantics`` per public API."""
     project: str
     apis: Dict[str, APISemantics] = field(default_factory=dict)
+    # Project HANDLE-type set (normalized) — the per-facet TYPE authority for
+    # "what is a handle", computed once by the IR layer (freed ∪ created-and-
+    # consumed). Threaded into the Typestate self-filter so value-structs are not
+    # tracked as lifecycle handles. Empty when unknown (no filtering).
+    handle_types: FrozenSet[str] = field(default_factory=frozenset)
 
     def get(self, name: str) -> Optional[APISemantics]:
         return self.apis.get(name)
@@ -333,11 +339,88 @@ class _IREvidence:
     arg_roles: Dict[int, ArgRole]
 
 
+def _classify_ir_role(
+    produces_h: FrozenSet[str],
+    requires_h: FrozenSet[str],
+    kills: FrozenSet[str],
+    in_sinks: bool,
+    in_sources: bool,
+    in_inits: bool,
+) -> Tuple[Optional[APIRole], float]:
+    """Tentative IR role from HANDLE-flow facets (per-facet authority).
+
+    ``produces_h``/``requires_h`` are already filtered to HANDLE types by the
+    caller — TYPE owns handle-ness. This is the fix for the conflict where SVF /
+    ConditionManager say "creator/mutator" because the API writes through a
+    pointer, but the written thing is a non-handle out-buffer (``png_read_image``
+    writes ``png_byte*``; ``png_get_sPLT`` writes ``png_splt_t*``): producing a
+    non-handle is NOT handle creation, so the ConditionManager ``source``/``init``
+    promotion to CREATOR fires ONLY when a real handle is produced (the type veto).
+    SVF still owns "is it written/freed" (it set ``produces``/``kills``); naming/
+    doc still break ties downstream in the reconciler."""
+    if in_sinks or kills:
+        return APIRole.DESTROYER, 0.75
+    # CREATOR iff it produces a NEW handle — one it does not also require as input
+    # (png_create_info_struct produces png_info while requiring png_struct; a
+    # source/init that produces a handle also counts). An API that only writes a
+    # handle it also requires is an in-place MUTATOR, not a creator.
+    new_handles = produces_h - requires_h
+    if new_handles or (produces_h and (in_sources or in_inits)):
+        return APIRole.CREATOR, 0.7
+    if produces_h and requires_h:
+        return APIRole.MUTATOR, 0.6
+    if requires_h and not produces_h:
+        return APIRole.CONSUMER, 0.6
+    return None, 0.0
+
+
+def _compute_handle_types(
+    project_apis: Sequence[Dict[str, Any]],
+    eff_by_name: Dict[str, Any],
+) -> FrozenSet[str]:
+    """Project-wide HANDLE (lifecycle-object) type set — the per-facet TYPE
+    authority for "is this a handle".
+
+    ``is_handle_type`` only rejects *literal* primitives, so it wrongly accepts
+    typedef scalars (``png_byte`` -> unsigned char) and POD value-structs
+    (``png_splt_t``, ``png_image``) as handles. A handle is a *managed object*,
+    signaled by either:
+      1. some API FREES it (an effect ``kill``) — you free handles, not value
+         records or scalars; this catches png_struct/png_info, cJSON, cms*,
+         ares_*, gzFile; and
+      2. a create/init-named API PRODUCES it AND another API CONSUMES it as a
+         HANDLE_IN — a passed-between-APIs opaque object. This catches
+         ``z_stream`` (deflateInit_ makes it, deflate uses it) even when its free
+         is not extracted, WITHOUT re-admitting value-structs (png_splt_t is
+         produced by a *get*, never consumed as a handle).
+    All keys normalized via ``normalize_handle_type`` for consistent membership.
+    """
+    freed: set = set()
+    created_named: set = set()
+    handle_in: set = set()
+    for api in project_apis:
+        name = api.get("function_name", "")
+        if not name:
+            continue
+        eff = eff_by_name.get(name)
+        if eff is not None:
+            freed |= {normalize_handle_type(t) for t in eff.kill}
+            nr = _naming_role(name)
+            if nr is not None and nr[0] is APIRole.CREATOR:
+                created_named |= {normalize_handle_type(t) for t in eff.def_}
+        args = api.get("arguments", api.get("arguments_info", [])) or []
+        for i, r in _ir_arg_roles(api).items():
+            if r is ArgRole.HANDLE_IN and i < len(args):
+                t = args[i].get("type", args[i].get("type_clang", "")) or ""
+                handle_in.add(normalize_handle_type(t))
+    return frozenset(freed | (created_named & handle_in))
+
+
 def collect_ir_evidence(
     project_apis: Sequence[Dict[str, Any]],
     condition_info: Optional[Dict[str, Any]] = None,
     lifecycle_pairs: Optional[List[Tuple[str, str]]] = None,
-) -> Dict[str, _IREvidence]:
+) -> Tuple[Dict[str, _IREvidence], FrozenSet[str]]:
     """Per-API mechanism evidence from use-def + ConditionManager summary.
 
     Mechanism (produces/requires/kills handle types) comes straight from the
@@ -353,6 +436,7 @@ def collect_ir_evidence(
         list(project_apis), lifecycle_pairs=lifecycle_pairs or None
     )
     eff_by_name = {e.name: e for e in effects}
+    handle_types = _compute_handle_types(project_apis, eff_by_name)
 
     out: Dict[str, _IREvidence] = {}
     for api in project_apis:
@@ -364,24 +448,38 @@ def collect_ir_evidence(
         requires = frozenset(eff.use) if eff else frozenset()
         kills = frozenset(eff.kill) if eff else frozenset()
 
-        # Tentative IR role (tiebreak authority only).
-        role: Optional[APIRole] = None
-        conf = 0.0
-        if name in sinks or kills:
-            role, conf = APIRole.DESTROYER, 0.75
-        elif name in sources or name in inits or (produces and not requires):
-            role, conf = APIRole.CREATOR, 0.7
-        elif produces and requires:
-            role, conf = APIRole.MUTATOR, 0.6
-        elif requires and not produces:
-            role, conf = APIRole.CONSUMER, 0.6
+        # Tentative IR role (tiebreak authority only). Per-facet authority:
+        #  • produces_h (STRICT) — only types in the project HANDLE set count as
+        #    handle production, so a non-handle out-buffer write (png_read_image →
+        #    png_byte*, png_get_sPLT → png_splt_t*) is NOT creation (type veto on
+        #    the ConditionManager source/init promotion). SVF still set produces.
+        #  • requires_h (LENIENT/structural) — the handle types of HANDLE_IN args
+        #    (is_handle_type), NOT eff.use, so a consumer of a handle is still a
+        #    CONSUMER even when that handle's create/free isn't in the API set, and
+        #    OUTPUT/init args (deflateInit_'s z_stream) are excluded from requires.
+        arg_roles = _ir_arg_roles(api)
+        _args = api.get("arguments", api.get("arguments_info", [])) or []
+
+        def _atype(i: int) -> str:
+            return (_args[i].get("type", _args[i].get("type_clang", "")) or ""
+                    if i < len(_args) else "")
+
+        produces_h = frozenset(
+            normalize_handle_type(t) for t in produces
+            if normalize_handle_type(t) in handle_types)
+        requires_h = frozenset(
+            normalize_handle_type(_atype(i)) for i, r in arg_roles.items()
+            if r is ArgRole.HANDLE_IN and is_handle_type(_atype(i)))
+        role, conf = _classify_ir_role(
+            produces_h, requires_h, kills,
+            name in sinks, name in sources, name in inits)
 
         out[name] = _IREvidence(
             role=role, role_conf=conf, produces=produces,
             requires=requires, kills=kills,
-            arg_roles=_ir_arg_roles(api),
+            arg_roles=arg_roles,
         )
-    return out
+    return out, handle_types
 
 
 def _ir_arg_roles(api: Dict[str, Any]) -> Dict[int, ArgRole]:
@@ -803,7 +901,8 @@ def reconcile(
     ``llm_tiebreak`` is the older callable hook (model, apis)->model; retained
     for back-compat, runs after the data-driven fold.
     """
-    ir_ev = collect_ir_evidence(project_apis, condition_info, lifecycle_pairs)
+    ir_ev, _handle_types = collect_ir_evidence(
+        project_apis, condition_info, lifecycle_pairs)
     doc_ev = collect_doc_evidence(project_apis, doc_signals)
     usage = collect_usage_evidence(accepting_paths)
     llm_ev = _parse_llm_roles(llm_roles)
@@ -869,7 +968,8 @@ def reconcile(
             destroys=destroys, evidence=tuple(role_log + arg_log),
         )
 
-    model = APISemanticModel(project=project, apis=apis)
+    model = APISemanticModel(
+        project=project, apis=apis, handle_types=_handle_types)
 
     if llm_tiebreak is not None:
         # Hook: batched residual over genuine IR↔doc role conflicts only.

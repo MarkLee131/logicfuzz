@@ -69,7 +69,8 @@ def _lifecycle_pairs(model):
 
 def _ordering_clean(apis, model, sequences):
     ts = Typestate(UseDefGraph(extract_api_effects(
-        apis, lifecycle_pairs=_lifecycle_pairs(model) or None)))
+        apis, lifecycle_pairs=_lifecycle_pairs(model) or None)),
+        handle_types=(getattr(model, "handle_types", None) or None))
     for seq in sequences:
         if {r.kind.name for r in ts.check(seq)} & _ORDERING_FAULTS:
             return False
@@ -84,7 +85,7 @@ def _no_genuine_ordering_faults(apis, model, sequences):
     graph = UseDefGraph(extract_api_effects(
         apis, lifecycle_pairs=_lifecycle_pairs(model) or None))
     producers = {h for e in graph.all_effects() for h in e.def_}
-    ts = Typestate(graph)
+    ts = Typestate(graph, handle_types=(getattr(model, "handle_types", None) or None))
     for seq in sequences:
         for r in ts.check(seq):
             if r.kind.name not in _ORDERING_FAULTS:

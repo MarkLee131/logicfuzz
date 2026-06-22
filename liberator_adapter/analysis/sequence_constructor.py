@@ -1608,7 +1608,7 @@ def construct_sequences(
             _ts = Typestate(UseDefGraph(extract_api_effects(
                 list(project_apis),
                 lifecycle_pairs=list(lifecycle_pairs) if lifecycle_pairs else None,
-            )))
+            )), handle_types=(getattr(model, "handle_types", None) or None))
             # Graceful degradation (B): a USE_BEFORE_INIT on an ORPHAN handle —
             # one no in-project API produces — is NOT a fixable ordering fault.
             # It is an "island" API (opaque / void* / no producer) that the
