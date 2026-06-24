@@ -1011,6 +1011,58 @@ EXT_LFLAGS=$(grep -hoE -- '[[:space:]]-l[A-Za-z0-9_]+' $SRC/build.sh 2>/dev/null
 
         return stats
 
+    def _export_coverage_from_profdata(self, build_out: Path) -> Optional[CoverageData]:
+        """Profdata-first coverage — the reliable replacement for the llvm-cov HTML
+        report path that HANGS/FAILS on merged multi-TU harnesses (the all-session
+        0%/None bug: replay timeout, or 'Failed to generate clang coverage report').
+
+        The OSS-Fuzz ``coverage`` command produces ``dumps/merged.profdata`` BEFORE
+        its HTML/rename step (which is what fails), so we export totals straight
+        from that profdata via the base-runner's ``llvm-cov export -summary-only``
+        — deterministic, no HTML generation, no single-input hang. Returns None
+        (caller fails open to the live libFuzzer edge count) when the profdata or
+        binary is absent or the totals are empty (un-instrumented garbage)."""
+        pd = build_out / "dumps" / "merged.profdata"
+        binary = build_out / (self.target_name or "")
+        if not pd.is_file() or not binary.is_file():
+            return None
+        cmd = [
+            "docker", "run", "--rm", "-v", f"{build_out}:/cov",
+            "gcr.io/oss-fuzz-base/base-runner", "bash", "-c",
+            f"llvm-cov export /cov/{binary.name} "
+            f"-instr-profile=/cov/dumps/merged.profdata -summary-only",
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except Exception as e:
+            logger.warning(f"profdata-first export failed to run: {e}")
+            return None
+        if r.returncode != 0 or not r.stdout.strip():
+            return None
+        try:
+            totals = json.loads(r.stdout)["data"][0]["totals"]
+        except Exception:
+            return None
+        L = totals.get("lines", {}); B = totals.get("branches", {}); F = totals.get("functions", {})
+        # Sanity: reject an all-zero / un-instrumented profile (the '1-file harness
+        # only' garbage). Use non-empty totals rather than a file-count floor, so a
+        # single-source library (e.g. cJSON.c) is NOT false-rejected.
+        if (L.get("count", 0) == 0 and B.get("count", 0) == 0):
+            logger.warning("profdata-first: empty totals — rejecting as unreliable")
+            return None
+        logger.info("Coverage via profdata-first: %s/%s branches (%.1f%%), %s/%s funcs",
+                    B.get("covered", 0), B.get("count", 0), B.get("percent", 0.0),
+                    F.get("covered", 0), F.get("count", 0))
+        return CoverageData(
+            line_coverage_percent=L.get("percent", 0.0),
+            branch_coverage_percent=B.get("percent", 0.0),
+            function_coverage_percent=F.get("percent", 0.0),
+            lines_covered=L.get("covered", 0), lines_total=L.get("count", 0),
+            branches_covered=B.get("covered", 0), branches_total=B.get("count", 0),
+            functions_covered=F.get("covered", 0), functions_total=F.get("count", 0),
+            edge_coverage=0,
+        )
+
     def _measure_coverage(self) -> Optional[CoverageData]:
         """Measure actual code coverage using OSS-Fuzz coverage infrastructure."""
         logger.info("Measuring code coverage...")
@@ -1106,17 +1158,25 @@ EXT_LFLAGS=$(grep -hoE -- '[[:space:]]-l[A-Za-z0-9_]+' $SRC/build.sh 2>/dev/null
             finally:
                 container_cleanup.force_remove_named_container(cov_ctr)
 
-            if result.returncode != 0:
-                logger.warning(f"Coverage measurement failed: {result.stderr}")
-                return None
-
-            # Parse coverage from summary.json
             if not self.coverage_project_name:
                 logger.warning("No coverage project name")
                 return None
             build_out = oss_fuzz_dir / "build" / "out" / self.coverage_project_name
-            summary_file = build_out / "report" / "linux" / "summary.json"
 
+            # PROFDATA-FIRST (primary, reliable): the coverage cmd above produces
+            # dumps/merged.profdata even when its HTML report step fails/hangs (the
+            # all-session 0%/None bug). Export totals straight from it; bypasses the
+            # returncode and the broken HTML path entirely.
+            cd = self._export_coverage_from_profdata(build_out)
+            if cd is not None:
+                return cd
+
+            if result.returncode != 0:
+                logger.warning(f"Coverage cmd failed and no usable profdata: {result.stderr[:300]}")
+                return None
+
+            # Fallback: the HTML-step summary.json, if it was produced.
+            summary_file = build_out / "report" / "linux" / "summary.json"
             if not summary_file.exists():
                 logger.warning(f"Coverage summary not found: {summary_file}")
                 return None
