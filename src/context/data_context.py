@@ -2308,44 +2308,12 @@ class FuzzingContext:
             "present" if automaton_artifact is not None else "None",
             len(skeleton_drivers),
         )
-        if (closed_loop_iters > 0
-                and automaton_artifact is not None
-                and skeleton_drivers):
-            try:
-                from src.closed_loop import run_closed_loop
-
-                def _resynth(art, k: int) -> List[Dict[str, Any]]:
-                    return _generate_cbfactory_drivers(
-                        generator=generator,
-                        num_drivers=k,
-                        driver_size=driver_size,
-                        project_name=project_name,
-                        log=log,
-                        automaton_artifact=art,
-                    ) or []
-
-                cl_result = run_closed_loop(
-                    project=project_name,
-                    automaton_artifact=automaton_artifact,
-                    initial_drivers=skeleton_drivers,
-                    resynthesize_fn=_resynth,
-                    n_iters=closed_loop_iters,
-                    early_stop_delta=closed_loop_early_stop,
-                    target_drivers_per_iter=len(skeleton_drivers),
-                    persist_dir=Path(f"./results/{project_name}/automaton"),
-                    log=log,
-                )
-                log.info(
-                    "   🔁 Closed-loop done: %d iters run (early_stopped=%s, "
-                    "reason=%s); evidence drivers in last iter=%d",
-                    len(cl_result.iterations),
-                    cl_result.early_stopped,
-                    cl_result.early_stop_reason or "n/a",
-                    len(cl_result.final_drivers),
-                )
-            except Exception as exc:
-                log.warning("Closed-loop feedback failed (non-critical): %s",
-                            exc)
+        # Closed-loop feedback REMOVED (architecture-cleanup blueprint #2, dead
+        # weight): its product (cl_result.final_drivers) was explicitly discarded,
+        # and the automaton it grew fed only the inert acceptance guard
+        # (admits=True) + telemetry — so 3 resynthesis iterations per --eval did
+        # nothing observable. closed_loop_iters/--closed-loop are now no-ops;
+        # src/closed_loop.py + the CLI flags are a mechanical follow-up delete.
 
         # === Step 12: Extract knowledge from existing drivers (optional, requires LLM) ===
         log.info('  12/12 Extracting knowledge from existing drivers...')
