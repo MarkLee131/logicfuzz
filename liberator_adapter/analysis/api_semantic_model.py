@@ -28,8 +28,8 @@ IR loser.
 
 Token budget (redesign G1 invariant): this module is **deterministic-only**.
 Naming + type-patterns + structured doxygen need no LLM. The batched-LLM
-residual is an optional hook (``llm_tiebreak``) that defaults off; with it off
-the model adds 0 LLM calls and is cached at
+residual (``llm_roles`` from the Comprehender) overrides only the uncertain
+residual; with it None the model adds 0 LLM calls and is cached at
 ``results/{project}/state/api_semantic_model.json`` for 0-token re-runs.
 """
 from __future__ import annotations
@@ -887,7 +887,6 @@ def reconcile(
     doc_signals: Optional[Dict[str, Dict[str, Any]]] = None,
     accepting_paths: Optional[Sequence[Sequence[str]]] = None,
     llm_roles: Optional[Dict[str, Dict[str, Any]]] = None,
-    llm_tiebreak: Optional[Any] = None,
 ) -> APISemanticModel:
     """Fuse IR ⊕ doc ⊕ usage ⊕ LLM into one ``APISemanticModel``.
 
@@ -897,9 +896,6 @@ def reconcile(
     confidence < ``_LLM_OVERRIDE_BELOW``) — confident rule verdicts stand. When
     ``llm_roles`` is None the result is exactly the prior deterministic model
     (zero LLM calls).
-
-    ``llm_tiebreak`` is the older callable hook (model, apis)->model; retained
-    for back-compat, runs after the data-driven fold.
     """
     ir_ev, _handle_types = collect_ir_evidence(
         project_apis, condition_info, lifecycle_pairs)
@@ -970,14 +966,4 @@ def reconcile(
 
     model = APISemanticModel(
         project=project, apis=apis, handle_types=_handle_types)
-
-    if llm_tiebreak is not None:
-        # Hook: batched residual over genuine IR↔doc role conflicts only.
-        # Left unwired in G1 (deterministic-only); a future phase may pass a
-        # callable that takes the model + conflict list and returns overrides.
-        try:
-            model = llm_tiebreak(model, project_apis) or model
-        except Exception:
-            pass
-
     return model
