@@ -69,9 +69,15 @@ the LLM's freedom *bounded by the symbolic plan* — the missing middle between 
   to one conformance check.
 
 ## Risk / open questions for the user
-1. **Conformance-check precision**: can we reliably detect "lost depth / parser-revert" from
-   the authored source? If not robustly, do NOT flip default (keep LLM-render opt-in). Needs a
-   small precision study (label N drivers drift/ok, measure the check).
+1. **Conformance-check precision — RESOLVED (prototyped 2026-06-25).** `liberator_adapter/
+   analysis/plan_conformance.py` + `tests/test_plan_conformance.py` (6/6 pass). Finding: the
+   reliable signal is the lifecycle **BACKBONE** (a planned creator called AND the planned
+   **terminal deep-consumer** called) — NOT kept-fraction, which is too noisy (good drivers
+   legitimately drop 30–56% of the plan: write-side setters, deprecated re-initializers). The
+   terminal-consumer presence cleanly separates good drivers (call it) from BOTH A-design
+   failures: shallow (created handle, bailed → no terminal) and parser-revert (swapped the
+   chain for an unplanned one-shot → planned terminal absent). Must strip comments first (an
+   API named in prose else false-counts). The check is ready to wire as the #4 render gate.
 2. **Token cost**: full-authoring is more tokens than hole-fill. Measure per-driver; the
    prototyper prompt is already ~7K ([[project_prototyper_prompt_token_reality]]), authoring
    adds the spec + retries.
