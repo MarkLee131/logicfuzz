@@ -1332,28 +1332,9 @@ def parse_args() -> argparse.Namespace:
                       dest='use_session_memory',
                       help='Disable session memory (short-memory) for cross-agent consensus sharing.')
 
-  # Phase G: closed-loop CBFactory feedback
-  parser.add_argument('--closed-loop',
-                      action='store_true',
-                      default=False,
-                      dest='closed_loop',
-                      help='Phase G: run N feedback iterations after the '
-                           'initial synthesis pass. Each iteration feeds '
-                           'prior drivers as evidence to the project '
-                           'automaton (incremental EDSM) and re-synthesises '
-                           'with the grown automaton.')
-  parser.add_argument('--closed-loop-iters',
-                      type=int,
-                      default=3,
-                      dest='closed_loop_iters',
-                      help='Number of feedback iterations (default: 3).')
-  parser.add_argument('--closed-loop-early-stop',
-                      type=int,
-                      default=0,
-                      dest='closed_loop_early_stop',
-                      help='Stop early when |Δmerged_states| ≤ this value '
-                           'for 2 consecutive iterations (default: 0 = '
-                           'exact saturation).')
+  # (Phase G closed-loop feedback + its --closed-loop[-iters/-early-stop]
+  # flags were removed — architecture-cleanup blueprint #2; the feedback's
+  # product was discarded and its automaton growth fed only inert consumers.)
 
   # Knowledge-layer doc priors (doxygen + readme) are now ALWAYS ON (B1-③):
   # doxygen priors are token-negative (a substantive docstring lets the
@@ -1379,7 +1360,6 @@ def parse_args() -> argparse.Namespace:
   # Evaluation profile shortcut. Bundles the flags that are individually
   # opt-in but should ALL be on when reporting "total coverage vs baseline"
   # numbers (PromeFuzz Table 2 etc.):
-  #   --closed-loop         (Phase G feedback, designed to grow coverage)
   #   --merge-drivers       (synthesize a single multi-task harness from
   #                          successful trials at the eval tail)
   #
@@ -1392,8 +1372,8 @@ def parse_args() -> argparse.Namespace:
                       action='store_true',
                       default=False,
                       dest='eval_profile',
-                      help='Evaluation profile: implies --closed-loop, '
-                           '--merge-drivers. Overridden by explicit flags.')
+                      help='Evaluation profile: implies --merge-drivers. '
+                           'Overridden by explicit flags.')
 
   # Multi-task harness merger. Folds successful trials' .fuzz_target source
   # files into a single dispatcher driver via tools.merge_drivers.merge.
@@ -1415,8 +1395,6 @@ def parse_args() -> argparse.Namespace:
   # Apply evaluation profile (only fills flags the user did not set
   # explicitly — explicit always wins).
   if args.eval_profile:
-    if not args.closed_loop:
-      args.closed_loop = True
     if not args.merge_drivers:
       args.merge_drivers = True
   if args.num_samples:

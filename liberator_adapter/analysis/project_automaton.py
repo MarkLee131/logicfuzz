@@ -2,7 +2,7 @@
 
 Glue: trace extraction → PTA construction → EDSM merge (with optional LLM
 oracle) → on-disk persistence. The artifact it produces is consumed by L4
-ranking (Step 5e2), the Prototyper, and the closed-loop feedback.
+ranking (Step 5e2) and the Prototyper.
 
 Persistence layout::
 

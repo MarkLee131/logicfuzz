@@ -310,8 +310,6 @@ class FuzzingContext:
                 filter_top_k: Optional[int] = None,
                 use_cache: bool = True,
                 llm_client: Any = None,
-                closed_loop_iters: int = 0,
-                closed_loop_early_stop: int = 0,
                 # Doc priors are always-on and not switchable (no CLI opt-out):
                 # doxygen priors are token-NEGATIVE — a substantive docstring lets
                 # the comprehender SKIP that API's LLM call — and @param/@return
@@ -2287,33 +2285,12 @@ class FuzzingContext:
                 log.warning('T12 value-feedback attach failed '
                             '(non-critical): %s', _ve)
 
-        # === Step 11 (Phase G): Closed-loop automaton feedback ===
-        # When ``closed_loop_iters > 0`` and the project has a learned
-        # automaton, run N feedback iterations. Each iteration feeds the
-        # current viable skeletons' API sequences as evidence (incremental
-        # EDSM merge), then re-synthesises additional drivers under the
-        # grown automaton. The artifact is mutated in-place; Phase E
-        # post-parse extensions and Phase H acceptance guard read the
-        # mutated artifact automatically when prepare()'s automaton
-        # snapshot block (below) reads `sample_accepting_paths` etc.
-        #
-        # cl_result.final_drivers is intentionally discarded: the LLM
-        # consumes ``skeleton_drivers`` as its base. The closed loop's
-        # value here is the automaton mutation it preserves through
-        # ``persist_dir`` and through the artifact passed by reference.
-        log.info(
-            "  11/12 Phase G gate: closed_loop_iters=%d, "
-            "automaton_artifact=%s, skeleton_drivers=%d",
-            closed_loop_iters,
-            "present" if automaton_artifact is not None else "None",
-            len(skeleton_drivers),
-        )
-        # Closed-loop feedback REMOVED (architecture-cleanup blueprint #2, dead
-        # weight): its product (cl_result.final_drivers) was explicitly discarded,
-        # and the automaton it grew fed only the inert acceptance guard
-        # (admits=True) + telemetry — so 3 resynthesis iterations per --eval did
-        # nothing observable. closed_loop_iters/--closed-loop are now no-ops;
-        # src/closed_loop.py + the CLI flags are a mechanical follow-up delete.
+        # === Step 11 (Phase G): Closed-loop automaton feedback — REMOVED ===
+        # Deleted under architecture-cleanup blueprint #2 (dead weight): the
+        # feedback's product (final drivers) was explicitly discarded, and the
+        # automaton it grew fed only the inert acceptance guard (admits=True) +
+        # telemetry — so the resynthesis iterations did nothing observable. The
+        # module (src/closed_loop.py), CLI flags, and prepare() params are gone.
 
         # === Step 12: Extract knowledge from existing drivers (optional, requires LLM) ===
         log.info('  12/12 Extracting knowledge from existing drivers...')

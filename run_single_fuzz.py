@@ -154,19 +154,11 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
   project_name = benchmark.project
 
   try:
-    # Phase G closed-loop knobs (only active when --closed-loop is also set)
-    # ``num_synthesis_drivers`` was removed: per CLAUDE.md, --num-samples is
-    # auto-resolved to ``len(skeleton_drivers)`` at runtime — one trial per
-    # Z3-validated skeleton. The old hardcoded knob was dead-arg-passed for
-    # months until --use-doxygen-priors first triggered a strict-kwarg path
-    # in prepare() that surfaced the latent TypeError. Cleared here.
-    closed_loop_iters = (
-        getattr(args, 'closed_loop_iters', 0)
-        if (args and getattr(args, 'closed_loop', False)) else 0
-    )
-    closed_loop_early_stop = (
-        getattr(args, 'closed_loop_early_stop', 0) if args else 0
-    )
+    # (Phase G closed-loop knobs removed — architecture-cleanup blueprint #2;
+    # the feedback loop is gone. ``num_synthesis_drivers`` was likewise
+    # removed earlier: per CLAUDE.md, --num-samples is auto-resolved to
+    # ``len(skeleton_drivers)`` at runtime — one trial per Z3-validated
+    # skeleton.)
 
     # Create LLM adapter for driver knowledge extraction (optional)
     llm_client = None
@@ -182,8 +174,6 @@ def _prepare_shared_data_for_benchmark(benchmark: Benchmark, args: argparse.Name
       benchmark=benchmark,  # Pass benchmark for Clang/LLVM extraction
       logger_instance=None,  # Use standard logging - no trial concept here
       llm_client=llm_client,  # Pass LLM for driver knowledge extraction
-      closed_loop_iters=closed_loop_iters,
-      closed_loop_early_stop=closed_loop_early_stop,
       # Doc priors (doxygen + readme) are always on — see prepare() (B1-③).
     )
     return context.to_dict()
