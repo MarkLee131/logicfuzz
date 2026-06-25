@@ -55,6 +55,7 @@ from liberator_adapter.analysis.sequence_constructor import (
 )
 from liberator_adapter.analysis.hole_semantics import (
     annotate_skeletons,
+    build_render_spec,
     value_intents_for_sequence,
     render_value_intents,
     render_callspec,
@@ -97,6 +98,7 @@ __all__ = [
     "ConstructionResult",
     "construct_sequences",
     "annotate_skeletons",
+    "build_render_spec",
     "value_intents_for_sequence",
     "render_value_intents",
     "render_callspec",

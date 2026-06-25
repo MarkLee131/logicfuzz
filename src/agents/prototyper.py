@@ -6,9 +6,18 @@ The FuzzIntrospector tool surface was removed; all context is pre-fetched.
 """
 from typing import Any, Dict, List, Optional
 import argparse
+import os
 import re
 
 import logger
+
+
+def _spec_render_enabled() -> bool:
+    """REPLACE #4: the spec-guided LLM-author path. Default OFF — when off the
+    Prototyper behaves BYTE-IDENTICALLY to today (deterministic / B-design
+    hole-fill path). Distinct from and checked BEFORE LOGICFUZZ_LLM_REWRITE
+    (A-design free-rewrite in the existing path)."""
+    return os.environ.get("LOGICFUZZ_SPEC_RENDER", "0") != "0"
 from langchain_core.tools import BaseTool
 from src.workflow.state import FuzzingWorkflowState
 from src.agents.base import LangGraphAgent
@@ -505,6 +514,206 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     # Main Execution
     # =========================================================================
 
+    @staticmethod
+    def _format_render_spec(spec: Dict[str, Any]) -> str:
+        """Render the flat render_spec dict into a compact author-prompt block.
+
+        Mirrors the CALLSPEC shape so the LLM sees per-call typed args + handle
+        provenance + return contracts — but framed as 'AUTHOR a driver that
+        realises this plan' rather than 'fill these holes'."""
+        lines = []
+        lib_consts = spec.get("library_constants") or ""
+        for i, rec in enumerate(spec.get("sequence", []), 1):
+            lines.append(f"#{i} {rec.get('api')} [{rec.get('role')}]")
+            if rec.get("ret_contract"):
+                lines.append(f"    {rec['ret_contract']}")
+            for a in rec.get("args", []):
+                seg = (f"    arg{a.get('index')} ({a.get('type')}) "
+                       f"[{a.get('kind')}]")
+                payload = []
+                if a.get("intent"):
+                    payload.append(a["intent"])
+                if a.get("pairs_with") is not None:
+                    payload.append(f"len↔arg{a['pairs_with']}")
+                if a.get("populated_from"):
+                    payload.append(
+                        "data from arg"
+                        + ",arg".join(str(x) for x in a["populated_from"]))
+                if payload:
+                    seg += " — " + " | ".join(payload)
+                lines.append(seg)
+            for p in rec.get("handle_provenance", []):
+                lines.append(f"    ⚙ {p}")
+        return "\n".join(lines), lib_consts
+
+    def _author_from_spec(self, state, active_skeleton, benchmark,
+                          target_language, needs_extern, is_c_project,
+                          header_info, project_apis, additional_context,
+                          is_regeneration):
+        """REPLACE #4: AUTHOR a driver from the serialized render_spec, gated by
+        the plan-conformance check (≤2 regens with the diff fed back), then
+        post-processed identically to the deterministic path.
+
+        Returns a ``state_update`` dict (same shape execute() returns) when a
+        CONFORMANT driver is authored; returns ``None`` to FALL BACK to the
+        deterministic hole-fill path (non-conformant after retries, no
+        <fuzz_target> emitted, or ANY exception — fail-open)."""
+        try:
+            from src.context.session_memory_injector import (
+                build_prompt_with_session_memory,
+                extract_session_memory_updates_from_response,
+                merge_session_memory_updates)
+            from liberator_adapter.analysis.plan_conformance import (
+                analyze_conformance)
+
+            spec = active_skeleton.get("render_spec") or {}
+            planned = active_skeleton.get("api_sequence") or []
+            hints = spec.get("_role_hints") or {}
+            spec_block, lib_consts = self._format_render_spec(spec)
+
+            lang_rule = ""
+            if target_language == 'c':
+                lang_rule = ("\n- C library: use the `struct` keyword for struct "
+                             "types (`struct foo *p`), not C++ shorthand.")
+            extern_rule = ""
+            if needs_extern:
+                extern_rule = ('\n- Wrap LLVMFuzzerTestOneInput in `extern "C"` '
+                               '(OSS-Fuzz compiles with clang++).')
+
+            base_author_prompt = f"""<task>
+AUTHOR a complete LibFuzzer driver in {target_language.upper()} for the
+{benchmark.get('project', 'unknown')} project that REALISES the plan below.
+The plan is a lifecycle-complete, type-validated API sequence (creator →
+consumer → destroyer). Realise it faithfully: call the creator(s), drive the
+deep consumer (terminal), wire the fuzz `data,size` into input/buffer args, and
+NULL-check creator returns before use. You MAY drop incoherent write-side
+setters, but you MUST keep the lifecycle backbone (creator + terminal deep
+consumer). Do NOT revert to a single parser-entry one-shot.{lang_rule}{extern_rule}
+- Call ONLY APIs that appear in the plan / signatures; never invent symbols.
+</task>
+
+<render_spec driver_id="{spec.get('driver_id', '')}">
+includes: {spec.get('includes', [])}
+plan (calls run in this order):
+{spec_block}
+</render_spec>
+"""
+            if lib_consts:
+                base_author_prompt += (f"\n<library_constants>\n{lib_consts}\n"
+                                       f"</library_constants>\n")
+            if additional_context and additional_context.strip():
+                base_author_prompt += (f"\n<additional_context>\n"
+                                       f"{additional_context}\n"
+                                       f"</additional_context>\n")
+            base_author_prompt += (
+                "\n<output_format>\nOutput the complete driver inside "
+                "<fuzz_target> tags.\n</output_format>\n")
+
+            all_responses_acc: List[str] = []
+            feedback = ""
+            for attempt in range(3):  # 1 initial + ≤2 regenerations
+                author_prompt = base_author_prompt
+                if feedback:
+                    author_prompt += (
+                        f"\n<conformance_feedback>\nYour previous attempt was "
+                        f"REJECTED (non-conformant). Fix these:\n{feedback}\n"
+                        f"Re-author the FULL driver keeping the lifecycle "
+                        f"backbone.\n</conformance_feedback>\n")
+                prompt = build_prompt_with_session_memory(
+                    state, author_prompt, agent_name=self.name)
+                _parsed, responses = self.run_tool_calling_loop(
+                    initial_prompt=prompt, state=state, max_rounds=1,
+                    log_prefix="PROTOTYPER-SPEC")
+                all_responses_acc.extend(responses)
+                code = parse_tag("\n\n".join(responses), "fuzz_target")
+                if not code:
+                    logger.warning(
+                        f'[spec-render] attempt {attempt}: no <fuzz_target> '
+                        f'emitted', trial=self.trial)
+                    feedback = "You emitted no <fuzz_target> block."
+                    continue
+                conf = analyze_conformance(
+                    planned=planned, driver_src=code,
+                    creators=hints.get("creators"),
+                    terminals=hints.get("terminals"),
+                    destroyers=hints.get("destroyers"))
+                if conf.conformant:
+                    logger.info(
+                        f'[spec-render] CONFORMANT on attempt {attempt} '
+                        f'(kept {conf.kept_frac:.0%})', trial=self.trial)
+                    val_warn, code = self._postprocess(
+                        code, header_info, target_language, is_c_project,
+                        benchmark, project_apis)
+                    combined = "\n\n".join(all_responses_acc)
+                    sm_updates = extract_session_memory_updates_from_response(
+                        combined, agent_name=self.name,
+                        current_iteration=state.get("current_iteration", 0))
+                    updated_sm = merge_session_memory_updates(state, sm_updates)
+                    state_update = {
+                        "fuzz_target_source": code,
+                        "compile_success": None,
+                        "build_errors": [],
+                        "session_memory": updated_sm,
+                        "api_validation_warnings": val_warn,
+                        "is_stub_binary": False,
+                        "spec_render_conformant": True,
+                        "spec_render_attempt": attempt,
+                    }
+                    if is_regeneration:
+                        rc = state.get("prototyper_regenerate_count", 0)
+                        state_update["prototyper_regenerate_count"] = rc + 1
+                        state_update["compilation_retry_count"] = 0
+                    return state_update
+                logger.warning(
+                    f'[spec-render] attempt {attempt} REJECTED: '
+                    f'{"; ".join(conf.reasons)}', trial=self.trial)
+                feedback = ("reasons: " + "; ".join(conf.reasons)
+                            + (f"\ndropped planned APIs: {conf.dropped}"
+                               if conf.dropped else ""))
+
+            logger.info(
+                '[spec-render] non-conformant after 3 attempts → falling back '
+                'to deterministic skeleton floor', trial=self.trial)
+            return None
+        except Exception as _e:  # fail-open: any error → deterministic path
+            logger.warning(
+                f'[spec-render] errored ({_e}) → deterministic fallback',
+                trial=self.trial)
+            return None
+
+    def _postprocess(self, fuzz_target_code: str, header_info: Dict[str, Any],
+                     target_language: str, is_c_project: bool,
+                     benchmark: Dict[str, Any],
+                     project_apis: Any) -> tuple:
+        """Shared post-processing for both the deterministic hole-fill path and
+        the spec-render author path. Returns ``(validation_warnings, code)``.
+
+        Behaviour is byte-identical to the inline block it replaced — applying
+        the SAME header fixes / extern "C" wrap / API-usage validation, so an
+        authored driver clears the same gates the deterministic one does."""
+        # Fix common header issues (FuzzedDataProvider, etc.)
+        if fuzz_target_code:
+            fuzz_target_code = self._fix_common_header_issues(fuzz_target_code)
+
+        # Ensure project headers are included (post-processing fix for LLM-generated code)
+        if fuzz_target_code and header_info.get('project_headers'):
+            fuzz_target_code = self._ensure_project_headers(
+                fuzz_target_code, header_info, target_language)
+
+        # Ensure extern "C" wrapper for C projects (OSS-Fuzz always uses clang++)
+        if fuzz_target_code and is_c_project:
+            fuzz_target_code = self._ensure_extern_c_wrapper(fuzz_target_code)
+            # C2: _ensure_extern_c_wrapper early-returns when `extern "C"` is merely
+            # PRESENT — it doesn't check balance. Some LLMs (DeepSeek) emit the open
+            # but drop the closing block (fatal under $CXX). Re-balance defensively.
+            from src.utils.cxx_clean import balance_extern_c
+            fuzz_target_code = balance_extern_c(fuzz_target_code)
+
+        validation_warnings, fuzz_target_code = self._validate_api_usage(
+            fuzz_target_code, benchmark.get('project', 'unknown'),
+            known_apis=project_apis)
+        return validation_warnings, fuzz_target_code
+
     def execute(self, state: FuzzingWorkflowState) -> Dict[str, Any]:
         """Generate fuzz target code with optional tool access."""
         from src.context.session_memory_injector import (
@@ -624,6 +833,24 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
 
         skeleton_template_code, holes_description, has_skeleton_template = \
             self._format_skeleton_as_template(active_skeleton)
+
+        # === REPLACE #4: spec-guided LLM render (LOGICFUZZ_SPEC_RENDER) ===
+        # Checked FIRST and gated behind a default-OFF flag + a present
+        # render_spec. When on, the LLM AUTHORS a driver from the serialized
+        # spec, gated by the plan-conformance check (≤2 regens, then fall back).
+        # When off (or no spec, or any exception), this branch is skipped and
+        # execute() continues into the UNCHANGED deterministic hole-fill path
+        # below — byte-identical to today.
+        if (_spec_render_enabled() and active_skeleton is not None
+                and active_skeleton.get("render_spec")):
+            spec_update = self._author_from_spec(
+                state, active_skeleton, benchmark, target_language,
+                needs_extern, is_c_project, header_info, project_apis,
+                additional_context, is_regeneration)
+            if spec_update is not None:
+                return spec_update
+            # else: fall through to the deterministic path (fail-open / non-conformant)
+
         # DEFAULT = HOLE-FILLING (B-design): the LLM fills only leaf holes and
         # PRESERVES the symbolic object-construction skeleton. A-design (LLM
         # rewrites freely) is OPT-OUT via LOGICFUZZ_LLM_REWRITE=1.
@@ -1011,27 +1238,13 @@ Output your fuzz driver code inside <fuzz_target> tags.
                         'No <fuzz_target> tag found in prototyper response',
                         trial=self.trial)
 
-        # Fix common header issues (FuzzedDataProvider, etc.)
-        if fuzz_target_code:
-            fuzz_target_code = self._fix_common_header_issues(fuzz_target_code)
-
-        # Ensure project headers are included (post-processing fix for LLM-generated code)
-        if fuzz_target_code and header_info.get('project_headers'):
-            fuzz_target_code = self._ensure_project_headers(
-                fuzz_target_code, header_info, target_language)
-
-        # Ensure extern "C" wrapper for C projects (OSS-Fuzz always uses clang++)
-        if fuzz_target_code and is_c_project:
-            fuzz_target_code = self._ensure_extern_c_wrapper(fuzz_target_code)
-            # C2: _ensure_extern_c_wrapper early-returns when `extern "C"` is merely
-            # PRESENT — it doesn't check balance. Some LLMs (DeepSeek) emit the open
-            # but drop the closing block (fatal under $CXX). Re-balance defensively.
-            from src.utils.cxx_clean import balance_extern_c
-            fuzz_target_code = balance_extern_c(fuzz_target_code)
-
-        validation_warnings, fuzz_target_code = self._validate_api_usage(
-            fuzz_target_code, benchmark.get('project', 'unknown'),
-            known_apis=project_apis)
+        # Post-process (header fixes, extern "C", API-usage validation). Shared
+        # with the spec-render author path so authored code passes the IDENTICAL
+        # gates (A≡B / merge compile-validate parity). Byte-identical for the
+        # deterministic path: it runs the same code on the same input as before.
+        validation_warnings, fuzz_target_code = self._postprocess(
+            fuzz_target_code, header_info, target_language, is_c_project,
+            benchmark, project_apis)
 
         state_update = {
             "fuzz_target_source": fuzz_target_code,

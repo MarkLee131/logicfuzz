@@ -2226,7 +2226,7 @@ class FuzzingContext:
                 )
                 _n_annot = annotate_skeletons(
                     skeleton_drivers, api_semantic_model, _const_vocab,
-                    _svf_index, _ret_contracts)
+                    _svf_index, _ret_contracts, project_name=project_name)
                 log.info('  10b/12 ✅ G4 value-intent: %d/%d skeletons annotated'
                          ' (%d enum families)',
                          _n_annot, len(skeleton_drivers),

@@ -503,12 +503,77 @@ def render_callspec(intents: Sequence[Dict[str, Any]],
     return "\n".join(lines)
 
 
+def build_render_spec(
+    sk: Dict[str, Any],
+    intents: Sequence[Dict[str, Any]],
+    project_name: str = "unknown",
+) -> Dict[str, Any]:
+    """REPLACE #4: a flat, serializable RENDER SPEC for the spec-guided LLM
+    author. PURE re-projection of fields the skeleton already carries
+    (``name``/``includes``/``api_sequence`` + the ``value_intents`` records) —
+    reads NO new model data. The author prompt is built from this dict; the
+    conformance gate reads the ``_role_hints`` block (creators/destroyers/
+    terminals derived from the SAME records so the gate sees real roles, not
+    regex-inferred ones).
+
+    Returns ``{}`` when there are no intent records (the entry guard in
+    ``prototyper.execute`` treats a falsy ``render_spec`` as "no spec → fall
+    back to the deterministic path").
+    """
+    if not intents:
+        return {}
+    sequence: List[Dict[str, Any]] = []
+    for rec in intents:
+        args = []
+        for a in rec.get("args", []):
+            args.append({
+                "index": a.get("index"),
+                "type": a.get("type"),
+                "intent": a.get("intent", ""),
+                "kind": _kind_tag(a),
+                "pairs_with": a.get("pairs_with"),
+                "populated_from": a.get("populated_from"),
+            })
+        sequence.append({
+            "api": rec.get("api"),
+            "role": rec.get("role"),
+            "args": args,
+            "handle_provenance": rec.get("handle_provenance", []),
+            "ret_contract": rec.get("ret_contract", ""),
+        })
+
+    # Role hints for the conformance gate, derived from the SAME records:
+    # creators/destroyers by record role; the terminal by plan ORDER (the last
+    # non-destroyer API in the planned sequence — mirrors analyze_conformance's
+    # order_terminal logic), so the gate uses exact roles, not name regex.
+    creators = [r["api"] for r in intents if r.get("role") == "CREATOR"]
+    destroyers = [r["api"] for r in intents if r.get("role") == "DESTROYER"]
+    api_seq = list(sk.get("api_sequence") or [])
+    destroyer_set = set(destroyers)
+    non_teardown = [a for a in api_seq if a not in destroyer_set]
+    terminals = [non_teardown[-1]] if non_teardown else []
+
+    return {
+        "driver_id": sk.get("name", ""),
+        "library": project_name,
+        "includes": sk.get("includes", []),
+        "sequence": sequence,
+        "library_constants": sk.get("library_constants", ""),
+        "_role_hints": {
+            "creators": creators,
+            "destroyers": destroyers,
+            "terminals": terminals,
+        },
+    }
+
+
 def annotate_skeletons(
     skeleton_drivers: Sequence[Dict[str, Any]],
     model: APISemanticModel,
     vocab=None,
     svf_index=None,
     ret_contracts=None,
+    project_name: str = "unknown",
 ) -> int:
     """Attach a ``value_intents`` block to each skeleton in place.
 
@@ -533,4 +598,9 @@ def annotate_skeletons(
             n += 1
             if vocab_block:
                 sk["library_constants"] = vocab_block
+            # REPLACE #4: attach a flat render spec for the spec-guided LLM
+            # author (inert unless LOGICFUZZ_SPEC_RENDER reads it). Pure
+            # re-projection of the fields just attached — must run AFTER
+            # library_constants so the spec can carry it.
+            sk["render_spec"] = build_render_spec(sk, intents, project_name)
     return n
