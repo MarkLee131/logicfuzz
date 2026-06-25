@@ -45,8 +45,22 @@ def _strip_comments(src: str) -> str:
     return src
 
 
+_WRAPPER_PREFIX_RE = re.compile(r"^(?:OSS_FUZZ_)+")
+
+
+def _canon(name: str) -> str:
+    """Canonicalize an API name by stripping the OSS-Fuzz introspector wrapper
+    prefix. Plan names reach the gate as ``OSS_FUZZ_png_*`` (the harness wrapper
+    symbols), but the LLM authors the real library names ``png_*`` — comparing
+    them literally is a 0%-match false reject (the libpng A/B bug)."""
+    return _WRAPPER_PREFIX_RE.sub("", name)
+
+
 def _calls(code: str, api: str) -> bool:
-    return re.search(rf"\b{re.escape(api)}\s*\(", code) is not None
+    # Prefix-agnostic: match whether the driver wrote the real name or the
+    # OSS_FUZZ_ wrapper, against a canonicalized plan name.
+    name = _canon(api)
+    return re.search(rf"\b(?:OSS_FUZZ_)?{re.escape(name)}\s*\(", code) is not None
 
 
 @dataclass
@@ -76,7 +90,7 @@ def analyze_conformance(
     non-destroyer planned API, which is the deepest consumer) plus naming, and
     creators/destroyers from naming. ``min_kept`` is intentionally low: the gate
     is the backbone, not exact reproduction."""
-    planned = list(planned)
+    planned = [_canon(a) for a in planned]
     code = _strip_comments(driver_src)
     called = [a for a in planned if _calls(code, a)]
     dropped = [a for a in planned if a not in called]
@@ -91,9 +105,16 @@ def analyze_conformance(
     name_terminal = [a for a in planned
                      if _TERMINAL_RE.search(a) and a not in inferred_create and a not in inferred_destroy]
 
-    creators = list(creators) if creators is not None else inferred_create
-    destroyers = list(destroyers) if destroyers is not None else inferred_destroy
-    terminals = list(terminals) if terminals is not None else sorted(set(order_terminal) | set(name_terminal))
+    creators = [_canon(a) for a in creators] if creators is not None else inferred_create
+    destroyers = [_canon(a) for a in destroyers] if destroyers is not None else inferred_destroy
+    # A weak explicit terminal hint (e.g. the planner's last-non-destroyer, which
+    # can be a utility like png_malloc_default) must not block a genuinely deep
+    # driver: union the hint with the name-inferred decode terminals so a real
+    # decode consumer (read/decode/image/...) present in the plan still counts.
+    if terminals is not None:
+        terminals = sorted(set(_canon(a) for a in terminals) | set(name_terminal))
+    else:
+        terminals = sorted(set(order_terminal) | set(name_terminal))
 
     has_creator = any(_calls(code, a) for a in creators) if creators else True
     has_terminal = any(_calls(code, a) for a in terminals) if terminals else (kept >= min_kept)

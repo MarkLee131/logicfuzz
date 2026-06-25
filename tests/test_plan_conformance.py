@@ -78,12 +78,13 @@ int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n){
 }
 """
 
-# An API named only in a COMMENT must not count as a call.
+# An API named only in a COMMENT must not count as a call. Genuinely shallow —
+# the only consumer (png_read_image) appears solely in a comment, so the driver
+# creates+destroys the handle without ever exercising it.
 COMMENT_ONLY_TERMINAL = """
 int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n){
   png_structp p = png_create_read_struct(PNG_LIBPNG_VER_STRING,0,0,0);
   png_infop i = png_create_info_struct(p);
-  png_read_info(p, i);
   // NOTE: png_read_image(p, rows) is intentionally skipped here.
   png_destroy_read_struct(&p,&i,0);
   return 0;
@@ -131,3 +132,51 @@ def test_role_inference_without_hints():
     assert r.conformant, r.reasons
     r2 = analyze_conformance(PLAN, SHALLOW)
     assert not r2.conformant
+
+
+# --- regression: the OSS_FUZZ_-wrapper namespace mismatch (the libpng A/B bug) ----
+# The pipeline feeds OSS_FUZZ_-prefixed planned names + a weak "last-non-destroyer"
+# terminal hint, while the LLM authors REAL libpng names. The gate must canonicalize
+# the wrapper prefix and not let a weak terminal hint reject a genuinely deep driver.
+
+OSS_PLAN = [
+    "OSS_FUZZ_png_create_read_struct", "OSS_FUZZ_png_create_info_struct",
+    "OSS_FUZZ_png_read_info", "OSS_FUZZ_png_set_user_limits",
+    "OSS_FUZZ_png_start_read_image", "OSS_FUZZ_png_read_image",
+    "OSS_FUZZ_png_malloc_default", "OSS_FUZZ_png_destroy_read_struct",
+]
+OSS_CREATORS = ["OSS_FUZZ_png_create_read_struct", "OSS_FUZZ_png_create_info_struct"]
+OSS_DESTROYERS = ["OSS_FUZZ_png_destroy_read_struct"]
+OSS_TERMINALS_BAD = ["OSS_FUZZ_png_malloc_default"]  # the wrong last-non-destroyer hint
+
+
+def test_oss_fuzz_prefixed_plan_vs_real_name_driver():
+    # Real-name deep driver must be ACCEPTED despite OSS_FUZZ_-prefixed plan +
+    # a malloc terminal hint (the exact libpng A/B failure: was kept 0% → rejected).
+    r = analyze_conformance(OSS_PLAN, GOOD_DEEP, creators=OSS_CREATORS,
+                            terminals=OSS_TERMINALS_BAD, destroyers=OSS_DESTROYERS)
+    assert r.conformant, r.reasons
+    assert r.has_creator and r.has_terminal
+    assert "png_create_read_struct" in r.called  # canonicalized (prefix-agnostic) match
+
+
+def test_wrapped_name_driver_also_matches():
+    # A driver that DOES use the OSS_FUZZ_ wrapper names (deterministic render) must
+    # also match a wrapper-prefixed plan — _calls is prefix-agnostic both ways.
+    wrapped = ('extern "C" int LLVMFuzzerTestOneInput(const uint8_t*d,size_t n){'
+               'png_structp p=OSS_FUZZ_png_create_read_struct(0,0,0,0);'
+               'OSS_FUZZ_png_read_image(p,0);'
+               'OSS_FUZZ_png_destroy_read_struct(&p,0,0);return 0;}')
+    r = analyze_conformance(OSS_PLAN, wrapped, creators=OSS_CREATORS,
+                            terminals=["OSS_FUZZ_png_read_image"], destroyers=OSS_DESTROYERS)
+    assert "png_create_read_struct" in r.called
+    assert r.has_creator and r.has_terminal
+
+
+def test_oss_prefixed_shallow_still_rejected():
+    # The fix must NOT make the gate permissive: an OSS_FUZZ_-prefixed deep plan
+    # rendered as a SHALLOW driver (no terminal) is still rejected.
+    r = analyze_conformance(OSS_PLAN, SHALLOW, creators=OSS_CREATORS,
+                            terminals=OSS_TERMINALS_BAD, destroyers=OSS_DESTROYERS)
+    assert not r.conformant
+    assert not r.has_terminal
