@@ -4,7 +4,7 @@ LangGraphPrototyper agent for LangGraph workflow.
 Generates fuzz drivers from API sequences using context provided in the prompt.
 The FuzzIntrospector tool surface was removed; all context is pre-fetched.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import argparse
 import os
 import re
@@ -515,7 +515,7 @@ class LangGraphPrototyper(LangGraphAgent, ToolCallingMixin):
     # =========================================================================
 
     @staticmethod
-    def _format_render_spec(spec: Dict[str, Any]) -> str:
+    def _format_render_spec(spec: Dict[str, Any]) -> Tuple[str, str]:
         """Render the flat render_spec dict into a compact author-prompt block.
 
         Mirrors the CALLSPEC shape so the LLM sees per-call typed args + handle
