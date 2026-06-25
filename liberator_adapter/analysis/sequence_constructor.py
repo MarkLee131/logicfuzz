@@ -51,17 +51,6 @@ _ORDERING_FAULTS = frozenset({
 })
 
 
-# T11 — symbolic error-shape variants (gate LOGICFUZZ_ERROR_VARIANTS). From a
-# happy-path lifecycle sequence we derive a few ERROR-SHAPE variants that
-# exercise the library's error-handling branches (double-free / idempotent-
-# destroy guard, use-after-destroy state check, uninitialised-handle check). The
-# variant changes ONLY the call-sequence shape — the LLM still fills the same
-# leaf holes. Any crash a variant provokes is triaged by the existing crash-frame
-# classifier (driver-bug → pre-ship merge quarantine), so a missing library guard
-# never poisons the fused harness, while a present guard is covered for free.
-_ERROR_VARIANT_SHAPES = ("DOUBLE_DESTROY", "USE_AFTER_DESTROY", "SKIP_INIT")
-
-
 # =============================================================================
 # Phase-3 L1a: object-construction-first gate + root-kind classifier
 # =============================================================================
@@ -108,17 +97,6 @@ def _root_kind(sem: "APISemantics") -> str:
             return "caller_alloc"
         return "data_buildable"
     return "other"
-
-
-def _exercise_object() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_EXERCISE_OBJECT`` extends a construction
-    chain FORWARD with the deepest fuzz-data-consuming consumer of each produced
-    handle, so a built object is actually RUN on fuzz bytes (e.g. a constructed
-    ``cmsHTRANSFORM`` gets ``cmsDoTransform(t, data, …)``) rather than just
-    built-then-freed. Addresses the per-driver DEPTH gap: backward ``_build_prefix``
-    stops at object construction; this is the missing forward 'exercise' step."""
-    return _os.environ.get("LOGICFUZZ_EXERCISE_OBJECT", "0").strip().lower() in (
-        "1", "true", "yes", "on")
 
 
 def _validity_contract() -> bool:
@@ -171,35 +149,6 @@ def _collection_elem_keys(sem) -> List[str]:
         if key not in out:
             out.append(key)
     return out
-
-
-def _recover_init_handles() -> bool:
-    """Gate (default-off): ``LOGICFUZZ_RECOVER_INIT_HANDLES`` — recover a void*-
-    returning ``*Init``/``*Alloc``/``*New`` initializer as an opaque producer
-    EVEN when the IR role heuristic mis-labeled it CONSUMER/MUTATOR (void* return
-    erased → produces=[]). Unlocks whole deep subsystems (CIECAM02, gamut/GDB,
-    IT8) whose consumers otherwise get a NULL handle → 0 coverage → culled. The
-    same-subsystem gate in ``resolve()`` prevents cross-wiring."""
-    return _os.environ.get("LOGICFUZZ_RECOVER_INIT_HANDLES", "0").strip().lower() in (
-        "1", "true", "yes", "on")
-
-
-# Strong producer-verb idioms: an API whose subsystem-stripped name STARTS or
-# ENDS with one of these allocates/opens a handle. Excludes mutator/accessor
-# verbs (Get/Set/Read/Write/Add) which never produce a fresh handle.
-_INIT_IDIOM_VERBS = ("init", "alloc", "new", "create", "open", "build", "load",
-                     "dup")
-
-
-def _is_init_idiom_name(name: str, lib_prefix: str) -> bool:
-    """True when ``name`` (minus the library prefix) is a producer-verb idiom —
-    e.g. ``cmsCIECAM02Init``, ``cmsGBDAlloc``, ``cmsMLUalloc``. Used to recover
-    void*-returning initializers the role heuristic missed."""
-    core = name
-    if lib_prefix and core.lower().startswith(lib_prefix.lower()):
-        core = core[len(lib_prefix):]
-    low = core.lstrip("_").lower()
-    return any(low.startswith(v) or low.endswith(v) for v in _INIT_IDIOM_VERBS)
 
 
 def _norm_handle(type_str: str) -> str:
@@ -541,87 +490,6 @@ def _inject_cross_source(seq: Sequence[str], model, idx) -> List[str]:
     return out
 
 
-def _append_exercisers(core: List[str], opened: Set[str], idx) -> List[str]:
-    """For each handle the chain PRODUCED, append ONE consumer that exercises it.
-
-    Ranks eligible consumers (``requires`` ⊆ ``opened`` so no NULL hole, not
-    already in-chain): fuzz (an ``INPUT_BUFFER`` arg) > plain. Highest rank per
-    handle wins; ties keep the first (order-stable). Appends names only."""
-    in_core = set(core)
-    extra: List[str] = []
-    cbh = getattr(idx, "consumers_by_handle", None) or {}
-    for h in sorted(opened):
-        best = None  # (sem, rank): 1=fuzz, 0=plain
-        for c in cbh.get(h, ()):  # consumers whose ``requires`` includes h
-            if c.name in in_core or c.name in extra:
-                continue
-            req = set(getattr(c, "requires", ()) or ())
-            if not req <= opened:
-                continue  # an unsatisfied handle would NULL-hole the call
-            if any(a.role is ArgRole.INPUT_BUFFER
-                   for a in getattr(c, "args", ()) or ()):
-                rank = 1
-            else:
-                rank = 0
-            if best is None or rank > best[1]:
-                best = (c, rank)
-                if rank == 1:
-                    break  # a fuzz-data consumer is the deepest exercise
-        if best is not None:
-            extra.append(best[0].name)
-            in_core.add(best[0].name)
-    return list(core) + extra
-
-
-def error_shape_variants(
-    seq: Sequence[str],
-    creator_names: Set[str],
-    destroyer_names: Set[str],
-    *,
-    shapes: Sequence[str] = _ERROR_VARIANT_SHAPES,
-) -> List[Tuple[List[str], str]]:
-    """Derive error-shape variants of a happy-path sequence.
-
-    Returns ``(variant_sequence, shape_label)`` pairs. Pure + deterministic
-    (unit-tested). A variant is produced only when the source sequence has the
-    structural ingredient the shape needs (a destroyer for the destroy-shapes, a
-    creator for SKIP_INIT); otherwise that shape is skipped. DOUBLE_DESTROY /
-    USE_AFTER_DESTROY reuse the SAME bound handle in an illegal order — the shape
-    *itself* is the error, independent of any LLM leaf value. SKIP_INIT drops the
-    creator so the consumer runs on an unbound handle (LLM-dependent, weaker).
-    """
-    seq = [a for a in seq if a]
-    if len(seq) < 2:
-        return []
-    destroyers_in = [a for a in seq if a in destroyer_names]
-    creators_in = [a for a in seq if a in creator_names]
-    out: List[Tuple[List[str], str]] = []
-
-    if "DOUBLE_DESTROY" in shapes and destroyers_in:
-        # …, destroy(h), destroy(h) → double-free / idempotent-destroy guard.
-        d = destroyers_in[-1]
-        out.append((list(seq) + [d], "DOUBLE_DESTROY"))
-
-    if "USE_AFTER_DESTROY" in shapes and destroyers_in and creators_in:
-        # create(h), destroy(h), <rest uses h> → use-after-destroy state check.
-        d = destroyers_in[-1]
-        c = creators_in[0]
-        rest = [a for a in seq if a != c and a != d]
-        if rest:
-            out.append(([c, d] + rest, "USE_AFTER_DESTROY"))
-
-    if "SKIP_INIT" in shapes and creators_in and len(seq) > len(creators_in):
-        # drop the first creator → its consumer runs on an uninitialised handle
-        # (the handle arg becomes a hole the LLM may NULL — LLM-dependent).
-        c = creators_in[0]
-        v = list(seq)
-        v.remove(c)
-        if v:
-            out.append((v, "SKIP_INIT"))
-
-    return out
-
-
 def _scoped_guards() -> bool:
     """B+D, always-on (gate removed).
 
@@ -912,21 +780,6 @@ def _recover_opaque_producers(
     # the bucket spans >1 subsystem, so it binds Dict↔Dict / IT8↔IT8 and leaves
     # a hole (never cross-connects) when there is no same-subsystem builder.
     opaque_builders = [c for c in creators if not c.produces]
-    if _recover_init_handles():
-        # LOGICFUZZ_RECOVER_INIT_HANDLES: a void*-returning initializer
-        # (cmsCIECAM02Init returns cmsHANDLE=void*) that ALSO takes a config arg
-        # is mis-roled CONSUMER/MUTATOR by the IR heuristic (void* return erased
-        # → produces=[] → "requires and not produces" = CONSUMER), so it's absent
-        # from ``creators`` and its whole subsystem's consumers get a NULL handle
-        # → 0 coverage → culled. Recover name-idiom initializers with empty
-        # ``produces`` regardless of role. The same-subsystem gate in
-        # ``resolve()`` binds each ONLY to a same-subsystem consumer (CIECAM02↔
-        # CIECAM02), so a recovered non-producer can never cross-wire.
-        creator_names = {c.name for c in opaque_builders}
-        for s in model.apis.values():
-            if (s.name not in creator_names and not s.produces
-                    and _is_init_idiom_name(s.name, lib_prefix)):
-                opaque_builders.append(s)
     if opaque_builders:
         for t in unproduced:
             if t not in out:
@@ -1012,13 +865,7 @@ def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
     only hole what's genuinely unbindable → same density, lower FP."""
     in_seq = set(core_seq)
     cands: Dict[str, APISemantics] = {}
-    # Cross-wiring guard (LOGICFUZZ_RECOVER_INIT_HANDLES): a generic recovered
-    # opaque handle (cmsHANDLE, shared by CIECAM02/GDB/IT8/…) is satisfied for
-    # the TARGET via a SUBSYSTEM-SPECIFIC producer; another subsystem's consumer
-    # of the same generic handle must NOT reuse it (binding by void* type would
-    # cross-wire). So exclude such handles from density's free-sharing pool.
-    _skip_generic = (idx.generic_opaque_handles
-                     if _recover_init_handles() else frozenset())
+    _skip_generic = frozenset()
     # (a) handle-sharing extenders
     for t in opened:
         if t in _skip_generic:
@@ -1388,9 +1235,6 @@ def construct_sequences(
     # Default 8 → ~7.7 APIs/seq on lcms (PromeFuzz parity 7.6) once co-occurrence
     # is on; lower it (e.g. =4) for thinner drivers / fewer holes.
     _dense_max_extra = int(os.environ.get("LOGICFUZZ_DENSE_MAX_EXTRA", "8"))
-    _dense_repeat = os.environ.get(
-        "LOGICFUZZ_DENSE_REPEAT_CONSUMER", "").strip().lower() in (
-            "1", "true", "yes", "on")  # explicit: "0" must mean off
     n_densified = 0
     # Co-occurrence map for density source (b): which APIs are used TOGETHER in
     # the library's REAL usage paths (automaton accepting-paths + idioms) — the
@@ -1550,14 +1394,9 @@ def construct_sequences(
                 _rank_i = _sibling_rank.get(_grp, 0)
                 _sibling_rank[_grp] = _rank_i + 1
                 core = _densify(core, opened, idx, _dense_max_extra,
-                                _dense_repeat, _cooccur, sibling_rank=_rank_i)
+                                False, _cooccur, sibling_rank=_rank_i)
                 if len(core) > len(prefix) + 1:
                     n_densified += 1
-            if _exercise_object():
-                # Forward 'exercise the object' (per-driver DEPTH): append a
-                # fuzz-data consumer for each constructed handle so the object is
-                # RUN, not just built+freed. Gate-OFF leaves ``core`` unchanged.
-                core = _append_exercisers(core, opened, idx)
             if _scoped_guards():
                 # D — reorder ``core`` so its dependency components are
                 # CONTIGUOUS (parser+consumers block first, independent producer
@@ -1581,10 +1420,6 @@ def construct_sequences(
                                            producer_rank=_producer_rank)
             opened = set(opened) | set(creator.produces)
             _core = prefix + [creator.name]
-            if _exercise_object():
-                # The shallowest chains (pure create→destroy) benefit most from
-                # the forward exercise step — these are 'build but never use'.
-                _core = _append_exercisers(_core, opened, idx)
             _seq = _core + _closing_destroyers(opened, idx,
                                                destroyer_rank=_destroyer_rank)
             if _validity_contract():
@@ -1653,44 +1488,7 @@ def construct_sequences(
                 "UNFILTERED — investigate (not 'oracle unavailable')",
                 _e, len(seqs))
 
-    # T11: error-shape variants (LOGICFUZZ_ERROR_VARIANTS) — appended AFTER the
-    # ordering self-filter so they survive (the shapes are deliberate ordering
-    # faults the filter would otherwise drop). Derived from the surviving
-    # happy-path sequences; bounded by LOGICFUZZ_ERROR_VARIANTS_MAX.
     n_error_variants = 0
-    if os.environ.get("LOGICFUZZ_ERROR_VARIANTS") and seqs:
-        _creator_names = {s.name for ns in idx.producers.values() for s in ns}
-        _destroyer_names = {s.name for ns in idx.destroyers.values() for s in ns}
-        _vbudget = int(os.environ.get("LOGICFUZZ_ERROR_VARIANTS_MAX", "12"))
-        # Selectivity (1) — shapes: default to the GUARD-testing shapes a robust
-        # library is *designed* to handle (SKIP_INIT = uninitialised-handle check;
-        # DOUBLE_DESTROY = idempotent-destroy / double-free guard) → pure coverage
-        # win when the guard exists. USE_AFTER_DESTROY is genuine UAF (almost
-        # always a crash, rarely a guarded branch), so it is opt-in only.
-        _shapes = ["SKIP_INIT", "DOUBLE_DESTROY"]
-        if os.environ.get("LOGICFUZZ_ERROR_VARIANTS_AGGRESSIVE"):
-            _shapes.append("USE_AFTER_DESTROY")
-        # Selectivity (2) — gap-direction: only vary sequences that touch a
-        # baseline-UNCOVERED (gap) API, so variants add NEW error-branch coverage
-        # instead of re-covering. No gap info → vary all.
-        _gap = set(gap_apis) if gap_apis else set()
-        _src = [s for s in seqs if (not _gap or (_gap & set(s)))]
-        _variants: List[List[str]] = []
-        for s in _src:
-            if len(_variants) >= _vbudget:
-                break
-            for vseq, shape in error_shape_variants(
-                    s, _creator_names, _destroyer_names, shapes=_shapes):
-                key = tuple(vseq)
-                if key in seen:
-                    continue
-                seen.add(key)
-                source_of[key] = f"error_variant:{shape}"
-                _variants.append(vseq)
-                if len(_variants) >= _vbudget:
-                    break
-        seqs.extend(_variants)
-        n_error_variants = len(_variants)
 
     api_cov = {a for s in seqs for a in s}
     handle_cov = set(idx.producers) | set(idx.destroyers)

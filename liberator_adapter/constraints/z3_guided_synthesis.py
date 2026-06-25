@@ -201,44 +201,6 @@ class AutomatonAcceptanceGuard:
     def is_strong(self) -> bool:
         return self._strong
 
-    def admits(self, candidate_sequence: List[str]) -> bool:
-        """Positive-only signal: always returns True (2026-05-12 redesign).
-
-        Pre-redesign behaviour: rejected ``score < self.threshold`` when
-        ``is_strong()``. Empirically (cjson run4, c-ares run1, lcms run1)
-        this rejected 10/10 candidates uniformly across all three
-        benchmarks regardless of automaton size (cjson 2-state, c-ares
-        24-state, lcms 26-state). Root cause: the project automaton is
-        trained from a finite test corpus and only represents a *subset*
-        of valid library usage. ``score < threshold`` means "not in the
-        observed subset", not "invalid". Real infeasibility (type /
-        lifecycle / provenance) is the Z3 solver's job downstream.
-
-        We still compute the score (for telemetry — operators can decide
-        to re-enable filtering by raising the threshold above the typical
-        novel-but-valid range) and surface it via ``stats()``. But we
-        never reject the candidate here — Z3 has actual semantic
-        grounds, this layer doesn't.
-
-        ``stats().pruned`` is preserved for telemetry continuity but
-        always reads 0 under the new behaviour.
-        """
-        if self.artifact is None:
-            self.n_passed += 1
-            return True
-        try:
-            score = float(self.artifact.acceptance_score(candidate_sequence))
-        except Exception as exc:
-            logger.debug("[AutomatonGuard] acceptance_score raised %s", exc)
-            self.n_errors += 1
-            score = -1.0  # below any threshold; for telemetry below
-        # Telemetry: split "would-have-pruned" vs "always-passed" so we
-        # can still measure how often candidates fell below the threshold.
-        if score >= 0.0 and score < self.threshold:
-            self.n_low_score += 1
-        self.n_passed += 1
-        return True
-
     def stats(self) -> Dict[str, Any]:
         return {
             "strong": self._strong,
@@ -626,25 +588,6 @@ class IncrementalZ3Solver:
                 missing_resources=missing,
                 conflicting_constraints=[]
             )
-
-        # Second check (Phase H): automaton-acceptance hard pruning. We
-        # fabricate the hypothetical sequence (running sequence ++ candidate)
-        # and consult the guard. Strong guards reject sequences whose typestate
-        # doesn't match the project's learned protocol — eliminating Z3 calls
-        # that would have produced syntactically-valid-but-semantically-wrong
-        # candidates. Weak/missing guards admit everything (no-op).
-        if self.automaton_guard is not None:
-            hypothetical = list(self.api_sequence) + [api_name]
-            if not self.automaton_guard.admits(hypothetical):
-                self.n_automaton_pruned += 1
-                return CandidateResult(
-                    api_name=api_name,
-                    is_feasible=False,
-                    missing_resources=[],
-                    conflicting_constraints=[
-                        f"automaton_acceptance<{self.automaton_guard.threshold:.3f}"
-                    ],
-                )
 
         # Third check: Z3 constraint satisfiability
         # Push a temporary checkpoint
