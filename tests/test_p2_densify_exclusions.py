@@ -45,7 +45,7 @@ def test_densify_excludes_cooccurring_destroyer():
     # thing_free.requires == {Thing} ⊆ opened, so WITHOUT the role exclusion it
     # would pass the co-occurrence gate and be densified in (→ double-free).
     out = _densify(["thing_create", "thing_use"], opened, idx,
-                   max_extra=8, repeat=False,
+                   max_extra=8,
                    cooccur={"thing_use": {"thing_free"}})
     assert "thing_free" not in out, f"destroyer must not be densified in; got {out}"
 
@@ -55,7 +55,7 @@ def test_densify_excludes_cooccurring_creator():
     idx = _build_index(model)
     opened = set(model.apis["thing_create"].produces)
     out = _densify(["thing_create", "thing_use"], opened, idx,
-                   max_extra=8, repeat=False,
+                   max_extra=8,
                    cooccur={"thing_use": {"thing_create2"}})
     assert "thing_create2" not in out, \
         f"creator must not be densified in (prefix's job); got {out}"
@@ -74,6 +74,6 @@ def test_densify_still_pulls_a_valid_consumer():
     model = reconcile(apis)
     idx = _build_index(model)
     opened = set(model.apis["thing_create"].produces)
-    out = _densify(["thing_create"], opened, idx, max_extra=8, repeat=False,
+    out = _densify(["thing_create"], opened, idx, max_extra=8,
                    cooccur={"thing_create": {"thing_get_count"}})
     assert "thing_get_count" in out, f"valid consumer should densify in; got {out}"

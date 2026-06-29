@@ -27,9 +27,9 @@ def test_sibling_slices_are_disjoint():
     # DISJOINT densifier slices, so two near-twins exercise different APIs.
     idx = SC._build_index(reconcile(_wide_lib()))
     opened = set(idx.consumers_by_handle.keys())   # normalized handle key
-    s0 = SC._densify(["h_create"], opened, idx, max_extra=4, repeat=False,
+    s0 = SC._densify(["h_create"], opened, idx, max_extra=4,
                      sibling_rank=0)
-    s1 = SC._densify(["h_create"], opened, idx, max_extra=4, repeat=False,
+    s1 = SC._densify(["h_create"], opened, idx, max_extra=4,
                      sibling_rank=1)
     extra0 = set(s0) - {"h_create"}
     extra1 = set(s1) - {"h_create"}
@@ -42,8 +42,8 @@ def test_rank_changes_slice():
     # different densifier suffix; this is the breadth/diversity lever.
     idx = SC._build_index(reconcile(_wide_lib()))
     opened = set(idx.consumers_by_handle.keys())
-    a = SC._densify(["h_create"], opened, idx, max_extra=4, repeat=False,
+    a = SC._densify(["h_create"], opened, idx, max_extra=4,
                     sibling_rank=0)
-    b = SC._densify(["h_create"], opened, idx, max_extra=4, repeat=False,
+    b = SC._densify(["h_create"], opened, idx, max_extra=4,
                     sibling_rank=1)
     assert a != b                            # rank now always honored

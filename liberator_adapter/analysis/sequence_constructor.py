@@ -33,7 +33,7 @@ import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from liberator_adapter.analysis.api_semantic_model import (
     APIRole,
@@ -613,13 +613,6 @@ class _Index:
     # it. Recovered by naming (see ``_recover_opaque_producers``). Empty unless the
     # flag is on → strictly additive, never regresses the default path.
     recovered_producers: Dict[str, List[APISemantics]] = field(default_factory=dict)
-    # Recovered opaque handle types whose producer bucket spans >1 subsystem (a
-    # generic ``void*`` typedef like cmsHANDLE shared by CIECAM02/GDB/IT8/…).
-    # Each consumer needs a SUBSYSTEM-SPECIFIC instance, so such a handle must
-    # NOT be treated as a freely-shareable open handle by density (that would
-    # cross-wire one subsystem's consumer to another's producer). Used only when
-    # LOGICFUZZ_RECOVER_INIT_HANDLES is on (keeps gate-off byte-identical).
-    generic_opaque_handles: FrozenSet[str] = frozenset()
 
 
 # =============================================================================
@@ -822,26 +815,14 @@ def _build_index(model: APISemanticModel) -> _Index:
     # LOGICFUZZ_FACTORY_CHAIN gate was removed.
     recovered = _recover_opaque_producers(model, producers, creators)
 
-    # Recovered opaque handles whose producer bucket spans >1 subsystem token
-    # (a generic void* typedef like cmsHANDLE). Density must not freely share
-    # these (cross-wiring guard). Cheap; only consulted when the recovery gate
-    # is on, so gate-off is byte-identical.
-    _lib_prefix = _detect_lib_prefix(list(model.apis.keys()))
-    generic_opaque: Set[str] = set()
-    for _t, _cands in recovered.items():
-        _toks = {_subsystem_token(c.name, _lib_prefix) for c in _cands}
-        if len(_toks) > 1:
-            generic_opaque.add(_t)
-
     return _Index(producers, destroyers, mutators, entries, consumers, creators,
                   consumers_by_handle, getters,
                   {sem.name: sem for sem in model.apis.values()},
-                  recovered_producers=recovered,
-                  generic_opaque_handles=frozenset(generic_opaque))
+                  recovered_producers=recovered)
 
 
 def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
-             max_extra: int, repeat: bool,
+             max_extra: int,
              cooccur: Optional[Dict[str, Set[str]]] = None,
              sibling_rank: int = 0) -> List[str]:
     """Thicken a thin lifecycle chain toward the PromeFuzz density band (5.6–7.6
@@ -924,12 +905,6 @@ def _densify(core_seq: List[str], opened: Set[str], idx: _Index,
     else:
         ordered = []
     extra = [s.name for s in ordered]
-    if repeat:   # PF-style: re-call one CONFIG-bearing consumer/getter in a 2nd state
-        for s in ordered:
-            if s.role is not APIRole.MUTATOR and any(
-                    a.role is ArgRole.CONFIG for a in s.args):
-                extra.append(s.name)
-                break
     return list(core_seq) + extra
 
 
@@ -1355,7 +1330,7 @@ def construct_sequences(
                 _rank_i = _sibling_rank.get(_grp, 0)
                 _sibling_rank[_grp] = _rank_i + 1
                 core = _densify(core, opened, idx, _dense_max_extra,
-                                False, _cooccur, sibling_rank=_rank_i)
+                                _cooccur, sibling_rank=_rank_i)
                 if len(core) > len(prefix) + 1:
                     n_densified += 1
             if _scoped_guards():
@@ -1449,8 +1424,6 @@ def construct_sequences(
                 "UNFILTERED — investigate (not 'oracle unavailable')",
                 _e, len(seqs))
 
-    n_error_variants = 0
-
     api_cov = {a for s in seqs for a in s}
     handle_cov = set(idx.producers) | set(idx.destroyers)
     gap_hit = (api_cov & gap_apis) if gap_apis else set()
@@ -1462,7 +1435,6 @@ def construct_sequences(
         "n_densified": n_densified,
         "n_ordering_dropped": n_ordering_dropped,
         "n_orphan_kept": n_orphan_kept,
-        "n_error_variants": n_error_variants,
         "n_before_ordering_filter": n_before_filter,
         "api_coverage": len(api_cov),
         "handle_types": len(handle_cov),
