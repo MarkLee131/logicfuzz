@@ -101,12 +101,18 @@ drivers are valid).
 
 ## The four foundation capabilities (non-CEGAR)
 
-**① Profdata-first MEASURE** *(blueprint #0 — built FIRST, the linchpin)*
-`run_extended_fuzzing._measure_coverage` → per-input replay
-`<cov_bin> -timeout=10 -runs=0 <corpus>` → `llvm-profdata merge -sparse` →
-`llvm-cov export -summary-only` (`data[0].totals`). `n_files<2` sanity gate; fail-open
-to live `cov:` edges; on failure export the surviving `merged.profdata`. *Without this,
-nothing else is measurable.*
+**① Profdata-first MEASURE** *(blueprint #0 — ALREADY SHIPPED in `ab55eae5`; this
+refactor only TEST-LOCKS it)*
+`run_extended_fuzzing._export_coverage_from_profdata` exports from the OSS-Fuzz-produced
+`dumps/merged.profdata` via `llvm-cov export -summary-only` (`data[0].totals`) — the
+primary path inside `_measure_coverage`, bypassing the HTML-report step that hangs on
+merged multi-TU harnesses. Degeneracy gate is **empty-totals** (`lines.count==0 and
+branches.count==0` → reject), deliberately NOT an `n_files<2` file-count floor (which
+would false-reject a single-source lib like cJSON.c — `run_extended_fuzzing.py:1047-1052`).
+Fails open to the live libFuzzer edge count. The only remaining work was **test lock-in**
+(`tests/test_profdata_measurement.py`, 7 characterization tests). The per-input
+`-runs=0` replay + explicit `llvm-profdata merge -sparse` the blueprint imagined are
+unneeded — the OSS-Fuzz `coverage` command already produces the merged profdata.
 
 **② Extraction robustness** *(audit-new)* — three fixes:
 - **(a) buffer-typedef → INPUT_BUFFER via SVF read/write** — replace the name-match
@@ -174,10 +180,11 @@ memory + marginal-gain termination/telemetry.
 
 ## Build structure (big-bang, but falsifiable)
 
-- **Phase 0 — test infrastructure first (the only forced ordering).** Build #0
-  profdata-first measurement + `n_files<2` gate; **freeze the current pipeline as the
-  A/B control** (tag `pub-llm` HEAD). The rebuild is unmeasurable without a trustworthy
-  metric and a baseline to beat.
+- **Phase 0 — test infrastructure first (the only forced ordering).** #0 profdata-first
+  measurement is ALREADY SHIPPED (`ab55eae5`); this phase only **verifies + test-locks**
+  it (`tests/test_profdata_measurement.py`) and **freezes the current pipeline as the A/B
+  control** (tag `pub-llm` HEAD). The rebuild is unmeasurable without a trustworthy metric
+  and a baseline to beat — both now in hand.
 - **Phase 1 — build the new architecture as one coherent whole:** 4 layers + deletes +
   4 foundation capabilities + CEGAR loop. **Component-level unit tests per unit** (spec
   emission; family-binding across 3 handle shapes; buffer-typedef→INPUT_BUFFER;
@@ -193,7 +200,7 @@ memory + marginal-gain termination/telemetry.
 
 | Gate | Bar | Status |
 |---|---|---|
-| Measurement trustworthy | #0 gate passes; no 0%/1-file garbage; A≡B preserved | must-pass |
+| Measurement trustworthy | #0 already shipped (`ab55eae5`) + test-pinned; empty-totals reject (not n_files<2); A≡B preserved | done |
 | **libjpeg-turbo (flagship WIN)** | merged > PF **4,274** under matched campaign (have 3,396 from one driver) | strong |
 | **cjson (parity)** | within noise of PF **899** (tie at 886 today) | high |
 | **c-ares (parity)** | substantial gap-closure under 24h toward PF **6,106** | ⚠️ STRETCH — hardest of the 3 (near-saturated); honest gap-report if not reached, do NOT block the rebuild on it |
@@ -207,8 +214,10 @@ honest-gap-report escape so the program doesn't quietly fail on an over-ambitiou
 
 ## Risks & mitigations
 
-- **#0 measurement is the linchpin** — every A/B is unfalsifiable until it lands.
-  Fallback: `-merge=1` into a control dir; surviving-`merged.profdata` export is the safety net.
+- **#0 measurement** already shipped (`ab55eae5`) and now test-pinned
+  (`tests/test_profdata_measurement.py`); residual risk is a regression (e.g. someone
+  re-adding a file-count floor), guarded by the single-source-library pin test.
+  Fallback: surviving-`merged.profdata` export is the safety net.
 - **LLM-render A-design revert** (validated risk: free LLM reverts deep
   object-construction to shallow parser-entry). Mitigation: mandatory
   terminal-consumer-backbone conformance check + deterministic-render fallback + gated
