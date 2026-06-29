@@ -1251,42 +1251,6 @@ def construct_sequences(
     seen: Set[Tuple[str, ...]] = set()
     source_of: Dict[Tuple[str, ...], str] = {}
 
-    # Mode C — drop guaranteed-NULL-bail sequences. Opt-in (A/B pending): it
-    # supersedes the pure-orphan graceful-degradation keep, which the preflight
-    # proved produces edges=0 dead drivers (e.g. lcms cmsDictDup) — but the
-    # preflight already drops those at merge, so this is primarily a wasted-trial
-    # + cleaner-portfolio optimization. Default off keeps the orphan-keep design.
-    _drop_unrunnable = os.environ.get(
-        "LOGICFUZZ_DROP_UNRUNNABLE", "0").strip().lower() in (
-            "1", "true", "yes", "on")
-    _n_unrunnable = [0]
-
-    def _runnable(cleaned: Sequence[str]) -> bool:
-        """Guaranteed-NULL-bail guard: keep a sequence only if >=1 call actually
-        runs against a real input — a fuzz INPUT_BUFFER arg, a CREATOR (incl. an
-        opaque produces=[] builder), or a consumer whose every required handle is
-        satisfiable (produced in-sequence, or has a real/recovered producer). A
-        sequence where EVERY call is an unsatisfied-handle consumer renders the
-        handle args NULL → the call returns NULL → the next one bails: an edges=0
-        driver. Drop it at construction (frees the portfolio slot for a runnable
-        sequence)."""
-        produced: Set[str] = set()
-        for nm in cleaned:
-            sem = idx.by_name.get(nm)
-            if sem is None:
-                continue
-            if any(a.role is ArgRole.INPUT_BUFFER
-                   for a in getattr(sem, "args", ()) or ()):
-                return True
-            if sem.role is APIRole.CREATOR or sem.produces:
-                return True
-            req = set(getattr(sem, "requires", ()) or ())
-            if not any(h not in produced and not idx.producers.get(h)
-                       and not idx.recovered_producers.get(h) for h in req):
-                return True
-            produced |= set(getattr(sem, "produces", ()) or ())
-        return False
-
     def _add(seq: Sequence[str], source: str = "bottomup") -> None:
         cleaned = [a for a in seq if a and a in model.apis]
         if _validity_contract():
@@ -1305,9 +1269,6 @@ def construct_sequences(
         # full sequences incl. prefix-resident creators.
         cleaned = [a for a in _inject_cross_source(cleaned, model, idx)
                    if a in model.apis]
-        if _drop_unrunnable and not _runnable(cleaned):
-            _n_unrunnable[0] += 1
-            return
         key = tuple(cleaned)
         if key in seen:
             return
@@ -1499,7 +1460,6 @@ def construct_sequences(
         "n_seeded_from_idioms": n_idiom,
         "n_targets_attempted": n_attempted,
         "n_densified": n_densified,
-        "n_dropped_unrunnable": _n_unrunnable[0],
         "n_ordering_dropped": n_ordering_dropped,
         "n_orphan_kept": n_orphan_kept,
         "n_error_variants": n_error_variants,
