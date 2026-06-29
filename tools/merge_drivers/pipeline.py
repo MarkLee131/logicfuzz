@@ -306,8 +306,7 @@ def _apply_dominance(sources, *, cov_reports_dir, edges=None):
 def _compile_validate_candidates(sources, *, project: str,
                                  stock_lang: Optional[str],
                                  iquote_dirs: List[str],
-                                 out_dir: Optional[Path] = None,
-                                 model_name: Optional[str] = None):
+                                 out_dir: Optional[Path] = None):
   """Drop merge candidates that don't COMPILE under the OSS-Fuzz build flags.
 
   Compiles each candidate TU inside the project's real OSS-Fuzz container with
@@ -320,10 +319,6 @@ def _compile_validate_candidates(sources, *, project: str,
   container hiccup) it returns the sources unchanged and logs the gap — it must
   never BLOCK a merge, only PRUNE known-bad TUs (the weak-stub net still backs
   it up). A run can opt out via ``LOGICFUZZ_SKIP_COMPILE_VALIDATE=1``.
-
-  Opt-in merge-gate LLM repair (``LOGICFUZZ_MERGE_REPAIR=1`` + ``model_name``):
-  give each excluded TU ONE single-shot LLM rewrite, RE-VALIDATE through this same
-  gate, keep only if it now compiles (fail-closed → A≡B preserved).
   """
   # Explicit truthy parse — a bare `if os.environ.get(...)` treats "0"/"false"
   # as set, so SKIP_COMPILE_VALIDATE=0 would SKIP the A≡B gate. 2026-06 review.
@@ -346,39 +341,10 @@ def _compile_validate_candidates(sources, *, project: str,
   valid, excluded = validate_compilable(
       [Path(s) for s in sources], project, iquote_dirs=iquote_dirs, lang=stock_lang)
 
-  # Merge-gate LLM repair (opt-in: LOGICFUZZ_MERGE_REPAIR=1): one single-shot
-  # rewrite per excluded TU, re-validated through this same gate. Fail-closed —
-  # a still-failing rewrite is dropped, so A≡B holds (kept TUs compile under cov).
+  # repaired_recovered retained (always 0) for the merged/compile_validation.json
+  # schema; the LOGICFUZZ_MERGE_REPAIR opt-in was removed (subsumed by the 92d17830
+  # stock-target-language fix).
   repaired_recovered = 0
-  _do_repair = os.environ.get('LOGICFUZZ_MERGE_REPAIR', '').strip().lower() in (
-      '1', 'true', 'yes', 'on')
-  if excluded and _do_repair and model_name and out_dir is not None:
-    try:
-      from tools.merge_drivers.llm_repair import repair_candidates
-      from src.llm.adapter import create_llm_adapter
-      _adapter = create_llm_adapter(model_name)
-      if _adapter is None:
-        raise RuntimeError('no LLM adapter')
-
-      def _revalidate(srcs, proj, iquote_dirs=None):
-        return validate_compilable(list(srcs), proj, iquote_dirs=iquote_dirs,
-                                   lang=stock_lang)
-
-      recovered, excluded = repair_candidates(
-          excluded, project, _adapter.query,
-          out_dir=Path(out_dir) / 'repaired',
-          iquote_dirs=iquote_dirs, revalidate=_revalidate)
-      for _orig, _repaired in recovered:
-        valid.append(_repaired)
-      repaired_recovered = len(recovered)
-      if repaired_recovered:
-        logger.info(
-            f'merge_drivers: LLM-repair RECOVERED {repaired_recovered} '
-            f'previously-excluded driver(s) (re-validated under cov flags): '
-            f'{sorted(Path(o).name for o, _ in recovered)}', trial=0)
-    except Exception as _re:  # never block the merge on the repair path
-      logger.warning(f'merge_drivers: LLM-repair skipped ({_re}); keeping the '
-                     f'original excluded set', trial=0)
 
   if excluded:
     # Visible, not silent: log every excluded driver + the first error line so
@@ -462,7 +428,9 @@ def run_merge_pipeline(
   cov_reports_dir:
       Reserved for future per-driver coverage reports (unused now).
   model_name:
-      LLM model identifier for ``LOGICFUZZ_MERGE_REPAIR`` (opt-in).
+      Reserved/unused — the ``LOGICFUZZ_MERGE_REPAIR`` opt-in it fed was removed
+      (subsumed by the 92d17830 stock-target-language fix). Accepted for
+      caller-API stability.
   cdf:
       Use edge-weighted CDF dispatch instead of UNIFORM.  ``False`` by default
       (UNIFORM is the seed-routing-compatible default).
@@ -541,7 +509,6 @@ def run_merge_pipeline(
       stock_lang=stock_lang,
       iquote_dirs=iquote_dirs,
       out_dir=out_dir,
-      model_name=model_name,
   )
   if len(successful_sources) < 2:
     logger.info(

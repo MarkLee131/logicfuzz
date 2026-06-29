@@ -605,7 +605,7 @@ def _edges_weights_for(sources, work_dirs):
   return _impl(sources, Path(work_dirs.base) / 'merged')
 
 
-def _compile_validate_candidates(sources, benchmark, work_dirs, model_name=None):
+def _compile_validate_candidates(sources, benchmark, work_dirs):
   """Compatibility wrapper: adapts old benchmark/work_dirs API to pipeline's explicit params."""
   from pathlib import Path
   from tools.merge_drivers.pipeline import (
@@ -617,7 +617,6 @@ def _compile_validate_candidates(sources, benchmark, work_dirs, model_name=None)
       stock_lang=_stock_target_lang(benchmark),
       iquote_dirs=_iquote_dirs_for_target(benchmark),
       out_dir=Path(work_dirs.base) / 'merged',
-      model_name=model_name,
   )
 
 
