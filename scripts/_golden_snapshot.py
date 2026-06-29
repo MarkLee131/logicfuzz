@@ -71,7 +71,7 @@ def snapshot(project, inp):
     clusters = subsystem_clusters(model)
     selected = CoverageRanker().rank_and_select(
         constructed, clusters=clusters,
-        portfolio_mode="complete", portfolio_depth=0.5).selected_sequences
+        portfolio_depth=0.5).selected_sequences
     return {
         "project": project,
         "n_apis": len(model.apis),
