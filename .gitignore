@@ -20,3 +20,7 @@ extracted_fuzz_drivers/
 scripts/_*.sh
 *.profraw
 FUZZ.IT8
+# CMake-generated dependency lists (host-absolute paths, pure build noise)
+compiler_depend.internal
+compiler_depend.make
+compiler_depend.ts
