@@ -2,3 +2,4 @@
 "project": "sqlite3"
 "target_name": "ossfuzz"
 "target_path": "/src/sqlite3/test/ossfuzz.c"
+"public_headers": ["bld/sqlite3.h"]

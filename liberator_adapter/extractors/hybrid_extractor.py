@@ -87,16 +87,28 @@ class HybridAPIExtractor(BaseAPIExtractor):
         logger.info("Step 1: Compiling project to bitcode...")
         llvm_extraction_failed = False
         self._degraded_reason = None
+        compiled_ok = False
         if not bc_file:
             if compile_project:
                 try:
                     bc_file = self.llvm_extractor.compile_to_bitcode()
+                    compiled_ok = True
                 except Exception as e:
                     self._degraded_reason = classify_degraded_reason(str(e))
                     logger.warning(f"LLVM compilation failed, falling back to clang-only mode: {e}")
                     llvm_extraction_failed = True
             else:
                 raise ValueError("bc_file not provided and compile_project=False")
+
+        # 1.5 Amalgamation fix: the public-header heuristic ran on the raw source
+        # checkout, where the canonical generated header (e.g. sqlite3's
+        # bld/sqlite3.h amalgamation) does NOT yet exist — so it grabbed
+        # subdirectory headers (sqlite3 -> all ext/* internals) instead of the
+        # real public API. Now that the in-container `compile` has produced the
+        # canonical {project}.h, prefer it. Library-agnostic, fail-open.
+        if compiled_ok:
+            public_headers_file = self._prefer_generated_public_header(
+                include_dir, public_headers_file)
 
         # 2. Extract apis_clang.json (after compile, so generated headers are available)
         logger.info("Step 2: Extracting apis_clang.json...")
@@ -148,7 +160,95 @@ class HybridAPIExtractor(BaseAPIExtractor):
         
         logger.info(f"Successfully extracted {len(apis)} APIs")
         return apis
-    
+
+    def _prefer_generated_public_header(
+        self,
+        include_dir: Optional[str],
+        public_headers_file: Optional[str],
+    ) -> Optional[str]:
+        """Re-point ``public_headers_file`` at the canonical, build-GENERATED
+        ``{project}.h`` when it exists in the container post-compile.
+
+        Amalgamation projects (sqlite3) generate their single public header
+        (``bld/sqlite3.h``, 369 SQLITE_API funcs) only during the build. The
+        pre-build header heuristic therefore can't see it and instead collects
+        subdirectory headers (sqlite3 -> all ``ext/*`` internals = the wrong
+        258-API surface, no public sqlite3_* API). Here, after the in-container
+        ``compile`` produced ``{project}.h``, we rewrite the public-headers list
+        to that single canonical header (path relative to the clang include dir).
+
+        Library-agnostic: keyed on "the build produced a header literally named
+        after the project that was absent from the original list". Fail-open:
+        any error / not-found leaves ``public_headers_file`` untouched, so this
+        can never blank a project that was working before.
+        """
+        try:
+            project = self.benchmark.project
+            # Normalise project name -> candidate header basenames.
+            pname = project.lower().replace('-', '_').replace(' ', '_')
+            pcore = pname.lstrip('lib')
+            candidate_basenames = []
+            for stem in {pname, pcore, project.lower(), project}:
+                for ext in ('.h', '.hpp'):
+                    candidate_basenames.append(stem + ext)
+            candidate_basenames = list(dict.fromkeys(candidate_basenames))
+
+            # The clang extractor resolves header paths relative to this dir.
+            base_dir = include_dir or self.clang_extractor._find_include_dir()
+            if not base_dir:
+                return public_headers_file
+
+            # If the current list already references a project-named header,
+            # the build header (if any) is already in play — leave it alone.
+            n_existing = 0
+            if public_headers_file and os.path.exists(public_headers_file):
+                with open(public_headers_file) as _fh:
+                    existing = [ln.strip() for ln in _fh if ln.strip()]
+                n_existing = len(existing)
+                if any(os.path.basename(h).lower() in
+                       {b.lower() for b in candidate_basenames}
+                       for h in existing):
+                    return public_headers_file
+
+            # Search the container project dir for a generated {project}.h.
+            # Prefer the shallowest match (build output near the root, e.g.
+            # bld/sqlite3.h), excluding test/ext internal copies.
+            name_expr = ' -o '.join(
+                f'-name "{b}"' for b in candidate_basenames)
+            find_cmd = (
+                f'find "{base_dir}" -maxdepth 4 -type f \\( {name_expr} \\) '
+                r"-not -path '*/test/*' -not -path '*/ext/*' "
+                r"-printf '%d\t%p\n' 2>/dev/null | sort -n"
+            )
+            res = self.container.execute(find_cmd)
+            if res.returncode != 0 or not res.stdout.strip():
+                return public_headers_file
+
+            best_abs = res.stdout.strip().split('\n')[0].split('\t', 1)[1].strip()
+            # Path relative to the clang include dir.
+            rel = os.path.relpath(best_abs, base_dir)
+
+            # Write a fresh single-header list next to the existing one.
+            out_dir = (os.path.dirname(public_headers_file)
+                       if public_headers_file else tempfile.gettempdir())
+            new_path = os.path.join(
+                out_dir or tempfile.gettempdir(),
+                f'public_headers_{project}_generated.txt')
+            with open(new_path, 'w') as _fh:
+                _fh.write(rel + '\n')
+            logger.info(
+                "Amalgamation public-header fix: using build-generated header "
+                "'%s' (rel '%s') instead of %s",
+                best_abs, rel,
+                f"{n_existing} pre-build header(s)"
+                if n_existing else "auto-detect",
+            )
+            return new_path
+        except Exception as exc:  # fail-open — never break a working project
+            logger.warning(
+                "Generated-public-header preference failed (fail-open): %s", exc)
+            return public_headers_file
+
     def _merge_apis(
         self,
         apis_clang_path: str,

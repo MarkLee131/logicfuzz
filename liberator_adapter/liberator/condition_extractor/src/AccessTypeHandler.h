@@ -35,11 +35,19 @@ bool isAnArray(const CallBase *c) {
             // outs() << "base type\n";
             // outs() << *base_tye << "\n";
 
-            // need size in bytes
-            obj_size = data_layout.getTypeStoreSizeInBits(base_tye);
-            obj_size /= 8;
-            // outs() << obj_size << "\n";
-            obj_size_found = true;
+            // need size in bytes — GUARD unsized pointee. A bitcast's source
+            // pointer can point at a FunctionType or an opaque/incomplete struct
+            // (unsized); DataLayout::getTypeSizeInBits then aborts
+            // ("Cannot getTypeInfo() on a type that is unsized!"). sqlite3's many
+            // function pointers hit this. Mirror the isSized() guards already at
+            // extractor.cpp:856 and LibfuzzUtil.cpp:110: when unsized, leave
+            // obj_size_found=false so the downstream size match simply doesn't fire.
+            if (base_tye->isSized()) {
+                obj_size = data_layout.getTypeStoreSizeInBits(base_tye);
+                obj_size /= 8;
+                // outs() << obj_size << "\n";
+                obj_size_found = true;
+            }
         }
     }
 

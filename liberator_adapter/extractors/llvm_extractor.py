@@ -67,6 +67,12 @@ def svf_resources_for(project: str) -> dict:
     base = {"timeout_secs": _SVF_TIMEOUT_SECS, "mem_gb": _SVF_MEM_GB, "lite": False}
     base.update(_SVF_PROJECT_RESOURCES.get(project, {}))
     base["lite"] = project in _SVF_LITE_PROJECTS
+    # An EXPLICITLY-set env timeout overrides the per-project cap, so an operator
+    # can lift (or lower) any project's one-time SVF budget without editing the
+    # table — generic, no per-project special-case. (When unset, the per-project
+    # value wins as before.) ``0`` / negative ⇒ no wall-time cap (run to completion).
+    if 'LIBERATOR_SVF_TIMEOUT_SECS' in os.environ:
+        base["timeout_secs"] = _SVF_TIMEOUT_SECS
     return base
 
 
@@ -483,14 +489,16 @@ class LLVMAPIExtractor(BaseAPIExtractor):
                 _mem_gb = _res["mem_gb"] if _res["mem_gb"] > 0 else _SVF_MEM_GB
                 _preexec = _make_svf_preexec(_mem_gb)
 
+                _cap = _timeout if _timeout and _timeout > 0 else None
                 logger.info(
-                    f'Running extractor on host (timeout {_timeout}s, '
+                    f'Running extractor on host (timeout '
+                    f'{("uncapped" if _cap is None else str(_cap) + "s")}, '
                     f'lite={_res["lite"]}): {" ".join(str(a) for a in cmd)}'
                 )
                 try:
                     result = subprocess.run(
                         cmd, env=env, capture_output=True, text=True,
-                        timeout=_timeout,
+                        timeout=_cap,
                         preexec_fn=_preexec,
                     )
                 except subprocess.TimeoutExpired:

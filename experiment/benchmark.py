@@ -81,7 +81,8 @@ class Benchmark:
     functions = data.get('functions', [])
 
     test_files = data.get('test_files', [])
-    
+    public_headers = data.get('public_headers', []) or []
+
     # Support project-level mode: no functions and no test_files
     if not functions and not test_files:
       # Project-level benchmark
@@ -102,6 +103,7 @@ class Benchmark:
               cppify_headers=cppify_headers,
               commit=commit,
               use_context=use_context,
+              public_headers=public_headers,
           ))
       return benchmarks
     
@@ -125,6 +127,7 @@ class Benchmark:
                 data['target_path'],
                 data.get('target_name', ''),
                 test_file_path=test_file_path,
+                public_headers=public_headers,
             ))
 
     if functions:
@@ -152,7 +155,8 @@ class Benchmark:
                 cppify_headers=cppify_headers,
                 commit=commit,
                 use_context=use_context,
-                function_dict=function))
+                function_dict=function,
+                public_headers=public_headers))
 
     return benchmarks
 
@@ -171,10 +175,17 @@ class Benchmark:
                use_context=False,
                commit=None,
                function_dict: Optional[dict] = None,
-               test_file_path: str = ''):
+               test_file_path: str = '',
+               public_headers: Optional[list] = None):
     self.id = benchmark_id
     self.project = project
     self.language = language
+    # Optional YAML-provided public API header list (filenames or paths
+    # relative to the include dir). When set, extraction uses these verbatim
+    # and SKIPS header auto-discovery — for projects whose canonical public
+    # header is build-GENERATED (sqlite3's amalgamation) and thus absent from
+    # the raw checkout the discovery scans. Empty ⇒ discovery as before.
+    self.public_headers = public_headers or []
     self.function_signature = function_signature or ''
     self.function_name = function_name or ''
     self.return_type = return_type or ''
