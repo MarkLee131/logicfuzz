@@ -23,11 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from liberator_adapter.analysis.edsm import EDSMResult, incremental_merge, merge
+from liberator_adapter.analysis.edsm import EDSMResult, merge
 from liberator_adapter.analysis.llm_oracle import LLMEquivalenceOracle
 from liberator_adapter.analysis.pta import PrefixTreeAcceptor, build_pta
 from liberator_adapter.analysis.static_trace import (
-    CallSite,
     ProjectTraceReport,
     StaticTrace,
     extract_project_traces,
@@ -351,133 +350,6 @@ class AutomatonArtifact:
             cur = nxt
             steps_walked += 1
         return steps_walked / len(sequence)
-
-    # ---------------- Phase G: closed-loop trace ingestion ---------------
-
-    def update_with_traces(
-        self,
-        api_sequences: List[List[str]],
-        *,
-        source_label: str = "runtime",
-        persist: bool = True,
-        oracle_fn: Optional[Any] = None,
-        min_score_to_merge: float = 1.5,
-    ) -> Dict[str, Any]:
-        """Ingest runtime-witnessed API sequences as new evidence.
-
-        Each sequence is materialized as a lightweight ``StaticTrace``
-        (no per-arg binding info — closed-loop feedback ships only the
-        api_name order), added to the existing PTA, then EDSM is re-run
-        incrementally so prior unions are preserved.
-
-        Returns a delta summary; persisted artifacts (``traces.json``,
-        ``pta.json``, ``merged.json``, ``metadata.json``) are rewritten
-        when ``persist=True``.
-
-        Reference: Lang/Pearlmutter/Price 1998 §6 — incremental EDSM
-        updates are valid because state-vector buckets only grow; new
-        evidence either matches an existing bucket (raises witness mass
-        on already-merged classes) or extends it with a fresh node
-        whose new pairs ``incremental_merge`` evaluates against the
-        existing partition.
-        """
-        if not api_sequences:
-            return {"added": 0, "delta_states": 0, "merged_states": self.n_merged_states}
-
-        prev_node_count = self.pta.size()
-        prev_merged = self.n_merged_states
-
-        # Materialize lightweight traces. We don't have file/line info
-        # from runtime; the tag goes into ``function_name`` so persistence
-        # still distinguishes them from static traces.
-        next_trace_id = self.n_traces
-        new_trace_pairs = []  # (trace_id, seq) for non-empty seqs — the ids
-                              # the PTA actually consumed, reused for persist
-        for seq in api_sequences:
-            if not seq:
-                continue
-            trace = StaticTrace(
-                function_name=f"{source_label}#{next_trace_id}",
-                file=f"<{source_label}>",
-                line=0,
-                api_calls=[
-                    CallSite(
-                        api_name=name,
-                        file=f"<{source_label}>",
-                        line=0,
-                        call_id=f"{source_label}:{next_trace_id}:{i}",
-                    )
-                    for i, name in enumerate(seq)
-                ],
-            )
-            self.pta.add_trace(next_trace_id, trace)
-            new_trace_pairs.append((next_trace_id, seq))
-            next_trace_id += 1
-
-        # Identify the newly-added node ids (everything beyond the prior
-        # node count). PTA assigns ids monotonically via _next_id.
-        new_node_ids = [nid for nid in self.pta.nodes if nid >= prev_node_count]
-
-        # Re-run EDSM incrementally. ``incremental_merge`` preserves prior
-        # unions and only proposes pairs touching the new ids.
-        self.edsm = incremental_merge(
-            self.edsm, self.pta, new_node_ids,
-            oracle=oracle_fn,
-            library_name=self.project,
-            min_score_to_merge=min_score_to_merge,
-        )
-
-        # Refresh artifact-level fields.
-        self.n_traces = next_trace_id
-        self.n_pta_states = self.pta.size()
-        self.n_merged_states = self.edsm.n_output_states
-
-        delta = {
-            "added_traces": len(new_trace_pairs),
-            "added_nodes": self.pta.size() - prev_node_count,
-            # negative = compression (same sign convention as closed_loop's
-            # delta_merged_states = n_merged_states - prev_merged)
-            "delta_states": self.n_merged_states - prev_merged,
-            "merged_states": self.n_merged_states,
-        }
-
-        if persist:
-            try:
-                self.output_dir.mkdir(parents=True, exist_ok=True)
-                # Append new traces — keep prior ones for audit.
-                traces_path = self.output_dir / "traces.json"
-                prior = []
-                if traces_path.exists():
-                    try:
-                        prior = json.loads(traces_path.read_text())
-                    except Exception:
-                        prior = []
-                new_records = [
-                    {
-                        "function_name": f"{source_label}#{nid}",
-                        "file": f"<{source_label}>",
-                        "line": 0,
-                        "api_calls": [{"api_name": n} for n in seq],
-                    }
-                    for nid, seq in new_trace_pairs
-                ]
-                traces_path.write_text(
-                    json.dumps(prior + new_records, indent=2),
-                )
-                (self.output_dir / "pta.json").write_text(
-                    json.dumps(self.pta.to_dict(), indent=2)
-                )
-                (self.output_dir / "merged.json").write_text(
-                    json.dumps(self.edsm.to_dict(), indent=2)
-                )
-                (self.output_dir / "metadata.json").write_text(
-                    json.dumps(self.to_summary(), indent=2)
-                )
-            except Exception as exc:
-                logger.warning("[%s] update_with_traces persist failed: %s",
-                               self.project, exc)
-
-        return delta
 
     def to_summary(self) -> Dict[str, Any]:
         return {
