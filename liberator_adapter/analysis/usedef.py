@@ -110,6 +110,19 @@ _BUFFER_HINT_PATTERNS: Tuple[str, ...] = (
     "unsigned char *", "unsigned char*", "void *", "void*",
 )
 
+# Byte-buffer typedef tokens: a const pointer whose (lowercased) spelling
+# CONTAINS one of these is a raw byte/char/void buffer regardless of typedef
+# wrapping (``png_const_voidp`` → "void", ``png_bytep`` → "byte"). Keyed on the
+# TYPE-spelling family — a structural property — never a library name.
+_BYTE_BUFFER_TOKENS: Tuple[str, ...] = ("void", "byte", "char")
+
+# Length-arg types: the fixed integer set PLUS typedef'd lengths whose bare name
+# ends in ``_size_t`` / ``_len`` (e.g. ``png_size_t``).
+_LENGTH_TYPES: frozenset = frozenset({
+    "size_t", "ssize_t", "int", "long", "unsigned", "uint32_t",
+    "uint64_t", "unsigned long", "unsigned int",
+})
+
 
 def _normalize_type_str(type_str: str) -> str:
     """Lowercase, collapse whitespace around pointers / refs / templates."""
@@ -223,15 +236,21 @@ def _find_buffer_size_positions(
 ) -> Tuple[int, int]:
     """Locate a ``(buf, size)`` arg pair if present; ``(-1, -1)`` otherwise.
 
-    Heuristic: a buffer arg is a const pointer to a byte-ish type whose
-    successor is integer-sized.
+    A buffer arg is a const pointer to a byte-ish type — a literal byte pointer
+    (``const void *``) OR a typedef whose spelling carries a byte-family token
+    (``png_const_voidp`` → "void") — whose successor is an integer length
+    (``size_t``-family OR a ``_size_t``/``_len`` typedef). An SVF-observed WRITE
+    on the buffer vetoes the match (output buffer, not fuzz input).
     """
     for i, arg in enumerate(args):
         atype = arg.get("type", arg.get("type_clang", "")) or ""
         norm = _normalize_type_str(atype)
-        if not _get_is_const(arg):
+        # Const gate — typedef-aware: the extractor's is_const flag OR a ``const``
+        # embedded in the (typedef) spelling (``png_const_voidp`` is const-pointee).
+        if not (_get_is_const(arg) or "const" in norm):
             continue
-        if not any(p in norm for p in _BUFFER_HINT_PATTERNS):
+        if not (any(p in norm for p in _BUFFER_HINT_PATTERNS)
+                or any(tok in norm for tok in _BYTE_BUFFER_TOKENS)):
             continue
         if i + 1 >= len(args):
             continue
@@ -239,9 +258,14 @@ def _find_buffer_size_positions(
         nnorm = _normalize_type_str(
             next_arg.get("type", next_arg.get("type_clang", "")) or "")
         nbare = nnorm.replace("const ", "").replace("*", "").strip()
-        if nbare in {"size_t", "ssize_t", "int", "long", "unsigned", "uint32_t",
-                     "uint64_t", "unsigned long", "unsigned int"}:
-            return i, i + 1
+        if not (nbare in _LENGTH_TYPES
+                or nbare.endswith("_size_t") or nbare.endswith("_len")):
+            continue
+        # SVF write-veto: a buffer SVF saw WRITTEN is an output, not fuzz input.
+        # None (no SVF data) / False (read-only) fall through to the match.
+        if arg.get("_svf_writes") is True:
+            continue
+        return i, i + 1
     return -1, -1
 
 
