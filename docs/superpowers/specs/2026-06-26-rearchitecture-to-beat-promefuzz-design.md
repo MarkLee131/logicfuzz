@@ -84,17 +84,30 @@ drivers are valid).
 - **A≡B compile-validate + orphan/crash-poison filter** + `traces.json` + `graft_creator_prefix`.
 - **Ablation switches** (`DISABLE_*`, `REQUIRE_Z3`, `Z3_MODE`) — paper controls.
 
-## LEAVE BEHIND — ~2000 LOC inert/dead weight (zero behavior change)
+## LEAVE BEHIND — dead weight (zero behavior change)
 
-- `AutomatonAcceptanceGuard.admits` (hardwired True) · `IncrementalZ3Solver` push/pop
-  controller (soft mode falls through) · EDSM merge + `acceptance_score` + PTA quotient.
-- **Old per-trial closed-loop** + `--closed-loop`/`--eval` wiring (output discarded) —
-  *replaced by* the new CEGAR loop, NOT revived. Different subsystem (post-merge,
-  cross-round, evidence-fed).
-- Dead `llm_tiebreak` hook · 5 inert levers (`_exercise_object`,
-  `_recover_init_handles`, `_drop_unrunnable`, `ERROR_VARIANTS`, `_dense_repeat`) ·
-  dominance gate from the default merge path (keep `select.py` for CLI) · `LLM_REPAIR`
-  branch · ~20 dead/graduated `LOGICFUZZ_*` flag reads+docs.
+**Correction (inventory-verified 2026-06-29):** the blueprint's "~2000 LOC" was mostly
+ALREADY removed in prior commits (`4b593c64`, `12550e8c`, `e75c0cd3`, `7ed8e961`); the
+genuine residual was **~420 LOC** (Plan 2, `docs/superpowers/plans/2026-06-29-prune-dead-code.md`).
+Critically, several items the blueprint listed as "inert" are **LOAD-BEARING — KEPT, NOT deleted:**
+- `IncrementalZ3Solver` push/pop + `Z3GuidedSynthesisController` — the LIVE Z3 synthesis
+  engine (soft mode = no *reject*, but the SAT path still builds every skeleton).
+- EDSM + PTA + `acceptance_score` — the **primary L4 sort axis** (`coverage_ranker.py`)
+  + Comprehender-B prefilter signal; `learn_project_automaton` builds it by default.
+- `AutomatonAcceptanceGuard` class — its `is_strong()` gates the Comprehender-B VALID
+  prefilter (`comprehender.py`). Only its (already-gone) `admits`/prune arm was inert.
+- merge dominance gate (`_apply_dominance`/`dominance_filter`) — drops dominated drivers
+  when ≥2 measured reports exist ("0 drops" was a measurement, not a structural no-op).
+
+**Plan 2 actually deleted (~420 LOC):** dead `update_with_traces` (0 callers); the
+`LOGICFUZZ_MERGE_REPAIR` opt-in (`llm_repair.py` + wiring); the `_drop_unrunnable` lever;
+dead residuals (`generic_opaque_handles`, `_densify` `repeat`, `n_error_variants`) + their
+obsolete tests + orphaned imports. **DEFERRED:** the dead automaton-guard arm inside
+`IncrementalZ3Solver` (threads through the live controller — revisit in the Z3 plan).
+
+**Already removed in prior commits (do not re-plan):** `AutomatonAcceptanceGuard.admits`;
+old per-trial closed-loop + `--closed-loop` CLI; dead `llm_tiebreak` hook; `_exercise_object`;
+`_recover_init_handles` read; `ERROR_VARIANTS` emission; graduated/pruned `LOGICFUZZ_*` flag reads.
 - **Deterministic `skeleton_generator` render body** (24 `SkeletonVariable` branches,
   no HEAP mode) → shrinks to **spec-emission only**; kept as the
   SVF-failed/conformance-failed fallback ONLY.

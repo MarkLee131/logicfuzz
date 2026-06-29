@@ -48,7 +48,6 @@ Format: `FLAG=val — purpose (default)`. Full rationale/measurements live in gi
 - `LOGICFUZZ_PORTFOLIO_DEPTH=F` — depth multiplier for coverage-complete Phase 2 (default 0.5). Coverage-complete portfolio selection (≥1 lifecycle-valid driver per subsystem cluster + bounded depth pass + API-floor; fixes parser-entry-bias) is now UNCONDITIONAL — the `LOGICFUZZ_PORTFOLIO=complete|minimal|off` switch was removed (graduated 2026-06-20); this is the only remaining knob.
 - `LOGICFUZZ_DENSE_MAX_EXTRA=N` — cap extra APIs appended per chain (default 8 → ~7.7 APIs/seq lcms = PromeFuzz parity).
 - `LOGICFUZZ_DENSE_COOCCUR=0` — density extends ONLY handle-sharing, dropping automaton co-occurrence (default on).
-- `LOGICFUZZ_DENSE_REPEAT_CONSUMER=1` — density also repeats a handle's consumer (default off).
 - `LOGICFUZZ_STRICT_ORDERING=1` — revert B graceful degradation (drop orphan USE_BEFORE_INIT instead of keeping as a hole).
 - `LOGICFUZZ_DISABLE_{G2_CONSTRUCT,DRIVER_TRACES,SEQFACTS,LLM_ROLES}=1` — A/B kill-switch for that default-on stage.
 
@@ -71,10 +70,9 @@ Jaccard 0.43→0.05; lcms 60→45 / 154→212 / 0.15→0.06).
 - **FUZZ_BUFFERS** — render a builder's scalar data-buffer arg (`cmsUInt16Number *`) as `(T*)data` with paired length bound to `size/sizeof(T)`, making drivers SEED-INDEPENDENT (`sequence_constructor._fuzz_buffers`, `skeleton_generator`); lcms 300s-fuzz edges 325→943, cov 0.86%→16.81%.
 
 ### Pruned (removed — redundant / over-fit / niche)
-TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT / XPROJ_CORPUS (unvalidated resource-thin fallback); DEDUP_WORKFLOW_PARTITION (⊂ DENSE_PARTITION); PAIRWISE_DEDUP / PAIRWISE_TAU (⊂ SUBSET_ELIM + construction decoupling); ORDERSETS (⊂ coverage-complete selection); **TOP_K** (`LOGICFUZZ_TOP_K`, retired 2026-06-20 — it implied it capped API breadth, but breadth is portfolio-determined and construction + residual all-cover already reach the extraction ceiling regardless; `filter_top_k` now defaults to `None`/no-cap, the greedy L4 floor self-terminates at full pool coverage, and the legacy fixed cap survives only as the `PORTFOLIO=off` A/B control).
+TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT / XPROJ_CORPUS (unvalidated resource-thin fallback); DEDUP_WORKFLOW_PARTITION (⊂ DENSE_PARTITION); PAIRWISE_DEDUP / PAIRWISE_TAU (⊂ SUBSET_ELIM + construction decoupling); ORDERSETS (⊂ coverage-complete selection); **TOP_K** (`LOGICFUZZ_TOP_K`, retired 2026-06-20 — it implied it capped API breadth, but breadth is portfolio-determined and construction + residual all-cover already reach the extraction ceiling regardless; `filter_top_k` now defaults to `None`/no-cap, the greedy L4 floor self-terminates at full pool coverage, and the legacy fixed cap was removed).
 
 ### Construction / depth / dedup levers
-- `LOGICFUZZ_ERROR_VARIANTS=1` / `_MAX=N` — T11: emit error-shape skeleton variants (double-free / use-after-destroy / skip-init) so library error branches become reachable (gated, A/B pending).
 - `LOGICFUZZ_VALUE_FEEDBACK` — T12: capture filled hole values → coverage_memory, pin deepest-coverage into the same skeleton next run (cross-run). DEFAULT-ON (opt-out =0); no-op on a fresh project.
 - `LOGICFUZZ_FORMAT_INFER=1` — T10: synthesize front-gate-passing seed(s) from inferred magic when no real seed matches (opt-in; emits a diverse k≥3 corpus).
 - `LOGICFUZZ_FUZZABLE_HOLES=1` — Tier 1: render tunable CONFIG holes (enum/scalar/float) as FUZZ_DERIVE directives so the fuzzer sweeps the param. DEFAULT-ON (opt-out =0).
@@ -84,14 +82,12 @@ TAG_ROUNDTRIP + EXERCISE_DEEP_BUFFER (lcms over-fit single-idiom); CROSS_PROJECT
 - `LOGICFUZZ_API_FLOOR=1` — L7: greedy set-cover guarantees every constructable API appears in ≥1 selected sequence. **DEFAULT-ON** (opt-out =0); graduated 2026-06-20 — lcms A/B survived 32→157, merged distinct APIs 18→69 (with VALIDITY_CONTRACT).
 - `LOGICFUZZ_RESIDUAL_ALLCOVER=1` — breadth lever: append a single-API sequence for every public API the symbolic constructor can't chain (validity-repair prepends its handle creators), lifting API breadth toward the extraction ceiling (cjson 75→78, lcms 149→297). **DEFAULT-ON** (opt-out =0); graduated 2026-06-20 — lcms A/B survived 32→157, merged distinct APIs 18→69 (with VALIDITY_CONTRACT).
 - `LOGICFUZZ_SKIP_COMPILE_VALIDATE=1` — opt OUT of the merge compile-validation gate (default-on, fail-open: ships only drivers that compile under real cov-build flags).
-- `LOGICFUZZ_MERGE_REPAIR=1` — opt IN to single-shot LLM repair of drivers the merge compile-validation gate would DROP. Each excluded TU gets one LLM rewrite (deterministic triage-guided prompt) RE-VALIDATED through the same gate; kept only if it now compiles (fail-closed ⇒ A≡B preserved). `tools/merge_drivers/llm_repair.py` + `run_single_fuzz._compile_validate_candidates`; records `repaired_recovered` in `merged/compile_validation.json`. **Largely subsumed by the deterministic stock-target-language fix (commit `92d17830`)** — the libpng 34/110 C-vs-C++ exclusions it targeted now compile by threading `benchmark.file_type` (the stock target's extension) through the gate+merge+build; MERGE_REPAIR's honest residual is genuinely-malformed drivers only. (PROTOTYPE, default-OFF, A/B pending — keep as fallback.)
 
 ### Driver DECOUPLING / DE-DUP levers
 DENSE_PARTITION, DIVERSIFY_PRODUCERS, SUBSET_ELIM graduated to default (see Graduated block). Always-on Layer-E redundancy telemetry → `results/<project>/static_analysis/redundancy_telemetry.json` (mean pairwise API Jaccard + disjointness; the A/B oracle).
 
 ### Driver DEPTH levers
 CROSS_SOURCE_BIND graduated to default; EXERCISE_DEEP_BUFFER removed (lcms over-fit).
-- `LOGICFUZZ_EXERCISE_OBJECT=1` — after the prefix builds a handle, append ONE consumer that RUNS it (prefers an INPUT_BUFFER fuzz-data consumer). (gated, A/B pending)
 
 ### LLM / debug / SVF config
 - `LOGICFUZZ_LLM_REWRITE=1` — opt OUT of B-design (hole-filling) back to A-design (LLM free-rewrite). DEFAULT B-design preserves constructed skeletons (A-design = A/B control, measured inert).
