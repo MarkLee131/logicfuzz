@@ -149,6 +149,23 @@ def _stub_engine_build_cmd(stub_path: str = STUB_ENGINE_PATH) -> str:
     )
 
 
+def _select_fallback_archive(candidates, stub_path=STUB_ENGINE_PATH):
+    """From a list of ``(path, size_bytes)`` static-archive candidates, pick the
+    project's library when it is NOT named ``lib{project}.a`` (e.g. libjpeg-turbo
+    builds ``libjpeg.a``/``libturbojpeg.a``). Excludes the synthesized stub engine
+    and zero-size archives, then takes the LARGEST (the real library dwarfs
+    vendored/object archives); ties broken by path for determinism. Pure /
+    container-free → unit-testable. Returns the path or ``None``."""
+    usable = [(p, s) for (p, s) in candidates
+              if p and p != stub_path
+              and not p.endswith("/logicfuzz_stub_engine.a")
+              and isinstance(s, int) and s > 0]
+    if not usable:
+        return None
+    usable.sort(key=lambda ps: (-ps[1], ps[0]))
+    return usable[0][0]
+
+
 def _make_svf_preexec(mem_gb_limit: int):
     """Factory for a preexec_fn that caps the SVF child's RLIMIT_AS.
 
@@ -358,12 +375,29 @@ class LLVMAPIExtractor(BaseAPIExtractor):
             if lib_file:
                 break
         if not lib_file:
-            project_dir = f'/src/{project_name}'
-            find_result = self.container.execute(
-                f'find {project_dir} -name "*.a" -type f 2>/dev/null | head -1')
-            if find_result.returncode == 0 and find_result.stdout.strip():
-                lib_file = find_result.stdout.strip()
-                logger.info(f"Found library in project dir: {lib_file}")
+            # Strategy 2: the static lib isn't named after the project (e.g.
+            # libjpeg-turbo builds libjpeg.a/libturbojpeg.a) and/or lives in a
+            # VERSIONED source dir (/src/libjpeg-turbo.main, not /src/libjpeg-turbo).
+            # Discover the real source subtree(s) structurally, then pick the
+            # largest *.a there (excludes the tiny stub engine). No project-name
+            # string special-case; only fires after the {project} patterns missed.
+            dir_res = self.container.execute(
+                f'find /src -maxdepth 1 -type d -iname "{project_name}*" 2>/dev/null')
+            src_roots = [d.strip() for d in (dir_res.stdout or "").splitlines()
+                         if d.strip()] or ['/src']
+            cands = []
+            for root in src_roots:
+                far = self.container.execute(
+                    f'find {root} -name "*.a" -type f -printf "%s\\t%p\\n" 2>/dev/null')
+                for line in (far.stdout or "").splitlines():
+                    parts = line.split("\t", 1)
+                    if len(parts) == 2 and parts[0].strip().isdigit():
+                        cands.append((parts[1].strip(), int(parts[0].strip())))
+            lib_file = _select_fallback_archive(cands)
+            if lib_file:
+                logger.info(
+                    f"Found library via source-subtree largest-archive fallback: "
+                    f"{lib_file} (from {len(cands)} candidate archive(s))")
         return lib_file, output
 
     def _ensure_clang14_installed(self):
