@@ -9,7 +9,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from liberator_adapter.extractors.llvm_extractor import (
-    _select_fallback_archive, STUB_ENGINE_PATH,
+    _select_fallback_archive, _probe_implementation_macro, STUB_ENGINE_PATH,
 )
 
 
@@ -33,3 +33,22 @@ def test_excludes_zero_size_and_empty():
 def test_deterministic_tiebreak_by_path():
     cands = [("/src/b.a", 100), ("/src/a.a", 100)]
     assert _select_fallback_archive(cands) == "/src/a.a"
+
+
+def test_probe_ifdef_implementation_macro():
+    hdr = "#ifndef TINY_GLTF_H\n#define TINY_GLTF_H\n#ifdef TINYGLTF_IMPLEMENTATION\nvoid f(){}\n#endif\n"
+    assert _probe_implementation_macro(hdr) == "TINYGLTF_IMPLEMENTATION"
+
+
+def test_probe_defined_form():
+    hdr = "#if defined(STB_IMAGE_IMPLEMENTATION)\nint g;\n#endif\n"
+    assert _probe_implementation_macro(hdr) == "STB_IMAGE_IMPLEMENTATION"
+
+
+def test_probe_none_when_absent():
+    assert _probe_implementation_macro("#pragma once\nint h;\n") is None
+
+
+def test_probe_ignores_plain_define_guard():
+    # The include guard (TINY_GLTF_H) is NOT an *_IMPLEMENTATION macro.
+    assert _probe_implementation_macro("#ifndef TINY_GLTF_H\n#define TINY_GLTF_H\n#endif\n") is None

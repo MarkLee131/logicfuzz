@@ -166,6 +166,22 @@ def _select_fallback_archive(candidates, stub_path=STUB_ENGINE_PATH):
     return usable[0][0]
 
 
+_IMPL_MACRO_RE = re.compile(
+    r'(?:#\s*if(?:n?def)\s+|defined\s*\(\s*)([A-Z_][A-Z0-9_]*_IMPLEMENTATION)\b')
+
+
+def _probe_implementation_macro(header_text):
+    """Recover a single-header lib's implementation-gate macro (e.g.
+    ``TINYGLTF_IMPLEMENTATION``, ``STB_IMAGE_IMPLEMENTATION``) by scanning for an
+    ``#ifdef X_IMPLEMENTATION`` / ``defined(X_IMPLEMENTATION)`` guard. Returns the
+    first such macro or ``None``. Pure → unit-testable. Generic: keys on the
+    ``*_IMPLEMENTATION`` convention, never a specific library name."""
+    if not header_text:
+        return None
+    m = _IMPL_MACRO_RE.search(header_text)
+    return m.group(1) if m else None
+
+
 def _make_svf_preexec(mem_gb_limit: int):
     """Factory for a preexec_fn that caps the SVF child's RLIMIT_AS.
 
@@ -302,6 +318,12 @@ class LLVMAPIExtractor(BaseAPIExtractor):
                         logger.warning("Stub-engine archive build failed: %s", stub_res.stdout)
                 except Exception as e:  # fail-open
                     logger.warning("Stub-engine retry errored (fail-open): %s", e)
+            if (lib_file is None
+                    and os.getenv("LOGICFUZZ_HEADER_TU_RETRY", "1") != "0"):
+                logger.warning(
+                    "No library after stub-engine retry; trying header-only "
+                    "TU-synthesis (single-header lib path)")
+                lib_file = self._try_header_tu_synthesis()
             if lib_file:
                 output_bc = f'{lib_file}.bc'
             else:
@@ -399,6 +421,65 @@ class LLVMAPIExtractor(BaseAPIExtractor):
                     f"Found library via source-subtree largest-archive fallback: "
                     f"{lib_file} (from {len(cands)} candidate archive(s))")
         return lib_file, output
+
+    def _try_header_tu_synthesis(self):
+        """Header-only recovery: when no static lib exists because the project is a
+        single-header (STB-style) lib, synthesize one. Find the project's public
+        single-header, probe its ``*_IMPLEMENTATION`` macro, compile a one-line TU
+        that defines the macro and includes the header into an object, and ``ar``
+        it into ``lib{project}.a`` so the existing discovery + extract-bc flow
+        proceeds. Returns the .a path (and sets ``self.bitcode_recovery='header_tu'``)
+        or None. Fail-open: any miss/error → None → caller keeps the clang-only
+        degradation. Generic: macro + header are derived structurally, never hardcoded."""
+        try:
+            project = self.benchmark.project
+            src_dir = self._bc_source_dir or f'/src/{project}'
+            # Find a project-named single header (prefer shallow, exclude test/ext).
+            pstem = project.lower().replace('-', '').replace('_', '')
+            find_hdr = self.container.execute(
+                f'find /src -maxdepth 4 -type f \\( -name "*.h" -o -name "*.hpp" \\) '
+                r"-not -path '*/test/*' -not -path '*/tests/*' -not -path '*/ext/*' "
+                r"-printf '%d\t%p\n' 2>/dev/null | sort -n")
+            header = None
+            header_txt = ""
+            for line in (find_hdr.stdout or "").splitlines():
+                parts = line.split('\t', 1)
+                if len(parts) != 2:
+                    continue
+                p = parts[1].strip()
+                base = os.path.basename(p).lower().replace('-', '').replace('_', '')
+                if pstem and (pstem in base
+                              or base.replace('.h', '').replace('.hpp', '') in pstem):
+                    # Confirm it carries an *_IMPLEMENTATION guard before committing.
+                    txt = self.container.execute(f'cat "{p}" 2>/dev/null').stdout or ""
+                    if _probe_implementation_macro(txt):
+                        header, header_txt = p, txt
+                        break
+            if not header:
+                return None
+            macro = _probe_implementation_macro(header_txt)
+            hdr_dir = os.path.dirname(header)
+            tu = f'/tmp/logicfuzz_header_tu_{project}.cpp'
+            obj = f'/tmp/logicfuzz_header_tu_{project}.o'
+            lib = f'{src_dir}/lib{project}.a'
+            build = (
+                'export LLVM_COMPILER=clang && '
+                'export LLVM_COMPILER_PATH=/usr/lib/llvm-14/bin && '
+                f'printf "#define {macro}\\n#include \\"{os.path.basename(header)}\\"\\n" > {tu} && '
+                f'wllvm++ {self._cxf_clean} -I"{hdr_dir}" -c {tu} -o {obj} 2>&1 && '
+                f'ar crs {lib} {obj} 2>&1 && echo HEADER_TU_OK')
+            res = self.container.execute(build, timeout=600)
+            if 'HEADER_TU_OK' in (res.stdout or '') and self._file_exists_in_container(lib):
+                self.bitcode_recovery = 'header_tu'
+                logger.info("Header-TU synthesis recovered library: %s (macro %s, header %s)",
+                            lib, macro, header)
+                return lib
+            logger.warning("Header-TU synthesis did not produce a lib (fail-open): %s",
+                           (res.stdout or '')[-400:])
+            return None
+        except Exception as e:  # fail-open
+            logger.warning("Header-TU synthesis errored (fail-open): %s", e)
+            return None
 
     def _ensure_clang14_installed(self):
         """Ensure clang-14 is installed (should already be pre-installed in custom base-builder image)"""
